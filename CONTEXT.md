@@ -80,6 +80,14 @@ _Avoid_: like, heart, star
 A user's score for an Item, distinct from a provider's rating.
 _Avoid_: score, stars
 
+**Scan**:
+A job that walks one directory subtree, probes the files that changed and hands the matches to the medium. It runs on the watcher when one sits next to the disks, otherwise on a worker over the network.
+_Avoid_: refresh, index, crawl, import
+
+**Probe**:
+One read of a File's headers that yields its Streams, duration, chapters and keyframe index. Cached by path, size and mtime.
+_Avoid_: analyse, inspect, ffprobe as a concept
+
 **Translation layer**:
 An adapter that speaks a third-party protocol on top of Pendia's own API, so existing apps connect unchanged. One per medium: the Jellyfin API for video, OpenSubsonic for music, OPDS for books, HDHomeRun for live TV.
 _Avoid_: compat layer, shim, emulation, bridge

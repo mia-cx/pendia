@@ -1,0 +1,13 @@
+# Pendia
+
+A self-hosted media server, written from scratch to be fast where Jellyfin is slow: scanning, browsing, playback start and startup.
+
+One image, one binary. Movies, series, music, photos, ebooks, audiobooks, live TV and channels, each with a browser built for that medium. Plugins are TypeScript. The apps you already use keep working through translation layers: the Jellyfin API for video, OpenSubsonic for music, OPDS for ebooks.
+
+## Status
+
+Planning. The architecture is decided ticket by ticket on the [Pendia v1 map](https://github.com/mia-cx/pendia/issues?q=label%3Awayfinder%3Amap). The glossary is [CONTEXT.md](./CONTEXT.md), decisions live in [docs/adr](./docs/adr).
+
+## License
+
+[MCX](./LICENSE): MPL 2.0 with network use counted as distribution.

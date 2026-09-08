@@ -101,8 +101,16 @@ The Versions of an Item that share a codec family and its segment timeline, list
 _Avoid_: ladder, rendition set, ABR set
 
 **Stored Version**:
-A Version Pendia transcoded and keeps in its own store path, keyed by Item id, so a later session needs no live transcode.
-_Avoid_: pre-transcode, cache, optimized version
+A Version Pendia transcoded with the quality profile and keeps next to its source file, so a session needs no live transcode.
+_Avoid_: pre-transcode, cache, optimized version, live transcode
+
+**Permission**:
+One allowed action, such as viewing a library or managing subtitles. Users get them through Groups, with per-user overrides.
+_Avoid_: right, privilege, scope
+
+**Group**:
+A named set of Permissions given to users. Built-in: admins and users.
+_Avoid_: role, policy, team
 
 **Translation layer**:
 An adapter that speaks a third-party protocol on top of Pendia's own API, so existing apps connect unchanged. One per medium: the Jellyfin API for video, OpenSubsonic for music, OPDS for books, HDHomeRun for live TV.

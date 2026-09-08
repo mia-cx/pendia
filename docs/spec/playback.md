@@ -38,7 +38,7 @@ One per Item, or one per cut when an Item has several cuts. Pendia derives it on
 
 ## Stored Versions
 
-Pendia owns pre-transcoding. A store job runs the transcode pipeline with a persist flag and writes the output into the Pendia store path, keyed by Item id, never into the canonical folder. A per-library policy names the rungs to store and the condition, for example a 1080p H.264 8 Mbit/s AAC stereo Version for every Item whose best Version is 4K, HEVC or HDR. Manual per-Item requests exist. Store jobs run on workers at low priority inside an idle window. Files transcoded elsewhere still become Versions when they land in the canonical folder, and join the adaptive group only when aligned.
+Pendia owns pre-transcoding, with the quality profile, never the live profile. When transcoding is enabled for a library or an Item, a store job segments the source into a folder next to the source file, named after it with a `.pendia` suffix, one subfolder per rung. The source rung is a remux. A Stored Version is offered only when every segment is present; otherwise the client gets a live transcode for that rung. A per-library policy names the rungs to store and the condition, for example a 1080p H.264 8 Mbit/s AAC stereo Version for every Item whose best Version is 4K, HEVC or HDR. Manual per-Item requests exist. Store jobs run on workers at low priority inside an idle window. When the source file is deleted, its derived folder goes with it. Files transcoded elsewhere still become Versions when they land in the canonical folder, and join the adaptive group only when aligned. Live transcodes are never kept.
 
 ## Caps and ladder
 

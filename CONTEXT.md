@@ -88,6 +88,22 @@ _Avoid_: refresh, index, crawl, import
 One read of a File's headers that yields its Streams, duration, chapters and keyframe index. Cached by path, size and mtime.
 _Avoid_: analyse, inspect, ffprobe as a concept
 
+**Play method**:
+How a session delivers a Version: direct play over range requests, remux to HLS without re-encoding, or transcode.
+_Avoid_: stream mode, playback type
+
+**Segment timeline**:
+The segment boundary timestamps of an Item, derived once from its first Version and forced on every Version Pendia produces. One per cut.
+_Avoid_: GOP grid, chunk map
+
+**Adaptive group**:
+The Versions of an Item that share a codec family and its segment timeline, listed together in one master playlist so the client switches between them.
+_Avoid_: ladder, rendition set, ABR set
+
+**Stored Version**:
+A Version Pendia transcoded and keeps in its own store path, keyed by Item id, so a later session needs no live transcode.
+_Avoid_: pre-transcode, cache, optimized version
+
 **Translation layer**:
 An adapter that speaks a third-party protocol on top of Pendia's own API, so existing apps connect unchanged. One per medium: the Jellyfin API for video, OpenSubsonic for music, OPDS for books, HDHomeRun for live TV.
 _Avoid_: compat layer, shim, emulation, bridge

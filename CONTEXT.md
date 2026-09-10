@@ -112,6 +112,14 @@ _Avoid_: right, privilege, scope
 A named set of Permissions given to users. Built-in: admins and users.
 _Avoid_: role, policy, team
 
+**Shelf**:
+A named row of Items on a browse screen, contributed by a medium or a plugin. Core shelves: continue watching, recently added, recently played.
+_Avoid_: row, carousel, section, rail
+
+**Capability**:
+Something a plugin declares in its manifest and an admin approves, such as file access. A capability that was not declared or was switched off is absent from the plugin's host object. Not a user Permission.
+_Avoid_: permission, grant, scope
+
 **Translation layer**:
 An adapter that speaks a third-party protocol on top of Pendia's own API, so existing apps connect unchanged. One per medium: the Jellyfin API for video, OpenSubsonic for music, OPDS for books, HDHomeRun for live TV.
 _Avoid_: compat layer, shim, emulation, bridge

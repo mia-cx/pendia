@@ -31,3 +31,24 @@ export function createDatabase(databaseUrl = process.env.DATABASE_URL) {
 }
 
 export type Database = ReturnType<typeof createDatabase>["db"];
+
+const probeTimeoutSeconds = 2;
+
+/**
+ * Reports whether the database answers, over a fresh connection that is closed afterwards.
+ * Never throws: readiness turns a lost database into a 503, not a dropped response.
+ */
+export async function probeDatabase(databaseUrl: string): Promise<boolean> {
+  const probe = new SQL(databaseUrl, {
+    max: 1,
+    connectionTimeout: probeTimeoutSeconds,
+  });
+  try {
+    await probe`select 1`;
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await probe.close().catch(() => undefined);
+  }
+}

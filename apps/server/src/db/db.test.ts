@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { and, eq, sql } from "drizzle-orm";
-import { createDatabase, type Database } from "./client.ts";
+import { startApiServer } from "../api.ts";
+import { createDatabase, type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import {
   contributors,
@@ -173,6 +174,20 @@ async function migrationState(db: Database) {
 }
 
 describe.skipIf(!databaseUrl)("Postgres schema", () => {
+  test("readiness passes against a live database while liveness stays available", () =>
+    withDatabase(async (_db, url) => {
+      const server = startApiServer(() => probeDatabase(url), 0);
+      const base = `http://127.0.0.1:${server.port}`;
+      try {
+        const ready = await fetch(`${base}/readyz`);
+        expect(ready.status).toBe(200);
+        expect(await ready.json()).toEqual({ status: "ready" });
+        expect((await fetch(`${base}/healthz`)).status).toBe(200);
+      } finally {
+        await server.stop(true);
+      }
+    }));
+
   test("migrates an empty database once and preserves the second run", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -345,7 +360,93 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       ).rejects.toMatchObject({ cause: { errno: "23514" } });
     }));
 
-  test("cascades owned rows and preserves progress when a Version disappears", () =>
+  test("rejects container Versions and mismatched libraries or source Items", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const f = await fixture(db);
+      const values = {
+        itemId: f.movie.id,
+        itemKind: f.movie.kind,
+        libraryId: f.movie.libraryId,
+        label: "Original",
+        format: "video",
+        bytes: 100n,
+      } as const;
+      for (const container of [f.first, f.season]) {
+        await expect(
+          db
+            .insert(versions)
+            .values({
+              ...values,
+              itemId: container.id,
+              itemKind: container.kind,
+              libraryId: container.libraryId,
+            })
+            .execute(),
+        ).rejects.toMatchObject({ cause: { errno: "23514" } });
+        await expect(
+          db
+            .insert(versions)
+            .values({
+              ...values,
+              itemId: container.id,
+              itemKind: "movie",
+              libraryId: container.libraryId,
+            })
+            .execute(),
+        ).rejects.toMatchObject({ cause: { errno: "23503" } });
+      }
+      await expect(
+        db
+          .insert(versions)
+          .values({ ...values, libraryId: f.base.libraryId })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23503" } });
+      const [source] = await db.insert(versions).values(values).returning();
+      if (!source) throw new Error("Source Version missing.");
+      await expect(
+        db
+          .insert(files)
+          .values({
+            versionId: source.id,
+            libraryId: f.base.libraryId,
+            path: "wrong.mkv",
+            order: 0,
+            bytes: 100n,
+            modifiedAt: new Date(),
+          })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23503" } });
+      const [timeline] = await db
+        .insert(segmentTimelines)
+        .values({
+          itemId: f.episode.id,
+          cutKey: "original",
+          boundariesSeconds: [0, 5],
+        })
+        .returning();
+      if (!timeline) throw new Error("Timeline missing.");
+      await expect(
+        db
+          .insert(versions)
+          .values({
+            ...values,
+            itemId: f.episode.id,
+            itemKind: f.episode.kind,
+            libraryId: f.episode.libraryId,
+            origin: "stored",
+            sourceVersionId: source.id,
+            segmentTimelineId: timeline.id,
+            timelineAligned: true,
+            storedFolder: "/stored/episode",
+            rung: "720p",
+            complete: true,
+          })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23503" } });
+    }));
+
+  test("cascades Version ownership while preserving streams on File deletion and progress on Version deletion", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const f = await fixture(db);
@@ -361,6 +462,8 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         .insert(versions)
         .values({
           itemId: f.movie.id,
+          itemKind: f.movie.kind,
+          libraryId: f.movie.libraryId,
           label: "Original",
           format: "video",
           bytes: 100n,
@@ -379,6 +482,18 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         })
         .returning();
       if (!file) throw new Error("File missing.");
+      const [secondFile] = await db
+        .insert(files)
+        .values({
+          versionId: version.id,
+          libraryId: f.movie.libraryId,
+          path: "movie-part2.mkv",
+          order: 1,
+          bytes: 100n,
+          modifiedAt: new Date(),
+        })
+        .returning();
+      if (!secondFile) throw new Error("Second File missing.");
       const [timeline] = await db
         .insert(segmentTimelines)
         .values({
@@ -392,7 +507,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         segmentTimelineId: timeline.id,
         timelineAligned: true,
         origin: "stored",
-        sourceFileId: file.id,
+        sourceVersionId: version.id,
         storedFolder: "/stored/movie",
         rung: "720p",
         complete: true,
@@ -401,6 +516,8 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         .insert(versions)
         .values({
           itemId: f.movie.id,
+          itemKind: f.movie.kind,
+          libraryId: f.movie.libraryId,
           label: "720p",
           format: "video",
           bytes: 50n,
@@ -428,9 +545,44 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           .where(eq(versions.id, version.id))
           .execute(),
       ).rejects.toMatchObject({ cause: { errno: "23514" } });
-      await db
-        .insert(streams)
-        .values({ fileId: file.id, index: 0, kind: "video", codec: "h264" });
+      await db.insert(streams).values([
+        {
+          versionId: version.id,
+          fileId: file.id,
+          index: 0,
+          kind: "video",
+          codec: "h264",
+        },
+        { versionId: stored.id, index: 0, kind: "video", codec: "h264" },
+        { versionId: stored.id, index: 1, kind: "audio", codec: "aac" },
+      ]);
+      await expect(
+        db
+          .insert(streams)
+          .values({
+            versionId: version.id,
+            fileId: secondFile.id,
+            index: 0,
+            kind: "video",
+            codec: "h264",
+          })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23505" } });
+      await db.delete(files).where(eq(files.id, file.id));
+      expect(
+        await db
+          .select()
+          .from(streams)
+          .orderBy(streams.versionId, streams.index),
+      ).toMatchObject([
+        { versionId: version.id, fileId: null, kind: "video" },
+        { versionId: stored.id, fileId: null, kind: "video" },
+        { versionId: stored.id, fileId: null, kind: "audio" },
+      ]);
+      expect(await db.select().from(versions)).toHaveLength(2);
+      expect(await db.select().from(files)).toMatchObject([
+        { id: secondFile.id },
+      ]);
       const mark = {
         userId: user.id,
         itemId: f.movie.id,

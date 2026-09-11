@@ -1,5 +1,5 @@
 import { startApiServer } from "./api.ts";
-import { createDatabase } from "./db/client.ts";
+import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
@@ -85,38 +85,41 @@ function log(
   );
 }
 
-function startRoles(role: Role): Bun.Server<undefined> | undefined {
+function startRoles(
+  role: Role,
+  apiServer: Bun.Server<undefined> | undefined,
+): void {
   const activeRoles = role === "all" ? roles.slice(0, -1) : [role];
-  let apiServer: Bun.Server<undefined> | undefined;
 
   for (const activeRole of activeRoles) {
     log(activeRole, "role.started");
 
-    if (activeRole === "api") {
-      apiServer = startApiServer();
+    if (activeRole === "api" && apiServer) {
       log(activeRole, "api.listening", { port: apiServer.port });
       continue;
     }
 
     log(activeRole, "role.idle");
   }
-
-  return apiServer;
 }
 
 async function run(): Promise<void> {
   requireSupportedBunVersion(Bun.version);
   const role = parseRole(Bun.argv);
 
+  const databaseUrl = process.env.DATABASE_URL;
   const database =
-    role === "api" || role === "all" ? createDatabase() : undefined;
+    role === "api" || role === "all" ? createDatabase(databaseUrl) : undefined;
   let apiServer: Bun.Server<undefined> | undefined;
   try {
-    if (database) {
+    if (database && databaseUrl) {
       await migrateDatabase(database.db);
       log(role, "database.migrated");
+      // Readiness opens its own short-lived connection: the pooled client's reconnect
+      // path drops the response when the database host stops resolving.
+      apiServer = startApiServer(() => probeDatabase(databaseUrl));
     }
-    apiServer = startRoles(role);
+    startRoles(role, apiServer);
     await new Promise<void>((resolve) => {
       process.once("SIGTERM", resolve);
     });

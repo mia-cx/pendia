@@ -48,8 +48,12 @@ async function serveWeb(pathname: string, root: string): Promise<Response> {
   return new Response(Bun.file(resolve(webRoot, "200.html")));
 }
 
-/** Starts the same-origin HTTP server for Pendia's API role. */
+/**
+ * Starts the HTTP server for the api role. `ready` answers the readiness probe;
+ * it must resolve, never throw, so a lost database becomes a 503 and not a dropped connection.
+ */
 export function startApiServer(
+  ready: () => Promise<boolean>,
   port = readPort(Bun.env.PENDIA_PORT),
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
@@ -64,8 +68,9 @@ export function startApiServer(
       }
 
       if (pathname === "/readyz") {
-        // Startup applies migrations before listening. Transcoder readiness comes in its slice.
-        return Response.json({ status: "ready" });
+        return (await ready())
+          ? Response.json({ status: "ready" })
+          : Response.json({ status: "database unavailable" }, { status: 503 });
       }
 
       if (isApplicationPath(pathname)) {

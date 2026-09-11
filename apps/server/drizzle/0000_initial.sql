@@ -228,7 +228,8 @@ CREATE TABLE "segment_timelines" (
 --> statement-breakpoint
 CREATE TABLE "streams" (
 	"id" uuid PRIMARY KEY NOT NULL,
-	"file_id" uuid NOT NULL,
+	"version_id" uuid NOT NULL,
+	"file_id" uuid,
 	"index" integer NOT NULL,
 	"kind" "stream_kind" NOT NULL,
 	"codec" text NOT NULL,
@@ -247,7 +248,7 @@ CREATE TABLE "streams" (
 	"channels" integer,
 	"channel_layout" text,
 	"sample_rate" integer,
-	CONSTRAINT "streams_file_index_unique" UNIQUE("file_id","index"),
+	CONSTRAINT "streams_version_index_unique" UNIQUE("version_id","index"),
 	CONSTRAINT "streams_index_check" CHECK ("streams"."index" >= 0),
 	CONSTRAINT "streams_bitrate_check" CHECK ("streams"."bitrate" >= 0),
 	CONSTRAINT "streams_level_check" CHECK ("streams"."level" >= 0),
@@ -262,6 +263,8 @@ CREATE TABLE "streams" (
 CREATE TABLE "versions" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"item_id" uuid NOT NULL,
+	"item_kind" "item_kind" NOT NULL,
+	"library_id" uuid NOT NULL,
 	"label" text NOT NULL,
 	"format" "format" NOT NULL,
 	"bytes" bigint NOT NULL,
@@ -269,16 +272,18 @@ CREATE TABLE "versions" (
 	"segment_timeline_id" uuid,
 	"timeline_aligned" boolean DEFAULT false NOT NULL,
 	"origin" "version_origin" DEFAULT 'imported' NOT NULL,
-	"source_file_id" uuid,
+	"source_version_id" uuid,
 	"stored_folder" text,
 	"rung" text,
 	"complete" boolean,
 	CONSTRAINT "versions_id_item_format_unique" UNIQUE("id","item_id","format"),
 	CONSTRAINT "versions_id_item_unique" UNIQUE("id","item_id"),
+	CONSTRAINT "versions_id_library_unique" UNIQUE("id","library_id"),
+	CONSTRAINT "versions_item_kind_check" CHECK ("versions"."item_kind" in ('movie', 'episode')),
 	CONSTRAINT "versions_bytes_check" CHECK ("versions"."bytes" >= 0),
 	CONSTRAINT "versions_duration_check" CHECK ("versions"."duration_seconds" >= 0 and "versions"."duration_seconds" < 'Infinity'::float8),
 	CONSTRAINT "versions_alignment_check" CHECK (not "versions"."timeline_aligned" or "versions"."segment_timeline_id" is not null),
-	CONSTRAINT "versions_storage_check" CHECK (("versions"."origin" = 'imported' and "versions"."source_file_id" is null and "versions"."stored_folder" is null and "versions"."rung" is null and "versions"."complete" is null) or ("versions"."origin" = 'stored' and "versions"."format" = 'video' and "versions"."source_file_id" is not null and "versions"."stored_folder" is not null and "versions"."rung" is not null and "versions"."complete" is not null and "versions"."segment_timeline_id" is not null and "versions"."timeline_aligned"))
+	CONSTRAINT "versions_storage_check" CHECK (("versions"."origin" = 'imported' and "versions"."source_version_id" is null and "versions"."stored_folder" is null and "versions"."rung" is null and "versions"."complete" is null) or ("versions"."origin" = 'stored' and "versions"."format" = 'video' and "versions"."source_version_id" is not null and "versions"."stored_folder" is not null and "versions"."rung" is not null and "versions"."complete" is not null and "versions"."segment_timeline_id" is not null and "versions"."timeline_aligned"))
 );
 --> statement-breakpoint
 CREATE TABLE "favourites" (
@@ -420,8 +425,7 @@ ALTER TABLE "artwork" ADD CONSTRAINT "artwork_item_id_items_id_fk" FOREIGN KEY (
 ALTER TABLE "artwork" ADD CONSTRAINT "artwork_version_id_versions_id_fk" FOREIGN KEY ("version_id") REFERENCES "public"."versions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "credits" ADD CONSTRAINT "credits_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "credits" ADD CONSTRAINT "credits_contributor_id_contributors_id_fk" FOREIGN KEY ("contributor_id") REFERENCES "public"."contributors"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "files" ADD CONSTRAINT "files_version_id_versions_id_fk" FOREIGN KEY ("version_id") REFERENCES "public"."versions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "files" ADD CONSTRAINT "files_library_id_libraries_id_fk" FOREIGN KEY ("library_id") REFERENCES "public"."libraries"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "files" ADD CONSTRAINT "files_version_library_fk" FOREIGN KEY ("version_id","library_id") REFERENCES "public"."versions"("id","library_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "item_ancestors" ADD CONSTRAINT "item_ancestors_ancestor_id_items_id_fk" FOREIGN KEY ("ancestor_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "item_ancestors" ADD CONSTRAINT "item_ancestors_descendant_id_items_id_fk" FOREIGN KEY ("descendant_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "items" ADD CONSTRAINT "items_library_id_libraries_id_fk" FOREIGN KEY ("library_id") REFERENCES "public"."libraries"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -429,9 +433,11 @@ ALTER TABLE "items" ADD CONSTRAINT "items_parent_fk" FOREIGN KEY ("parent_id","l
 ALTER TABLE "provider_ids" ADD CONSTRAINT "provider_ids_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "provider_ids" ADD CONSTRAINT "provider_ids_contributor_id_contributors_id_fk" FOREIGN KEY ("contributor_id") REFERENCES "public"."contributors"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "segment_timelines" ADD CONSTRAINT "segment_timelines_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "streams" ADD CONSTRAINT "streams_file_id_files_id_fk" FOREIGN KEY ("file_id") REFERENCES "public"."files"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "versions" ADD CONSTRAINT "versions_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "versions" ADD CONSTRAINT "versions_source_file_id_files_id_fk" FOREIGN KEY ("source_file_id") REFERENCES "public"."files"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "streams" ADD CONSTRAINT "streams_version_id_versions_id_fk" FOREIGN KEY ("version_id") REFERENCES "public"."versions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "streams" ADD CONSTRAINT "streams_file_id_files_id_fk" FOREIGN KEY ("file_id") REFERENCES "public"."files"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "versions" ADD CONSTRAINT "versions_item_kind_fk" FOREIGN KEY ("item_id","item_kind") REFERENCES "public"."items"("id","kind") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "versions" ADD CONSTRAINT "versions_item_library_fk" FOREIGN KEY ("item_id","library_id") REFERENCES "public"."items"("id","library_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "versions" ADD CONSTRAINT "versions_source_version_fk" FOREIGN KEY ("source_version_id","item_id") REFERENCES "public"."versions"("id","item_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "versions" ADD CONSTRAINT "versions_timeline_fk" FOREIGN KEY ("segment_timeline_id","item_id") REFERENCES "public"."segment_timelines"("id","item_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "favourites" ADD CONSTRAINT "favourites_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "favourites" ADD CONSTRAINT "favourites_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -475,7 +481,7 @@ CREATE UNIQUE INDEX "provider_ids_item_unique" ON "provider_ids" USING btree ("i
 CREATE UNIQUE INDEX "provider_ids_contributor_unique" ON "provider_ids" USING btree ("contributor_id","provider") WHERE "provider_ids"."contributor_id" is not null;--> statement-breakpoint
 CREATE INDEX "provider_ids_lookup_idx" ON "provider_ids" USING btree ("provider","value");--> statement-breakpoint
 CREATE INDEX "versions_item_idx" ON "versions" USING btree ("item_id");--> statement-breakpoint
-CREATE INDEX "versions_source_file_idx" ON "versions" USING btree ("source_file_id");--> statement-breakpoint
+CREATE INDEX "versions_source_version_idx" ON "versions" USING btree ("source_version_id");--> statement-breakpoint
 CREATE INDEX "favourites_recent_idx" ON "favourites" USING btree ("user_id","created_at" DESC NULLS LAST,"item_id");--> statement-breakpoint
 CREATE INDEX "progress_recent_idx" ON "progress" USING btree ("user_id","played_at" DESC NULLS LAST,"item_id");--> statement-breakpoint
 CREATE INDEX "progress_continue_idx" ON "progress" USING btree ("user_id","played_at" DESC NULLS LAST,"item_id") WHERE not "progress"."completed" and "progress"."position_seconds" > 0;--> statement-breakpoint
@@ -484,6 +490,7 @@ CREATE INDEX "jobs_queued_idx" ON "jobs" USING btree ("priority" DESC NULLS LAST
 CREATE INDEX "jobs_running_idx" ON "jobs" USING btree ("concurrency_key") WHERE "jobs"."state" = 'running';--> statement-breakpoint
 CREATE INDEX "session_registry_node_state_idx" ON "session_registry" USING btree ("transcoder_node_id","state","created_at","id");--> statement-breakpoint
 CREATE INDEX "session_registry_seen_idx" ON "session_registry" USING btree ("last_seen_at");--> statement-breakpoint
+-- Stored Versions own Streams. These triggers restrict only Files.
 -- Lock the Version so a concurrent origin change cannot admit a File.
 CREATE FUNCTION require_imported_file_version() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN

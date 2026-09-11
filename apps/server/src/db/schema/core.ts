@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import {
-  type AnyPgColumn,
   bigint,
   boolean,
   check,
@@ -150,9 +149,9 @@ export const versions = pgTable(
   "versions",
   {
     id: id(),
-    itemId: uuid("item_id")
-      .notNull()
-      .references(() => items.id, owned),
+    itemId: uuid("item_id").notNull(),
+    itemKind: itemKind("item_kind").notNull(),
+    libraryId: uuid("library_id").notNull(),
     label: text("label").notNull(),
     format: format("format").notNull(),
     bytes: bigint("bytes", { mode: "bigint" }).notNull(),
@@ -160,10 +159,7 @@ export const versions = pgTable(
     segmentTimelineId: uuid("segment_timeline_id"),
     timelineAligned: boolean("timeline_aligned").notNull().default(false),
     origin: versionOrigin("origin").notNull().default("imported"),
-    sourceFileId: uuid("source_file_id").references(
-      (): AnyPgColumn => files.id,
-      owned,
-    ),
+    sourceVersionId: uuid("source_version_id"),
     storedFolder: text("stored_folder"),
     rung: text("rung"),
     complete: boolean("complete"),
@@ -175,6 +171,32 @@ export const versions = pgTable(
       table.format,
     ),
     unique("versions_id_item_unique").on(table.id, table.itemId),
+    unique("versions_id_library_unique").on(table.id, table.libraryId),
+    foreignKey({
+      name: "versions_item_kind_fk",
+      columns: [table.itemId, table.itemKind],
+      foreignColumns: [items.id, items.kind],
+    })
+      .onDelete("cascade")
+      .onUpdate("no action"),
+    foreignKey({
+      name: "versions_item_library_fk",
+      columns: [table.itemId, table.libraryId],
+      foreignColumns: [items.id, items.libraryId],
+    })
+      .onDelete("cascade")
+      .onUpdate("no action"),
+    foreignKey({
+      name: "versions_source_version_fk",
+      columns: [table.sourceVersionId, table.itemId],
+      foreignColumns: [table.id, table.itemId],
+    })
+      .onDelete("cascade")
+      .onUpdate("no action"),
+    check(
+      "versions_item_kind_check",
+      sql`${table.itemKind} in ('movie', 'episode')`,
+    ),
     foreignKey({
       name: "versions_timeline_fk",
       columns: [table.segmentTimelineId, table.itemId],
@@ -193,10 +215,10 @@ export const versions = pgTable(
     ),
     check(
       "versions_storage_check",
-      sql`(${table.origin} = 'imported' and ${table.sourceFileId} is null and ${table.storedFolder} is null and ${table.rung} is null and ${table.complete} is null) or (${table.origin} = 'stored' and ${table.format} = 'video' and ${table.sourceFileId} is not null and ${table.storedFolder} is not null and ${table.rung} is not null and ${table.complete} is not null and ${table.segmentTimelineId} is not null and ${table.timelineAligned})`,
+      sql`(${table.origin} = 'imported' and ${table.sourceVersionId} is null and ${table.storedFolder} is null and ${table.rung} is null and ${table.complete} is null) or (${table.origin} = 'stored' and ${table.format} = 'video' and ${table.sourceVersionId} is not null and ${table.storedFolder} is not null and ${table.rung} is not null and ${table.complete} is not null and ${table.segmentTimelineId} is not null and ${table.timelineAligned})`,
     ),
     index("versions_item_idx").on(table.itemId),
-    index("versions_source_file_idx").on(table.sourceFileId),
+    index("versions_source_version_idx").on(table.sourceVersionId),
   ],
 );
 
@@ -210,12 +232,8 @@ export const files = pgTable(
   "files",
   {
     id: id(),
-    versionId: uuid("version_id")
-      .notNull()
-      .references((): AnyPgColumn => versions.id, owned),
-    libraryId: uuid("library_id")
-      .notNull()
-      .references(() => libraries.id, owned),
+    versionId: uuid("version_id").notNull(),
+    libraryId: uuid("library_id").notNull(),
     path: text("path").notNull(),
     order: integer("order").notNull(),
     bytes: bigint("bytes", { mode: "bigint" }).notNull(),
@@ -227,6 +245,13 @@ export const files = pgTable(
   (table) => [
     unique("files_version_order_unique").on(table.versionId, table.order),
     unique("files_version_path_unique").on(table.versionId, table.path),
+    foreignKey({
+      name: "files_version_library_fk",
+      columns: [table.versionId, table.libraryId],
+      foreignColumns: [versions.id, versions.libraryId],
+    })
+      .onDelete("cascade")
+      .onUpdate("no action"),
     check("files_bytes_check", sql`${table.bytes} >= 0`),
     check("files_order_check", sql`${table.order} >= 0`),
     check(
@@ -241,9 +266,13 @@ export const streams = pgTable(
   "streams",
   {
     id: id(),
-    fileId: uuid("file_id")
+    versionId: uuid("version_id")
       .notNull()
-      .references(() => files.id, owned),
+      .references(() => versions.id, owned),
+    fileId: uuid("file_id").references(() => files.id, {
+      onDelete: "set null",
+      onUpdate: "no action",
+    }),
     index: integer("index").notNull(),
     kind: streamKind("kind").notNull(),
     codec: text("codec").notNull(),
@@ -267,7 +296,7 @@ export const streams = pgTable(
     sampleRate: integer("sample_rate"),
   },
   (table) => [
-    unique("streams_file_index_unique").on(table.fileId, table.index),
+    unique("streams_version_index_unique").on(table.versionId, table.index),
     check("streams_index_check", sql`${table.index} >= 0`),
     check("streams_bitrate_check", sql`${table.bitrate} >= 0`),
     check("streams_level_check", sql`${table.level} >= 0`),

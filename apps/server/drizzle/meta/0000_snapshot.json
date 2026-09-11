@@ -1,5 +1,5 @@
 {
-  "id": "eca1c885-dcf4-4502-96b3-58daec8f0c4d",
+  "id": "7ee4099c-ef89-469a-8d78-748862798bf9",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1236,21 +1236,12 @@
         }
       },
       "foreignKeys": {
-        "files_version_id_versions_id_fk": {
-          "name": "files_version_id_versions_id_fk",
+        "files_version_library_fk": {
+          "name": "files_version_library_fk",
           "tableFrom": "files",
           "tableTo": "versions",
-          "columnsFrom": ["version_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "files_library_id_libraries_id_fk": {
-          "name": "files_library_id_libraries_id_fk",
-          "tableFrom": "files",
-          "tableTo": "libraries",
-          "columnsFrom": ["library_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": ["version_id", "library_id"],
+          "columnsTo": ["id", "library_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1893,11 +1884,17 @@
           "primaryKey": true,
           "notNull": true
         },
+        "version_id": {
+          "name": "version_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "file_id": {
           "name": "file_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "index": {
           "name": "index",
@@ -2012,22 +2009,31 @@
       },
       "indexes": {},
       "foreignKeys": {
+        "streams_version_id_versions_id_fk": {
+          "name": "streams_version_id_versions_id_fk",
+          "tableFrom": "streams",
+          "tableTo": "versions",
+          "columnsFrom": ["version_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
         "streams_file_id_files_id_fk": {
           "name": "streams_file_id_files_id_fk",
           "tableFrom": "streams",
           "tableTo": "files",
           "columnsFrom": ["file_id"],
           "columnsTo": ["id"],
-          "onDelete": "cascade",
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "streams_file_index_unique": {
-          "name": "streams_file_index_unique",
+        "streams_version_index_unique": {
+          "name": "streams_version_index_unique",
           "nullsNotDistinct": false,
-          "columns": ["file_id", "index"]
+          "columns": ["version_id", "index"]
         }
       },
       "policies": {},
@@ -2087,6 +2093,19 @@
           "primaryKey": false,
           "notNull": true
         },
+        "item_kind": {
+          "name": "item_kind",
+          "type": "item_kind",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "library_id": {
+          "name": "library_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
         "label": {
           "name": "label",
           "type": "text",
@@ -2133,8 +2152,8 @@
           "notNull": true,
           "default": "'imported'"
         },
-        "source_file_id": {
-          "name": "source_file_id",
+        "source_version_id": {
+          "name": "source_version_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -2174,11 +2193,11 @@
           "method": "btree",
           "with": {}
         },
-        "versions_source_file_idx": {
-          "name": "versions_source_file_idx",
+        "versions_source_version_idx": {
+          "name": "versions_source_version_idx",
           "columns": [
             {
-              "expression": "source_file_id",
+              "expression": "source_version_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2191,21 +2210,30 @@
         }
       },
       "foreignKeys": {
-        "versions_item_id_items_id_fk": {
-          "name": "versions_item_id_items_id_fk",
+        "versions_item_kind_fk": {
+          "name": "versions_item_kind_fk",
           "tableFrom": "versions",
           "tableTo": "items",
-          "columnsFrom": ["item_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": ["item_id", "item_kind"],
+          "columnsTo": ["id", "kind"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "versions_source_file_id_files_id_fk": {
-          "name": "versions_source_file_id_files_id_fk",
+        "versions_item_library_fk": {
+          "name": "versions_item_library_fk",
           "tableFrom": "versions",
-          "tableTo": "files",
-          "columnsFrom": ["source_file_id"],
-          "columnsTo": ["id"],
+          "tableTo": "items",
+          "columnsFrom": ["item_id", "library_id"],
+          "columnsTo": ["id", "library_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "versions_source_version_fk": {
+          "name": "versions_source_version_fk",
+          "tableFrom": "versions",
+          "tableTo": "versions",
+          "columnsFrom": ["source_version_id", "item_id"],
+          "columnsTo": ["id", "item_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2230,10 +2258,19 @@
           "name": "versions_id_item_unique",
           "nullsNotDistinct": false,
           "columns": ["id", "item_id"]
+        },
+        "versions_id_library_unique": {
+          "name": "versions_id_library_unique",
+          "nullsNotDistinct": false,
+          "columns": ["id", "library_id"]
         }
       },
       "policies": {},
       "checkConstraints": {
+        "versions_item_kind_check": {
+          "name": "versions_item_kind_check",
+          "value": "\"versions\".\"item_kind\" in ('movie', 'episode')"
+        },
         "versions_bytes_check": {
           "name": "versions_bytes_check",
           "value": "\"versions\".\"bytes\" >= 0"
@@ -2248,7 +2285,7 @@
         },
         "versions_storage_check": {
           "name": "versions_storage_check",
-          "value": "(\"versions\".\"origin\" = 'imported' and \"versions\".\"source_file_id\" is null and \"versions\".\"stored_folder\" is null and \"versions\".\"rung\" is null and \"versions\".\"complete\" is null) or (\"versions\".\"origin\" = 'stored' and \"versions\".\"format\" = 'video' and \"versions\".\"source_file_id\" is not null and \"versions\".\"stored_folder\" is not null and \"versions\".\"rung\" is not null and \"versions\".\"complete\" is not null and \"versions\".\"segment_timeline_id\" is not null and \"versions\".\"timeline_aligned\")"
+          "value": "(\"versions\".\"origin\" = 'imported' and \"versions\".\"source_version_id\" is null and \"versions\".\"stored_folder\" is null and \"versions\".\"rung\" is null and \"versions\".\"complete\" is null) or (\"versions\".\"origin\" = 'stored' and \"versions\".\"format\" = 'video' and \"versions\".\"source_version_id\" is not null and \"versions\".\"stored_folder\" is not null and \"versions\".\"rung\" is not null and \"versions\".\"complete\" is not null and \"versions\".\"segment_timeline_id\" is not null and \"versions\".\"timeline_aligned\")"
         }
       },
       "isRLSEnabled": false

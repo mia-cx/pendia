@@ -12,6 +12,20 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: pendia
+          POSTGRES_PASSWORD: pendia
+          POSTGRES_DB: pendia
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pendia -d pendia"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -22,6 +36,8 @@ jobs:
       - run: bun run check
       - run: bun run build
       - run: bun test
+        env:
+          DATABASE_URL: postgresql://pendia:pendia@127.0.0.1:5432/pendia
 
   image:
     runs-on: ubuntu-latest

@@ -14,6 +14,8 @@
     },
     "lint": {},
     "test": {
+      "cache": false,
+      "passThroughEnv": ["DATABASE_URL", "CI"],
       "dependsOn": ["build"]
     }
   }

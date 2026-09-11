@@ -14,7 +14,7 @@ The skeleton every later slice lands in: a Bun workspace with Turborepo, the ser
 
 ## TODOs
 
-- [ ] Workspace root: `package.json` with Bun workspaces for `apps/*`, `packages/*`, `plugins/*`, `engines.bun >= 1.4.0`, `turbo.json` with `build`, `lint`, `check`, `test` and `dev`, `biome.json`, `.gitignore`, `.editorconfig`, and a root `tsconfig.base.json` with strict settings.
+- [x] Workspace root: `package.json` with Bun workspaces for `apps/*`, `packages/*`, `plugins/*`, `engines.bun >= 1.4.0`, `turbo.json` with `build`, `lint`, `check`, `test` and `dev`, `biome.json`, `.gitignore`, `.editorconfig`, and a root `tsconfig.base.json` with strict settings.
 - [ ] `packages/plugin-api`: publishes the declarations from `docs/spec/plugin-api.d.ts` unchanged as its types entry, version `0.1.0`, name `@pendia/plugin-api`.
 - [ ] `apps/server`: entry that parses `--role api|worker|transcoder|watcher|all` (default `all`), exits with a clear message on an unknown role, gates on Bun 1.4.0 or later with a message naming the requirement, logs structured JSON tagged with the role, and shuts down on SIGTERM. Worker, transcoder and watcher roles log that they started and idle.
 - [ ] `apps/server` api role: `Bun.serve` on `PENDIA_PORT` (default 3000) with `/healthz` answering 200 and `/readyz` answering 200 with a comment marking where migrations and the transcoder trial will gate it later.
@@ -29,3 +29,4 @@ The skeleton every later slice lands in: a Bun workspace with Turborepo, the ser
 
 - Bun 1.4.2 is installed on the dev box for this slice; the audit in `docs/research/bun-capabilities.md` is why 1.4 is the floor.
 - Implementation is delegated to Codex (gpt-5.6-sol); each TODO lands as one commit with `Refs #19`.
+- TODO 1: `BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun install && BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run build && BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run lint && BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run check` passed.

@@ -61,6 +61,7 @@ export const seasons = pgTable(
   ],
 );
 
+// The migration adds a GiST exclusion constraint for overlapping episode ranges within a season.
 export const episodes = pgTable(
   "episodes",
   {

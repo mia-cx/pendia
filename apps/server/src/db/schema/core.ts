@@ -8,6 +8,7 @@ import {
   index,
   integer,
   jsonb,
+  type PgTableExtraConfigValue,
   pgEnum,
   pgTable,
   text,
@@ -159,12 +160,12 @@ export const versions = pgTable(
     segmentTimelineId: uuid("segment_timeline_id"),
     timelineAligned: boolean("timeline_aligned").notNull().default(false),
     origin: versionOrigin("origin").notNull().default("imported"),
-    sourceVersionId: uuid("source_version_id"),
+    sourceFileId: uuid("source_file_id"),
     storedFolder: text("stored_folder"),
     rung: text("rung"),
     complete: boolean("complete"),
   },
-  (table) => [
+  (table): PgTableExtraConfigValue[] => [
     unique("versions_id_item_format_unique").on(
       table.id,
       table.itemId,
@@ -187,9 +188,9 @@ export const versions = pgTable(
       .onDelete("cascade")
       .onUpdate("no action"),
     foreignKey({
-      name: "versions_source_version_fk",
-      columns: [table.sourceVersionId, table.itemId],
-      foreignColumns: [table.id, table.itemId],
+      name: "versions_source_file_fk",
+      columns: [table.sourceFileId, table.itemId],
+      foreignColumns: [files.id, files.itemId],
     })
       .onDelete("cascade")
       .onUpdate("no action"),
@@ -215,10 +216,10 @@ export const versions = pgTable(
     ),
     check(
       "versions_storage_check",
-      sql`(${table.origin} = 'imported' and ${table.sourceVersionId} is null and ${table.storedFolder} is null and ${table.rung} is null and ${table.complete} is null) or (${table.origin} = 'stored' and ${table.format} = 'video' and ${table.sourceVersionId} is not null and ${table.storedFolder} is not null and ${table.rung} is not null and ${table.complete} is not null and ${table.segmentTimelineId} is not null and ${table.timelineAligned})`,
+      sql`(${table.origin} = 'imported' and ${table.sourceFileId} is null and ${table.storedFolder} is null and ${table.rung} is null and ${table.complete} is null) or (${table.origin} = 'stored' and ${table.format} = 'video' and ${table.sourceFileId} is not null and ${table.storedFolder} is not null and ${table.rung} is not null and ${table.complete} is not null and ${table.segmentTimelineId} is not null and ${table.timelineAligned})`,
     ),
     index("versions_item_idx").on(table.itemId),
-    index("versions_source_version_idx").on(table.sourceVersionId),
+    index("versions_source_file_idx").on(table.sourceFileId),
   ],
 );
 
@@ -233,6 +234,7 @@ export const files = pgTable(
   {
     id: id(),
     versionId: uuid("version_id").notNull(),
+    itemId: uuid("item_id").notNull(),
     libraryId: uuid("library_id").notNull(),
     path: text("path").notNull(),
     order: integer("order").notNull(),
@@ -244,7 +246,16 @@ export const files = pgTable(
   },
   (table) => [
     unique("files_version_order_unique").on(table.versionId, table.order),
-    unique("files_version_path_unique").on(table.versionId, table.path),
+    unique("files_library_path_unique").on(table.libraryId, table.path),
+    unique("files_id_item_unique").on(table.id, table.itemId),
+    unique("files_id_version_unique").on(table.id, table.versionId),
+    foreignKey({
+      name: "files_version_item_fk",
+      columns: [table.versionId, table.itemId],
+      foreignColumns: [versions.id, versions.itemId],
+    })
+      .onDelete("cascade")
+      .onUpdate("no action"),
     foreignKey({
       name: "files_version_library_fk",
       columns: [table.versionId, table.libraryId],
@@ -269,10 +280,7 @@ export const streams = pgTable(
     versionId: uuid("version_id")
       .notNull()
       .references(() => versions.id, owned),
-    fileId: uuid("file_id").references(() => files.id, {
-      onDelete: "set null",
-      onUpdate: "no action",
-    }),
+    fileId: uuid("file_id"),
     index: integer("index").notNull(),
     kind: streamKind("kind").notNull(),
     codec: text("codec").notNull(),
@@ -296,7 +304,20 @@ export const streams = pgTable(
     sampleRate: integer("sample_rate"),
   },
   (table) => [
-    unique("streams_version_index_unique").on(table.versionId, table.index),
+    // The migration narrows SET NULL to file_id so the Version remains attached.
+    foreignKey({
+      name: "streams_file_version_fk",
+      columns: [table.fileId, table.versionId],
+      foreignColumns: [files.id, files.versionId],
+    })
+      .onDelete("set null")
+      .onUpdate("no action"),
+    uniqueIndex("streams_file_index_unique")
+      .on(table.fileId, table.index)
+      .where(sql`${table.fileId} is not null`),
+    uniqueIndex("streams_version_index_unique")
+      .on(table.versionId, table.index)
+      .where(sql`${table.fileId} is null`),
     check("streams_index_check", sql`${table.index} >= 0`),
     check("streams_bitrate_check", sql`${table.bitrate} >= 0`),
     check("streams_level_check", sql`${table.level} >= 0`),

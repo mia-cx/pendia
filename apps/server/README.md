@@ -11,7 +11,7 @@ docker compose -p pendia-db-test -f compose.yaml -f compose.test.yaml down -v
 ```
 
 Tests create and drop unique databases on that server. They leave the database named in DATABASE_URL intact.
-The test role needs CREATEDB and permission to install pg_trgm. The Compose role has both.
+The test role needs CREATEDB and permission to install pg_trgm and btree_gist. The Compose role has these permissions.
 Missing DATABASE_URL skips database tests locally and fails in CI. Connection errors always fail.
 
 After changing the Drizzle schema, generate the next migration:
@@ -21,7 +21,8 @@ bun run --cwd apps/server db:generate
 ```
 
 Review and commit the SQL and metadata under apps/server/drizzle together.
-Hand-written SQL handles the boundary validator, stored-file triggers and column-specific SET NULL for progress.
+Hand-written SQL handles the boundary validator, stored-file triggers and episode-range exclusion.
+It also limits SET NULL to version_id on progress and file_id on streams.
 Preserve these rules when a generated migration changes their constraints.
 
 The api and all roles apply pending migrations before listening. Other roles do not migrate.

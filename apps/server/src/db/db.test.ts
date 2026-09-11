@@ -167,7 +167,7 @@ async function migrationState(db: Database) {
     groups: await db.select().from(groups).orderBy(groups.name),
     extensions: Array.from(
       await db.execute(
-        sql`select extname from pg_extension where extname = 'pg_trgm'`,
+        sql`select extname from pg_extension where extname in ('pg_trgm', 'btree_gist') order by extname`,
       ),
     ),
   };
@@ -194,7 +194,10 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       const before = await migrationState(db);
       expect(before.journal).toHaveLength(1);
       expect(before.tables).toHaveLength(32);
-      expect(before.extensions).toEqual([{ extname: "pg_trgm" }]);
+      expect(before.extensions).toEqual([
+        { extname: "btree_gist" },
+        { extname: "pg_trgm" },
+      ]);
       expect(before.groups).toMatchObject([
         { name: "admins", builtIn: true, permissions: [...permissions] },
         { name: "users", builtIn: true, permissions: ["view", "play"] },
@@ -347,6 +350,14 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         }),
       ).rejects.toMatchObject({ cause: { errno: "23514" } });
       expect(await db.select().from(items)).toHaveLength(7);
+      await expect(
+        insertItem(db, {
+          ...f.base,
+          kind: "episode",
+          parentId: f.season.id,
+          extension: { episodeNumber: 2 },
+        }),
+      ).rejects.toMatchObject({ cause: { errno: "23P01" } });
       await expectClosure(db);
       await expect(
         db
@@ -409,11 +420,55 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           .insert(files)
           .values({
             versionId: source.id,
+            itemId: source.itemId,
             libraryId: f.base.libraryId,
             path: "wrong.mkv",
             order: 0,
             bytes: 100n,
             modifiedAt: new Date(),
+          })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23503" } });
+      const fileValues = {
+        versionId: source.id,
+        itemId: source.itemId,
+        libraryId: source.libraryId,
+        path: "source.mkv",
+        order: 0,
+        bytes: 100n,
+        modifiedAt: new Date(),
+      };
+      await expect(
+        db
+          .insert(files)
+          .values({ ...fileValues, itemId: f.episode.id })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23503" } });
+      const [sourceFile] = await db
+        .insert(files)
+        .values(fileValues)
+        .returning();
+      const [otherVersion] = await db
+        .insert(versions)
+        .values({ ...values, label: "Other" })
+        .returning();
+      if (!sourceFile || !otherVersion)
+        throw new Error("File ownership fixture missing.");
+      await expect(
+        db
+          .insert(files)
+          .values({ ...fileValues, versionId: otherVersion.id })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23505" } });
+      await expect(
+        db
+          .insert(streams)
+          .values({
+            versionId: otherVersion.id,
+            fileId: sourceFile.id,
+            index: 0,
+            kind: "video",
+            codec: "h264",
           })
           .execute(),
       ).rejects.toMatchObject({ cause: { errno: "23503" } });
@@ -435,7 +490,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             itemKind: f.episode.kind,
             libraryId: f.episode.libraryId,
             origin: "stored",
-            sourceVersionId: source.id,
+            sourceFileId: sourceFile.id,
             segmentTimelineId: timeline.id,
             timelineAligned: true,
             storedFolder: "/stored/episode",
@@ -474,6 +529,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         .insert(files)
         .values({
           versionId: version.id,
+          itemId: version.itemId,
           libraryId: f.movie.libraryId,
           path: "movie.mkv",
           order: 0,
@@ -486,6 +542,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         .insert(files)
         .values({
           versionId: version.id,
+          itemId: version.itemId,
           libraryId: f.movie.libraryId,
           path: "movie-part2.mkv",
           order: 1,
@@ -507,7 +564,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         segmentTimelineId: timeline.id,
         timelineAligned: true,
         origin: "stored",
-        sourceVersionId: version.id,
+        sourceFileId: file.id,
         storedFolder: "/stored/movie",
         rung: "720p",
         complete: true,
@@ -530,6 +587,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           .insert(files)
           .values({
             versionId: stored.id,
+            itemId: stored.itemId,
             libraryId: f.movie.libraryId,
             path: "segment.ts",
             order: 0,
@@ -555,13 +613,31 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         },
         { versionId: stored.id, index: 0, kind: "video", codec: "h264" },
         { versionId: stored.id, index: 1, kind: "audio", codec: "aac" },
+        {
+          versionId: version.id,
+          fileId: secondFile.id,
+          index: 0,
+          kind: "video",
+          codec: "h264",
+        },
       ]);
       await expect(
         db
           .insert(streams)
           .values({
             versionId: version.id,
-            fileId: secondFile.id,
+            fileId: file.id,
+            index: 0,
+            kind: "video",
+            codec: "h264",
+          })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23505" } });
+      await expect(
+        db
+          .insert(streams)
+          .values({
+            versionId: stored.id,
             index: 0,
             kind: "video",
             codec: "h264",
@@ -570,16 +646,14 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       ).rejects.toMatchObject({ cause: { errno: "23505" } });
       await db.delete(files).where(eq(files.id, file.id));
       expect(
-        await db
-          .select()
-          .from(streams)
-          .orderBy(streams.versionId, streams.index),
+        await db.select().from(streams).orderBy(streams.fileId),
       ).toMatchObject([
+        { versionId: version.id, fileId: secondFile.id, kind: "video" },
         { versionId: version.id, fileId: null, kind: "video" },
-        { versionId: stored.id, fileId: null, kind: "video" },
-        { versionId: stored.id, fileId: null, kind: "audio" },
       ]);
-      expect(await db.select().from(versions)).toHaveLength(2);
+      expect(await db.select().from(versions)).toMatchObject([
+        { id: version.id },
+      ]);
       expect(await db.select().from(files)).toMatchObject([
         { id: secondFile.id },
       ]);

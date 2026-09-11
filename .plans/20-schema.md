@@ -29,3 +29,4 @@ The Drizzle schema for the core and both mediums, exactly as the glossary and AD
 
 - Phase one: Astra reads the specs and writes its approach per TODO; the orchestrator reviews it against the criteria and posts it on the issue before phase two writes code.
 - Implementation is delegated to Codex (gpt-6-astra); the orchestrator commits per TODO by staging paths.
+- Phase one done: Astra's plan and the review are on issue #20. Decisions: no speculative columns; simple session registry and node table; plain foreign keys on extension tables; Stored Versions have no File rows; timelines per cut; stored Versions keep their audio tracks; permission precedence, verified-email OIDC linking and a 0 to 10 rating scale are fixed in the docs by this slice.

@@ -6,11 +6,11 @@ The skeleton every later slice lands in: a Bun workspace with Turborepo, the ser
 
 ## Acceptance criteria
 
-- [ ] `bun install` and `bun run build` succeed from a clean clone; lint and typecheck run in CI on every PR.
-- [ ] `docker compose up` starts Postgres and Pendia; `/healthz` answers 200 and the web shell renders at `/`.
-- [ ] Every role value is accepted and logged; an unknown one fails with a clear message.
-- [ ] Bun below 1.4 exits at startup with a message naming the requirement.
-- [ ] The plugin API package builds and exports the types from the spec unchanged.
+- [x] `bun install` and `bun run build` succeed from a clean clone; lint and typecheck run in CI on every PR.
+- [x] `docker compose up` starts Postgres and Pendia; `/healthz` answers 200 and the web shell renders at `/`.
+- [x] Every role value is accepted and logged; an unknown one fails with a clear message.
+- [x] Bun below 1.4 exits at startup with a message naming the requirement.
+- [x] The plugin API package builds and exports the types from the spec unchanged.
 
 ## TODOs
 
@@ -21,9 +21,9 @@ The skeleton every later slice lands in: a Bun workspace with Turborepo, the ser
 - [x] `apps/web`: SvelteKit app whose build is served by the api process on the same origin for every non-API path, rendering a "Pendia" shell at `/`. SSR through the Bun adapter is allowed; a static build is acceptable if mounting the SSR handler into `Bun.serve` proves awkward. Record the choice in Notes.
 - [x] `plugins/webhooks`: placeholder package with the `pendia` manifest block from `docs/spec/plugins.md` and an entry that calls `definePlugin` from `@pendia/plugin-api` and registers nothing yet.
 - [x] Tests with `bun test`: role parsing accepts the five values and rejects an unknown one; the Bun version gate rejects `1.3.11` and accepts `1.4.0`; a started api server answers `/healthz` with 200.
-- [~] `Dockerfile`: multi-stage, build on `oven/bun:1.4`, runtime on Debian trixie with ffmpeg 7 installed, the server compiled with `bun build --compile` and the web build copied in, `--role all` as the default command. `compose.yaml` with Postgres 18 and Pendia, `DATABASE_URL` wired, port 3000 published.
-- [ ] CI: a GitHub Actions workflow on pull requests running `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun test`, and a Docker build without push.
-- [ ] README: a short "Develop" section with the commands to install, run, test and build the image.
+- [x] `Dockerfile`: multi-stage, build on `oven/bun:1.4`, runtime on Debian trixie with ffmpeg 7 installed, the server compiled with `bun build --compile` and the web build copied in, `--role all` as the default command. `compose.yaml` with Postgres 18 and Pendia, `DATABASE_URL` wired, port 3000 published.
+- [x] CI: a GitHub Actions workflow on pull requests running `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun test`, and a Docker build without push.
+- [x] README: a short "Develop" section with the commands to install, run, test and build the image.
 
 ## Notes
 
@@ -39,4 +39,9 @@ The skeleton every later slice lands in: a Bun workspace with Turborepo, the ser
 - TODO 6: `BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun install && BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run build && BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run lint && BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run check` passed.
 - TODO 7: `BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun test` passed with 9 tests across 2 files. `BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run test` passed with 5 Turbo tasks.
 - Orchestrator: `+layout.ts` now prerenders instead of disabling SSR, so the HTML at `/` carries the page and curl sees "Pendia" without JavaScript. Root `typescript` moved to 6.0.3 by Codex for svelte-check compatibility.
+- TODO 8: `BUILDX_CONFIG=/tmp/pendia-buildx docker build -t pendia:dev .` passed. The image runs as `pendia`, defaults to `--role all`, and has ffmpeg 7.1.5.
+- TODO 8: `docker compose up -d` could not bind host port 3000 because `discord-mcp-server-1` uses it. `docker compose -f compose.yaml -f /tmp/pendia-port-override.yaml up -d` passed on host port 3001. Postgres became healthy, `/healthz` returned 200, `/` contained `Pendia`, and `docker compose -f compose.yaml -f /tmp/pendia-port-override.yaml down -v` removed the test stack and volume.
+- TODO 9: `BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun run lint` passed. `actionlint` was unavailable, so the workflow has not run on GitHub yet.
+- TODO 10: `BUN_TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/pendia-bun-cache /home/mia/.bun/bin/bun install`, `bun run build`, `bun run lint`, `bun run check`, and `bun test` passed from the repository root. The final test run passed 10 tests across 2 files.
 - Orchestrator: adapter-static wrote the SPA fallback as index.html and overwrote the prerendered page, and the static route appended index.html twice for "/", so the shell at / never carried content. The fallback is now 200.html, served only for unknown paths, and "/" resolves to the prerendered index.html. Verified with curl: "/" contains "Pendia", a deep client route answers 200 with the shell, /healthz answers 200.
+- Orchestrator: compose host port is now `${PENDIA_HOST_PORT:-3000}` because this box has 3000 taken. Verified on 3001: image builds, Postgres healthy, /healthz and /readyz 200, "/" contains "Pendia", `down -v` clean.

@@ -30,11 +30,10 @@ function isApplicationPath(pathname: string): boolean {
 
 async function serveWeb(pathname: string, root: string): Promise<Response> {
   const webRoot = resolve(root);
-  const relativePath = pathname === "/" ? "index.html" : pathname.slice(1);
-  const requestedPath = resolve(
-    webRoot,
-    pathname.endsWith("/") ? `${relativePath}index.html` : relativePath,
-  );
+  const relativePath = pathname.endsWith("/")
+    ? `${pathname.slice(1)}index.html`
+    : pathname.slice(1);
+  const requestedPath = resolve(webRoot, relativePath);
   const insideWebRoot = requestedPath.startsWith(`${webRoot}${sep}`);
 
   if (insideWebRoot) {
@@ -45,7 +44,8 @@ async function serveWeb(pathname: string, root: string): Promise<Response> {
     }
   }
 
-  return new Response(Bun.file(resolve(webRoot, "index.html")));
+  // Client-side routes fall back to the SPA shell; prerendered pages keep their own files.
+  return new Response(Bun.file(resolve(webRoot, "200.html")));
 }
 
 /** Starts the same-origin HTTP server for Pendia's API role. */

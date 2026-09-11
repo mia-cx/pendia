@@ -120,6 +120,18 @@ _Avoid_: row, carousel, section, rail
 Something a plugin declares in its manifest and an admin approves, such as file access. A capability that was not declared or was switched off is absent from the plugin's host object. Not a user Permission.
 _Avoid_: permission, grant, scope
 
+**Job**:
+A unit of background work on the Postgres queue: a scan, a probe, a provider fetch, a store job, a plugin job.
+_Avoid_: task, worker item, background process
+
+**Playback token**:
+A signed, short-lived token scoped to one session and one Item, carried in the query string of playback URLs because media elements cannot send headers.
+_Avoid_: api key, stream key, access token
+
+**Artwork store**:
+Where artwork originals live: colocated in the Item's `.pendia` folder, a configured path, or S3-compatible object storage.
+_Avoid_: image cache, media store, blob store
+
 **Translation layer**:
 An adapter that speaks a third-party protocol on top of Pendia's own API, so existing apps connect unchanged. One per medium: the Jellyfin API for video, OpenSubsonic for music, OPDS for books, HDHomeRun for live TV.
 _Avoid_: compat layer, shim, emulation, bridge

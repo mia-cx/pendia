@@ -11,3 +11,7 @@ Planning. The architecture is decided ticket by ticket on the [Pendia v1 map](ht
 ## License
 
 [MCX](./LICENSE): MPL 2.0 with network use counted as distribution.
+
+## Layout
+
+A Bun workspace with Turborepo. `apps/server` is the Bun host with the mediums and the first-party providers in-tree. `apps/web` is the SvelteKit client and admin UI. `packages/plugin-api` holds the published plugin types. `plugins/webhooks` is the first-party plugin that ships through the official registry.

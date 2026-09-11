@@ -27,3 +27,7 @@ Artwork routes accept anonymous requests by default, because Findroid sends no t
 - Plain HTTP is accepted. Cookie security flags apply on HTTPS only.
 - Proxy headers are trusted from configured addresses only.
 - Login is rate-limited per address and account. No built-in ACME.
+
+## Playback URLs
+
+A video element and Safari's native HLS cannot send headers, so playback URLs carry a per-session playback token in the query string: signed, short-lived, scoped to one session and one Item, refreshed by the client before it expires. The same-origin web client uses a cookie instead. Artwork stays anonymous. The account token never appears in a URL.

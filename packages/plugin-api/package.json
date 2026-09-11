@@ -1,0 +1,25 @@
+{
+  "name": "@pendia/plugin-api",
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./plugin-api.d.ts",
+  "exports": {
+    ".": {
+      "types": "./plugin-api.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "plugin-api.d.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "check": "tsc --noEmit -p tsconfig.json"
+  }
+}

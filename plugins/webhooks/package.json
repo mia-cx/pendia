@@ -1,0 +1,19 @@
+{
+  "name": "@pendia/plugin-webhooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "pendia": {
+    "api": "^1.0.0",
+    "capabilities": [],
+    "entry": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@pendia/plugin-api": "workspace:*"
+  }
+}

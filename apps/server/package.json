@@ -4,9 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "db:generate": "drizzle-kit generate",
     "build": "bun build src/index.ts --outdir dist --target bun",
     "check": "tsc --noEmit -p tsconfig.json",
     "dev": "bun --watch src/index.ts",
     "test": "bun test"
+  },
+  "dependencies": {
+    "drizzle-orm": "0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10"
   }
 }

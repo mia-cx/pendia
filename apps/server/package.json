@@ -1,0 +1,11 @@
+{
+  "name": "@pendia/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "dev": "bun --watch src/index.ts"
+  }
+}

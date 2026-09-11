@@ -6,6 +6,7 @@
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target bun",
     "check": "tsc --noEmit -p tsconfig.json",
-    "dev": "bun --watch src/index.ts"
+    "dev": "bun --watch src/index.ts",
+    "test": "bun test"
   }
 }

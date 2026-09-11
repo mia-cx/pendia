@@ -20,7 +20,7 @@ RUN bun build --compile apps/server/src/index.ts --outfile /app/pendia
 FROM debian:trixie-slim AS runtime
 
 RUN apt-get update \
-  && apt-get install --yes --no-install-recommends ca-certificates ffmpeg \
+  && apt-get install --yes --no-install-recommends ca-certificates curl ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system pendia \
@@ -29,6 +29,7 @@ RUN groupadd --system pendia \
 WORKDIR /app
 
 COPY --from=build --chown=pendia:pendia /app/pendia /app/pendia
+COPY --from=build --chown=pendia:pendia /app/apps/server/drizzle /app/drizzle
 COPY --from=build --chown=pendia:pendia /app/apps/web/build /app/web
 
 ENV PENDIA_PORT=3000

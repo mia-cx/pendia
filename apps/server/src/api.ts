@@ -64,7 +64,7 @@ export function startApiServer(
       }
 
       if (pathname === "/readyz") {
-        // Later slices gate readiness on migrations and the transcoder startup trial.
+        // Startup applies migrations before listening. Transcoder readiness comes in its slice.
         return Response.json({ status: "ready" });
       }
 

@@ -1,4 +1,6 @@
 import { startApiServer } from "./api.ts";
+import { createDatabase } from "./db/client.ts";
+import { migrateDatabase } from "./db/migrate.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -106,14 +108,26 @@ async function run(): Promise<void> {
   requireSupportedBunVersion(Bun.version);
   const role = parseRole(Bun.argv);
 
-  const apiServer = startRoles(role);
-
-  await new Promise<void>((resolve) => {
-    process.once("SIGTERM", resolve);
-  });
-
-  log(role, "server.stopping");
-  await apiServer?.stop();
+  const database =
+    role === "api" || role === "all" ? createDatabase() : undefined;
+  let apiServer: Bun.Server<undefined> | undefined;
+  try {
+    if (database) {
+      await migrateDatabase(database.db);
+      log(role, "database.migrated");
+    }
+    apiServer = startRoles(role);
+    await new Promise<void>((resolve) => {
+      process.once("SIGTERM", resolve);
+    });
+    log(role, "server.stopping");
+  } finally {
+    try {
+      await apiServer?.stop();
+    } finally {
+      await database?.close();
+    }
+  }
 }
 
 if (import.meta.main) {

@@ -23,6 +23,7 @@ A session registry in Postgres maps a session to its transcoder. On one node the
 
 ## Store jobs
 
+- A Stored Version has no File rows. Its folder, rung and complete flag live on the Version, and the manifest lists the segments.
 - Run on workers at low priority inside the idle window, per the library policy or a manual request.
 - Write to `<source file>.pendia/<rung>/` next to the source: `init.mp4`, `n.m4s`, and `manifest.json` with the timeline id, the rung and a complete flag written last.
 - Resume by skipping segments already present. A folder whose rung the policy no longer wants is deleted. Deleting the source deletes its derived folder.

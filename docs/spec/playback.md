@@ -33,7 +33,7 @@ One per Item, or one per cut when an Item has several cuts. Pendia derives it on
 ## Renditions
 
 - Video variants: the Versions in the Item's adaptive group that pass the video rule, in the client's best supported codec family, sorted by bitrate. The client's HLS player switches between them. A live transcode variant appears only when no stored Version passes.
-- Audio: one rendition per audio Stream of the selected Version, tagged with `CODECS` and `CHANNELS`, so a headphone client picks stereo and a receiver picks 5.1 or Atmos. When no stereo track exists, an AAC stereo rendition is transcoded on demand. Audio is selected per session and switched per track; nothing audio is stored.
+- Audio: one rendition per audio Stream of the selected Version, tagged with `CODECS` and `CHANNELS`, so a headphone client picks stereo and a receiver picks 5.1 or Atmos. When no stereo track exists, an AAC stereo rendition is transcoded on demand. Audio is selected per session and switched per track. A stored Version carries the tracks it was encoded with; no separate audio renditions are stored.
 - Subtitles: text tracks as WebVTT renditions, converted on demand.
 
 ## Stored Versions

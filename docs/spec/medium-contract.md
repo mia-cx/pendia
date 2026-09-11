@@ -19,7 +19,7 @@ Home is a core screen assembled from shelves. Three are core: continue watching,
 
 ## Deferred mediums, checked in the abstract
 
-- Music: kinds Artist, Album, Track, with Versions on Track. Scan is tag-based, so `identify` reads the file rather than the path, which the contract allows. Its translation layer is OpenSubsonic. Fits.
+- Music: kinds Album and Track, with Versions on Track and artists as Contributors credited through Credits. Scan is tag-based, so `identify` reads the file rather than the path, which the contract allows. Its translation layer is OpenSubsonic. Fits.
 - Books: kind Book with ebook and audiobook Versions, so one Item carries two formats. `formats` is a list for exactly this. Its translation layer is OPDS. Fits.
 - Photos: kind Photo, one Version, image format. No provider metadata. Fits, with browse doing the interesting work.
 - Live TV: kind Channel with no Versions and no files, so `identify` never fires and a channel arrives from an M3U instead. The contract needs a second source of Items besides the scanner. Does not fit as written.

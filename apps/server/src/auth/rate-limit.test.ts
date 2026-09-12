@@ -171,6 +171,35 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
       await consumeLoginAttempt(db, "192.0.2.30", "erin", fast);
     }));
 
+  test("malformed device metadata rejects before consuming an attempt", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await setupAdmin(db, { username: "admin", password: "secret" });
+      await db.insert(settings).values({
+        key: "auth",
+        value: sql`jsonb_build_object('loginMaxAttempts', 1, 'loginWindowSeconds', 900)`,
+      });
+      await expect(
+        login(
+          db,
+          {
+            username: "admin",
+            password: "secret",
+            clientName: " ",
+            deviceId: "device-1",
+            deviceName: "Living Room",
+          },
+          "192.0.2.60",
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      const valid = await login(
+        db,
+        { username: "admin", password: "secret", ...device },
+        "192.0.2.60",
+      );
+      expect(valid.user.username).toBe("admin");
+    }));
+
   test(
     "login consumes the configured limit before password work",
     () =>

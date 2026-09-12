@@ -21,7 +21,8 @@ const usernamePattern = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const setupCompleteKey = "auth.setupComplete";
 const setupLockKey = 0x70656e646175n;
 
-async function prepareLocalAccount(input: LocalAccountInput) {
+/** Validates and hashes a local account before its transaction starts. */
+export async function prepareLocalAccount(input: LocalAccountInput) {
   const username = input.username.trim().toLowerCase();
   const displayName = (input.displayName ?? username).trim();
   if (

@@ -1,5 +1,6 @@
 const errors = {
   INVALID_INPUT: [400, "Invalid auth input."],
+  INVALID_INVITE: [400, "Invite is invalid or expired."],
   INVALID_CREDENTIALS: [401, "Invalid credentials."],
   UNAUTHENTICATED: [401, "Authentication required."],
   FORBIDDEN: [403, "Permission denied."],

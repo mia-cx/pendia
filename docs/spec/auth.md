@@ -2,6 +2,7 @@
 
 ## Identity
 
+- OIDC links to an existing account only on a verified email claim from the configured issuer.
 - Local accounts with argon2id password hashing.
 - OIDC through Authentik, first-order: login button, account linking by email.
 - Admins create users or send invite links. No self-signup. No third-party identity providers beyond OIDC.
@@ -14,6 +15,7 @@
 
 ## Permissions and groups
 
+- Precedence: the union of a user's group permissions, then per-user overrides. Library access rows override the global view permission. An explicit deny wins a tie. Admins bypass every check.
 - Permissions are a flat set: view a library, play, manage libraries, manage metadata, manage subtitles, manage users, manage plugins, manage transcoding, manage server.
 - A Group is a named set of permissions. Built-in: admins, with everything, and users, with view and play on every library. Custom groups are admin-made.
 - A user has groups and optional per-user overrides. Per-user settings: bitrate cap, content-rating ceiling.

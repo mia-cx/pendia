@@ -22,6 +22,11 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://pendia:pendia@postgres:5432/pendia
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:3000/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     ports:
       # Host port; override with PENDIA_HOST_PORT when 3000 is taken.
       - "${PENDIA_HOST_PORT:-3000}:3000"

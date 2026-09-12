@@ -77,7 +77,7 @@ A user's mark on an Item.
 _Avoid_: like, heart, star
 
 **Rating**:
-A user's score for an Item, distinct from a provider's rating.
+A user's score for an Item, 0 to 10 with one decimal, distinct from a provider's rating.
 _Avoid_: score, stars
 
 **Scan**:

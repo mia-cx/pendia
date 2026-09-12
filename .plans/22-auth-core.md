@@ -14,10 +14,11 @@ Add local identity and access behind reusable server functions. Expose setup, lo
 
 ## TODOs
 
-- [ ] Implement permission checks and group assignment.
+- [x] Implement permission checks and group assignment.
   - Add one shared permission helper over enabled users, group union, user overrides and library access. Admins bypass checks. Library denies win ties.
   - Add permission-checked custom group creation, membership replacement and user override changes. Preserve built-in groups.
   - Validate with colocated Postgres tests for built-ins, custom group union, overrides, library precedence and forbidden mutations. Run the server typecheck and build.
+  - Done: auth/errors.ts, auth/permissions.ts, auth/permissions.test.ts. bun test permissions.test.ts: 7 pass / 0 fail (50 expects) against pendia-test-pg-22, including a two-client concurrent replacement test; setUserGroups locks the target user row FOR UPDATE. tsc check, bun build and biome check clean. Evidence: .devin/todo1-evidence.md.
 - [ ] Implement local accounts and atomic first-run setup.
   - Hash local passwords with Bun.password argon2id. Setup creates only one admin account and membership under a transaction advisory lock. Persist setup completion in settings.
   - Add permission-checked local account creation with the users group by default. Return public user fields, never password hashes.

@@ -27,6 +27,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
         loginMaxAttempts: 5,
         loginWindowSeconds: 900,
         trustedProxyAddresses: [],
+        oidc: null,
       });
       await db.insert(settings).values({
         key: "auth",
@@ -37,6 +38,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
         loginMaxAttempts: 7,
         loginWindowSeconds: 900,
         trustedProxyAddresses: ["10.0.0.2", "10.0.0.3"],
+        oidc: null,
       });
       for (const value of [
         sql`'[]'::jsonb`,

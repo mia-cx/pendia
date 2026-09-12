@@ -18,7 +18,7 @@ const client: ClientProfile = {
   videoCodecs: [
     {
       codec: "hevc",
-      profiles: ["main"],
+      profiles: ["main", "main10"],
       maxLevel: 153,
       maxWidth: 3840,
       maxHeight: 2160,
@@ -52,6 +52,14 @@ const source: PlaybackSource = {
   },
   audio: [{ codec: "aac", channels: 2 }],
   subtitles: [{ format: "srt", kind: "text" }],
+};
+
+const dvVideo: VideoStream = {
+  ...source.video,
+  codec: "hevc",
+  profile: "main10",
+  level: 153,
+  hdr: "dolby-vision",
 };
 
 const losslessClient: ClientProfile = {
@@ -355,24 +363,17 @@ describe("decidePlayback video", () => {
   });
 
   test.each([7, 8])(
-    "dv profile %i plays its hdr10 base layer without dolby vision",
+    "dv profile %i remuxes its hdr10 base layer without dolby vision",
     (dvProfile) => {
       const result = decidePlayback(
-        {
-          ...source,
-          video: {
-            ...source.video,
-            hdr: "dolby-vision",
-            dvProfile,
-          },
-        },
+        { ...source, video: { ...dvVideo, dvProfile } },
         client,
         { isLan: false },
       );
-      expect(result.method).toBe("direct-play");
+      expect(result.method).toBe("remux");
       expect(result.video).toEqual({
         action: "copy",
-        codec: "h264",
+        codec: "hevc",
         hdr: "hdr10",
         stripDolbyVision: true,
       });
@@ -384,14 +385,7 @@ describe("decidePlayback video", () => {
     (dvProfile) => {
       const sdrClient: ClientProfile = { ...client, hdr: ["sdr"] };
       const result = decidePlayback(
-        {
-          ...source,
-          video: {
-            ...source.video,
-            hdr: "dolby-vision",
-            dvProfile,
-          },
-        },
+        { ...source, video: { ...dvVideo, dvProfile } },
         sdrClient,
         { isLan: false },
       );
@@ -409,7 +403,7 @@ describe("decidePlayback video", () => {
     const result = decidePlayback(
       {
         ...source,
-        video: { ...source.video, hdr: "dolby-vision", dvProfile: 5 },
+        video: { ...dvVideo, dvProfile: 5 },
       },
       sdrClient,
       { isLan: false },
@@ -430,7 +424,7 @@ describe("decidePlayback video", () => {
     const result = decidePlayback(
       {
         ...source,
-        video: { ...source.video, hdr: "dolby-vision", dvProfile: 5 },
+        video: { ...dvVideo, dvProfile: 5 },
       },
       dvClient,
       { isLan: false },
@@ -438,7 +432,7 @@ describe("decidePlayback video", () => {
     expect(result.method).toBe("direct-play");
     expect(result.video).toEqual({
       action: "copy",
-      codec: "h264",
+      codec: "hevc",
       hdr: "dolby-vision",
       stripDolbyVision: false,
     });
@@ -559,6 +553,31 @@ describe("decidePlayback audio", () => {
       );
       expect(result.audio).toEqual([
         { action: "transcode", codec: "aac", channels: 2 },
+      ]);
+    },
+  );
+
+  test.each(["truehd", "dts-hd"])(
+    "dv stripping re-evaluates %s for hls",
+    (codec) => {
+      const result = decidePlayback(
+        {
+          ...source,
+          video: { ...dvVideo, dvProfile: 8 },
+          audio: [{ codec, channels: 8 }],
+        },
+        losslessClient,
+        { isLan: false },
+      );
+      expect(result.method).toBe("transcode");
+      expect(result.video).toEqual({
+        action: "copy",
+        codec: "hevc",
+        hdr: "hdr10",
+        stripDolbyVision: true,
+      });
+      expect(result.audio).toEqual([
+        { action: "transcode", codec: "eac3", channels: 6 },
       ]);
     },
   );

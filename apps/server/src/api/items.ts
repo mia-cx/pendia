@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Schema } from "effect";
 import { Effect } from "effect";
 import { AuthError } from "../auth/errors.ts";
@@ -21,13 +21,18 @@ export type ListItemsInput = {
   readonly cursor?: string;
 };
 
+// Instants cross the API as the database's own UTC text at microsecond
+// precision, so a cursor never rounds a timestamp the driver truncated.
+const instantText = (column: typeof items.addedAt) =>
+  sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+
 const cardFields = {
   id: items.id,
   kind: items.kind,
   libraryId: items.libraryId,
   title: items.title,
   year: items.year,
-  addedAt: items.addedAt,
+  addedAt: instantText(items.addedAt),
 };
 
 const detailFields = {
@@ -37,7 +42,7 @@ const detailFields = {
   contentRating: items.contentRating,
   genres: items.genres,
   tags: items.tags,
-  updatedAt: items.updatedAt,
+  updatedAt: instantText(items.updatedAt),
 };
 
 /** Lists item cards newest first, paginated by the opaque cursor. */
@@ -84,10 +89,7 @@ export function listItemCards(
       id: row.id,
     }));
     return {
-      items: page.items.map((row) => ({
-        ...row,
-        addedAt: row.addedAt.toISOString(),
-      })),
+      items: page.items,
       cursor: page.cursor,
     };
   });
@@ -103,10 +105,6 @@ export function getItemDetail(db: Database, caller: Caller, id: string) {
     yield* fromHost(() =>
       requirePermission(db, caller.user.id, "view", row.libraryId),
     );
-    return {
-      ...row,
-      addedAt: row.addedAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
-    };
+    return row;
   });
 }

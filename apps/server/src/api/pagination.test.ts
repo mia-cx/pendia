@@ -7,7 +7,7 @@ import {
 } from "./pagination.ts";
 
 const key: PageKey = {
-  addedAt: new Date("2026-02-03T04:05:06.789Z"),
+  addedAt: "2026-02-03T04:05:06.789000Z",
   id: "0190a8f2-7c3d-7e2f-8a4b-1c2d3e4f5a6b",
 };
 
@@ -26,8 +26,10 @@ describe("pagination", () => {
       encode("only-one-part"),
       encode("a|b|c"),
       encode(`not-a-date|${key.id}`),
-      encode(`${key.addedAt.toISOString()}|not-a-uuid`),
+      encode(`${key.addedAt}|not-a-uuid`),
       encode(`2026-02-03|${key.id}`),
+      encode(`2026-02-30T04:05:06.789000Z|${key.id}`),
+      encode(`2026-02-03T04:05:06.7890000Z|${key.id}`),
     ];
     for (const cursor of cases) expect(decodeCursor(cursor)).toBeUndefined();
   });
@@ -41,7 +43,7 @@ describe("pagination", () => {
 
   test("toPage returns the last kept row's cursor when rows overflow", () => {
     const rows = [0, 1, 2, 3].map((index) => ({
-      addedAt: new Date(Date.UTC(2026, 0, 4, 0, 0, index)),
+      addedAt: `2026-01-04T00:00:0${index}.000000Z`,
       id: `00000000-0000-7000-8000-00000000000${index}`,
     }));
     const page = toPage(rows, 3, (row) => row);

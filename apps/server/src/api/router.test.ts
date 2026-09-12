@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createORPCClient, ORPCError } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
+import { sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { setPermissionOverride } from "../auth/permissions.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
@@ -111,6 +112,57 @@ describe.skipIf(!databaseUrl)("api router", () => {
         expect(pageSizes).toEqual([2, 2, 1]);
         expect(new Set(seen).size).toBe(rows.length);
         expect(seen).toEqual(rows.map((row) => row.id).reverse());
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("paging does not drop rows that share a millisecond", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token, library, rows } = await seed(db);
+      const [early] = await db
+        .insert(items)
+        .values({
+          libraryId: library.id,
+          kind: "movie",
+          title: "Microsecond Early",
+          canonicalFolder: "/srv/movies/us-early",
+          addedAt: sql`${"2027-01-01T00:00:00.123456Z"}::timestamptz`,
+        })
+        .returning();
+      const [late] = await db
+        .insert(items)
+        .values({
+          libraryId: library.id,
+          kind: "movie",
+          title: "Microsecond Late",
+          canonicalFolder: "/srv/movies/us-late",
+          addedAt: sql`${"2027-01-01T00:00:00.123789Z"}::timestamptz`,
+        })
+        .returning();
+      if (!early || !late) throw new Error("Item insert returned no row.");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = rpcClient(base, token);
+        const seen: string[] = [];
+        let cursor: string | null = null;
+        for (;;) {
+          const page = await client.items.list(
+            cursor === null ? { limit: 1 } : { limit: 1, cursor },
+          );
+          seen.push(...page.items.map((item) => item.id));
+          if (page.cursor === null) break;
+          cursor = page.cursor;
+        }
+        // The two 2027 rows differ only in microseconds, so a cursor that
+        // truncates to milliseconds skips the earlier one permanently.
+        expect(seen).toEqual([
+          late.id,
+          early.id,
+          ...rows.map((row) => row.id).reverse(),
+        ]);
       } finally {
         await server.stop();
       }

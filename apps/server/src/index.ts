@@ -1,9 +1,12 @@
 import { startApiServer } from "./api.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
+import { jobRegistry } from "./jobs/registry.ts";
+import { startJobWorker } from "./jobs/worker.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
+/** A Pendia runtime role selected by --role. */
 export type Role = (typeof roles)[number];
 
 const minimumBunVersion = [1, 4, 0] as const;
@@ -88,6 +91,7 @@ function log(
 function startRoles(
   role: Role,
   apiServer: Bun.Server<undefined> | undefined,
+  workerStarted: boolean,
 ): void {
   const activeRoles = role === "all" ? roles.slice(0, -1) : [role];
 
@@ -99,37 +103,94 @@ function startRoles(
       continue;
     }
 
+    if (activeRole === "worker" && workerStarted) continue;
+
     log(activeRole, "role.idle");
+  }
+}
+
+type StartOptions = {
+  databaseUrl?: string;
+  port?: number;
+  registry?: typeof jobRegistry;
+  workerOptions?: Parameters<typeof startJobWorker>[2];
+};
+
+/** Starts the selected roles and returns their shared shutdown operation. */
+export async function startPendia(
+  role: Role,
+  {
+    databaseUrl = process.env.DATABASE_URL,
+    port,
+    registry = jobRegistry,
+    workerOptions,
+  }: StartOptions = {},
+) {
+  const servesApi = role === "api" || role === "all";
+  const runsJobs = role === "worker" || role === "all";
+  const database =
+    servesApi || runsJobs ? createDatabase(databaseUrl) : undefined;
+  let apiServer: Bun.Server<undefined> | undefined;
+  let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
+  let stopping: Promise<void> | undefined;
+  /** Stops the worker, API server and database pool once, in that order. */
+  function stop() {
+    stopping ??= (async () => {
+      try {
+        await worker?.stop();
+      } finally {
+        try {
+          await apiServer?.stop();
+        } finally {
+          await database?.close();
+        }
+      }
+    })();
+    return stopping;
+  }
+  try {
+    if (servesApi && database && databaseUrl) {
+      await migrateDatabase(database.db);
+      log(role, "database.migrated");
+      // Readiness opens its own short-lived connection: the pooled client's reconnect
+      // path drops the response when the database host stops resolving.
+      apiServer = startApiServer(() => probeDatabase(databaseUrl), port);
+    }
+    if (runsJobs && database) {
+      worker = await startJobWorker(database.db, registry, {
+        ...workerOptions,
+        onError:
+          workerOptions?.onError ??
+          ((error: unknown) =>
+            console.error(
+              JSON.stringify({
+                level: "error",
+                role: "worker",
+                message: "jobs.error",
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            )),
+      });
+    }
+    startRoles(role, apiServer, worker !== undefined);
+    return { apiServer, stop };
+  } catch (error) {
+    await stop();
+    throw error;
   }
 }
 
 async function run(): Promise<void> {
   requireSupportedBunVersion(Bun.version);
   const role = parseRole(Bun.argv);
-
-  const databaseUrl = process.env.DATABASE_URL;
-  const database =
-    role === "api" || role === "all" ? createDatabase(databaseUrl) : undefined;
-  let apiServer: Bun.Server<undefined> | undefined;
+  const server = await startPendia(role);
   try {
-    if (database && databaseUrl) {
-      await migrateDatabase(database.db);
-      log(role, "database.migrated");
-      // Readiness opens its own short-lived connection: the pooled client's reconnect
-      // path drops the response when the database host stops resolving.
-      apiServer = startApiServer(() => probeDatabase(databaseUrl));
-    }
-    startRoles(role, apiServer);
     await new Promise<void>((resolve) => {
       process.once("SIGTERM", resolve);
     });
     log(role, "server.stopping");
   } finally {
-    try {
-      await apiServer?.stop();
-    } finally {
-      await database?.close();
-    }
+    await server.stop();
   }
 }
 

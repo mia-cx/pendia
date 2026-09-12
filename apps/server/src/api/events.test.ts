@@ -22,7 +22,13 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
-import { type Event, publishEvent, startEventBroker } from "./events.ts";
+import {
+  type Event,
+  memoizeAudience,
+  publishEvent,
+  startEventBroker,
+} from "./events.ts";
+import type { Caller } from "./items.ts";
 
 const device = {
   clientName: "Test Client",
@@ -192,6 +198,75 @@ await database.close();
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+describe("event audience memo", () => {
+  const caller: Caller = {
+    user: {
+      id: "0190a8f2-7c3d-7e2f-8a4b-1c2d3e4f5a6b",
+      username: "u",
+      displayName: "U",
+    },
+    credential: {
+      kind: "api-key",
+      id: "0190a8f2-7c3d-7e2f-8a4b-1c2d3e4f5a6c",
+    },
+  };
+
+  test("a repeated subject decides once and distinct subjects decide each", async () => {
+    let decisions = 0;
+    const memo = memoizeAudience(async () => {
+      decisions++;
+      return true;
+    });
+    const libraryId = Bun.randomUUIDv7();
+    await memo.allows(caller, { kind: "library.changed", libraryId });
+    await memo.allows(caller, { kind: "library.changed", libraryId });
+    expect(decisions).toBe(1);
+    await memo.allows(caller, {
+      kind: "library.changed",
+      libraryId: Bun.randomUUIDv7(),
+    });
+    expect(decisions).toBe(2);
+    // job.progress answers one permission question for every row.
+    await memo.allows(caller, {
+      kind: "job.progress",
+      jobId: Bun.randomUUIDv7(),
+      state: "running",
+    });
+    await memo.allows(caller, {
+      kind: "job.progress",
+      jobId: Bun.randomUUIDv7(),
+      state: "completed",
+    });
+    expect(decisions).toBe(3);
+    // session.state and segment.ready share the session's ownership question.
+    const sessionId = Bun.randomUUIDv7();
+    await memo.allows(caller, {
+      kind: "session.state",
+      sessionId,
+      state: "playing",
+    });
+    await memo.allows(caller, { kind: "segment.ready", sessionId, index: 0 });
+    expect(decisions).toBe(4);
+  });
+
+  test("reset makes the next call decide again", async () => {
+    let decisions = 0;
+    const memo = memoizeAudience(async () => {
+      decisions++;
+      return true;
+    });
+    const event: Event = {
+      kind: "library.changed",
+      libraryId: Bun.randomUUIDv7(),
+    };
+    await memo.allows(caller, event);
+    await memo.allows(caller, event);
+    memo.reset();
+    await memo.allows(caller, event);
+    expect(decisions).toBe(2);
+  });
+});
 
 describe.skipIf(!databaseUrl)("api events", () => {
   test("an event published from a second process reaches the stream", () =>
@@ -585,6 +660,50 @@ describe.skipIf(!databaseUrl)("api events", () => {
         expect((await stream.next()).done).toBe(true);
       } finally {
         await broker.stop();
+      }
+    }));
+
+  test("replay delivers only the entitled subset across batches", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const movies = await insertLibrary(db, "Movies");
+      const shows = await insertLibrary(db, "Shows");
+      const fan = await createLocalUser(db, admin.id, {
+        username: "fan",
+        password: "fan-pass",
+      });
+      await db.insert(libraryAccess).values({
+        libraryId: shows.id,
+        userId: fan.id,
+        allowed: false,
+      });
+      const { token } = await createApiKey(db, fan.id, "fan-key");
+      // Two hundred and forty rows across two libraries cross the hundred-row
+      // batch boundary, so the memo has to be right on every row.
+      const expected: Event[] = [];
+      const rows = Array.from({ length: 240 }, (_, index) => {
+        const payload: Event = {
+          kind: "library.changed",
+          libraryId: index % 2 === 0 ? movies.id : shows.id,
+        };
+        if (payload.libraryId === movies.id) expected.push(payload);
+        return { kind: payload.kind, payload };
+      });
+      await db.insert(events).values(rows);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const stream = await openEvents(base, token, "0");
+        try {
+          await stream.waitFor(expected.length, 10_000);
+          await Bun.sleep(400);
+          expect(seen(stream)).toEqual(expected);
+        } finally {
+          await stream.close();
+        }
+      } finally {
+        await server.stop();
       }
     }));
 

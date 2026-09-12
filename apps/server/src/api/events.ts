@@ -72,6 +72,43 @@ export async function canReceive(
   }
 }
 
+// The subject an audience decision attaches to: every event of a kind asking
+// the same question shares one memo slot.
+function subjectKey(event: Event): string {
+  switch (event.kind) {
+    case "library.changed":
+      return `library:${event.libraryId}`;
+    case "job.progress":
+      return "job";
+    case "session.state":
+    case "segment.ready":
+      return `session:${event.sessionId}`;
+    default:
+      return `kind:${event.kind}`;
+  }
+}
+
+/** Memoises an audience decider by event subject; reset() drops every decision. */
+export function memoizeAudience(
+  decide: (caller: Caller, event: Event) => Promise<boolean>,
+) {
+  const memo = new Map<string, Promise<boolean>>();
+  return {
+    allows(caller: Caller, event: Event): Promise<boolean> {
+      const key = subjectKey(event);
+      let pending = memo.get(key);
+      if (pending === undefined) {
+        pending = decide(caller, event);
+        memo.set(key, pending);
+      }
+      return pending;
+    },
+    reset() {
+      memo.clear();
+    },
+  };
+}
+
 type BrokerOptions = {
   pollIntervalMs?: number;
   revalidateIntervalMs?: number;
@@ -124,6 +161,16 @@ export async function startEventBroker(
     const { lastEventId, signal } = options;
     let caller = options.caller;
     let validatedAt = Date.now();
+    const audience = memoizeAudience((current, event) =>
+      canReceive(db, current, event),
+    );
+    // A fresh caller invalidates cached audience decisions, so authorisation
+    // freshness is bounded by the same interval as credential freshness.
+    const refresh = async () => {
+      caller = await options.revalidate();
+      validatedAt = Date.now();
+      audience.reset();
+    };
     let cursor: bigint;
     if (lastEventId !== undefined && eventIdPattern.test(lastEventId)) {
       cursor = BigInt(lastEventId);
@@ -143,10 +190,7 @@ export async function startEventBroker(
         .where(gt(events.id, cursor))
         .orderBy(asc(events.id))
         .limit(batchSize);
-      if (rows.length > 0) {
-        caller = await options.revalidate();
-        validatedAt = Date.now();
-      }
+      if (rows.length > 0) await refresh();
       for (const row of rows) {
         cursor = row.id;
         const decoded = Schema.decodeUnknownOption(ApiEvent)(row.payload);
@@ -162,11 +206,8 @@ export async function startEventBroker(
         }
         // A yield suspends until the consumer pulls, so a batch can outlive
         // the interval; revalidate before authorising each row past it.
-        if (Date.now() - validatedAt >= revalidateMs) {
-          caller = await options.revalidate();
-          validatedAt = Date.now();
-        }
-        if (await canReceive(db, caller, decoded.value))
+        if (Date.now() - validatedAt >= revalidateMs) await refresh();
+        if (await audience.allows(caller, decoded.value))
           yield withEventMeta(decoded.value, { id: String(row.id) });
       }
       if (rows.length === batchSize) continue;
@@ -175,10 +216,8 @@ export async function startEventBroker(
         !stopped &&
         !signal?.aborted &&
         Date.now() - validatedAt >= revalidateMs
-      ) {
-        caller = await options.revalidate();
-        validatedAt = Date.now();
-      }
+      )
+        await refresh();
     }
   }
 

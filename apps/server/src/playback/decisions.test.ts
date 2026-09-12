@@ -157,8 +157,46 @@ describe("decidePlayback methods", () => {
         stripDolbyVision: false,
       },
       audio: [{ action: "copy", codec: "aac", channels: 2 }],
-      subtitles: [{ action: "copy", format: "srt" }],
+      subtitles: [{ action: "convert", format: "webvtt", delivery: "sidecar" }],
     });
+  });
+
+  const hlsTextCases: [
+    string,
+    Partial<PlaybackSource>,
+    PlayResult["method"],
+  ][] = [
+    ["srt", { container: "mkv" }, "remux"],
+    ["ass", { audio: [{ codec: "dts", channels: 6 }] }, "transcode"],
+    ["srt", { video: { ...source.video, codec: "vp9" } }, "transcode"],
+  ];
+  test.each(hlsTextCases)(
+    "converts supported %s after HLS is required by %o",
+    (format, overrides, method) => {
+      const result = decidePlayback(
+        { ...source, ...overrides, subtitles: [{ format, kind: "text" }] },
+        { ...client, subtitleFormats: [format] },
+        { isLan: false },
+      );
+      expect(result.method).toBe(method);
+      expect(result.subtitles).toEqual([
+        { action: "convert", format: "webvtt", delivery: "sidecar" },
+      ]);
+    },
+  );
+
+  test("copies supported WebVTT when HLS is required", () => {
+    const result = decidePlayback(
+      {
+        ...source,
+        container: "mkv",
+        subtitles: [{ format: "webvtt", kind: "text" }],
+      },
+      { ...client, subtitleFormats: ["webvtt"] },
+      { isLan: false },
+    );
+    expect(result.method).toBe("remux");
+    expect(result.subtitles).toEqual([{ action: "copy", format: "webvtt" }]);
   });
 
   const textSubtitles: [
@@ -390,6 +428,55 @@ describe("decidePlayback video", () => {
         { isLan: false },
       );
       expect(result.video).toEqual({ ...hevcFull, toneMap: "hdr10" });
+    },
+  );
+
+  const dvBaseLayerCases: [
+    number,
+    ClientProfile["hdr"],
+    "hdr10" | "sdr",
+    "hdr10" | null,
+  ][] = [
+    [7, ["sdr", "dolby-vision", "hdr10"], "hdr10", null],
+    [8, ["sdr", "dolby-vision", "hdr10"], "hdr10", null],
+    [7, ["sdr", "dolby-vision"], "sdr", "hdr10"],
+    [8, ["sdr", "dolby-vision"], "sdr", "hdr10"],
+  ];
+  test.each(dvBaseLayerCases)(
+    "dv profile %i re-encodes its base layer for client HDR %o",
+    (dvProfile, supportedHdr, hdr, toneMap) => {
+      const dvClient: ClientProfile = {
+        ...client,
+        hdr: supportedHdr,
+        videoCodecs: [{ codec: "hevc", profiles: ["main10"] }],
+      };
+      const input: PlaybackSource = {
+        ...source,
+        video: { ...dvVideo, dvProfile },
+      };
+      expect(decidePlayback(input, dvClient, { isLan: false }).video).toEqual({
+        action: "copy",
+        codec: "hevc",
+        hdr: "dolby-vision",
+        stripDolbyVision: false,
+      });
+      const result = decidePlayback(
+        input,
+        dvClient,
+        { isLan: false, sessionRequest: 3_000_000 },
+        {
+          qsv: { codecs: ["hevc"], toneMapping: ["hdr10"] },
+          cpu: cpuCapabilities.cpu,
+        },
+      );
+      expect(result.method).toBe("transcode");
+      expect(result.video).toMatchObject({
+        action: "transcode",
+        codec: "hevc",
+        hdr,
+        toneMap,
+        backend: "qsv",
+      });
     },
   );
 

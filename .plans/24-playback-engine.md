@@ -36,12 +36,13 @@ Read `CONTEXT.md`, `docs/spec/playback.md`, `docs/spec/transcoding.md` and ADR 0
   - Reject malformed keyframe inputs rather than inventing cut points. Use exact timestamps for alignment.
   - Validate regular and irregular GOPs, ties, short files, trailing segments, equal and superset keyframes, missing boundaries and duration mismatch. Run focused Bun tests and the server typecheck.
   - Done: playback/timeline.ts, playback/timeline.test.ts. Red run against a shaped stub failed 33 of 44 tests; `bun test apps/server/src/playback/timeline.test.ts` then passed 44 tests and 44 assertions: regular and irregular GOPs, trailing segments, ties choosing the earlier keyframe, short and sparse files, all malformed-input throws, exact and superset alignment, missing boundaries, duration mismatch, near-miss timestamps, malformed boundaries and keyframes returning false, derivation-alignment round trips and input immutability. `bun run --cwd apps/server check` and `bunx --no-install biome check apps/server/src/playback` clean. Evidence: .devin/todo3-red.log, .devin/todo3-green.log, .devin/todo3-check.log, .devin/todo3-lint.log.
-- [ ] Select adaptive groups from compatible aligned Versions.
+- [x] Select adaptive groups from compatible aligned Versions.
   - Filter to the requested Item and timeline, aligned imported Versions and complete Stored Versions.
   - Reuse the video pass rule. Choose the first available client codec family and sort variants by increasing bitrate.
   - Prefer playable existing Versions over a live video transcode, including when only a lower-ranked family passes.
-  - Return one live video fallback only when no existing variant passes. Do not offer incomplete Stored Versions as fallback sources.
+  - Return one live source for later session planning only when no existing variant passes. Do not offer incomplete Stored Versions as fallback sources.
   - Validate mixed families, cuts, alignment, completeness, caps, sort order, stored preference, live fallback and unchanged inputs. Run focused Bun tests and the server typecheck.
+  - Done: playback/adaptive.ts, playback/adaptive.test.ts. Red run against a null-result stub failed 25 of 28 tests; `bun test apps/server/src/playback/adaptive.test.ts` then passed 28 tests and 70 assertions: family preference, ascending bitrate sort, lower-ranked family over live encode, unsupported codec exclusion, all seven source and alignment exclusions, imported superset acceptance, stored flags without keyframes, cap filtering on WAN and LAN with the decoder limit still applying, live source preference for the highest bitrate eligible source, null results for no eligible sources, no duplicate variants and unchanged inputs. `bun run --cwd apps/server check` and `bunx --no-install biome check apps/server/src/playback` clean. Evidence: .devin/todo4-red.log, .devin/todo4-green.log, .devin/todo4-check.log, .devin/todo4-lint.log.
 - [ ] Validate the complete slice and record the results.
   - Review every source and test against the spec and acceptance criteria. Keep imports inside the pure module.
   - Run from the root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `bun test`.
@@ -58,6 +59,7 @@ Read `CONTEXT.md`, `docs/spec/playback.md`, `docs/spec/transcoding.md` and ADR 0
 - The spec does not rank codecs. The normalized profile orders video capabilities from best to least preferred. Existing compatible Versions beat live re-encoding in another family.
 - Inputs describe the selected video, audio and subtitle Streams, not every unselected Stream in a File. Probe normalization supplies known dimensions, bitrate and channels. Optional profile and level constraints require known matching source values.
 - Unsupported output combinations throw rather than return an unplayable plan. A cap below 1.5 Mbit/s has no ladder rung. AAC stereo is the spec's baseline audio fallback.
+- Adaptive selection returns at most one live source for later session planning. It does not plan the fallback's encoding, audio or subtitles; a later caller decides those for the session.
 - CPU capability assertions describe the MVP contract, not a trial executed by this module. Hardware entries arrive from a later startup trial. Unsupported DV 5 selects CPU even when hardware advertises tone mapping.
 - Timeline boundaries include the duration so callers can derive the final segment length. The endpoint is not a segment start and need not be a keyframe. Foreign alignment also requires the same duration. No timestamp tolerance is invented.
 - Push after the pre-PR rebase onto `origin/main`, so no force-push is needed. Never commit `.devin`, touch another branch or merge the PR.

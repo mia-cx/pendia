@@ -89,9 +89,12 @@ function decideVideo(
       stripDolbyVision: video.hdr === "dolby-vision" && hdr === "hdr10",
     };
   }
-  const toneMap = hdr !== "sdr" && !client.hdr.includes(hdr) ? hdr : null;
-  const forceCpu =
-    video.hdr === "dolby-vision" && video.dvProfile === 5 && toneMap !== null;
+  const forceCpu = video.hdr === "dolby-vision" && video.dvProfile === 5;
+  const toneMap = forceCpu
+    ? ("dolby-vision" as const)
+    : hdr !== "sdr" && !client.hdr.includes(hdr)
+      ? hdr
+      : null;
   const rung = selectLadderRung(videoCap(client, cap));
   if (!rung) throw new Error("No ladder rung fits the bitrate cap.");
   for (const candidate of client.videoCodecs) {

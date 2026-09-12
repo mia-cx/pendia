@@ -188,6 +188,65 @@ describe("selectAdaptiveGroup", () => {
     expect(result.liveSource).toBeNull();
   });
 
+  test.each([7, 8])(
+    "excludes unstripped stored dv profile %i on an hdr10 client",
+    (dvProfile) => {
+      const hdrClient: ClientProfile = {
+        ...client,
+        videoCodecs: [
+          { codec: "hevc", profiles: ["main10"] },
+          ...client.videoCodecs,
+        ],
+      };
+      const dv = stored("v-dv", {
+        codec: "hevc",
+        profile: "main10",
+        hdr: "dolby-vision",
+        dvProfile,
+      });
+      const compatible = stored("v-h264");
+      expect(
+        selectAdaptiveGroup([dv, compatible], timeline, hdrClient, wan6m),
+      ).toEqual({
+        codec: "h264",
+        variants: [compatible],
+        liveSource: null,
+      });
+      expect(selectAdaptiveGroup([dv], timeline, hdrClient, wan6m)).toEqual({
+        codec: null,
+        variants: [],
+        liveSource: dv,
+      });
+    },
+  );
+
+  const storedHdrCases: [VideoStream["hdr"], ClientProfile["hdr"]][] = [
+    ["dolby-vision", ["sdr", "dolby-vision"]],
+    ["hdr10", ["sdr", "hdr10"]],
+  ];
+  test.each(storedHdrCases)(
+    "offers stored %s when its bitstream is supported",
+    (hdr, supportedHdr) => {
+      const hdrClient: ClientProfile = {
+        ...client,
+        videoCodecs: [{ codec: "hevc", profiles: ["main10"] }],
+        hdr: supportedHdr,
+      };
+      const version = stored("v-hdr", {
+        codec: "hevc",
+        profile: "main10",
+        hdr,
+      });
+      expect(
+        selectAdaptiveGroup([version], timeline, hdrClient, wan6m),
+      ).toEqual({
+        codec: "hevc",
+        variants: [version],
+        liveSource: null,
+      });
+    },
+  );
+
   test("the lowest policy cap filters variants", () => {
     const v3 = imported("v-3m");
     const v6 = imported("v-6m", { bitrate: 6_000_000 });

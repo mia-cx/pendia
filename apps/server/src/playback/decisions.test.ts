@@ -416,6 +416,52 @@ describe("decidePlayback video", () => {
     });
   });
 
+  test.each(["bitrate", "resolution", "subtitle"] as const)(
+    "dv profile 5 uses the cpu tone map when %s forces re-encoding on a dv client",
+    (trigger) => {
+      const dvClient: ClientProfile = {
+        ...client,
+        hdr: ["sdr", "dolby-vision"],
+        subtitleFormats: ["srt"],
+        videoCodecs: [
+          {
+            codec: "hevc",
+            profiles: ["main10"],
+            maxLevel: 153,
+            maxWidth: trigger === "resolution" ? 1280 : 3840,
+            maxHeight: trigger === "resolution" ? 720 : 2160,
+          },
+        ],
+      };
+      const table: CapabilityTable = {
+        qsv: { codecs: ["hevc"], toneMapping: ["dolby-vision"] },
+        cpu: cpuCapabilities.cpu,
+      };
+      const result = decidePlayback(
+        {
+          ...source,
+          video: { ...dvVideo, dvProfile: 5 },
+          subtitles:
+            trigger === "subtitle" ? [{ format: "pgs", kind: "bitmap" }] : [],
+        },
+        dvClient,
+        {
+          isLan: false,
+          sessionRequest: trigger === "bitrate" ? 3_000_000 : null,
+        },
+        table,
+      );
+      expect(result.method).toBe("transcode");
+      expect(result.video).toMatchObject({
+        action: "transcode",
+        hdr: "sdr",
+        toneMap: "dolby-vision",
+        backend: "cpu",
+        burnSubtitles: trigger === "subtitle",
+      });
+    },
+  );
+
   test("dv profile 5 copies when the client supports dolby vision", () => {
     const dvClient: ClientProfile = {
       ...client,

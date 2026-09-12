@@ -130,7 +130,8 @@ function checkOrigin(request: Request, secure: boolean): void {
   if (origin !== expected) throw new AuthError("FORBIDDEN");
 }
 
-function readToken(request: Request): string {
+/** Reads the session token from a Bearer header or the session cookie. */
+export function readSessionToken(request: Request): string {
   const authorization = request.headers.get("authorization");
   if (authorization !== null) {
     const match = authorization.match(bearerPattern);
@@ -235,12 +236,12 @@ export function createAuthHandler(db: Database) {
           });
         }
         case "/api/auth/me": {
-          const auth = await authenticate(db, readToken(request));
+          const auth = await authenticate(db, readSessionToken(request));
           return respond(auth, 200);
         }
         case "/api/auth/logout": {
           checkOrigin(request, identity.secure);
-          const auth = await authenticate(db, readToken(request));
+          const auth = await authenticate(db, readSessionToken(request));
           if (auth.credential.kind === "session")
             await revokeSession(db, auth.user.id, auth.credential.id);
           else await revokeApiKey(db, auth.user.id, auth.credential.id);

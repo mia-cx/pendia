@@ -16,7 +16,7 @@ Read `CONTEXT.md`, ADRs 0008 and 0012, the medium contract and declarations, and
 
 ## TODOs
 
-- [ ] 1. Add the Medium contract and movies scan rules over video-common helpers.
+- [x] 1. Add the Medium contract and movies scan rules over video-common helpers.
   - Implement the six-part contract from `docs/spec/medium.d.ts`. Register the existing movies extension table.
   - Identify library-relative video paths by their immediate containing folder. Parse its title and optional year. Recognize Radarr provider suffixes and explicit `{edition-...}` filename tags.
   - Exclude extras directories, extra filename suffixes, and every `.pendia` or `*.pendia` directory. Group paths by canonical folder, never by filename quality tags.
@@ -48,6 +48,7 @@ Read `CONTEXT.md`, ADRs 0008 and 0012, the medium contract and declarations, and
 
 ## Notes
 
+- TODO1 done: `apps/server/src/mediums/medium.ts` (CoreShelf, Medium, MediumKind, ScanRules, BrowseContribution from `docs/spec/medium.d.ts`), `video-common/paths.ts` (`isVideoPath`, `isVideoExtra`, `editionTag`), `movies.ts` (`moviesMedium` satisfies Medium over the existing movies table, `groupMoviePaths`), colocated `movies.test.ts`. Checks from repo root: `bun test apps/server/src/mediums/movies.test.ts` (24 pass), `bun run --cwd apps/server check`, `bun run --cwd apps/server build`, `biome check` on the four files. All pass. Evidence is in `.devin/todo1-validation.log`.
 - This run is unattended. The lead owns design, reviews, commits, pushes, comments and the PR. The built-in implementation worker handles each TODO and its focused checks. No independent workers run.
 - Work stays in `/home/mia/mia-cx/pendia/.worktrees/scan` on `feat/25-libraries-scan`. Each TODO has one buildable commit with `Refs #25`. Never commit `.devin`.
 - No exact canonical-folder algorithm is specified beyond grouping files in a folder. Use the immediate parent and reject loose files at the library root, which have no movie folder. Nested collection folders remain supported.

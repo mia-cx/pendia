@@ -1,0 +1,87 @@
+import { posix } from "node:path";
+import { movies as movieTable } from "../db/schema/movies.ts";
+import type { Medium } from "./medium.ts";
+import { isVideoExtra, isVideoPath } from "./video-common/paths.ts";
+
+/** The movies medium: a leaf Item per canonical folder with one Version per file. */
+export const moviesMedium = {
+  id: "movies",
+  kinds: [
+    { kind: "movie", parent: null, table: movieTable, hasVersions: true },
+  ],
+  scan: { identify, parse, isExtra: isVideoExtra },
+  providers: ["metadata", "subtitles", "artwork"],
+  formats: ["video"],
+  browse: {
+    coreShelves: ["continue-watching", "recently-added"],
+    shelves: [],
+    screens: { movie: "/movies/:id" },
+  },
+  translation: { protocol: "jellyfin" },
+} satisfies Medium;
+
+function identify(
+  path: string,
+): { kind: string; canonicalFolder: string } | null {
+  if (
+    posix.isAbsolute(path) ||
+    path.split("/").includes("..") ||
+    !isVideoPath(path) ||
+    isVideoExtra(path)
+  ) {
+    return null;
+  }
+  const canonicalFolder = posix.dirname(path);
+  if (canonicalFolder === "." || parse(canonicalFolder).title === "") {
+    return null;
+  }
+  return { kind: "movie", canonicalFolder };
+}
+
+function parse(canonicalFolder: string): {
+  title: string;
+  year: number | null;
+} {
+  const folder = posix
+    .basename(canonicalFolder)
+    .replace(/\s*\{(?:tmdb|imdb|tvdb)[-=][^}]+\}/gi, "")
+    .trim();
+  const match = /^(.*?)\s*\((\d{4})\)(?:\s.*)?$/.exec(folder);
+  const rawTitle = (match?.[1] ?? folder).trim();
+  const title = rawTitle.includes(" ")
+    ? rawTitle
+    : rawTitle.replace(/[._]/g, " ");
+  return { title, year: match?.[2] ? Number(match[2]) : null };
+}
+
+/** One canonical movie folder: parsed identity plus its accepted member paths. */
+export interface MoviePathGroup {
+  canonicalFolder: string;
+  title: string;
+  year: number | null;
+  paths: string[];
+}
+
+/** Group accepted library-relative paths by canonical folder, sorted and deduplicated. */
+export function groupMoviePaths(paths: Iterable<string>): MoviePathGroup[] {
+  const byFolder = new Map<string, Set<string>>();
+  for (const path of paths) {
+    const identified = identify(path);
+    if (!identified) {
+      continue;
+    }
+    let members = byFolder.get(identified.canonicalFolder);
+    if (!members) {
+      members = new Set();
+      byFolder.set(identified.canonicalFolder, members);
+    }
+    members.add(path);
+  }
+  return [...byFolder.entries()]
+    .map(([canonicalFolder, members]) => ({
+      canonicalFolder,
+      ...parse(canonicalFolder),
+      paths: [...members].sort(),
+    }))
+    .sort((a, b) => a.canonicalFolder.localeCompare(b.canonicalFolder));
+}

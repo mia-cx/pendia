@@ -7,7 +7,7 @@ import { setPermissionOverride } from "../auth/permissions.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { items, libraries } from "../db/schema/index.ts";
+import { items, libraries, libraryAccess } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import type { pendiaRouter } from "./router.ts";
@@ -204,6 +204,106 @@ describe.skipIf(!databaseUrl)("api router", () => {
         );
         expect(badCursor.code).toBe("BAD_REQUEST");
         expect(badCursor.status).toBe(400);
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("the list skips a library the caller is denied", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin, library } = await seed(db);
+      const [other] = await db
+        .insert(libraries)
+        .values({ name: "Shows", medium: "shows", rootPath: "/srv/shows" })
+        .returning();
+      if (!other) throw new Error("Library insert returned no row.");
+      const otherRows = [];
+      for (const index of [0, 1]) {
+        const [row] = await db
+          .insert(items)
+          .values({
+            libraryId: other.id,
+            kind: "show",
+            title: `Show ${index}`,
+            canonicalFolder: `/srv/shows/show-${index}`,
+            addedAt: new Date(Date.UTC(2026, 1, 10, 0, 0, index)),
+          })
+          .returning();
+        if (!row) throw new Error("Item insert returned no row.");
+        otherRows.push(row);
+      }
+      const viewer = await createLocalUser(db, admin.id, {
+        username: "viewer",
+        password: "viewer-pass",
+      });
+      await db.insert(libraryAccess).values({
+        libraryId: library.id,
+        userId: viewer.id,
+        allowed: false,
+      });
+      const { token } = await createApiKey(db, viewer.id, "viewer-key");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const page = await rpcClient(base, token).items.list({});
+        expect(page.items.map((item) => item.id)).toEqual(
+          otherRows.map((row) => row.id).reverse(),
+        );
+        expect(page.cursor).toBeNull();
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("a globally denied caller still sees the library it is allowed", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin, library, rows } = await seed(db);
+      const viewer = await createLocalUser(db, admin.id, {
+        username: "viewer",
+        password: "viewer-pass",
+      });
+      await setPermissionOverride(db, admin.id, viewer.id, "view", false);
+      await db.insert(libraryAccess).values({
+        libraryId: library.id,
+        userId: viewer.id,
+        allowed: true,
+      });
+      const { token } = await createApiKey(db, viewer.id, "viewer-key");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const page = await rpcClient(base, token).items.list({});
+        expect(page.items.map((item) => item.id)).toEqual(
+          rows.map((row) => row.id).reverse(),
+        );
+        expect(page.cursor).toBeNull();
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("a caller that may view no library answers 403", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const viewer = await createLocalUser(db, admin.id, {
+        username: "viewer",
+        password: "viewer-pass",
+      });
+      await setPermissionOverride(db, admin.id, viewer.id, "view", false);
+      const { token } = await createApiKey(db, viewer.id, "viewer-key");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const rest = await fetch(`${base}/api/items`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(rest.status).toBe(403);
+        const error = await capture(rpcClient(base, token).items.list({}));
+        expect(error.code).toBe("FORBIDDEN");
+        expect(error.status).toBe(403);
       } finally {
         await server.stop();
       }

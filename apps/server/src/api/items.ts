@@ -1,7 +1,7 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Schema } from "effect";
 import { Effect } from "effect";
-import { requirePermission } from "../auth/permissions.ts";
+import { requirePermission, viewableLibraryIds } from "../auth/permissions.ts";
 import type { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { items } from "../db/schema/index.ts";
@@ -46,9 +46,21 @@ export function listItemCards(
   input: ListItemsInput,
 ) {
   return Effect.gen(function* () {
-    yield* fromHost(() =>
-      requirePermission(db, caller.user.id, "view", input.libraryId),
-    );
+    // Without a library the list is scoped to every library the caller may view.
+    let scope;
+    if (input.libraryId === undefined) {
+      const viewable = yield* fromHost(() =>
+        viewableLibraryIds(db, caller.user.id),
+      );
+      if (viewable.length === 0)
+        return yield* new ApiError({ code: "FORBIDDEN" });
+      scope = inArray(items.libraryId, viewable);
+    } else {
+      yield* fromHost(() =>
+        requirePermission(db, caller.user.id, "view", input.libraryId),
+      );
+      scope = eq(items.libraryId, input.libraryId);
+    }
     const limit = input.limit ?? defaultPageSize;
     const key =
       input.cursor === undefined ? undefined : decodeCursor(input.cursor);
@@ -63,9 +75,7 @@ export function listItemCards(
         .from(items)
         .where(
           and(
-            input.libraryId === undefined
-              ? undefined
-              : eq(items.libraryId, input.libraryId),
+            scope,
             input.kind === undefined ? undefined : eq(items.kind, input.kind),
             key === undefined ? undefined : after(key),
           ),

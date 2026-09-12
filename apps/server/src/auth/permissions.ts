@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   groups,
+  libraries,
   libraryAccess,
   type Permission,
   permissions,
@@ -81,6 +82,19 @@ export async function checkPermission(
     if (access.length) return access.every((row) => row.allowed);
   }
   return granted;
+}
+
+/** Lists the ids of every library the user may view, decided by checkPermission itself. */
+export async function viewableLibraryIds(
+  db: Database,
+  userId: string,
+): Promise<string[]> {
+  const rows = await db.select({ id: libraries.id }).from(libraries);
+  const ids: string[] = [];
+  for (const row of rows) {
+    if (await checkPermission(db, userId, "view", row.id)) ids.push(row.id);
+  }
+  return ids;
 }
 
 /** Throws FORBIDDEN when an enabled user lacks a permission. */

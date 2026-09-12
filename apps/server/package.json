@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./api": {
+      "types": "./src/api/router.ts"
+    }
+  },
   "scripts": {
     "db:generate": "drizzle-kit generate",
     "build": "bun build src/index.ts --outdir dist --target bun",

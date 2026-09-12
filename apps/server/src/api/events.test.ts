@@ -140,10 +140,16 @@ describe.skipIf(!databaseUrl)("api events", () => {
       const server = await startPendia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        // Cursor zero replays every row, so the test does not race the
-        // subscriber's initial position read against the publish.
-        const stream = await openEvents(base, token, "0");
+        const stream = await openEvents(base, token);
         try {
+          // The warm-up frame proves the subscriber finished its initial
+          // read and is parked on the wake, so nothing can reach it through
+          // a catch-up read any more.
+          await publishEvent(db, {
+            kind: "library.changed",
+            libraryId: Bun.randomUUIDv7(),
+          });
+          await stream.waitFor(1, 3_000);
           const event: Event = {
             kind: "library.changed",
             libraryId: Bun.randomUUIDv7(),
@@ -151,8 +157,8 @@ describe.skipIf(!databaseUrl)("api events", () => {
           // The poll fallback waits five seconds, so a frame inside three
           // seconds can only have arrived through the NOTIFY wake.
           await publishFromProcess(url, event);
-          const [frame] = await stream.waitFor(1, 3_000);
-          expect(JSON.parse(frame?.data ?? "")).toEqual(event);
+          const frames = await stream.waitFor(2, 3_000);
+          expect(JSON.parse(frames[1]?.data ?? "")).toEqual(event);
         } finally {
           await stream.close();
         }
@@ -168,7 +174,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
       const server = await startPendia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const first = await openEvents(base, token, "0");
+        const first = await openEvents(base, token);
         let lastId: string;
         try {
           const firstEvent: Event = {

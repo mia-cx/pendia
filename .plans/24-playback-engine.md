@@ -8,11 +8,11 @@ Read `CONTEXT.md`, `docs/spec/playback.md`, `docs/spec/transcoding.md` and ADR 0
 
 ## Acceptance criteria
 
-- [ ] Table-driven tests cover every row of the per-stream table and every play-method outcome in the spec.
-- [ ] Dolby Vision profiles 7 and 8 resolve to the HDR10 base layer on a client without DV; profile 5 resolves to the CPU tone map.
-- [ ] TrueHD and DTS-HD pass only on direct play and follow the audio rule in HLS.
-- [ ] Timeline derivation covers a regular 2 s GOP and irregular keyframes. Alignment accepts a superset and rejects a missing boundary.
-- [ ] The effective cap is the minimum of the three inputs. No policy cap applies on the LAN.
+- [x] Table-driven tests cover every row of the per-stream table and every play-method outcome in the spec.
+- [x] Dolby Vision profiles 7 and 8 resolve to the HDR10 base layer on a client without DV; profile 5 resolves to the CPU tone map.
+- [x] TrueHD and DTS-HD pass only on direct play and follow the audio rule in HLS.
+- [x] Timeline derivation covers a regular 2 s GOP and irregular keyframes. Alignment accepts a superset and rejects a missing boundary.
+- [x] The effective cap is the minimum of the three inputs. No policy cap applies on the LAN.
 
 ## TODOs
 
@@ -43,10 +43,11 @@ Read `CONTEXT.md`, `docs/spec/playback.md`, `docs/spec/transcoding.md` and ADR 0
   - Return one live source for later session planning only when no existing variant passes. Do not offer incomplete Stored Versions as fallback sources.
   - Validate mixed families, cuts, alignment, completeness, caps, sort order, stored preference, live fallback and unchanged inputs. Run focused Bun tests and the server typecheck.
   - Done: playback/adaptive.ts, playback/adaptive.test.ts. Red run against a null-result stub failed 25 of 28 tests; `bun test apps/server/src/playback/adaptive.test.ts` then passed 28 tests and 70 assertions: family preference, ascending bitrate sort, lower-ranked family over live encode, unsupported codec exclusion, all seven source and alignment exclusions, imported superset acceptance, stored flags without keyframes, cap filtering on WAN and LAN with the decoder limit still applying, live source preference for the highest bitrate eligible source, null results for no eligible sources, no duplicate variants and unchanged inputs. `bun run --cwd apps/server check` and `bunx --no-install biome check apps/server/src/playback` clean. Evidence: .devin/todo4-red.log, .devin/todo4-green.log, .devin/todo4-check.log, .devin/todo4-lint.log.
-- [ ] Validate the complete slice and record the results.
+- [x] Validate the complete slice and record the results.
   - Review every source and test against the spec and acceptance criteria. Keep imports inside the pure module.
   - Run from the root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `bun test`.
   - Record real results below, including database skips. Commit this TODO before rebasing, pushing and filing the PR.
+  - Done: `bun install --frozen-lockfile` checked 91 installs, no changes; `bun run lint` clean across 67 files; `bun run check` 5/5 turbo tasks; `bun run build` 4/4 turbo tasks, server bundle 235.1 KB; `bun test` 206 pass, 62 skip, 0 fail across 16 files with database tests skipped for missing DATABASE_URL. All exit codes 0. Evidence: .devin/final-install.log, .devin/final-lint.log, .devin/final-check.log, .devin/final-build.log, .devin/final-test.log.
 
 ## Notes
 
@@ -64,3 +65,4 @@ Read `CONTEXT.md`, `docs/spec/playback.md`, `docs/spec/transcoding.md` and ADR 0
 - Timeline boundaries include the duration so callers can derive the final segment length. The endpoint is not a segment start and need not be a keyframe. Foreign alignment also requires the same duration. No timestamp tolerance is invented.
 - Push after the pre-PR rebase onto `origin/main`, so no force-push is needed. Never commit `.devin`, touch another branch or merge the PR.
 - Review existing CodeRabbit, Codex and Pullfrog findings with the trigger test. Finish only with passing CI, a clean Pullfrog verdict on the head, mergeability and no unresolved threads.
+- Final gate results (recorded in .devin/final-*.log): `bun install --frozen-lockfile` no changes; `bun run lint` clean; `bun run check` 5/5 turbo tasks; `bun run build` 4/4 turbo tasks; `bun test` 206 pass / 62 skip / 0 fail with database tests skipped locally and one skip message; CI supplies its own disposable database.

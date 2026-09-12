@@ -6,42 +6,49 @@ Build the first-party API from ADR 0010. Procedures are defined once with Effect
 
 ## Acceptance criteria
 
-- [ ] A procedure defined once is callable through RPC from the typed client and through REST with the same schema, and appears in the OpenAPI document.
-- [ ] The typed client calls `me` and a paginated list end to end from the web app.
-- [ ] An event published with NOTIFY from a second process reaches an SSE client; after a reconnect with Last-Event-ID the missed events arrive.
-- [ ] An unauthenticated call answers 401 and a forbidden one 403 through the error mapping.
-- [ ] Effect never appears in a client-facing type.
+- [x] A procedure defined once is callable through RPC from the typed client and through REST with the same schema, and appears in the OpenAPI document.
+- [x] The typed client calls `me` and a paginated list end to end from the web app.
+- [x] An event published with NOTIFY from a second process reaches an SSE client; after a reconnect with Last-Event-ID the missed events arrive.
+- [x] An unauthenticated call answers 401 and a forbidden one 403 through the error mapping.
+- [x] Effect never appears in a client-facing type.
 
 ## TODOs
 
-- [ ] Add the API dependencies and the shared client-facing shapes.
+- [x] Add the API dependencies and the shared client-facing shapes.
   - Add `effect@3.22.1`, `@orpc/server@1.15.0`, `@orpc/client@1.15.0` and `@orpc/openapi@1.15.0` to `apps/server`.
   - Add `src/api/schema.ts`: the item card shape, the item detail shape, the `me` result, the connection combinator and the event union. Outputs stay identity schemas, so encoded and decoded forms match.
   - Add `src/api/pagination.ts`: opaque cursor encoding over `(addedAt, id)`, the keyset predicate and the page builder returning `{ items, cursor }`.
   - Validation: colocated pagination tests for cursor round-trip, rejected cursors and page assembly. Server typecheck and build.
-- [ ] Map typed host errors to HTTP errors at the boundary.
+  - Done: api/schema.ts, api/pagination.ts, api/pagination.test.ts, deps pinned exact in apps/server/package.json. bun test pagination.test.ts: 4 pass / 0 fail (14 expects). tsc check, bun build and biome check clean. Commit `0cd1be8`.
+- [x] Map typed host errors to HTTP errors at the boundary.
   - Add `src/api/errors.ts`: tagged Effect errors for unauthenticated, forbidden, not found and invalid input, an adapter from `AuthError`, and the boundary runner that turns a failed effect into an `ORPCError` and a defect into a 500.
   - Add `src/api/context.ts`: the request context, the base builder with the shared error map, and the authentication middleware over the auth slice's `authenticate`. Export the session token reader from `auth/http.ts` and use it in both places.
   - Validation: colocated tests asserting each auth code maps to its HTTP status and that a defect answers 500 without leaking its message. Server typecheck and build.
-- [ ] Define the router once and serve it over RPC and REST in the api role.
+  - Done: api/errors.ts, api/context.ts, api/errors.test.ts; auth/http.ts exports readSessionToken. bun test errors.test.ts: 5 pass / 0 fail (31 expects) covering all ten auth codes, a host defect and a direct ApiError; auth/http.test.ts: 5 pass / 0 fail against pendia-test-pg-23. tsc check, bun build and biome check clean. Commit `d47d5f3`.
+- [x] Define the router once and serve it over RPC and REST in the api role.
   - Add `src/api/router.ts` with `me`, `items.list` and `items.get`, each with an Effect Schema input and output and an explicit REST route.
   - Add `src/api/handler.ts` mounting the RPC handler on `/rpc` and the OpenAPI handler on `/api`, returning nothing when neither matches.
   - Wire the handler into `api.ts` and `index.ts`, keeping `/api/auth`, the health routes and the web app unchanged.
   - Validation: Postgres tests over real HTTP for the same procedure through `/rpc` and `/api`, the paginated list across pages, 401 without credentials and 403 without the view permission. Server typecheck and build.
-- [ ] Generate the OpenAPI document from the same procedures.
+  - Done: api/items.ts, api/router.ts, api/handler.ts, api.ts takes a handlers object, index.ts passes both, api/router.test.ts; runApi's defect log now keeps Cause.pretty while the 500 stays bare. bun test src/api: 19 pass / 0 fail; api+auth-http+roles: 15 pass / 0 fail, both against pendia-test-pg-23: identical RPC/REST payloads, three-page cursor walk, 401 on both transports, denied-view 403, me over session and API key, 404 and 400. tsc check, bun build and biome check clean. Commit `404ee54`.
+- [x] Generate the OpenAPI document from the same procedures.
   - Add `src/api/openapi.ts`: the Effect Schema to JSON Schema converter and the cached document, served at `/api/openapi.json`.
   - Validation: a test asserting the document lists every procedure path once with the card properties on the list response, and that the document is valid JSON with an OpenAPI version. Server typecheck and build.
-- [ ] Publish events through Postgres and stream them to SSE clients.
+  - Done: api/openapi.ts with EffectSchemaConverter and a memoised generator, handler answers GET /api/openapi.json, api/openapi.test.ts plus two router.test.ts cases. bun test src/api: 26 pass / 0 fail (88 expects). The document reports openapi 3.1.1, declares 400/401/403/404 on the list operation and carries no $ref into #/$defs. tsc check, bun build and biome check clean. Commit `07b5969`.
+- [x] Publish events through Postgres and stream them to SSE clients.
   - Add the `events` table to the operations schema with a generated Drizzle migration.
   - Add `src/api/events.ts`: `publishEvent` writing the row, notifying the channel and pruning past the retention window, and the per-process broker holding one LISTEN and serving resumable subscriptions.
   - Add the `events.stream` procedure and its broker wiring in the api role.
   - Validation: Postgres tests where a second process publishes and an SSE client receives it, and where a reconnect with Last-Event-ID delivers the events missed while disconnected. Server typecheck and build.
-- [ ] Call the API from the web app through the typed client.
+  - Done: events table and drizzle/0001_clever_amphibian.sql, api/events.ts (publishEvent, startEventBroker, subscribe, stop), events.stream on the router, ApiContext.events, Bun idle timeout lifted on the stream routes, index.ts stops the broker between the api server and the database, api/events.test.ts, db.test.ts counts updated to 33 tables and 2 journal rows. bun test src with Postgres: 108 pass / 0 fail; without DATABASE_URL: 33 pass / 75 skip. tsc check, bun build and biome check clean. Commit `fe3fd36`.
+- [x] Call the API from the web app through the typed client.
   - Add `@orpc/client` and the workspace server dependency to `apps/web`, allow TypeScript extension imports in its tsconfig, and add `src/lib/api.ts` creating the typed client against `/rpc`.
   - Validation: a Postgres test that drives the web app's client factory against a live api role for `me` and a paginated list, plus assignability assertions proving the client-facing types are plain. Web typecheck.
-- [ ] Document the API and run the final gate.
+  - Done: server exports map `@pendia/server/api` types-only, web gets @orpc/client 1.15.0 plus @orpc/server and @pendia/server as devDependencies, allowImportingTsExtensions in web tsconfig, web/src/lib/api.ts, api/client.test.ts. bun test events+client: 7 pass / 0 fail against pendia-test-pg-23; the mutual-assignability checks prove the client types are plain JSON. `bun run --cwd apps/web check` reports 0 errors and `bun run --cwd apps/web build` writes the static site. effect is not resolvable under apps/web/node_modules. The cross-process SSE test now parks the subscriber on its wake with a warm-up event before the second process publishes, so the three-second budget can only be met through NOTIFY. Commit `a26a58f`.
+- [x] Document the API and run the final gate.
   - Add the API section to the server README: routes, the card and detail shapes, cursor semantics, error codes, the event channel, retention and the Last-Event-ID limits.
   - Validation: frozen install, lint, check, build, the full test suite with disposable Postgres, and the suite without DATABASE_URL. Record the real results in the notes.
+  - Done: README API section appended. Final gate below.
 
 ## Notes
 
@@ -58,7 +65,10 @@ Build the first-party API from ADR 0010. Procedures are defined once with Effect
 - Known limitation of a sequence-assigned id: an event inserted before a client disconnects but committed during the disconnect can carry an id below one already delivered, and a replay by `id >` then skips it. Closing that needs commit-order tracking, which is outside this slice.
 - The event union covers the four cross-process events the topology names: library changed, job progress, session state and segment ready. Publishers for them arrive with their own slices.
 - The web app typechecks the server's router source through a type-only import, which needs `allowImportingTsExtensions` in its tsconfig. Verified in a throwaway spike: `bun run --cwd apps/web check` reports no errors with that option and fifty-one extension errors without it. `effect` stays out of the web app's dependencies, so a leaked Effect type would fail that check.
+- Bun's ten-second idle timeout is lifted for the event stream on both transports, `/api/events` and `/rpc/events/stream`, because the same procedure is reachable through either and both would hit the idle kill. Every other route keeps the default.
+- `effect` is absent from the web app's dependency tree: neither `@orpc/client` nor `@orpc/server` depends on it, `effect` does not resolve under `apps/web/node_modules`, and the `@pendia/server` devDependency is consumed through a types-only exports entry that Vite erases.
 - Tests follow the repository conventions: colocated, real Postgres from DATABASE_URL, disposable databases through `withDatabase`, skipped with one message locally and failing in CI without it. Test Postgres for this slice is `pendia-test-pg-23` on port 55423, removed when the run finishes.
 - The second publishing process in the SSE test is a spawned Bun process against the same disposable database, because the criterion is about NOTIFY crossing processes rather than crossing connections.
 - Review posture is adversarial at the HTTP boundary. Apply the trigger test to every review finding. Reviewers are the bots already on the repository.
 - Push only after the pre-PR rebase, so no force-push is needed. The parent owns merging.
+- Final gate, all run from the repo root: `bun install --frozen-lockfile` clean (115 installs, 218 packages, no changes); `bun run lint` clean (76 files); `bun run check` 6/6 turbo tasks (web svelte-check 0 errors, 0 warnings); `bun run build` 4/4 turbo tasks (server bundle 0.78 MB, web static site written); `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55423/pendia bun run test` 5/5 turbo tasks, server 110 pass / 0 fail / 558 expects across 18 files; `bun run test` without DATABASE_URL 33 pass / 77 skip / 0 fail with the skip message printed once.

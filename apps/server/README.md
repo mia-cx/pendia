@@ -129,3 +129,48 @@ Untrusted socket peers cannot supply forwarded address or protocol headers. Trus
 `Forwarded` takes precedence over `X-Forwarded-For`. Malformed hops stop traversal.
 Trusted proxies must preserve Host and sanitize forwarded protocol headers. `X-Forwarded-Proto` supports a single sanitized value or a list matching the address chain.
 No proxy is trusted by default. Plain HTTP remains supported; TLS normally terminates at the trusted reverse proxy.
+
+## API
+
+The api and all roles serve one procedure router on two transports. `/rpc` carries the typed client and `/api` carries REST. `GET /api/openapi.json` answers the generated OpenAPI 3.1 document. The api role also serves `/api/auth` and the web app on the same origin.
+
+| Procedure | REST route | Input | Output |
+| --- | --- | --- | --- |
+| `me` | GET `/api/me` | None | `user` and `credential` |
+| `items.list` | GET `/api/items` | `libraryId`, `kind`, `limit`, `cursor` | `{ items, cursor }` of cards |
+| `items.get` | GET `/api/items/{id}` | `id` in the path | the detail shape |
+| `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
+
+Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes.
+`me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
+
+Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year` and `addedAt`.
+Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are ISO 8601 strings.
+
+The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.
+`cursor` is opaque and bound to that order. The default page is 24 and `limit` caps at 100. An unparseable cursor answers 400.
+
+Errors map host codes to HTTP statuses:
+
+| Auth code | Status | oRPC code |
+| --- | --- | --- |
+| `INVALID_INPUT`, `METHOD_NOT_ALLOWED` | 400 | `BAD_REQUEST` |
+| `INVALID_CREDENTIALS`, `UNAUTHENTICATED` | 401 | `UNAUTHORIZED` |
+| `FORBIDDEN` | 403 | `FORBIDDEN` |
+| `NOT_FOUND` | 404 | `NOT_FOUND` |
+| `CONFLICT`, `SETUP_COMPLETE` | 409 | `CONFLICT` |
+| `BODY_TOO_LARGE` | 413 | `PAYLOAD_TOO_LARGE` |
+| `RATE_LIMITED` | 429 | `TOO_MANY_REQUESTS` |
+
+Anything that is not a mapped failure is a defect. The response is a bare 500 and the cause goes to the server log.
+
+Events live in the durable `events` table. Publishing inserts the row, prunes rows older than the ten-minute retention window and notifies the new id on the `pendia_events` channel, all in one transaction.
+Each api process holds one LISTEN and wakes its subscribers; every subscriber then reads its own rows. Postgres sees one listener per process, not per client.
+
+`events.stream` resumes through the `Last-Event-ID` header. A digit id replays the rows after it; a missing or unparseable id starts from the present.
+Two honest limits: a disconnect longer than the retention window loses the pruned events, and an event committed out of sequence order during a disconnect can be skipped by an id-ordered replay.
+
+Bun closes a connection idle for ten seconds and oRPC 1.15 sends no keep-alive comments, so the stream route lifts the idle timeout. Every other route keeps the default.
+
+Procedures are defined once with Effect Schema in `src/api/router.ts` and stay identity schemas over plain JSON types, so Effect never crosses the boundary.
+The web app calls the API through `apps/web/src/lib/api.ts`, which imports the router type only.

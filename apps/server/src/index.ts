@@ -1,3 +1,5 @@
+import { startEventBroker } from "./api/events.ts";
+import { createApiHandler } from "./api/handler.ts";
 import { startApiServer } from "./api.ts";
 import { createAuthHandler } from "./auth/http.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
@@ -115,6 +117,7 @@ type StartOptions = {
   port?: number;
   registry?: typeof jobRegistry;
   workerOptions?: Parameters<typeof startJobWorker>[2];
+  brokerOptions?: Parameters<typeof startEventBroker>[1];
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -125,6 +128,7 @@ export async function startPendia(
     port,
     registry = jobRegistry,
     workerOptions,
+    brokerOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
@@ -133,17 +137,22 @@ export async function startPendia(
     servesApi || runsJobs ? createDatabase(databaseUrl) : undefined;
   let apiServer: Bun.Server<undefined> | undefined;
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
+  let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops the worker, API server and database pool once, in that order. */
+  /** Stops the worker, event broker, API server and database pool once, in that order. */
   function stop() {
     stopping ??= (async () => {
       try {
         await worker?.stop();
       } finally {
         try {
-          await apiServer?.stop();
+          await eventBroker?.stop();
         } finally {
-          await database?.close();
+          try {
+            await apiServer?.stop();
+          } finally {
+            await database?.close();
+          }
         }
       }
     })();
@@ -153,13 +162,13 @@ export async function startPendia(
     if (servesApi && database && databaseUrl) {
       await migrateDatabase(database.db);
       log(role, "database.migrated");
+      eventBroker = await startEventBroker(database.db, brokerOptions);
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
-      apiServer = startApiServer(
-        () => probeDatabase(databaseUrl),
-        port,
-        createAuthHandler(database.db),
-      );
+      apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
+        auth: createAuthHandler(database.db),
+        api: createApiHandler(database.db, eventBroker),
+      });
     }
     if (runsJobs && database) {
       worker = await startJobWorker(database.db, registry, {

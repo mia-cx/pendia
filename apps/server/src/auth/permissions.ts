@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   groups,
+  libraries,
   libraryAccess,
   type Permission,
   permissions,
@@ -81,6 +82,21 @@ export async function checkPermission(
     if (access.length) return access.every((row) => row.allowed);
   }
   return granted;
+}
+
+/** Lists the ids of every library the user may view, decided by checkPermission itself. */
+export async function viewableLibraryIds(
+  db: Database,
+  userId: string,
+): Promise<string[]> {
+  const rows = await db.select({ id: libraries.id }).from(libraries);
+  // The checks are independent reads, so they run concurrently. A set-based
+  // join is deliberately not used: it would duplicate checkPermission's
+  // precedence rules, which must stay single-sourced.
+  const allowed = await Promise.all(
+    rows.map((row) => checkPermission(db, userId, "view", row.id)),
+  );
+  return rows.filter((_, index) => allowed[index]).map((row) => row.id);
 }
 
 /** Throws FORBIDDEN when an enabled user lacks a permission. */

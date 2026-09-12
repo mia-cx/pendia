@@ -12,7 +12,8 @@ import {
 import { readAuthSettings } from "./settings.ts";
 import { requestIdentity } from "./transport.ts";
 
-const cookieName = "pendia_session";
+/** The session cookie the auth routes set and the API documents. */
+export const sessionCookieName = "pendia_session";
 const maxBodyBytes = 16_384;
 const cookieMaxAgeSeconds = 34_560_000;
 const bearerPattern = /^Bearer ([A-Za-z0-9_-]{43})$/i;
@@ -168,14 +169,15 @@ function readCookie(request: Request, name: string): string | undefined {
   return values[0];
 }
 
-function readToken(request: Request): string {
+/** Reads the session token from a Bearer header or the session cookie. */
+export function readSessionToken(request: Request): string {
   const authorization = request.headers.get("authorization");
   if (authorization !== null) {
     const match = authorization.match(bearerPattern);
     if (!match?.[1]) throw new AuthError("UNAUTHENTICATED");
     return match[1];
   }
-  const cookie = readCookie(request, cookieName);
+  const cookie = readCookie(request, sessionCookieName);
   if (cookie === undefined || !tokenPattern.test(cookie))
     throw new AuthError("UNAUTHENTICATED");
   return cookie;
@@ -192,11 +194,11 @@ function sessionCookie(token: string, secure: boolean, expiresAt: Date | null) {
             Math.ceil((expiresAt.getTime() - Date.now()) / 1000),
           ),
         );
-  return `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+  return `${sessionCookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 }
 
 const clearedCookie = (secure: boolean) =>
-  `${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
+  `${sessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 
 const oidcFlowCookieName = "pendia_oidc_flow";
 
@@ -278,12 +280,12 @@ export function createAuthHandler(db: Database) {
           });
         }
         case "/api/auth/me": {
-          const auth = await authenticate(db, readToken(request));
+          const auth = await authenticate(db, readSessionToken(request));
           return respond(auth, 200);
         }
         case "/api/auth/logout": {
           checkOrigin(request, identity.secure);
-          const auth = await authenticate(db, readToken(request));
+          const auth = await authenticate(db, readSessionToken(request));
           if (auth.credential.kind === "session")
             await revokeSession(db, auth.user.id, auth.credential.id);
           else await revokeApiKey(db, auth.user.id, auth.credential.id);
@@ -293,7 +295,7 @@ export function createAuthHandler(db: Database) {
         }
         case "/api/auth/invites": {
           checkOrigin(request, identity.secure);
-          const auth = await authenticate(db, readToken(request));
+          const auth = await authenticate(db, readSessionToken(request));
           const body = await readJsonObject(request);
           const result = await createInvite(db, auth.user.id, {
             email: requiredString(body, "email"),

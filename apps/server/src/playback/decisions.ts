@@ -40,9 +40,9 @@ function videoCap(client: ClientProfile, cap: number | null) {
   return limit === Infinity ? null : limit;
 }
 
-function playbackHdr(video: VideoStream, client: ClientProfile) {
+function playbackHdr(video: VideoStream, supportsDolbyVision: boolean) {
   return video.hdr === "dolby-vision" &&
-    !client.hdr.includes("dolby-vision") &&
+    !supportsDolbyVision &&
     (video.dvProfile === 7 || video.dvProfile === 8)
     ? ("hdr10" as const)
     : video.hdr;
@@ -55,7 +55,7 @@ export function videoPasses(
   cap: number | null,
 ) {
   const limit = videoCap(client, cap);
-  const hdr = playbackHdr(video, client);
+  const hdr = playbackHdr(video, client.hdr.includes("dolby-vision"));
   return (
     (hdr === "sdr" || client.hdr.includes(hdr)) &&
     (limit === null || video.bitrate <= limit) &&
@@ -80,8 +80,8 @@ function decideVideo(
   capabilities: CapabilityTable,
   burnSubtitles: boolean,
 ) {
-  const hdr = playbackHdr(video, client);
   if (!burnSubtitles && videoPasses(video, client, cap)) {
+    const hdr = playbackHdr(video, client.hdr.includes("dolby-vision"));
     return {
       action: "copy" as const,
       codec: video.codec,
@@ -89,6 +89,7 @@ function decideVideo(
       stripDolbyVision: video.hdr === "dolby-vision" && hdr === "hdr10",
     };
   }
+  const hdr = playbackHdr(video, false);
   const forceCpu = video.hdr === "dolby-vision" && video.dvProfile === 5;
   const toneMap = forceCpu
     ? ("dolby-vision" as const)
@@ -156,8 +157,15 @@ function decideAudio(audio: AudioStream, client: ClientProfile, hls: boolean) {
   return { action: "transcode" as const, codec: "aac", channels: 2 };
 }
 
-function decideSubtitle(subtitle: SubtitleStream, client: ClientProfile) {
-  if (client.subtitleFormats.includes(subtitle.format)) {
+function decideSubtitle(
+  subtitle: SubtitleStream,
+  client: ClientProfile,
+  hls: boolean,
+) {
+  if (
+    client.subtitleFormats.includes(subtitle.format) &&
+    !(hls && subtitle.kind === "text" && subtitle.format !== "webvtt")
+  ) {
     return { action: "copy" as const, format: subtitle.format };
   }
   if (subtitle.kind === "text") {
@@ -179,7 +187,7 @@ export function decidePlayback(
 ) {
   const cap = effectiveCap(caps);
   const subtitles = source.subtitles.map((subtitle) =>
-    decideSubtitle(subtitle, client),
+    decideSubtitle(subtitle, client, false),
   );
   const video = decideVideo(
     source.video,
@@ -213,6 +221,8 @@ export function decidePlayback(
     method: transcodes ? ("transcode" as const) : ("remux" as const),
     video,
     audio,
-    subtitles,
+    subtitles: source.subtitles.map((subtitle) =>
+      decideSubtitle(subtitle, client, true),
+    ),
   };
 }

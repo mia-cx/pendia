@@ -325,9 +325,8 @@ describe.skipIf(!databaseUrl)("auth http", () => {
           password: "secret",
           ...device,
         });
-        const adminToken = (
-          (await loginResponse.json()) as { token: string }
-        ).token;
+        const adminToken = ((await loginResponse.json()) as { token: string })
+          .token;
         const invited = { authorization: `Bearer ${adminToken}` };
 
         const anonymous = await post(`${base}/api/auth/invites`, {

@@ -314,12 +314,7 @@ export async function finishOidcLogin(
         as,
         client,
         idClaims.sub,
-        await oauth.userInfoRequest(
-          as,
-          client,
-          result.access_token,
-          options,
-        ),
+        await oauth.userInfoRequest(as, client, result.access_token, options),
       );
     }
     identity = {

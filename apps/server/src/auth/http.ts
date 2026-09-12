@@ -114,10 +114,7 @@ function requiredString(object: Record<string, unknown>, name: string): string {
   return value;
 }
 
-function requiredNumber(
-  object: Record<string, unknown>,
-  name: string,
-): number {
+function requiredNumber(object: Record<string, unknown>, name: string): number {
   const value = object[name];
   if (typeof value !== "number") throw new AuthError("INVALID_INPUT");
   return value;

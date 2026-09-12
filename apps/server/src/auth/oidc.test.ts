@@ -48,10 +48,7 @@ async function startProvider(
     "sign",
     "verify",
   ]);
-  const rogue = await crypto.subtle.generateKey(rsa, true, [
-    "sign",
-    "verify",
-  ]);
+  const rogue = await crypto.subtle.generateKey(rsa, true, ["sign", "verify"]);
   const exported = await crypto.subtle.exportKey("jwk", signing.publicKey);
   const jwk = { ...exported, kid: "pendia-test", alg: "RS256", use: "sig" };
   const pending = new Map<
@@ -86,8 +83,7 @@ async function startProvider(
     );
     return `${header}.${body}.${b64url(new Uint8Array(signature))}`;
   };
-  const json = (body: unknown, status = 200) =>
-    Response.json(body, { status });
+  const json = (body: unknown, status = 200) => Response.json(body, { status });
   const server = Bun.serve({
     port: 0,
     fetch: async (request) => {
@@ -253,10 +249,7 @@ async function oidcLogin(
   return { start, authorize, callbackUrl, flowCookie };
 }
 
-function oidcCallback(flow: {
-  callbackUrl?: string;
-  flowCookie: string;
-}) {
+function oidcCallback(flow: { callbackUrl?: string; flowCookie: string }) {
   return fetch(flow.callbackUrl ?? "", {
     redirect: "manual",
     headers: { cookie: flow.flowCookie },
@@ -720,16 +713,15 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .set({ email: "linked@example.com" })
           .where(eq(users.id, local.id));
 
-        const expectFailure = async (response?: Response) => {
-          expect(response?.status).toBe(401);
+        const expectFailure = async (response: Response) => {
+          expect(response.status).toBe(401);
           expect(
-            ((await response?.json()) as { error: { code: string } }).error
-              .code,
+            ((await response.json()) as { error: { code: string } }).error.code,
           ).toBe("OIDC_FAILED");
-          expect(response?.headers.get("set-cookie")).toContain(
+          expect(response.headers.get("set-cookie")).toContain(
             "pendia_oidc_flow=;",
           );
-          expect(response?.headers.get("set-cookie")).toContain("Max-Age=0");
+          expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
         };
 
         const tampered = await oidcLogin(base);

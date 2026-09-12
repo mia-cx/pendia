@@ -54,6 +54,7 @@ type LevelBound = readonly [
   level: number,
   maxPicture: number,
   maxBitrate: number,
+  maxSamplesPerSecond: number,
   maxWidth?: number,
   maxHeight?: number,
 ];
@@ -63,44 +64,83 @@ const levelBounds: Readonly<
   h264: {
     blockSize: 16,
     bounds: [
-      [20, 396, 2_000_000],
-      [21, 792, 4_000_000],
-      [22, 1620, 4_000_000],
-      [30, 1620, 10_000_000],
-      [31, 3600, 14_000_000],
-      [32, 5120, 20_000_000],
-      [40, 8192, 20_000_000],
-      [41, 8192, 50_000_000],
-      [42, 8704, 50_000_000],
-      [50, 22080, 135_000_000],
-      [51, 36864, 240_000_000],
+      [20, 396, 2_000_000, 11880],
+      [21, 792, 4_000_000, 19800],
+      [22, 1620, 4_000_000, 20250],
+      [30, 1620, 10_000_000, 40500],
+      [31, 3600, 14_000_000, 108000],
+      [32, 5120, 20_000_000, 216000],
+      [40, 8192, 20_000_000, 245760],
+      [41, 8192, 50_000_000, 245760],
+      [42, 8704, 50_000_000, 522240],
+      [50, 22080, 135_000_000, 589824],
+      [51, 36864, 240_000_000, 983040],
+      [52, 36864, 240_000_000, 2073600],
+      [60, 139264, 240_000_000, 4177920],
+      [61, 139264, 480_000_000, 8355840],
+      [62, 139264, 800_000_000, 16711680],
     ],
   },
   hevc: {
     blockSize: 1,
     bounds: [
-      [60, 122880, 1_500_000],
-      [63, 245760, 3_000_000],
-      [90, 552960, 6_000_000],
-      [93, 983040, 10_000_000],
-      [120, 2228224, 12_000_000],
-      [123, 2228224, 20_000_000],
-      [150, 8912896, 25_000_000],
+      [60, 122880, 1_500_000, 3686400],
+      [63, 245760, 3_000_000, 7372800],
+      [90, 552960, 6_000_000, 16588800],
+      [93, 983040, 10_000_000, 33177600],
+      [120, 2228224, 12_000_000, 66846720],
+      [123, 2228224, 20_000_000, 133693440],
+      [150, 8912896, 25_000_000, 267386880],
+      [153, 8912896, 40_000_000, 534773760],
+      [156, 8912896, 60_000_000, 1069547520],
+      [180, 35651584, 60_000_000, 1069547520],
+      [183, 35651584, 120_000_000, 2139095040],
+      [186, 35651584, 240_000_000, 4278190080],
     ],
   },
   av1: {
     blockSize: 1,
     bounds: [
-      [0, 147456, 1_500_000, 2048, 1152],
-      [1, 278784, 3_000_000, 2816, 1584],
-      [4, 665856, 6_000_000, 4352, 2448],
-      [5, 1065024, 10_000_000, 5504, 3096],
-      [8, 2359296, 12_000_000, 6144, 3456],
-      [9, 2359296, 20_000_000, 6144, 3456],
-      [12, 8912896, 30_000_000, 8192, 4352],
+      [0, 147456, 1_500_000, 4423680, 2048, 1152],
+      [1, 278784, 3_000_000, 8363520, 2816, 1584],
+      [4, 665856, 6_000_000, 19975680, 4352, 2448],
+      [5, 1065024, 10_000_000, 31950720, 5504, 3096],
+      [8, 2359296, 12_000_000, 70778880, 6144, 3456],
+      [9, 2359296, 20_000_000, 141557760, 6144, 3456],
+      [12, 8912896, 30_000_000, 267386880, 8192, 4352],
+      [13, 8912896, 40_000_000, 534773760, 8192, 4352],
+      [14, 8912896, 60_000_000, 1069547520, 8192, 4352],
+      [15, 8912896, 60_000_000, 1069547520, 8192, 4352],
+      [16, 35651584, 60_000_000, 1069547520, 16384, 8704],
+      [17, 35651584, 100_000_000, 2139095040, 16384, 8704],
+      [18, 35651584, 160_000_000, 4278190080, 16384, 8704],
+      [19, 35651584, 160_000_000, 4278190080, 16384, 8704],
     ],
   },
 };
+
+/** Returns the safe frame-rate ceiling for the planned output, or undefined when it cannot fit. */
+export function outputFrameRateLimit(
+  codec: string,
+  level: number,
+  width: number,
+  height: number,
+  bitrate: number,
+) {
+  const limits = levelBounds[codec];
+  if (!limits) return undefined;
+  const w = Math.ceil(width / limits.blockSize);
+  const h = Math.ceil(height / limits.blockSize);
+  const bound = limits.bounds.findLast(
+    ([ceiling, maxPicture, maxBitrate, , maxWidth, maxHeight]) =>
+      ceiling <= level &&
+      bitrate <= maxBitrate &&
+      w * h <= maxPicture &&
+      (maxWidth === undefined ? w * w <= 8 * maxPicture : w <= maxWidth) &&
+      (maxHeight === undefined ? h * h <= 8 * maxPicture : h <= maxHeight),
+  );
+  return bound === undefined ? undefined : Math.floor(bound[3] / (w * h));
+}
 
 /** Checks planned bitrate and frame size against conservative codec-level limits. */
 export function outputFitsLevel(
@@ -110,17 +150,8 @@ export function outputFitsLevel(
   height: number,
   bitrate: number,
 ) {
-  const limits = levelBounds[codec];
-  if (!limits) return false;
-  const w = Math.ceil(width / limits.blockSize);
-  const h = Math.ceil(height / limits.blockSize);
-  return limits.bounds.some(
-    ([ceiling, maxPicture, maxBitrate, maxWidth, maxHeight]) =>
-      ceiling <= level &&
-      bitrate <= maxBitrate &&
-      w * h <= maxPicture &&
-      (maxWidth === undefined ? w * w <= 8 * maxPicture : w <= maxWidth) &&
-      (maxHeight === undefined ? h * h <= 8 * maxPicture : h <= maxHeight),
+  return (
+    outputFrameRateLimit(codec, level, width, height, bitrate) !== undefined
   );
 }
 

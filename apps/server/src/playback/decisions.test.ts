@@ -82,6 +82,7 @@ const hevcFull: VideoTranscode = {
   codec: "hevc",
   profile: "main",
   level: 153,
+  maxFrameRate: 257,
   width: 1920,
   height: 1080,
   bitrate: 20_000_000,
@@ -326,6 +327,7 @@ describe("decidePlayback video", () => {
       codec: "h264",
       profile: "high",
       level: 41,
+      maxFrameRate: 30,
       width: 1920,
       height: 1080,
       bitrate: 20_000_000,
@@ -765,6 +767,27 @@ describe("decidePlayback video", () => {
       ),
     ).toThrow("No backend supports the required video output.");
   });
+
+  const frameRateCases: [
+    ClientProfile["videoCodecs"][number],
+    number,
+    number,
+  ][] = [
+    [{ codec: "h264", profiles: ["high"], maxLevel: 41 }, 20_000_000, 30],
+    [{ codec: "hevc", profiles: ["main"], maxLevel: 120 }, 10_000_000, 32],
+    [{ codec: "av1", profiles: ["main"], maxLevel: 8 }, 10_000_000, 34],
+  ];
+  test.each(frameRateCases)(
+    "caps output frame rate for %o",
+    (candidate, sessionRequest, maxFrameRate) => {
+      const result = decidePlayback(
+        { ...source, video: { ...source.video, codec: "vp9" } },
+        { ...client, videoCodecs: [candidate] },
+        { isLan: false, sessionRequest },
+      );
+      expect(result.video).toMatchObject({ action: "transcode", maxFrameRate });
+    },
+  );
 });
 
 describe("decidePlayback audio", () => {
@@ -964,6 +987,7 @@ describe("decidePlayback caps and scaling", () => {
     expect(result.method).toBe("transcode");
     expect(result.video).toEqual({
       ...hevcFull,
+      maxFrameRate: 580,
       width: 1280,
       height: 720,
       bitrate: 3_000_000,
@@ -1001,6 +1025,7 @@ describe("decidePlayback caps and scaling", () => {
     );
     expect(result.video).toEqual({
       ...hevcFull,
+      maxFrameRate: 580,
       width: 1280,
       height: 720,
       bitrate: 3_000_000,
@@ -1040,6 +1065,7 @@ describe("decidePlayback caps and scaling", () => {
     );
     expect(result.video).toEqual({
       ...hevcFull,
+      maxFrameRate: 785,
       width: 1280,
       height: 532,
       bitrate: 3_000_000,
@@ -1056,7 +1082,12 @@ describe("decidePlayback caps and scaling", () => {
       client,
       { isLan: false },
     );
-    expect(result.video).toEqual({ ...hevcFull, width: 640, height: 360 });
+    expect(result.video).toEqual({
+      ...hevcFull,
+      maxFrameRate: 2321,
+      width: 640,
+      height: 360,
+    });
   });
 
   test("fits within the client dimensions", () => {
@@ -1073,7 +1104,12 @@ describe("decidePlayback caps and scaling", () => {
       ],
     };
     const result = decidePlayback(source, bounded, { isLan: false });
-    expect(result.video).toEqual({ ...hevcFull, width: 1280, height: 720 });
+    expect(result.video).toEqual({
+      ...hevcFull,
+      maxFrameRate: 580,
+      width: 1280,
+      height: 720,
+    });
   });
 });
 

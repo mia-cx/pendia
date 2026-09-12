@@ -7,6 +7,7 @@ import {
   type Hdr,
   ladder,
   outputFitsLevel,
+  outputFrameRateLimit,
   type PlaybackCaps,
   selectBackend,
   selectLadderRung,
@@ -217,6 +218,27 @@ describe("outputFitsLevel", () => {
     "checks %s level %i at %ix%i and %i bps",
     (codec, level, width, height, bitrate, fits) => {
       expect(outputFitsLevel(codec, level, width, height, bitrate)).toBe(fits);
+    },
+  );
+});
+
+describe("outputFrameRateLimit", () => {
+  const cases: [string, number, number, number, number, number | undefined][] =
+    [
+      ["h264", 41, 1920, 1080, 20_000_000, 30],
+      ["h264", 42, 1920, 1080, 20_000_000, 64],
+      ["hevc", 120, 1920, 1080, 10_000_000, 32],
+      ["hevc", 123, 1920, 1080, 20_000_000, 64],
+      ["av1", 8, 1920, 1080, 10_000_000, 34],
+      ["av1", 9, 1920, 1080, 20_000_000, 68],
+      ["h264", 30, 1920, 1080, 20_000_000, undefined],
+    ];
+  test.each(cases)(
+    "caps %s level %i at %ix%i and %i bps",
+    (codec, level, width, height, bitrate, fps) => {
+      expect(outputFrameRateLimit(codec, level, width, height, bitrate)).toBe(
+        fps,
+      );
     },
   );
 });

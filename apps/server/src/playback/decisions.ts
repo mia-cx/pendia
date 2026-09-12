@@ -4,7 +4,7 @@ import {
   cpuCapabilities,
   effectiveCap,
   type Hdr,
-  outputFitsLevel,
+  outputFrameRateLimit,
   type PlaybackCaps,
   selectBackend,
   selectLadderRung,
@@ -145,17 +145,17 @@ function decideVideo(
     );
     const width = Math.max(2, Math.floor((video.width * scale) / 2) * 2);
     const height = Math.max(2, Math.floor((video.height * scale) / 2) * 2);
-    if (
-      candidate.maxLevel !== undefined &&
-      !outputFitsLevel(
-        candidate.codec,
-        candidate.maxLevel,
-        width,
-        height,
-        rung.bitrate,
-      )
-    )
-      continue;
+    const maxFrameRate =
+      candidate.maxLevel === undefined
+        ? null
+        : outputFrameRateLimit(
+            candidate.codec,
+            candidate.maxLevel,
+            width,
+            height,
+            rung.bitrate,
+          );
+    if (maxFrameRate === undefined) continue;
     return {
       action: "transcode" as const,
       codec: candidate.codec,
@@ -164,6 +164,7 @@ function decideVideo(
           ? hdrProfile
           : (candidate.profiles?.[0] ?? null),
       level: candidate.maxLevel ?? null,
+      maxFrameRate,
       width,
       height,
       bitrate: rung.bitrate,

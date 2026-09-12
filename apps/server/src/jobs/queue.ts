@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { type JobPayload, jobs, jobType } from "../db/schema/index.ts";
 
@@ -15,15 +15,17 @@ type EnqueueOptions = Partial<
 const claimLockKey = 0x70656e646a6fn;
 const maxRetryDelayMs = 60_000;
 
-type QueueOptions = { retryDelayMs?: number };
+type QueueOptions = { retryDelayMs?: number; concurrencyLimit?: number };
 
 /** Creates queue operations on the shared Postgres database. */
 export function createJobQueue(
   db: Database,
-  { retryDelayMs = 1_000 }: QueueOptions = {},
+  { retryDelayMs = 1_000, concurrencyLimit = 1 }: QueueOptions = {},
 ) {
   if (!Number.isFinite(retryDelayMs) || retryDelayMs <= 0)
     throw new Error("Retry delay must be positive and finite.");
+  if (!Number.isSafeInteger(concurrencyLimit) || concurrencyLimit < 1)
+    throw new Error("Concurrency limit must be a positive integer.");
   return {
     /** Enqueues a typed payload with its scheduling options. */
     async enqueue(payload: JobPayload, options: EnqueueOptions = {}) {
@@ -54,6 +56,10 @@ export function createJobQueue(
               lt(jobs.attempts, jobs.maxAttempts),
               lte(jobs.runAfter, sql`now()`),
               inArray(jobs.type, [...types]),
+              or(
+                isNull(jobs.concurrencyKey),
+                sql`(select count(*) from ${jobs} as running_jobs where running_jobs.state = 'running' and running_jobs.concurrency_key = ${jobs.concurrencyKey}) < ${concurrencyLimit}`,
+              ),
             ),
           )
           .orderBy(desc(jobs.priority), jobs.runAfter, jobs.id)

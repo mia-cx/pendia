@@ -25,12 +25,26 @@ async function claimWhenReady(queue: ReturnType<typeof createJobQueue>) {
   throw new Error("No claimable job before the deadline.");
 }
 
-test("rejects non-positive or non-finite retry delays", () => {
-  const db = {} as Database;
-  for (const retryDelayMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
-    expect(() => createJobQueue(db, { retryDelayMs })).toThrow(
-      "Retry delay must be positive and finite.",
-    );
+test("rejects invalid retry delays and concurrency limits", async () => {
+  const lazy = createDatabase("postgresql://pendia:pendia@127.0.0.1:1/unused");
+  try {
+    for (const retryDelayMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => createJobQueue(lazy.db, { retryDelayMs })).toThrow(
+        "Retry delay must be positive and finite.",
+      );
+    for (const concurrencyLimit of [
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ])
+      expect(() => createJobQueue(lazy.db, { concurrencyLimit })).toThrow(
+        "Concurrency limit must be a positive integer.",
+      );
+  } finally {
+    await lazy.close();
+  }
 });
 
 describe.skipIf(!databaseUrl)("Job queue", () => {
@@ -278,6 +292,82 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
       expect(retried?.runAfter.getTime()).toBeLessThanOrEqual(
         after.getTime() + 60_000 + 1,
       );
+    }));
+
+  test("caps concurrent jobs sharing a key across independent clients", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db, { concurrencyLimit: 2 });
+      const second = createDatabase(url);
+      try {
+        const secondQueue = createJobQueue(second.db, {
+          concurrencyLimit: 2,
+        });
+        await Promise.all(
+          Array.from({ length: 8 }, () =>
+            queue.enqueue(probePayload(), { concurrencyKey: "library-a" }),
+          ),
+        );
+        const claimed = await Promise.all(
+          Array.from({ length: 8 }, (_, index) =>
+            (index % 2 === 0 ? queue : secondQueue).claim(),
+          ),
+        );
+        const claimedJobs = claimed.filter((job) => job !== undefined);
+        expect(claimedJobs).toHaveLength(2);
+        expect(await listJobs(db, { state: "running" })).toHaveLength(2);
+        expect(await listJobs(db, { state: "queued" })).toHaveLength(6);
+
+        const [done, other] = claimedJobs;
+        if (!done || !other) throw new Error("Claimed jobs missing.");
+        await queue.complete(done);
+        const freed = await queue.claim();
+        expect(freed).toBeDefined();
+        expect([done.id, other.id]).not.toContain(freed?.id);
+
+        await queue.fail(other, "retry later");
+        const next = await queue.claim();
+        expect(next).toBeDefined();
+        expect(next?.id).not.toBe(other.id);
+        expect(await listJobs(db, { state: "running" })).toHaveLength(2);
+      } finally {
+        await second.close();
+      }
+    }));
+
+  test("defaults to one running job per key and frees it on completion", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const a1 = await queue.enqueue(probePayload(), {
+        priority: 10,
+        concurrencyKey: "a",
+      });
+      const a2 = await queue.enqueue(probePayload(), {
+        priority: 9,
+        concurrencyKey: "a",
+      });
+      const b = await queue.enqueue(probePayload(), {
+        priority: 1,
+        concurrencyKey: "b",
+      });
+      const c = await queue.enqueue(probePayload());
+      const d = await queue.enqueue(probePayload());
+      const first = await queue.claim();
+      expect(first?.id).toBe(a1.id);
+      const claimed = await Promise.all([
+        queue.claim(),
+        queue.claim(),
+        queue.claim(),
+      ]);
+      expect(new Set(claimed.map((job) => job?.id))).toEqual(
+        new Set([b.id, c.id, d.id]),
+      );
+      expect(await queue.claim()).toBeUndefined();
+      if (!first) throw new Error("First claim missing.");
+      await queue.complete(first);
+      const released = await queue.claim();
+      expect(released?.id).toBe(a2.id);
     }));
 
   test("claims nothing when the type filter is empty", () =>

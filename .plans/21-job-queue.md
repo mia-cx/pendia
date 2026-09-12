@@ -11,14 +11,14 @@ Read CONTEXT.md, docs/spec/topology.md section Jobs, docs/adr/0013-own-postgres-
 - [x] Two workers claiming concurrently never take the same job.
 - [x] A failing job retries with backoff and stops at max attempts with its error stored.
 - [x] Run after delays a job until its time; priority orders ready jobs.
-- [ ] A concurrency key caps parallel jobs sharing it.
+- [x] A concurrency key caps parallel jobs sharing it.
 - [ ] NOTIFY wakes an idle worker within 100 ms; without NOTIFY the poll still picks the job up.
 
 ## TODOs
 
 - [x] Add enqueue, list, and atomic claim operations with shared disposable-database test support. Validate independent clients claiming concurrently, payload round-trips, descending priority, run-after eligibility, and schema test preservation. Validation results are in Notes.
 - [x] Add completion and exponential retries with retained errors and attempt fencing. Validate increasing retry delays, no early retry, terminal failure at max attempts, success, and stale completion rejection.
-- [ ] Enforce a shared concurrency-key cap during claims. Validate racing clients against the same key, independent keys, unkeyed jobs, and capacity returning after completion or failure.
+- [x] Enforce a shared concurrency-key cap during claims. Validate racing clients against the same key, independent keys, unkeyed jobs, and capacity returning after completion or failure.
 - [ ] Add the typed handler registry and worker loop with NOTIFY and slow polling. Validate registered dispatch, unknown types staying queued, idle notification latency below 100 ms, polling without notification, retries, and graceful shutdown.
 - [ ] Start the worker in worker and all roles and drain it before database shutdown. Validate real registered handlers through role startup, no worker in other roles, and existing startup behavior.
 - [ ] Document queue use and run final repository validation. Validate frozen install, lint, typecheck, build, all tests against Postgres, and local skipping without DATABASE_URL. Record actual results below.
@@ -27,6 +27,7 @@ Read CONTEXT.md, docs/spec/topology.md section Jobs, docs/adr/0013-own-postgres-
 
 - TODO 1 validation: Postgres queue and schema tests passed, 13 tests and 111 assertions. Server typecheck and focused Biome checks passed. Without DATABASE_URL, bun test passed 12 and skipped 13 with one message. With CI=true and no URL it failed as required. The first test execution was blocked by command permissions, so this TODO has green evidence but no observed red run.
 - TODO 2 validation: red run failed all four new tests ("queue.fail is not a function", missing constructor throw) before implementation; after adding complete/fail, QueueOptions validation and the 60s cap, `bun test apps/server/src/jobs/queue.test.ts` passed 9 tests and 50 assertions against Postgres. `bun run --cwd apps/server check` and `bunx biome check apps/server/src/jobs` passed. Evidence: .devin/21-todo2-verification.log.
+- TODO 3 validation: red run failed the three new tests (no limit validation, all 8 same-key jobs claimed, default cap ignored) before implementation; after adding `concurrencyLimit` and the running-count subquery (using the `from jobs as running_jobs` form because Drizzle renders a table alias without its base name), `bun test apps/server/src/jobs/queue.test.ts` passed 11 tests and 67 assertions against Postgres. `bun run --cwd apps/server check` and `bunx biome check apps/server/src/jobs` passed. Evidence: .devin/21-todo3-verification.log.
 
 - Work only in this worktree on feat/21-job-queue. The parent committed the pre-existing .gitignore change as f9742ab. Never commit .devin.
 - Each TODO includes its tests and one buildable commit with Refs #21. The plan is committed first.

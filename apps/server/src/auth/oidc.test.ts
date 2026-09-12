@@ -42,7 +42,11 @@ const rsa = {
 
 async function startProvider(
   claims: ProviderClaims,
-  options: { omitUserInfo?: boolean; userInfo?: ProviderClaims } = {},
+  options: {
+    omitUserInfo?: boolean;
+    userInfo?: ProviderClaims;
+    userInfoBarrier?: number;
+  } = {},
 ) {
   const signing = await crypto.subtle.generateKey(rsa, true, [
     "sign",
@@ -61,6 +65,11 @@ async function startProvider(
     }
   >();
   const tokens = new Map<string, ProviderClaims>();
+  let arrived = 0;
+  let releaseBarrier: (() => void) | undefined;
+  const barrier = new Promise<void>((resolve) => {
+    releaseBarrier = resolve;
+  });
   const provider = {
     claims: {
       idToken: claims,
@@ -210,6 +219,11 @@ async function startProvider(
       }
       if (url.pathname === "/userinfo") {
         provider.observed.userinfo += 1;
+        if (options.userInfoBarrier !== undefined) {
+          arrived += 1;
+          if (arrived >= options.userInfoBarrier) releaseBarrier?.();
+          await barrier;
+        }
         const authorization = request.headers.get("authorization") ?? "";
         const served = tokens.get(authorization.replace(/^Bearer\s+/i, ""));
         if (!served) return json({ error: "invalid_token" }, 401);
@@ -357,7 +371,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         expect(stored?.oidcIssuer).toBe(new URL(provider.issuer).href);
         expect(stored?.oidcSubject).toBe("subject-1");
 
-        expect(provider.observed.discovery).toBeGreaterThanOrEqual(2);
+        expect(provider.observed.discovery).toBe(1);
         expect(provider.observed.token).toBe(1);
         expect(provider.observed.jwks).toBeGreaterThanOrEqual(1);
         expect(provider.observed.userinfo).toBe(1);
@@ -462,6 +476,63 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           user: { id: string };
         };
         expect(body.user.id).toBe(local.id);
+      } finally {
+        await server.stop();
+        await provider.stop();
+      }
+    }));
+
+  test("concurrent callbacks for one linked subject both issue sessions", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const provider = await startProvider(
+        {
+          sub: "raced-sub",
+          email: "raced@example.com",
+          emailVerified: true,
+        },
+        { userInfoBarrier: 2 },
+      );
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        await configureOidc(db, provider.issuer);
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "secret",
+        });
+        const local = await createLocalUser(db, admin.id, {
+          username: "raced",
+          password: "pass",
+        });
+        await db
+          .update(users)
+          .set({ email: "raced@example.com" })
+          .where(eq(users.id, local.id));
+
+        const flowOne = await oidcLogin(base, { deviceId: "race-one" });
+        const flowTwo = await oidcLogin(base, { deviceId: "race-two" });
+        const [callbackOne, callbackTwo] = await Promise.all([
+          oidcCallback(flowOne),
+          oidcCallback(flowTwo),
+        ]);
+        expect(callbackOne.status).toBe(200);
+        expect(callbackTwo.status).toBe(200);
+        const bodyOne = (await callbackOne.json()) as {
+          user: { id: string };
+        };
+        const bodyTwo = (await callbackTwo.json()) as {
+          user: { id: string };
+        };
+        expect(bodyOne.user.id).toBe(local.id);
+        expect(bodyTwo.user.id).toBe(local.id);
+        const [stored] = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, local.id));
+        expect(stored?.oidcIssuer).toBe(new URL(provider.issuer).href);
+        expect(stored?.oidcSubject).toBe("raced-sub");
+        expect(await db.select().from(sessions)).toHaveLength(2);
       } finally {
         await server.stop();
         await provider.stop();

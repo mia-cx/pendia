@@ -90,7 +90,9 @@ function endpoint(value: string | undefined, allowLoopbackHttp: boolean) {
   return url;
 }
 
-async function discover(config: OidcConfig) {
+const discoveryTtlMs = 300_000;
+
+async function fetchDiscovery(config: OidcConfig) {
   const options =
     config.issuer.protocol === "http:"
       ? { [oauth.allowInsecureRequests]: true }
@@ -103,8 +105,34 @@ async function discover(config: OidcConfig) {
   endpoint(as.jwks_uri, allowLoopbackHttp);
   if (as.userinfo_endpoint !== undefined)
     endpoint(as.userinfo_endpoint, allowLoopbackHttp);
-  const client: oauth.Client = { client_id: config.clientId };
-  return { as, client, options };
+  return { as, options };
+}
+
+type Discovery = Awaited<ReturnType<typeof fetchDiscovery>>;
+const discoveryCache = new Map<
+  string,
+  { expiresAt: number; result: Promise<Discovery> }
+>();
+
+async function discover(config: OidcConfig) {
+  const key = config.issuer.href;
+  const now = Date.now();
+  let cached = discoveryCache.get(key);
+  if (cached === undefined || cached.expiresAt <= now) {
+    cached = {
+      expiresAt: now + discoveryTtlMs,
+      result: fetchDiscovery(config),
+    };
+    discoveryCache.set(key, cached);
+  }
+  try {
+    const { as, options } = await cached.result;
+    const client: oauth.Client = { client_id: config.clientId };
+    return { as, client, options };
+  } catch (error) {
+    if (discoveryCache.get(key) === cached) discoveryCache.delete(key);
+    throw error;
+  }
 }
 
 function flowSecret(value: unknown): string {
@@ -393,21 +421,29 @@ export async function finishOidcLogin(
             id: users.id,
             disabledAt: users.disabledAt,
             oidcIssuer: users.oidcIssuer,
+            oidcSubject: users.oidcSubject,
           })
           .from(users)
           .where(sql`lower(${users.email}) = ${email}`)
           .for("update");
         if (existing) {
-          if (existing.disabledAt !== null || existing.oidcIssuer !== null)
-            failed();
-          await tx
-            .update(users)
-            .set({
-              oidcIssuer: config.issuer.href,
-              oidcSubject: identity.sub,
-              updatedAt: sql`clock_timestamp()`,
-            })
-            .where(eq(users.id, existing.id));
+          if (existing.disabledAt !== null) failed();
+          if (existing.oidcIssuer !== null) {
+            if (
+              existing.oidcIssuer !== config.issuer.href ||
+              existing.oidcSubject !== identity.sub
+            )
+              failed();
+          } else {
+            await tx
+              .update(users)
+              .set({
+                oidcIssuer: config.issuer.href,
+                oidcSubject: identity.sub,
+                updatedAt: sql`clock_timestamp()`,
+              })
+              .where(eq(users.id, existing.id));
+          }
           return issueSession(
             tx,
             existing.id,

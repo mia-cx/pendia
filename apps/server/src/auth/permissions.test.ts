@@ -194,7 +194,117 @@ describe.skipIf(!databaseUrl)("auth permissions", () => {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     }));
 
-  test("mutations require manage-users and validate groups", () =>
+  test("manage-users cannot grant groups or override permissions", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const admin = await createUser(db, "admin", ["admins"]);
+      const managerGroup = await createGroup(db, admin.id, {
+        name: "managers",
+        permissions: ["manage-users"],
+      });
+      const manager = await createUser(db, "manager");
+      await setUserGroups(db, admin.id, manager.id, [managerGroup.id]);
+      const allPermissions = await createGroup(db, admin.id, {
+        name: "all-permissions",
+        permissions: [...permissions],
+      });
+      const [admins] = await db
+        .select()
+        .from(groups)
+        .where(eq(groups.name, "admins"));
+      if (!admins) throw new Error("Seed group missing.");
+      expect(await checkPermission(db, manager.id, "manage-users")).toBe(true);
+      await expect(
+        createGroup(db, manager.id, {
+          name: "escalated",
+          permissions: ["manage-server"],
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      for (const groupId of [allPermissions.id, admins.id])
+        await expect(
+          setUserGroups(db, manager.id, manager.id, [groupId]),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        setPermissionOverride(
+          db,
+          manager.id,
+          manager.id,
+          "manage-server",
+          true,
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        setPermissionOverride(
+          db,
+          manager.id,
+          manager.id,
+          "manage-server",
+          null,
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(await checkPermission(db, manager.id, "manage-server")).toBe(
+        false,
+      );
+    }));
+
+  test("membership replacement preserves the final enabled admin", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const admin = await createUser(db, "admin", ["admins"]);
+      const disabled = await createUser(db, "disabled", ["admins"]);
+      await db
+        .update(users)
+        .set({ disabledAt: new Date() })
+        .where(eq(users.id, disabled.id));
+      const [members] = await db
+        .select()
+        .from(groups)
+        .where(eq(groups.name, "users"));
+      if (!members) throw new Error("Seed group missing.");
+      for (const groupIds of [[], [members.id]]) {
+        await expect(
+          setUserGroups(db, admin.id, admin.id, groupIds),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(await checkPermission(db, admin.id, "manage-users")).toBe(true);
+      }
+      const replacement = await createUser(db, "replacement", ["admins"]);
+      await setUserGroups(db, admin.id, admin.id, [members.id]);
+      expect(await checkPermission(db, admin.id, "manage-users")).toBe(false);
+      expect(await checkPermission(db, replacement.id, "manage-users")).toBe(
+        true,
+      );
+    }));
+
+  test("concurrent admin demotions preserve one enabled admin", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const first = await createUser(db, "first", ["admins"]);
+      const other = await createUser(db, "other", ["admins"]);
+      const second = createDatabase(url);
+      try {
+        const results = await Promise.allSettled([
+          setUserGroups(db, first.id, first.id, []),
+          setUserGroups(second.db, other.id, other.id, []),
+        ]);
+        expect(
+          results.filter((result) => result.status === "fulfilled"),
+        ).toHaveLength(1);
+        const rejected = results.find((result) => result.status === "rejected");
+        expect(rejected).toMatchObject({
+          status: "rejected",
+          reason: { code: "CONFLICT" },
+        });
+        const enabled = await Promise.all([
+          checkPermission(db, first.id, "manage-users"),
+          checkPermission(db, other.id, "manage-users"),
+        ]);
+        expect(enabled.filter(Boolean)).toHaveLength(1);
+      } finally {
+        await second.close();
+      }
+    }));
+
+  test("mutations require built-in admins and validate groups", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const admin = await createUser(db, "admin", ["admins"]);

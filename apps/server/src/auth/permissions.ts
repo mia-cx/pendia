@@ -25,7 +25,7 @@ async function enabledUser(
   return row;
 }
 
-async function memberships(db: Database, userId: string) {
+async function memberships(db: Queryable, userId: string) {
   return db
     .select({
       id: groups.id,
@@ -96,13 +96,20 @@ export async function requirePermission(
 
 const builtInNames = ["admins", "users"];
 
-/** Creates a custom permission group; the actor needs manage-users. */
+async function requireAdmin(db: Queryable, userId: string): Promise<void> {
+  if (!(await enabledUser(db, userId))) throw new AuthError("FORBIDDEN");
+  const memberGroups = await memberships(db, userId);
+  if (!memberGroups.some((group) => group.builtIn && group.name === "admins"))
+    throw new AuthError("FORBIDDEN");
+}
+
+/** Creates a custom permission group; the actor must be a built-in admin. */
 export async function createGroup(
   db: Database,
   actorId: string,
   input: { name: string; permissions: Permission[] },
 ) {
-  await requirePermission(db, actorId, "manage-users");
+  await requireAdmin(db, actorId);
   const name = input.name.trim();
   if (
     !name ||
@@ -127,16 +134,23 @@ export async function createGroup(
   }
 }
 
-/** Replaces a user's group memberships; the actor needs manage-users. */
+/** Replaces memberships as a built-in admin and preserves an enabled admin. */
 export async function setUserGroups(
   db: Database,
   actorId: string,
   userId: string,
   groupIds: string[],
 ): Promise<void> {
-  await requirePermission(db, actorId, "manage-users");
   const unique = [...new Set(groupIds)];
   await db.transaction(async (tx) => {
+    const [admins] = await tx
+      .select({ id: groups.id })
+      .from(groups)
+      .where(and(eq(groups.name, "admins"), eq(groups.builtIn, true)))
+      .for("update");
+    if (!admins)
+      throw new Error("Seeded admins group missing; run migrations first.");
+    await requireAdmin(tx, actorId);
     const [target] = await tx
       .select({ id: users.id })
       .from(users)
@@ -155,10 +169,17 @@ export async function setUserGroups(
       await tx
         .insert(userGroups)
         .values(unique.map((groupId) => ({ userId, groupId })));
+    const [remainingAdmin] = await tx
+      .select({ id: users.id })
+      .from(userGroups)
+      .innerJoin(users, eq(users.id, userGroups.userId))
+      .where(and(eq(userGroups.groupId, admins.id), isNull(users.disabledAt)))
+      .limit(1);
+    if (!remainingAdmin) throw new AuthError("CONFLICT");
   });
 }
 
-/** Sets or clears a per-user permission override; the actor needs manage-users. */
+/** Sets or clears a per-user permission override; the actor must be a built-in admin. */
 export async function setPermissionOverride(
   db: Database,
   actorId: string,
@@ -166,7 +187,7 @@ export async function setPermissionOverride(
   permission: Permission,
   allowed: boolean | null,
 ): Promise<void> {
-  await requirePermission(db, actorId, "manage-users");
+  await requireAdmin(db, actorId);
   if (!(permissions as readonly string[]).includes(permission))
     throw new AuthError("INVALID_INPUT");
   const [target] = await db

@@ -141,14 +141,16 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `items.get` | GET `/api/items/{id}` | `id` in the path | the detail shape |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
 
-Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes.
+Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year` and `addedAt`.
-Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are ISO 8601 strings.
+Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.
-`cursor` is opaque and bound to that order. The default page is 24 and `limit` caps at 100. An unparseable cursor answers 400.
+`cursor` is opaque, bound to that order and carries the microsecond instant, so a row that shares a millisecond with its predecessor still pages.
+Without a `libraryId` the list is scoped to the libraries the caller may view, with the auth slice's own precedence rules, and answers 403 when that set is empty.
+The default page is 24 and `limit` caps at 100. An unparseable cursor answers 400.
 
 Errors map host codes to HTTP statuses:
 
@@ -166,6 +168,9 @@ Anything that is not a mapped failure is a defect. The response is a bare 500 an
 
 Events live in the durable `events` table. Publishing inserts the row, prunes rows older than the ten-minute retention window and notifies the new id on the `pendia_events` channel, all in one transaction.
 Each api process holds one LISTEN and wakes its subscribers; every subscriber then reads its own rows. Postgres sees one listener per process, not per client.
+
+Every event reaches only its audience, on live delivery and on replay alike: `library.changed` needs view on that library, `job.progress` needs `manage-server`, and `session.state` and `segment.ready` reach the session's owner or a `manage-server` caller. An unknown kind is denied.
+An open stream revalidates its credential every thirty seconds and before each delivered batch, so a revoked session or key, a disabled user or a permission change stops delivery within that interval and ends the stream.
 
 `events.stream` resumes through the `Last-Event-ID` header. A digit id replays the rows after it; a missing or unparseable id starts from the present.
 Two honest limits: a disconnect longer than the retention window loses the pruned events, and an event committed out of sequence order during a disconnect can be skipped by an id-ordered replay.

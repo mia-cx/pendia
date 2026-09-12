@@ -1,5 +1,5 @@
 {
-  "id": "5ac87272-cafa-4508-8fc3-67428611bf91",
+  "id": "56e607ea-348d-4ffb-8bb0-51ad0c397bbd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -2356,6 +2356,10 @@
         "versions_item_kind_check": {
           "name": "versions_item_kind_check",
           "value": "\"versions\".\"item_kind\" in ('movie', 'episode')"
+        },
+        "versions_format_check": {
+          "name": "versions_format_check",
+          "value": "\"versions\".\"format\" = 'video'"
         },
         "versions_bytes_check": {
           "name": "versions_bytes_check",

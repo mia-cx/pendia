@@ -371,7 +371,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       ).rejects.toMatchObject({ cause: { errno: "23514" } });
     }));
 
-  test("rejects container Versions and mismatched libraries or source Items", () =>
+  test("rejects invalid Version kinds, formats and mismatched ownership", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const f = await fixture(db);
@@ -383,6 +383,20 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         format: "video",
         bytes: 100n,
       } as const;
+      for (const item of [f.movie, f.episode]) {
+        await expect(
+          db
+            .insert(versions)
+            .values({
+              ...values,
+              itemId: item.id,
+              itemKind: item.kind,
+              libraryId: item.libraryId,
+              format: "audio",
+            })
+            .execute(),
+        ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      }
       for (const container of [f.first, f.season]) {
         await expect(
           db
@@ -415,6 +429,17 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       ).rejects.toMatchObject({ cause: { errno: "23503" } });
       const [source] = await db.insert(versions).values(values).returning();
       if (!source) throw new Error("Source Version missing.");
+      await expect(
+        db
+          .insert(streams)
+          .values({
+            versionId: source.id,
+            index: 0,
+            kind: "video",
+            codec: "h264",
+          })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
       await expect(
         db
           .insert(files)
@@ -597,12 +622,59 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           .values({ ...storedVersion, segmentTimelineId: otherCut.id })
           .execute(),
       ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      const race = await Promise.allSettled([
+        db.insert(versions).values(storedVersion).execute(),
+        db
+          .update(versions)
+          .set({ segmentTimelineId: otherCut.id })
+          .where(eq(versions.id, version.id))
+          .execute(),
+      ]);
+      expect(
+        race.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      expect(
+        race.filter((result) => result.status === "rejected"),
+      ).toHaveLength(1);
+      await db.delete(versions).where(eq(versions.sourceFileId, file.id));
+      await db
+        .update(versions)
+        .set({ segmentTimelineId: timeline.id })
+        .where(eq(versions.id, version.id));
       const [stored] = await db
         .insert(versions)
         .values(storedVersion)
         .returning();
       if (!stored) throw new Error("Stored Version missing.");
       expect(stored.segmentTimelineId).toBe(timeline.id);
+      await expect(
+        db
+          .update(versions)
+          .set({ segmentTimelineId: otherCut.id })
+          .where(eq(versions.id, version.id))
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      const [otherVersion] = await db
+        .insert(versions)
+        .values({
+          itemId: f.movie.id,
+          itemKind: f.movie.kind,
+          libraryId: f.movie.libraryId,
+          label: "Other cut",
+          format: "video",
+          bytes: 100n,
+          segmentTimelineId: otherCut.id,
+        })
+        .returning();
+      if (!otherVersion) throw new Error("Other Version missing.");
+      await expect(
+        db
+          .update(files)
+          .set({ versionId: otherVersion.id })
+          .where(eq(files.id, file.id))
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      await db.delete(versions).where(eq(versions.id, otherVersion.id));
       await expect(
         db
           .update(versions)
@@ -652,6 +724,26 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           codec: "h264",
         },
       ]);
+      await expect(
+        db
+          .update(streams)
+          .set({ fileId: null })
+          .where(eq(streams.fileId, file.id))
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      await expect(
+        db
+          .update(versions)
+          .set({
+            origin: "imported",
+            sourceFileId: null,
+            storedFolder: null,
+            rung: null,
+            complete: null,
+          })
+          .where(eq(versions.id, stored.id))
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
       await expect(
         db
           .insert(streams)

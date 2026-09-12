@@ -283,6 +283,7 @@ CREATE TABLE "versions" (
 	CONSTRAINT "versions_id_item_unique" UNIQUE("id","item_id"),
 	CONSTRAINT "versions_id_library_unique" UNIQUE("id","library_id"),
 	CONSTRAINT "versions_item_kind_check" CHECK ("versions"."item_kind" in ('movie', 'episode')),
+	CONSTRAINT "versions_format_check" CHECK ("versions"."format" = 'video'),
 	CONSTRAINT "versions_bytes_check" CHECK ("versions"."bytes" >= 0),
 	CONSTRAINT "versions_duration_check" CHECK ("versions"."duration_seconds" >= 0 and "versions"."duration_seconds" < 'Infinity'::float8),
 	CONSTRAINT "versions_alignment_check" CHECK (not "versions"."timeline_aligned" or "versions"."segment_timeline_id" is not null),
@@ -497,13 +498,22 @@ CREATE INDEX "jobs_queued_idx" ON "jobs" USING btree ("priority" DESC NULLS LAST
 CREATE INDEX "jobs_running_idx" ON "jobs" USING btree ("concurrency_key") WHERE "jobs"."state" = 'running';--> statement-breakpoint
 CREATE INDEX "session_registry_node_state_idx" ON "session_registry" USING btree ("transcoder_node_id","state","created_at","id");--> statement-breakpoint
 CREATE INDEX "session_registry_seen_idx" ON "session_registry" USING btree ("last_seen_at");--> statement-breakpoint
--- Stored Versions own Streams. These triggers restrict only Files.
+-- Stored Versions have no Files and imported Streams require a File.
 -- Lock the Version so a concurrent origin change cannot admit a File.
 CREATE FUNCTION require_imported_file_version() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  source_timeline_id uuid;
 BEGIN
-  PERFORM 1 FROM versions WHERE id = NEW.version_id AND origin = 'imported' FOR SHARE;
+  SELECT segment_timeline_id INTO source_timeline_id
+  FROM versions WHERE id = NEW.version_id AND origin = 'imported' FOR SHARE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Files require an imported Version' USING ERRCODE = '23514';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM versions WHERE source_file_id = NEW.id AND origin = 'stored'
+      AND segment_timeline_id IS DISTINCT FROM source_timeline_id
+  ) THEN
+    RAISE EXCEPTION 'Source File must preserve stored Version timelines' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END;
@@ -514,6 +524,11 @@ CREATE FUNCTION require_fileless_stored_version() RETURNS trigger LANGUAGE plpgs
 BEGIN
   IF NEW.origin = 'stored' AND EXISTS (SELECT 1 FROM files WHERE version_id = NEW.id) THEN
     RAISE EXCEPTION 'Stored Versions have no Files' USING ERRCODE = '23514';
+  END IF;
+  IF NEW.origin = 'imported' AND EXISTS (
+    SELECT 1 FROM streams WHERE version_id = NEW.id AND file_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'Imported Version Streams require a File' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END;
@@ -528,17 +543,49 @@ ALTER TABLE "episodes" ADD CONSTRAINT "episodes_season_range_exclude"
 EXCLUDE USING gist ("season_id" WITH =, int4range("episode_number", coalesce("episode_end_number", "episode_number"), '[]') WITH &&);--> statement-breakpoint
 -- Stored encodes use the timeline of the Version that owns their source File.
 CREATE FUNCTION require_stored_source_timeline() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  source_timeline_id uuid;
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM files AS source_file
-    JOIN versions AS source_version ON source_version.id = source_file.version_id
-    WHERE source_file.id = NEW.source_file_id AND source_file.item_id = NEW.item_id
-      AND source_version.segment_timeline_id IS DISTINCT FROM NEW.segment_timeline_id
-  ) THEN
+  SELECT source_version.segment_timeline_id INTO source_timeline_id
+  FROM files AS source_file
+  JOIN versions AS source_version ON source_version.id = source_file.version_id
+  WHERE source_file.id = NEW.source_file_id AND source_file.item_id = NEW.item_id
+  FOR SHARE OF source_file, source_version;
+  IF FOUND AND source_timeline_id IS DISTINCT FROM NEW.segment_timeline_id THEN
     RAISE EXCEPTION 'Stored Version timeline must match its source Version' USING ERRCODE = '23514';
   END IF;
   RETURN NEW;
 END;
 $$;--> statement-breakpoint
 CREATE TRIGGER versions_stored_source_timeline BEFORE INSERT OR UPDATE ON versions
-FOR EACH ROW WHEN (NEW.origin = 'stored') EXECUTE FUNCTION require_stored_source_timeline();
+FOR EACH ROW WHEN (NEW.origin = 'stored') EXECUTE FUNCTION require_stored_source_timeline();--> statement-breakpoint
+-- A source cut cannot change while stored Versions still use its timeline.
+CREATE FUNCTION preserve_stored_source_timeline() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM versions AS stored
+    JOIN files AS source_file ON source_file.id = stored.source_file_id
+    WHERE source_file.version_id = NEW.id AND stored.origin = 'stored'
+      AND stored.segment_timeline_id IS DISTINCT FROM NEW.segment_timeline_id
+  ) THEN
+    RAISE EXCEPTION 'Source Version must preserve stored Version timelines' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER versions_preserve_stored_timeline BEFORE UPDATE OF segment_timeline_id ON versions
+FOR EACH ROW WHEN (OLD.segment_timeline_id IS DISTINCT FROM NEW.segment_timeline_id)
+EXECUTE FUNCTION preserve_stored_source_timeline();--> statement-breakpoint
+CREATE FUNCTION require_stream_file_origin() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  owner_origin version_origin;
+BEGIN
+  SELECT origin INTO owner_origin FROM versions WHERE id = NEW.version_id FOR SHARE;
+  IF FOUND AND (NEW.file_id IS NULL) <> (owner_origin = 'stored') THEN
+    RAISE EXCEPTION 'Only Stored Versions have fileless Streams' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER streams_file_origin BEFORE INSERT OR UPDATE OF file_id, version_id ON streams
+FOR EACH ROW EXECUTE FUNCTION require_stream_file_origin();

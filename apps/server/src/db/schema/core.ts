@@ -157,7 +157,7 @@ export const versions = pgTable(
     format: format("format").notNull(),
     bytes: bigint("bytes", { mode: "bigint" }).notNull(),
     durationSeconds: doublePrecision("duration_seconds"),
-    // The migration checks stored timelines against the source File's Version.
+    // Migration triggers preserve timeline agreement across stored and source writes.
     segmentTimelineId: uuid("segment_timeline_id"),
     timelineAligned: boolean("timeline_aligned").notNull().default(false),
     origin: versionOrigin("origin").notNull().default("imported"),
@@ -199,6 +199,7 @@ export const versions = pgTable(
       "versions_item_kind_check",
       sql`${table.itemKind} in ('movie', 'episode')`,
     ),
+    check("versions_format_check", sql`${table.format} = 'video'`),
     foreignKey({
       name: "versions_timeline_fk",
       columns: [table.segmentTimelineId, table.itemId],
@@ -284,6 +285,7 @@ export const streams = pgTable(
     versionId: uuid("version_id")
       .notNull()
       .references(() => versions.id, owned),
+    // Migration triggers reserve fileless Streams for stored Versions.
     fileId: uuid("file_id"),
     index: integer("index").notNull(),
     kind: streamKind("kind").notNull(),

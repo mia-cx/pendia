@@ -64,6 +64,8 @@ Plugin cron scheduling belongs to the plugin host, not this queue.
 ## Auth
 
 The api and all roles serve these JSON routes. Setup creates the admin account only. It does not log in.
+The first accepted setup request owns a fresh instance. Keep it inaccessible to untrusted clients until setup completes.
+Use a private bind address, firewall or restricted ingress during setup. Expose the instance only after creating the admin.
 
 | Method | Route | JSON input | Result |
 | --- | --- | --- | --- |
@@ -93,7 +95,7 @@ Server callers use these functions after authenticating the actor:
 
 - `accounts.ts`: `setupAdmin` and `createLocalUser`. Only setup accepts anonymous account creation; later users require `manage-users`.
 - `permissions.ts`: `checkPermission` and `requirePermission` for every later service. Group permissions form a union, then user overrides apply. Library rows override global view, and a matching library deny wins. Built-in admins bypass checks; disabled users do not.
-- `permissions.ts`: `createGroup`, `setUserGroups` and `setPermissionOverride` require `manage-users`. A null override restores inheritance. Membership replacement serializes per user.
+- `permissions.ts`: `createGroup`, `setUserGroups` and `setPermissionOverride` require built-in admin membership. A null override restores inheritance. Membership replacement serializes on the admins group and rejects removal of the final enabled admin with `CONFLICT`.
 - `sessions.ts`: `login`, `authenticate`, `listSessions`, `revokeSession`, `createApiKey`, `listApiKeys` and `revokeApiKey`. Listing and revocation require ownership or `manage-users`. API keys belong to their creator and carry an integration name.
 
 These files live under `src/auth`. Call `login(db, input, address)` with the resolved client address, not a forwarded header string.

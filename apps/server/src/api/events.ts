@@ -84,7 +84,8 @@ function subjectKey(event: Event): string {
     case "segment.ready":
       return `session:${event.sessionId}`;
     default:
-      return `kind:${event.kind}`;
+      // The union is exhaustive today; the cast keeps future kinds distinct.
+      return `kind:${(event as { kind: string }).kind}`;
   }
 }
 

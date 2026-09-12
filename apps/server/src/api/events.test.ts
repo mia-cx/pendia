@@ -628,7 +628,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
     }));
 
   test("revocation mid-batch stops delivery inside the interval", () =>
-    withDatabase(async (db, url) => {
+    withDatabase(async (db, _url) => {
       await migrateDatabase(db);
       const { token, user, session } = await seed(db);
       for (let index = 0; index < 3; index++) {

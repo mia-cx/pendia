@@ -75,7 +75,8 @@ export async function canReceive(
 // The subject an audience decision attaches to: every event of a kind asking
 // the same question shares one memo slot.
 function subjectKey(event: Event): string {
-  switch (event.kind) {
+  const { kind } = event;
+  switch (kind) {
     case "library.changed":
       return `library:${event.libraryId}`;
     case "job.progress":
@@ -84,8 +85,8 @@ function subjectKey(event: Event): string {
     case "segment.ready":
       return `session:${event.sessionId}`;
     default:
-      // The union is exhaustive today; the cast keeps future kinds distinct.
-      return `kind:${(event as { kind: string }).kind}`;
+      // The union is exhaustive today; a future kind memoises its own denial.
+      return `kind:${kind}`;
   }
 }
 

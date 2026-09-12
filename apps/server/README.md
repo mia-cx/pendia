@@ -239,7 +239,8 @@ Events live in the durable `events` table. Publishing inserts the row, prunes ro
 Each api process holds one LISTEN and wakes its subscribers; every subscriber then reads its own rows. Postgres sees one listener per process, not per client.
 
 Every event reaches only its audience, on live delivery and on replay alike: `library.changed` needs view on that library, `job.progress` needs `manage-server`, and `session.state` and `segment.ready` reach the session's owner or a `manage-server` caller. An unknown kind is denied.
-An open stream revalidates its credential every thirty seconds and before each delivered batch, so a revoked session or key, a disabled user or a permission change stops delivery within that interval and ends the stream.
+An open stream revalidates its credential every thirty seconds and again before any event that would be delivered past that deadline, so a revoked session or key, a disabled user or a permission change stops delivery within the interval and ends the stream — including mid-batch, where a suspended yield cannot stretch one validation over many rows.
+Audience decisions are memoised per event subject — the library, the job set or the session — and cleared whenever the credential refreshes, so a long replay costs one decision per subject rather than per row while staying within the same freshness bound.
 
 `events.stream` resumes through the `Last-Event-ID` header. A digit id replays the rows after it; a missing or unparseable id starts from the present.
 Two honest limits: a disconnect longer than the retention window loses the pruned events, and an event committed out of sequence order during a disconnect can be skipped by an id-ordered replay.

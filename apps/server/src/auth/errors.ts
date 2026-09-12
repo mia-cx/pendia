@@ -1,7 +1,9 @@
 const errors = {
   INVALID_INPUT: [400, "Invalid auth input."],
+  INVALID_INVITE: [400, "Invite is invalid or expired."],
   INVALID_CREDENTIALS: [401, "Invalid credentials."],
   UNAUTHENTICATED: [401, "Authentication required."],
+  OIDC_FAILED: [401, "OIDC login failed."],
   FORBIDDEN: [403, "Permission denied."],
   NOT_FOUND: [404, "Auth record not found."],
   CONFLICT: [409, "Auth record already exists."],

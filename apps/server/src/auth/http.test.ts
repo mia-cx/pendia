@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { migrateDatabase } from "../db/migrate.ts";
-import { settings, users } from "../db/schema/index.ts";
+import { invites, settings, users } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { setupAdmin } from "./accounts.ts";
@@ -305,6 +305,139 @@ describe.skipIf(!databaseUrl)("auth http", () => {
           { origin: `http://127.0.0.1:${server.apiServer?.port}` },
         );
         expect(sameOrigin.status).toBe(200);
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("invites create and accept local accounts over HTTP", () =>
+    withDatabase(async (db, url) => {
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const setup = await post(`${base}/api/auth/setup`, {
+          username: "admin",
+          password: "secret",
+        });
+        expect(setup.status).toBe(201);
+        const loginResponse = await post(`${base}/api/auth/login`, {
+          username: "admin",
+          password: "secret",
+          ...device,
+        });
+        const adminToken = ((await loginResponse.json()) as { token: string })
+          .token;
+        const invited = { authorization: `Bearer ${adminToken}` };
+
+        const anonymous = await post(`${base}/api/auth/invites`, {
+          email: "a@b.co",
+          expiresInSeconds: 600,
+        });
+        expect(anonymous.status).toBe(401);
+        expect(
+          ((await anonymous.json()) as { error: { code: string } }).error.code,
+        ).toBe("UNAUTHENTICATED");
+        const malformed = await post(
+          `${base}/api/auth/invites`,
+          { email: "a@b.co", expiresInSeconds: "600" },
+          invited,
+        );
+        expect(malformed.status).toBe(400);
+        expect(
+          ((await malformed.json()) as { error: { code: string } }).error.code,
+        ).toBe("INVALID_INPUT");
+
+        const created = await post(
+          `${base}/api/auth/invites`,
+          { email: " Invitee@Example.COM ", expiresInSeconds: 600 },
+          invited,
+        );
+        expect(created.status).toBe(201);
+        const createdBody = (await created.json()) as {
+          token: string;
+          invite: { id: string; email: string; acceptedAt: string | null };
+        };
+        expect(createdBody.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(Object.keys(createdBody.invite).sort()).toEqual([
+          "acceptedAt",
+          "email",
+          "expiresAt",
+          "id",
+          "invitedBy",
+        ]);
+        expect(createdBody.invite.email).toBe("invitee@example.com");
+        expect(createdBody.invite.acceptedAt).toBeNull();
+        expect(JSON.stringify(createdBody.invite)).not.toContain(
+          createdBody.token,
+        );
+
+        const accepted = await post(`${base}/api/auth/invites/accept`, {
+          token: createdBody.token,
+          username: "newbie",
+          password: "newbie-pass",
+          displayName: "New Bee",
+          ...device,
+        });
+        expect(accepted.status).toBe(201);
+        const acceptedBody = (await accepted.json()) as {
+          token: string;
+          user: { username: string; displayName: string };
+          session: {
+            clientName: string;
+            deviceId: string;
+            deviceName: string;
+          };
+        };
+        expect(acceptedBody.user).toMatchObject({
+          username: "newbie",
+          displayName: "New Bee",
+        });
+        expect(acceptedBody.session).toMatchObject(device);
+        const cookie = accepted.headers.get("set-cookie") ?? "";
+        expect(cookie).toContain(`pendia_session=${acceptedBody.token}`);
+        expect(cookie).toContain("HttpOnly");
+        expect(cookie).toContain("SameSite=Lax");
+        expect(cookie).toContain("Path=/");
+        expect(cookie).toContain("Max-Age=");
+        const me = await fetch(`${base}/api/auth/me`, {
+          headers: { authorization: `Bearer ${acceptedBody.token}` },
+        });
+        expect(me.status).toBe(200);
+
+        const replay = await post(`${base}/api/auth/invites/accept`, {
+          token: createdBody.token,
+          username: "second",
+          password: "pass",
+          ...device,
+        });
+        expect(replay.status).toBe(400);
+        expect(
+          ((await replay.json()) as { error: { code: string } }).error.code,
+        ).toBe("INVALID_INVITE");
+
+        const second = await post(
+          `${base}/api/auth/invites`,
+          { email: "late@example.com", expiresInSeconds: 600 },
+          invited,
+        );
+        const secondBody = (await second.json()) as {
+          token: string;
+          invite: { id: string };
+        };
+        await db
+          .update(invites)
+          .set({ expiresAt: sql`statement_timestamp() - interval '1 second'` })
+          .where(eq(invites.id, secondBody.invite.id));
+        const expired = await post(`${base}/api/auth/invites/accept`, {
+          token: secondBody.token,
+          username: "late",
+          password: "pass",
+          ...device,
+        });
+        expect(expired.status).toBe(400);
+        expect(
+          ((await expired.json()) as { error: { code: string } }).error.code,
+        ).toBe("INVALID_INVITE");
       } finally {
         await server.stop();
       }

@@ -160,6 +160,12 @@ export async function startEventBroker(
           );
           continue;
         }
+        // A yield suspends until the consumer pulls, so a batch can outlive
+        // the interval; revalidate before authorising each row past it.
+        if (Date.now() - validatedAt >= revalidateMs) {
+          caller = await options.revalidate();
+          validatedAt = Date.now();
+        }
         if (await canReceive(db, caller, decoded.value))
           yield withEventMeta(decoded.value, { id: String(row.id) });
       }

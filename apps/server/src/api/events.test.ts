@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inArray } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
-import { createApiKey, login, revokeSession } from "../auth/sessions.ts";
+import {
+  authenticate,
+  createApiKey,
+  login,
+  revokeSession,
+} from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
@@ -17,7 +22,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
-import { type Event, publishEvent } from "./events.ts";
+import { type Event, publishEvent, startEventBroker } from "./events.ts";
 
 const device = {
   clientName: "Test Client",
@@ -544,6 +549,42 @@ describe.skipIf(!databaseUrl)("api events", () => {
         }
       } finally {
         await server.stop();
+      }
+    }));
+
+  test("revocation mid-batch stops delivery inside the interval", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token, user, session } = await seed(db);
+      for (let index = 0; index < 3; index++) {
+        await publishEvent(db, {
+          kind: "library.changed",
+          libraryId: Bun.randomUUIDv7(),
+        });
+      }
+      const broker = await startEventBroker(db, {
+        revalidateIntervalMs: 0,
+      });
+      try {
+        // Driving subscribe directly keeps the revocation deterministic: the
+        // batch check is call one, each row revalidates under a zero interval,
+        // so call three lands before the second row authorises.
+        let calls = 0;
+        const stream = broker.subscribe({
+          caller: await authenticate(db, token),
+          lastEventId: "0",
+          revalidate: async () => {
+            calls++;
+            if (calls === 3) await revokeSession(db, user.id, session.id);
+            return authenticate(db, token);
+          },
+        });
+        const first = await stream.next();
+        expect(first.done).toBe(false);
+        await expect(stream.next()).rejects.toThrow();
+        expect((await stream.next()).done).toBe(true);
+      } finally {
+        await broker.stop();
       }
     }));
 

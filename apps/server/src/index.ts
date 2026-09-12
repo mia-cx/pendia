@@ -117,6 +117,7 @@ type StartOptions = {
   port?: number;
   registry?: typeof jobRegistry;
   workerOptions?: Parameters<typeof startJobWorker>[2];
+  brokerOptions?: Parameters<typeof startEventBroker>[1];
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -127,6 +128,7 @@ export async function startPendia(
     port,
     registry = jobRegistry,
     workerOptions,
+    brokerOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
@@ -160,7 +162,7 @@ export async function startPendia(
     if (servesApi && database && databaseUrl) {
       await migrateDatabase(database.db);
       log(role, "database.migrated");
-      eventBroker = await startEventBroker(database.db);
+      eventBroker = await startEventBroker(database.db, brokerOptions);
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {

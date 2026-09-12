@@ -1,6 +1,6 @@
 import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
-import { authenticated } from "./context.ts";
+import { authenticated, authenticateRequest } from "./context.ts";
 import { runApi } from "./errors.ts";
 import { getItemDetail, listItemCards } from "./items.ts";
 import {
@@ -47,7 +47,13 @@ const streamEvents = authenticated
   .route({ method: "GET", path: "/events" })
   .output(eventIterator(Schema.standardSchemaV1(ApiEvent)))
   .handler(async function* ({ context, lastEventId, signal }) {
-    yield* context.events.subscribe({ lastEventId, signal });
+    yield* context.events.subscribe({
+      caller: context.caller,
+      revalidate: () =>
+        runApi(authenticateRequest(context.db, context.request)),
+      lastEventId,
+      signal,
+    });
   });
 
 /** The API router: procedures defined once, served over both RPC and REST. */

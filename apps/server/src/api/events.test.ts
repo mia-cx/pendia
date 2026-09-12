@@ -3,11 +3,18 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inArray } from "drizzle-orm";
-import { setupAdmin } from "../auth/accounts.ts";
-import { login } from "../auth/sessions.ts";
+import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
+import { createApiKey, login, revokeSession } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { events } from "../db/schema/index.ts";
+import {
+  events,
+  items,
+  libraries,
+  libraryAccess,
+  sessionRegistry,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { type Event, publishEvent } from "./events.ts";
@@ -39,20 +46,21 @@ function openStream(body: ReadableStream<Uint8Array>) {
   let buffer = "";
   let ended = false;
   const pumping = (async () => {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        ended = true;
-        return;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        buffer += decoder.decode(value, { stream: true });
+        let split = buffer.indexOf("\n\n");
+        while (split !== -1) {
+          const frame = parseFrame(buffer.slice(0, split));
+          buffer = buffer.slice(split + 2);
+          if (frame !== undefined) frames.push(frame);
+          split = buffer.indexOf("\n\n");
+        }
       }
-      buffer += decoder.decode(value, { stream: true });
-      let split = buffer.indexOf("\n\n");
-      while (split !== -1) {
-        const frame = parseFrame(buffer.slice(0, split));
-        buffer = buffer.slice(split + 2);
-        if (frame !== undefined) frames.push(frame);
-        split = buffer.indexOf("\n\n");
-      }
+    } finally {
+      ended = true;
     }
   })();
   return {
@@ -70,9 +78,14 @@ function openStream(body: ReadableStream<Uint8Array>) {
         );
       return frames.slice(0, count);
     },
+    async waitUntilEnded(timeoutMs: number) {
+      const deadline = Date.now() + timeoutMs;
+      while (!ended && Date.now() < deadline) await Bun.sleep(20);
+      if (!ended) throw new Error("Timed out waiting for the stream to end.");
+    },
     async close() {
-      await reader.cancel();
-      await pumping;
+      await reader.cancel().catch(() => {});
+      await pumping.catch(() => {});
     },
   };
 }
@@ -88,14 +101,57 @@ async function openEvents(base: string, token: string, lastEventId?: string) {
   return openStream(response.body);
 }
 
+type Stream = Awaited<ReturnType<typeof openEvents>>;
+
+function seen(stream: Stream) {
+  return stream.frames.map((frame): unknown => JSON.parse(frame.data));
+}
+
+// Publishes until a frame arrives, which proves the subscriber finished its
+// initial read and is parked on the wake. A publish that lands inside that
+// first read is retried, so this cannot race.
+async function park(db: Database, stream: Stream) {
+  for (let attempt = 0; ; attempt++) {
+    if (attempt === 10)
+      throw new Error("The stream never received a warm-up event.");
+    const want = stream.frames.length + 1;
+    await publishEvent(db, {
+      kind: "library.changed",
+      libraryId: Bun.randomUUIDv7(),
+    });
+    try {
+      await stream.waitFor(want, 1_000);
+      return;
+    } catch {
+      // The publish raced the subscriber's first read; publish again.
+    }
+  }
+}
+
 async function seed(db: Database) {
-  await setupAdmin(db, { username: "admin", password: "admin-pass" });
-  const { token } = await login(
+  const admin = await setupAdmin(db, {
+    username: "admin",
+    password: "admin-pass",
+  });
+  const { token, user, session } = await login(
     db,
     { username: "admin", password: "admin-pass", ...device },
     "127.0.0.1",
   );
-  return { token };
+  return { admin, token, user, session };
+}
+
+async function insertLibrary(db: Database, name: string) {
+  const [library] = await db
+    .insert(libraries)
+    .values({
+      name,
+      medium: "movies",
+      rootPath: `/srv/${name.toLowerCase()}`,
+    })
+    .returning();
+  if (!library) throw new Error("Library insert returned no row.");
+  return library;
 }
 
 // Publishes one event from a genuinely separate process so the test
@@ -142,23 +198,19 @@ describe.skipIf(!databaseUrl)("api events", () => {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const stream = await openEvents(base, token);
         try {
-          // The warm-up frame proves the subscriber finished its initial
-          // read and is parked on the wake, so nothing can reach it through
-          // a catch-up read any more.
-          await publishEvent(db, {
-            kind: "library.changed",
-            libraryId: Bun.randomUUIDv7(),
-          });
-          await stream.waitFor(1, 3_000);
+          // Parking on the wake means nothing can reach the subscriber
+          // through a catch-up read any more, so the next event needs NOTIFY.
+          await park(db, stream);
           const event: Event = {
             kind: "library.changed",
             libraryId: Bun.randomUUIDv7(),
           };
           // The poll fallback waits five seconds, so a frame inside three
           // seconds can only have arrived through the NOTIFY wake.
+          const want = stream.frames.length + 1;
           await publishFromProcess(url, event);
-          const frames = await stream.waitFor(2, 3_000);
-          expect(JSON.parse(frames[1]?.data ?? "")).toEqual(event);
+          await stream.waitFor(want, 3_000);
+          expect(JSON.parse(stream.frames.at(-1)?.data ?? "")).toEqual(event);
         } finally {
           await stream.close();
         }
@@ -177,13 +229,16 @@ describe.skipIf(!databaseUrl)("api events", () => {
         const first = await openEvents(base, token);
         let lastId: string;
         try {
+          await park(db, first);
           const firstEvent: Event = {
             kind: "segment.ready",
             sessionId: Bun.randomUUIDv7(),
             index: 1,
           };
+          const want = first.frames.length + 1;
           await publishEvent(db, firstEvent);
-          const [frame] = await first.waitFor(1, 3_000);
+          await first.waitFor(want, 3_000);
+          const frame = first.frames.at(-1);
           expect(JSON.parse(frame?.data ?? "")).toEqual(firstEvent);
           if (frame?.id === undefined)
             throw new Error("The frame carries no event id.");
@@ -263,6 +318,233 @@ describe.skipIf(!databaseUrl)("api events", () => {
         .from(events)
         .where(inArray(events.id, [old.id, freshId]));
       expect(remaining.map((row) => row.id)).toEqual([freshId]);
+    }));
+
+  test("each caller only receives the events it may see, live and on replay", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const movies = await insertLibrary(db, "Movies");
+      const shows = await insertLibrary(db, "Shows");
+      const movieFan = await createLocalUser(db, admin.id, {
+        username: "moviefan",
+        password: "viewer-pass",
+      });
+      const showFan = await createLocalUser(db, admin.id, {
+        username: "showfan",
+        password: "viewer-pass",
+      });
+      await db.insert(libraryAccess).values({
+        libraryId: shows.id,
+        userId: movieFan.id,
+        allowed: false,
+      });
+      await db.insert(libraryAccess).values({
+        libraryId: movies.id,
+        userId: showFan.id,
+        allowed: false,
+      });
+      const { token: movieToken } = await createApiKey(db, movieFan.id, "m");
+      const { token: showToken } = await createApiKey(db, showFan.id, "s");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const moviesEvent: Event = {
+          kind: "library.changed",
+          libraryId: movies.id,
+        };
+        const showsEvent: Event = {
+          kind: "library.changed",
+          libraryId: shows.id,
+        };
+        const movieStream = await openEvents(base, movieToken);
+        const showStream = await openEvents(base, showToken);
+        try {
+          await park(db, movieStream);
+          await park(db, showStream);
+          const wantMovies = movieStream.frames.length + 1;
+          await publishEvent(db, moviesEvent);
+          await movieStream.waitFor(wantMovies, 3_000);
+          const wantShows = showStream.frames.length + 1;
+          await publishEvent(db, showsEvent);
+          await showStream.waitFor(wantShows, 3_000);
+          await Bun.sleep(400);
+          expect(seen(movieStream)).toContainEqual(moviesEvent);
+          expect(seen(movieStream)).not.toContainEqual(showsEvent);
+          expect(seen(showStream)).toContainEqual(showsEvent);
+          expect(seen(showStream)).not.toContainEqual(moviesEvent);
+        } finally {
+          await movieStream.close();
+          await showStream.close();
+        }
+        // Replay applies the same audience filter to stored rows.
+        const replayed = await openEvents(base, movieToken, "0");
+        try {
+          await replayed.waitFor(1, 3_000);
+          await Bun.sleep(400);
+          expect(seen(replayed)).toContainEqual(moviesEvent);
+          expect(seen(replayed)).not.toContainEqual(showsEvent);
+        } finally {
+          await replayed.close();
+        }
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("an admin receives job progress while a plain caller does not", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin, token: adminToken } = await seed(db);
+      const viewer = await createLocalUser(db, admin.id, {
+        username: "viewer",
+        password: "viewer-pass",
+      });
+      const { token: viewerToken } = await createApiKey(
+        db,
+        viewer.id,
+        "viewer-key",
+      );
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const adminStream = await openEvents(base, adminToken);
+        const viewerStream = await openEvents(base, viewerToken);
+        try {
+          await park(db, adminStream);
+          await park(db, viewerStream);
+          const progress: Event = {
+            kind: "job.progress",
+            jobId: Bun.randomUUIDv7(),
+            state: "running",
+          };
+          const want = adminStream.frames.length + 1;
+          await publishEvent(db, progress);
+          await adminStream.waitFor(want, 3_000);
+          await Bun.sleep(400);
+          expect(seen(adminStream)).toContainEqual(progress);
+          expect(seen(viewerStream)).not.toContainEqual(progress);
+        } finally {
+          await adminStream.close();
+          await viewerStream.close();
+        }
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("session events reach only the owner and admins", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin, token: adminToken } = await seed(db);
+      const owner = await createLocalUser(db, admin.id, {
+        username: "owner",
+        password: "owner-pass",
+      });
+      const other = await createLocalUser(db, admin.id, {
+        username: "other",
+        password: "other-pass",
+      });
+      const { token: ownerToken } = await createApiKey(db, owner.id, "o");
+      const { token: otherToken } = await createApiKey(db, other.id, "x");
+      const library = await insertLibrary(db, "Movies");
+      const [item] = await db
+        .insert(items)
+        .values({
+          libraryId: library.id,
+          kind: "movie",
+          title: "Movie",
+          canonicalFolder: "/srv/movies/movie",
+        })
+        .returning();
+      if (!item) throw new Error("Item insert returned no row.");
+      const [version] = await db
+        .insert(versions)
+        .values({
+          itemId: item.id,
+          itemKind: "movie",
+          libraryId: library.id,
+          label: "Original",
+          format: "video",
+          bytes: 1n,
+        })
+        .returning();
+      if (!version) throw new Error("Version insert returned no row.");
+      const [session] = await db
+        .insert(sessionRegistry)
+        .values({
+          userId: owner.id,
+          itemId: item.id,
+          versionId: version.id,
+          playMethod: "direct-play",
+          state: "playing",
+        })
+        .returning();
+      if (!session) throw new Error("Session insert returned no row.");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const adminStream = await openEvents(base, adminToken);
+        const ownerStream = await openEvents(base, ownerToken);
+        const otherStream = await openEvents(base, otherToken);
+        try {
+          await park(db, adminStream);
+          await park(db, ownerStream);
+          await park(db, otherStream);
+          const playing: Event = {
+            kind: "session.state",
+            sessionId: session.id,
+            state: "playing",
+          };
+          const wantAdmin = adminStream.frames.length + 1;
+          const wantOwner = ownerStream.frames.length + 1;
+          await publishEvent(db, playing);
+          await adminStream.waitFor(wantAdmin, 3_000);
+          await ownerStream.waitFor(wantOwner, 3_000);
+          await Bun.sleep(400);
+          expect(seen(adminStream)).toContainEqual(playing);
+          expect(seen(ownerStream)).toContainEqual(playing);
+          expect(seen(otherStream)).not.toContainEqual(playing);
+        } finally {
+          await adminStream.close();
+          await ownerStream.close();
+          await otherStream.close();
+        }
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("a revoked session stops receiving events and the stream ends", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token, user, session } = await seed(db);
+      const server = await startPendia("api", {
+        databaseUrl: url,
+        port: 0,
+        brokerOptions: { pollIntervalMs: 50, revalidateIntervalMs: 100 },
+      });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const stream = await openEvents(base, token);
+        try {
+          await park(db, stream);
+          await revokeSession(db, user.id, session.id);
+          const afterRevoke: Event = {
+            kind: "library.changed",
+            libraryId: Bun.randomUUIDv7(),
+          };
+          await publishEvent(db, afterRevoke);
+          // The delivery-path revalidate throws and ends the generator; the
+          // idle ceiling would end it without a publish.
+          await stream.waitUntilEnded(3_000);
+          expect(seen(stream)).not.toContainEqual(afterRevoke);
+        } finally {
+          await stream.close();
+        }
+      } finally {
+        await server.stop();
+      }
     }));
 
   test("an unauthenticated request to the stream answers 401", () =>

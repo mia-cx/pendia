@@ -1,8 +1,10 @@
 import { withEventMeta } from "@orpc/server";
-import { asc, desc, gt, sql } from "drizzle-orm";
+import { asc, desc, eq, gt, sql } from "drizzle-orm";
 import { Option, Schema } from "effect";
+import { checkPermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
-import { events } from "../db/schema/index.ts";
+import { events, sessionRegistry } from "../db/schema/index.ts";
+import type { Caller } from "./items.ts";
 import { ApiEvent } from "./schema.ts";
 
 /** The Postgres NOTIFY channel that carries new event ids. */
@@ -10,6 +12,9 @@ export const eventChannel = "pendia_events";
 
 /** The number of seconds an event stays replayable. */
 export const retentionSeconds = 600;
+
+/** The longest an open stream goes without revalidating its credential. */
+export const revalidateIntervalMs = 30_000;
 
 /** A decoded API event, the shape rows publish and streams deliver. */
 export type Event = Schema.Schema.Type<typeof ApiEvent>;
@@ -41,7 +46,36 @@ export async function publishEvent(
   });
 }
 
-type BrokerOptions = { pollIntervalMs?: number };
+/** Reports whether the caller is entitled to receive an event; anything unknown denies. */
+export async function canReceive(
+  db: Database,
+  caller: Caller,
+  event: Event,
+): Promise<boolean> {
+  switch (event.kind) {
+    case "library.changed":
+      return checkPermission(db, caller.user.id, "view", event.libraryId);
+    case "job.progress":
+      return checkPermission(db, caller.user.id, "manage-server");
+    case "session.state":
+    case "segment.ready": {
+      const [session] = await db
+        .select({ userId: sessionRegistry.userId })
+        .from(sessionRegistry)
+        .where(eq(sessionRegistry.id, event.sessionId))
+        .limit(1);
+      if (session?.userId === caller.user.id) return true;
+      return checkPermission(db, caller.user.id, "manage-server");
+    }
+    default:
+      return false;
+  }
+}
+
+type BrokerOptions = {
+  pollIntervalMs?: number;
+  revalidateIntervalMs?: number;
+};
 
 const batchSize = 100;
 const eventIdPattern = /^\d+$/;
@@ -52,7 +86,10 @@ export type EventBroker = Awaited<ReturnType<typeof startEventBroker>>;
 /** Starts the per-process event fan-out over a single Postgres LISTEN. */
 export async function startEventBroker(
   db: Database,
-  { pollIntervalMs = 5_000 }: BrokerOptions = {},
+  {
+    pollIntervalMs = 5_000,
+    revalidateIntervalMs: revalidateMs = revalidateIntervalMs,
+  }: BrokerOptions = {},
 ) {
   let stopped = false;
   let generation = 0;
@@ -79,10 +116,14 @@ export async function startEventBroker(
   const subscription = await db.$client.listen(eventChannel, wake, wake);
 
   async function* subscribe(options: {
+    caller: Caller;
+    revalidate: () => Promise<Caller>;
     lastEventId?: string;
     signal?: AbortSignal;
   }) {
     const { lastEventId, signal } = options;
+    let caller = options.caller;
+    let validatedAt = Date.now();
     let cursor: bigint;
     if (lastEventId !== undefined && eventIdPattern.test(lastEventId)) {
       cursor = BigInt(lastEventId);
@@ -102,6 +143,10 @@ export async function startEventBroker(
         .where(gt(events.id, cursor))
         .orderBy(asc(events.id))
         .limit(batchSize);
+      if (rows.length > 0) {
+        caller = await options.revalidate();
+        validatedAt = Date.now();
+      }
       for (const row of rows) {
         cursor = row.id;
         const decoded = Schema.decodeUnknownOption(ApiEvent)(row.payload);
@@ -115,10 +160,19 @@ export async function startEventBroker(
           );
           continue;
         }
-        yield withEventMeta(decoded.value, { id: String(row.id) });
+        if (await canReceive(db, caller, decoded.value))
+          yield withEventMeta(decoded.value, { id: String(row.id) });
       }
       if (rows.length === batchSize) continue;
       await wait(version, signal);
+      if (
+        !stopped &&
+        !signal?.aborted &&
+        Date.now() - validatedAt >= revalidateMs
+      ) {
+        caller = await options.revalidate();
+        validatedAt = Date.now();
+      }
     }
   }
 

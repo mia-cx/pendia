@@ -235,6 +235,8 @@ Errors map host codes to HTTP statuses:
 
 Anything that is not a mapped failure is a defect. The response is a bare 500 and the cause goes to the server log.
 
+Every response from either transport carries `Cache-Control: no-store` and `Vary: Cookie, Authorization`, matching the auth routes, because the answers are personalised and a shared proxy caches on the URL. The generated document is identical for every caller, so `/api/openapi.json` stays cacheable.
+
 Events live in the durable `events` table. Publishing inserts the row, prunes rows older than the ten-minute retention window and notifies the new id on the `pendia_events` channel, all in one transaction.
 Each api process holds one LISTEN and wakes its subscribers; every subscriber then reads its own rows. Postgres sees one listener per process, not per client.
 

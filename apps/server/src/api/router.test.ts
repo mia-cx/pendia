@@ -377,6 +377,67 @@ describe.skipIf(!databaseUrl)("api router", () => {
       }
     }));
 
+  test("API answers are marked non-cacheable on both transports", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token } = await seed(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const headers = { authorization: `Bearer ${token}` };
+        const assertNoStore = (response: Response) => {
+          expect(response.headers.get("cache-control")).toContain("no-store");
+          const vary = (response.headers.get("vary") ?? "").toLowerCase();
+          expect(vary).toContain("cookie");
+          expect(vary).toContain("authorization");
+        };
+        for (const path of ["/api/me", "/api/items"]) {
+          const response = await fetch(`${base}${path}`, { headers });
+          expect(response.status).toBe(200);
+          assertNoStore(response);
+          await response.body?.cancel();
+        }
+        // The RPC transport gets the same headers; a wrapped fetch exposes them.
+        let rpc: Headers | undefined;
+        const link = new RPCLink({
+          url: `${base}/rpc`,
+          headers,
+          fetch: async (request, init) => {
+            const response = await fetch(request, init);
+            rpc = response.headers;
+            return response;
+          },
+        });
+        const client =
+          createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+        await client.me();
+        if (!rpc) throw new Error("The RPC link never fetched.");
+        expect(rpc.get("cache-control")).toContain("no-store");
+        const vary = (rpc.get("vary") ?? "").toLowerCase();
+        expect(vary).toContain("cookie");
+        expect(vary).toContain("authorization");
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("GET /api/openapi.json stays cacheable", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await seed(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const response = await fetch(`${base}/api/openapi.json`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control") ?? "").not.toContain(
+          "no-store",
+        );
+      } finally {
+        await server.stop();
+      }
+    }));
+
   test("GET /api/items with no query string answers the default page", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);

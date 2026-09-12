@@ -27,6 +27,13 @@ export function createApiHandler(db: Database, events: EventBroker) {
       pathname === "/rpc" || pathname.startsWith("/rpc/")
         ? await rpc.handle(request, { prefix: "/rpc", context })
         : await openapi.handle(request, { prefix: "/api", context });
-    return result.response;
+    const response = result.response;
+    if (response === undefined) return undefined;
+    // Personalised GETs are heuristically cacheable to a shared proxy keyed
+    // on the URL; match the auth routes and mark every API response no-store.
+    // The openapi.json branch returns earlier and stays cacheable on purpose.
+    response.headers.set("cache-control", "no-store");
+    response.headers.append("vary", "cookie, authorization");
+    return response;
   };
 }

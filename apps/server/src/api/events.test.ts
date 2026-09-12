@@ -707,6 +707,44 @@ describe.skipIf(!databaseUrl)("api events", () => {
       }
     }));
 
+  test("the stream is marked non-cacheable and still delivers", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token } = await seed(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const response = await fetch(`${base}/api/events`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toContain("no-store");
+        const vary = (response.headers.get("vary") ?? "").toLowerCase();
+        expect(vary).toContain("cookie");
+        expect(vary).toContain("authorization");
+        expect(response.headers.get("content-type")).toContain(
+          "text/event-stream",
+        );
+        if (!response.body) throw new Error("The event stream has no body.");
+        const stream = openStream(response.body);
+        try {
+          await park(db, stream);
+          const event: Event = {
+            kind: "library.changed",
+            libraryId: Bun.randomUUIDv7(),
+          };
+          const want = stream.frames.length + 1;
+          await publishEvent(db, event);
+          await stream.waitFor(want, 3_000);
+          expect(seen(stream)).toContainEqual(event);
+        } finally {
+          await stream.close();
+        }
+      } finally {
+        await server.stop();
+      }
+    }));
+
   test("an unauthenticated request to the stream answers 401", () =>
     withDatabase(async (_db, url) => {
       const server = await startPendia("api", { databaseUrl: url, port: 0 });

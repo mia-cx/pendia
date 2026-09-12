@@ -1,6 +1,7 @@
 import type { Database } from "../db/client.ts";
 import { setupAdmin } from "./accounts.ts";
 import { AuthError } from "./errors.ts";
+import { acceptLocalInvite, createInvite } from "./invites.ts";
 import {
   authenticate,
   login,
@@ -21,6 +22,8 @@ const routes = {
   "/api/auth/login": "POST",
   "/api/auth/logout": "POST",
   "/api/auth/me": "GET",
+  "/api/auth/invites": "POST",
+  "/api/auth/invites/accept": "POST",
 } as const;
 
 function respond(
@@ -108,6 +111,15 @@ async function readJsonObject(
 function requiredString(object: Record<string, unknown>, name: string): string {
   const value = object[name];
   if (typeof value !== "string") throw new AuthError("INVALID_INPUT");
+  return value;
+}
+
+function requiredNumber(
+  object: Record<string, unknown>,
+  name: string,
+): number {
+  const value = object[name];
+  if (typeof value !== "number") throw new AuthError("INVALID_INPUT");
   return value;
 }
 
@@ -246,6 +258,36 @@ export function createAuthHandler(db: Database) {
           else await revokeApiKey(db, auth.user.id, auth.credential.id);
           return respond({ ok: true }, 200, {
             "Set-Cookie": clearedCookie(identity.secure),
+          });
+        }
+        case "/api/auth/invites": {
+          checkOrigin(request, identity.secure);
+          const auth = await authenticate(db, readToken(request));
+          const body = await readJsonObject(request);
+          const result = await createInvite(db, auth.user.id, {
+            email: requiredString(body, "email"),
+            expiresInSeconds: requiredNumber(body, "expiresInSeconds"),
+          });
+          return respond(result, 201);
+        }
+        case "/api/auth/invites/accept": {
+          checkOrigin(request, identity.secure);
+          const body = await readJsonObject(request);
+          const result = await acceptLocalInvite(db, {
+            token: requiredString(body, "token"),
+            username: requiredString(body, "username"),
+            password: requiredString(body, "password"),
+            displayName: optionalString(body, "displayName"),
+            clientName: requiredString(body, "clientName"),
+            deviceId: requiredString(body, "deviceId"),
+            deviceName: requiredString(body, "deviceName"),
+          });
+          return respond(result, 201, {
+            "Set-Cookie": sessionCookie(
+              result.token,
+              identity.secure,
+              result.session.expiresAt,
+            ),
           });
         }
         default:

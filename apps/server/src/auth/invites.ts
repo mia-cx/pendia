@@ -69,9 +69,21 @@ export async function createInvite(
 /** Accepts a live invite as a local account and returns its first session. */
 export async function acceptLocalInvite(db: Database, input: AcceptLocalInput) {
   if (!tokenPattern.test(input.token)) throw new AuthError("INVALID_INVITE");
+  const digest = createHash("sha256").update(input.token).digest();
+  const [live] = await db
+    .select({ id: invites.id })
+    .from(invites)
+    .where(
+      and(
+        eq(invites.tokenHash, digest),
+        isNull(invites.acceptedAt),
+        gt(invites.expiresAt, sql`statement_timestamp()`),
+      ),
+    )
+    .limit(1);
+  if (!live) throw new AuthError("INVALID_INVITE");
   const prepared = await prepareLocalAccount(input);
   const config = await readAuthSettings(db);
-  const digest = createHash("sha256").update(input.token).digest();
   try {
     return await db.transaction(async (tx) => {
       const [invite] = await tx

@@ -111,18 +111,19 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
   test("retryAfter comes only from the counters actually blocking", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      await consumeLoginAttempt(db, "192.0.2.50", "frank", {
-        loginMaxAttempts: 1,
-        loginWindowSeconds: 900,
-      });
+      const blockingWindowSeconds = 300;
+      const config = { loginMaxAttempts: 1, loginWindowSeconds: 900 };
+      await consumeLoginAttempt(db, "192.0.2.50", "frank", config);
       const key = `auth.login.account.${createHash("sha256").update("frank").digest("hex")}`;
       await db.execute(
-        sql`update settings set value = jsonb_build_object('attempts', (value->>'attempts')::integer, 'expiresAt', extract(epoch from clock_timestamp()) * 1000 + 10000) where key = ${key}`,
+        sql`update settings set value = jsonb_build_object('attempts', (value->>'attempts')::integer, 'expiresAt', extract(epoch from clock_timestamp()) * 1000 + ${blockingWindowSeconds} * 1000) where key = ${key}`,
       );
-      const blocked = await consumeLoginAttempt(db, "198.51.100.7", "frank", {
-        loginMaxAttempts: 1,
-        loginWindowSeconds: 900,
-      }).then(
+      const blocked = await consumeLoginAttempt(
+        db,
+        "198.51.100.7",
+        "frank",
+        config,
+      ).then(
         () => undefined,
         (error: unknown) => error,
       );
@@ -130,7 +131,9 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
       const retry = (blocked as { retryAfterSeconds?: number })
         .retryAfterSeconds;
       expect(retry).toBeGreaterThanOrEqual(1);
-      expect(retry).toBeLessThanOrEqual(10);
+      // Five minutes tolerates loaded CI but stays below the fresh,
+      // nonblocking address counter's fifteen-minute window.
+      expect(retry).toBeLessThanOrEqual(blockingWindowSeconds);
     }));
 
   test("concurrent callers share the same fixed windows", () =>

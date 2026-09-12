@@ -8,8 +8,8 @@ Add local identity and access behind reusable server functions. Expose setup, lo
 
 - [x] Login returns a per-device token; a revoked token is rejected on the next call.
 - [x] Permission checks resolve through groups and per-user overrides; the built-in groups behave as the spec says.
-- [ ] The rate limit trips after the configured attempts and clears after the window.
-- [ ] Forwarded headers from an untrusted address are ignored.
+- [x] The rate limit trips after the configured attempts and clears after the window.
+- [x] Forwarded headers from an untrusted address are ignored.
 - [x] The first-run path creates the admin exactly once, even under two concurrent requests.
 
 ## TODOs
@@ -29,11 +29,12 @@ Add local identity and access behind reusable server functions. Expose setup, lo
   - Add session listing and revocation for the owner or a user with manage-users. API keys have integration names and the same ownership checks.
   - Validate login, independent devices, immediate revocation, optional expiry, no default expiry, API keys and disabled users. Run the server typecheck and build.
   - Done: auth/sessions.ts, auth/sessions.test.ts. bun test sessions.test.ts: 4 pass / 0 fail (35 expects) against pendia-test-pg-22: opaque base64url tokens, SHA-256 digests, lastSeen/lastUsed touch on authenticate, immediate revocation, DB-clock expiry, owner-or-manager rules, disabled owner rejection. tsc check, bun build and biome check clean. Evidence: .devin/todo3-evidence.md.
-- [ ] Add persisted auth settings, login limits and trusted proxy handling.
+- [x] Add persisted auth settings, login limits and trusted proxy handling.
   - Read auth settings from Postgres. Default to no session maximum age, five login attempts per fifteen minutes and no trusted proxies.
   - Share independent address and case-insensitive account windows across processes using settings rows and a short transaction lock. Count attempts before password work and clear expired windows.
   - Derive client address and protocol only through configured exact proxy addresses. Walk forwarded chains from the trusted peer toward the first untrusted hop.
   - Validate configured attempt limits, independent address/account limits, concurrent callers, window reset, live settings and spoofed forwarded headers. Run the server typecheck and build.
+  - Done: auth/settings.ts, auth/rate-limit.ts, auth/transport.ts; login now takes a client address and consumes shared windows before password work, authenticate enforces configured session max age live. bun test (rate-limit+transport+sessions): 16 pass / 0 fail (81 expects) against pendia-test-pg-22; review cleanup fixed retryAfter to only count blocking counters and unparseable-peer trust. tsc check, bun build and biome check clean. Evidence: .devin/todo4-evidence.md.
 - [ ] Wire thin JSON auth handlers into api and all roles.
   - Serve POST setup/login/logout and GET me under `/api/auth`. Accept bearer tokens and same-origin cookies. Keep account tokens out of URLs.
   - Validate JSON input at the handler boundary. Use stable error codes, no-store responses and HTTP-only same-site cookies, with Secure only on HTTPS.

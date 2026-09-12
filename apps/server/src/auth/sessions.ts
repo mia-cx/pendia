@@ -5,6 +5,8 @@ import { apiKeys, sessions, users } from "../db/schema/index.ts";
 import { publicUserFields } from "./accounts.ts";
 import { AuthError } from "./errors.ts";
 import { requirePermission } from "./permissions.ts";
+import { consumeLoginAttempt } from "./rate-limit.ts";
+import { readAuthSettings } from "./settings.ts";
 
 type LoginInput = {
   username: string;
@@ -16,7 +18,6 @@ type LoginInput = {
 
 const usernamePattern = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
-const maxSessionAgeSeconds = 315_360_000;
 
 const safeSessionFields = {
   id: sessions.id,
@@ -81,11 +82,7 @@ async function ownOrManager(
 }
 
 /** Logs in a local user and returns a new device session with its opaque token. */
-export async function login(
-  db: Database,
-  input: LoginInput,
-  maxAgeSeconds: number | null = null,
-) {
+export async function login(db: Database, input: LoginInput, address: string) {
   const username = input.username.trim().toLowerCase();
   const clientName = input.clientName.trim();
   const deviceName = input.deviceName.trim();
@@ -98,13 +95,13 @@ export async function login(
     deviceName.length < 1 ||
     deviceName.length > 128 ||
     input.deviceId.length < 1 ||
-    input.deviceId.length > 128 ||
-    (maxAgeSeconds !== null &&
-      (!Number.isSafeInteger(maxAgeSeconds) ||
-        maxAgeSeconds <= 0 ||
-        maxAgeSeconds > maxSessionAgeSeconds))
+    input.deviceId.length > 128
   )
     throw new AuthError("INVALID_INPUT");
+
+  const config = await readAuthSettings(db);
+  await consumeLoginAttempt(db, address, username, config);
+  const maxAgeSeconds = config.sessionMaxAgeSeconds;
 
   const [found] = await db
     .select()
@@ -153,6 +150,7 @@ const enabledOwner = (userId: unknown) =>
 /** Authenticates an opaque bearer token against live session and API key rows. */
 export async function authenticate(db: Database, token: string) {
   if (!tokenPattern.test(token)) throw new AuthError("UNAUTHENTICATED");
+  const config = await readAuthSettings(db);
   const digest = hashToken(token);
 
   const [session] = await db
@@ -166,6 +164,9 @@ export async function authenticate(db: Database, token: string) {
           isNull(sessions.expiresAt),
           gt(sessions.expiresAt, sql`statement_timestamp()`),
         ),
+        config.sessionMaxAgeSeconds === null
+          ? undefined
+          : sql`${sessions.createdAt} > statement_timestamp() - ${config.sessionMaxAgeSeconds} * interval '1 second'`,
         enabledOwner(sessions.userId),
       ),
     )

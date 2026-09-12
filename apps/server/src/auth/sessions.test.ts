@@ -3,7 +3,13 @@ import { createHash } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { apiKeys, sessions, userGroups, users } from "../db/schema/index.ts";
+import {
+  apiKeys,
+  sessions,
+  settings,
+  userGroups,
+  users,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createLocalUser, setupAdmin } from "./accounts.ts";
 import {
@@ -49,11 +55,11 @@ describe.skipIf(!databaseUrl)("auth sessions", () => {
         username: "admin",
         password: "secret",
       });
-      const first = await login(db, {
-        username: " Admin ",
-        password: "secret",
-        ...device,
-      });
+      const first = await login(
+        db,
+        { username: " Admin ", password: "secret", ...device },
+        "192.0.2.1",
+      );
       expect(first.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(first.user.id).toBe(admin.id);
       expect(first.session).toMatchObject({
@@ -89,13 +95,17 @@ describe.skipIf(!databaseUrl)("auth sessions", () => {
         before?.getTime() ?? 0,
       );
 
-      const second = await login(db, {
-        username: "admin",
-        password: "secret",
-        clientName: "Other",
-        deviceId: "device-2",
-        deviceName: "Bedroom",
-      });
+      const second = await login(
+        db,
+        {
+          username: "admin",
+          password: "secret",
+          clientName: "Other",
+          deviceId: "device-2",
+          deviceName: "Bedroom",
+        },
+        "192.0.2.1",
+      );
       expect(second.session.id).not.toBe(first.session.id);
       await revokeSession(db, admin.id, first.session.id);
       await expect(authenticate(db, first.token)).rejects.toMatchObject({
@@ -118,10 +128,14 @@ describe.skipIf(!databaseUrl)("auth sessions", () => {
         username: "viewer",
         password: "viewer-pass",
       });
+      await db.insert(settings).values({
+        key: "auth",
+        value: sql`jsonb_build_object('sessionMaxAgeSeconds', 3600)`,
+      });
       const expiring = await login(
         db,
         { username: "viewer", password: "viewer-pass", ...device },
-        3600,
+        "192.0.2.1",
       );
       const [row] = await db
         .select({ expiresAt: sessions.expiresAt })
@@ -140,12 +154,16 @@ describe.skipIf(!databaseUrl)("auth sessions", () => {
         code: "UNAUTHENTICATED",
       });
 
-      const fresh = await login(db, {
-        username: "viewer",
-        password: "viewer-pass",
-        ...device,
-        deviceId: "device-3",
-      });
+      const fresh = await login(
+        db,
+        {
+          username: "viewer",
+          password: "viewer-pass",
+          ...device,
+          deviceId: "device-3",
+        },
+        "192.0.2.2",
+      );
       await expect(listSessions(db, viewer.id, admin.id)).rejects.toMatchObject(
         { code: "FORBIDDEN" },
       );
@@ -195,11 +213,11 @@ describe.skipIf(!databaseUrl)("auth sessions", () => {
         .where(eq(apiKeys.id, key.id));
       expect(used?.lastUsedAt).not.toBeNull();
 
-      const session = await login(db, {
-        username: "admin",
-        password: "secret",
-        ...device,
-      });
+      const session = await login(
+        db,
+        { username: "admin", password: "secret", ...device },
+        "192.0.2.1",
+      );
       await db
         .update(users)
         .set({ disabledAt: new Date() })
@@ -211,7 +229,11 @@ describe.skipIf(!databaseUrl)("auth sessions", () => {
         code: "UNAUTHENTICATED",
       });
       await expect(
-        login(db, { username: "admin", password: "secret", ...device }),
+        login(
+          db,
+          { username: "admin", password: "secret", ...device },
+          "192.0.2.3",
+        ),
       ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
       await db
         .update(users)
@@ -238,7 +260,9 @@ describe.skipIf(!databaseUrl)("auth sessions", () => {
         { username: "ghost", password: "secret" },
         { username: "oidc-only", password: "secret" },
       ])
-        await expect(login(db, { ...input, ...device })).rejects.toMatchObject({
+        await expect(
+          login(db, { ...input, ...device }, "192.0.2.1"),
+        ).rejects.toMatchObject({
           code: "INVALID_CREDENTIALS",
         });
       for (const token of ["", "short", "a".repeat(43), "!".repeat(43)])

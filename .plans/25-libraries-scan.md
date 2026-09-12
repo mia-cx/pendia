@@ -1,0 +1,61 @@
+# #25 Libraries and movies scan
+
+## Summary
+
+Add the movies medium and the manual scan pipeline. The core walks library-relative paths, caches ffprobe results, and writes Items, Versions, Files and Streams. Admin procedures enqueue scans through the existing job queue. Directory scans publish the existing `library.changed` SSE event.
+
+Read `CONTEXT.md`, ADRs 0008 and 0012, the medium contract and declarations, and the scanning resolution on issues #1 and #7. Use the existing schema, tree helpers, jobs and API modules. Follow `apps/server/README.md` for database tests.
+
+## Acceptance criteria
+
+- [ ] A fixture movies tree with a 4K and a 1080p copy of one film yields one Item with two Versions labelled from the probe, and the extras folder yields none.
+- [ ] A second scan with no changes probes nothing; touching one file re-probes only that file.
+- [ ] The scan runs through the job queue with the library's concurrency key and the client sees a library-changed event.
+- [ ] Scan rules and grouping have tests on Radarr-style layouts, including an edition tag.
+- [ ] Probe output for a fixture matches ffprobe's stream list.
+
+## TODOs
+
+- [ ] 1. Add the Medium contract and movies scan rules over video-common helpers.
+  - Implement the six-part contract from `docs/spec/medium.d.ts`. Register the existing movies extension table.
+  - Identify library-relative video paths by their immediate containing folder. Parse its title and optional year. Recognize Radarr provider suffixes and explicit `{edition-...}` filename tags.
+  - Exclude extras directories, extra filename suffixes, and every `.pendia` or `*.pendia` directory. Group paths by canonical folder, never by filename quality tags.
+  - Validation: colocated `bun test` cases cover Radarr folders, nested collection folders, edition tags, extras, traversal and unsupported files. Run server typecheck and build.
+- [ ] 2. Add the video-common ffprobe adapter and real media fixtures.
+  - Run one ffprobe with `-show_streams -show_format -show_chapters -of json`. Decode its output at the process boundary.
+  - Preserve stream indexes and normalize supported video, audio and subtitle fields for the schema and playback vocabulary. Return container, duration and chapters. Derive Version labels from dimensions, codecs and HDR, with the explicit edition tag as the only filename contribution.
+  - Validation: generate tiny real media with ffmpeg. Compare supported stream indexes and codecs against independent ffprobe output. Assert duration, chapters, dispositions, labels and process failures. Run server typecheck and build.
+- [ ] 3. Add the library walker and persistent probe cache.
+  - Walk regular files without following symlinks. Keep paths library-relative and reject escaping paths. Prune extras and Pendia store directories before descending.
+  - Add a small probe-cache table keyed by library and relative path, storing byte size, nanosecond mtime and JSON probe output. Reuse unchanged probes across processes. Reject a file that changes during a probe rather than cache mismatched data.
+  - Validation: filesystem fixtures cover pruning and symlinks. Disposable Postgres tests cover persistent hits, size changes, mtime changes and failed probes. Generate and review the migration. Run focused tests, server typecheck and build.
+- [ ] 4. Write canonical movie groups through the existing schema and tree helpers.
+  - Add the directory scanner. Insert Items with `insertItem`, then one imported Version and File per recognized media file, plus its supported Streams.
+  - Preserve Item, Version and File ids on repeated scans. Update changed probe fields transactionally under the library lock. Leave metadata already attached to existing Items intact.
+  - Keep segment timeline ids null and alignment false. This slice creates no keyframe index.
+  - Validation: a real 4K and 1080p fixture produces one Item, two labelled Versions, ancestry and movie rows, with no extras or store Versions. Repeat and touch scans verify identity and probe counts. Run focused tests, server typecheck and build.
+- [ ] 5. Add admin library procedures and queued scans with SSE delivery.
+  - Add permission-checked library create, list, get, rename, delete and scan services. Expose them on the existing oRPC router and REST transport.
+  - Use `manage-libraries`. Library roots and mediums remain immutable; only the name can be updated in this slice. Deletion removes database records, never filesystem content.
+  - A full scan job walks the root and enqueues canonical-directory scan jobs. Every scan job uses `library:<id>` as its concurrency key. Register the built-in handler for worker and all startup without sharing database-bound handlers between server instances.
+  - Publish `library.changed` after directory writes commit. Keep the existing SSE audience rules.
+  - Validation: real Postgres and real HTTP tests cover permissions, input errors, both transports, job claims and concurrency keys, default runtime dispatch and a client receiving the event. Run focused tests, server typecheck and build.
+- [ ] 6. Complete acceptance coverage and run the final repository checks.
+  - Review every acceptance criterion against its test. Record actual results below and document the library procedures in the existing server README.
+  - Run from the repository root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55425/pendia bun test`, and `env -u DATABASE_URL bun test`.
+  - Confirm database tests fail in CI without DATABASE_URL. Remove only the task's disposable Postgres container after review validation ends.
+  - Validation: all commands pass, local database omission prints the existing single skip message, and the plan records any genuine blocker.
+
+## Notes
+
+- This run is unattended. The lead owns design, reviews, commits, pushes, comments and the PR. The built-in implementation worker handles each TODO and its focused checks. No independent workers run.
+- Work stays in `/home/mia/mia-cx/pendia/.worktrees/scan` on `feat/25-libraries-scan`. Each TODO has one buildable commit with `Refs #25`. Never commit `.devin`.
+- No exact canonical-folder algorithm is specified beyond grouping files in a folder. Use the immediate parent and reject loose files at the library root, which have no movie folder. Nested collection folders remain supported.
+- Probe cache timestamps retain filesystem nanoseconds because JavaScript Date would hide changes within one millisecond. Cache entries belong to a library and a relative path because mount points may differ between roles.
+- The inherited queue key limit is one. Directory jobs use the existing configurable queue limit rather than introducing another scheduler.
+- Manual scans add and update records. Rename signals, missing-file reconciliation, directory-mtime repair walks and watcher locality belong to #30 and #31. Providers belong to #28 and #29. Shows belong to #26. Keyframes and timelines belong to #27.
+- Store output lives in `<source>.pendia/<rung>` and must never become imported Versions. Bare `.pendia` artwork folders are excluded too.
+- Test seams are the Medium scan contract, the probe adapter, cached probing, directory scans, library service, queue claims and authenticated RPC/REST/SSE. Tests use disposable databases through `db/testing.ts` and real temporary media fixtures.
+- Local Postgres uses the requested `pendia-test-pg-25` container and port 55425. The named database is not modified by tests.
+- Rebase on `origin/main` before filing and before each review push, preserving merged code. Force pushes are prohibited. If main advances after publication and a rebase prevents a normal push, record the conflict between these requirements instead of rewriting published history.
+- Initial repository state is clean at `1d78361`. Issue #25 is open. Issue #55 tracks existing NOTIFY timing and rate-limit test instability.

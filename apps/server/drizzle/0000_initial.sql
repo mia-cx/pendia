@@ -342,6 +342,7 @@ CREATE TABLE "jobs" (
 	"concurrency_key" text,
 	"state" "job_state" DEFAULT 'queued' NOT NULL,
 	"error" text,
+	CONSTRAINT "jobs_payload_type_check" CHECK (("jobs"."payload"->>'type') is not null and "jobs"."payload"->>'type' = "jobs"."type"::text),
 	CONSTRAINT "jobs_attempts_check" CHECK ("jobs"."attempts" >= 0 and "jobs"."max_attempts" > 0 and "jobs"."attempts" <= "jobs"."max_attempts")
 );
 --> statement-breakpoint
@@ -487,6 +488,7 @@ CREATE UNIQUE INDEX "provider_ids_contributor_unique" ON "provider_ids" USING bt
 CREATE INDEX "provider_ids_lookup_idx" ON "provider_ids" USING btree ("provider","value");--> statement-breakpoint
 CREATE UNIQUE INDEX "streams_file_index_unique" ON "streams" USING btree ("file_id","index") WHERE "streams"."file_id" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "streams_version_index_unique" ON "streams" USING btree ("version_id","index") WHERE "streams"."file_id" is null;--> statement-breakpoint
+CREATE INDEX "streams_version_idx" ON "streams" USING btree ("version_id");--> statement-breakpoint
 CREATE INDEX "versions_item_idx" ON "versions" USING btree ("item_id");--> statement-breakpoint
 CREATE INDEX "versions_source_file_idx" ON "versions" USING btree ("source_file_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "versions_source_file_rung_unique" ON "versions" USING btree ("source_file_id","rung") WHERE "versions"."origin" = 'stored';--> statement-breakpoint
@@ -562,6 +564,9 @@ FOR EACH ROW WHEN (NEW.origin = 'stored') EXECUTE FUNCTION require_stored_source
 -- A source cut cannot change while stored Versions still use its timeline.
 CREATE FUNCTION preserve_stored_source_timeline() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF OLD.timeline_aligned AND NEW.timeline_aligned THEN
+    RAISE EXCEPTION 'Changing timelines requires clearing alignment' USING ERRCODE = '23514';
+  END IF;
   IF EXISTS (
     SELECT 1 FROM versions AS stored
     JOIN files AS source_file ON source_file.id = stored.source_file_id

@@ -1,5 +1,5 @@
 {
-  "id": "56e607ea-348d-4ffb-8bb0-51ad0c397bbd",
+  "id": "19cab368-5da8-4bb9-9ab6-06c7267e9d15",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -2076,6 +2076,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "streams_version_idx": {
+          "name": "streams_version_idx",
+          "columns": [
+            {
+              "expression": "version_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -2913,6 +2928,10 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "jobs_payload_type_check": {
+          "name": "jobs_payload_type_check",
+          "value": "(\"jobs\".\"payload\"->>'type') is not null and \"jobs\".\"payload\"->>'type' = \"jobs\".\"type\"::text"
+        },
         "jobs_attempts_check": {
           "name": "jobs_attempts_check",
           "value": "\"jobs\".\"attempts\" >= 0 and \"jobs\".\"max_attempts\" > 0 and \"jobs\".\"attempts\" <= \"jobs\".\"max_attempts\""

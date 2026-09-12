@@ -324,6 +324,7 @@ export const streams = pgTable(
     uniqueIndex("streams_version_index_unique")
       .on(table.versionId, table.index)
       .where(sql`${table.fileId} is null`),
+    index("streams_version_idx").on(table.versionId),
     check("streams_index_check", sql`${table.index} >= 0`),
     check("streams_bitrate_check", sql`${table.bitrate} >= 0`),
     check("streams_level_check", sql`${table.level} >= 0`),

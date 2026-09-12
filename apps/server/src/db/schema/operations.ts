@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   check,
+  customType,
   foreignKey,
   index,
   integer,
@@ -43,6 +44,11 @@ export type JobPayload =
   | { type: "store"; sourceFileId: string; rung: string }
   | { type: "plugin"; pluginName: string; jobId: string; data: JsonObject };
 
+// Bun encodes JSON objects itself.
+const jobPayload = customType<{ data: JobPayload }>({
+  dataType: () => "jsonb",
+});
+
 export const jobType = pgEnum("job_type", [
   "scan",
   "probe",
@@ -62,7 +68,7 @@ export const jobs = pgTable(
   {
     id: id(),
     type: jobType("type").notNull(),
-    payload: jsonb("payload").$type<JobPayload>().notNull(),
+    payload: jobPayload("payload").notNull(),
     priority: integer("priority").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull(),
@@ -72,6 +78,10 @@ export const jobs = pgTable(
     error: text("error"),
   },
   (table) => [
+    check(
+      "jobs_payload_type_check",
+      sql`(${table.payload}->>'type') is not null and ${table.payload}->>'type' = ${table.type}::text`,
+    ),
     check(
       "jobs_attempts_check",
       sql`${table.attempts} >= 0 and ${table.maxAttempts} > 0 and ${table.attempts} <= ${table.maxAttempts}`,

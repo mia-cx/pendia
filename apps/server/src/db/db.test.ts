@@ -11,6 +11,7 @@ import {
   groups,
   itemAncestors,
   items,
+  jobs,
   libraries,
   movies,
   permissions,
@@ -371,6 +372,23 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       ).rejects.toMatchObject({ cause: { errno: "23514" } });
     }));
 
+  test("keeps the queue dispatch type consistent with its payload", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const payload = { type: "probe", fileId: Bun.randomUUIDv7() } as const;
+      await expect(
+        db
+          .insert(jobs)
+          .values({ type: "store", payload, maxAttempts: 3 })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      const [job] = await db
+        .insert(jobs)
+        .values({ type: payload.type, payload, maxAttempts: 3 })
+        .returning();
+      expect(job?.payload).toEqual(payload);
+    }));
+
   test("rejects invalid Version kinds, formats and mismatched ownership", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -598,6 +616,25 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         })
         .returning();
       if (!otherCut) throw new Error("Other cut missing.");
+      await db
+        .update(versions)
+        .set({ timelineAligned: true })
+        .where(eq(versions.id, version.id));
+      await expect(
+        db
+          .update(versions)
+          .set({ segmentTimelineId: otherCut.id })
+          .where(eq(versions.id, version.id))
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      await db
+        .update(versions)
+        .set({ segmentTimelineId: otherCut.id, timelineAligned: false })
+        .where(eq(versions.id, version.id));
+      await db
+        .update(versions)
+        .set({ segmentTimelineId: timeline.id })
+        .where(eq(versions.id, version.id));
       const storedValues = {
         segmentTimelineId: timeline.id,
         timelineAligned: true,

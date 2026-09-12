@@ -91,15 +91,26 @@ function decideVideo(
   }
   const hdr = playbackHdr(video, false);
   const forceCpu = video.hdr === "dolby-vision" && video.dvProfile === 5;
-  const toneMap = forceCpu
-    ? ("dolby-vision" as const)
-    : hdr !== "sdr" && !client.hdr.includes(hdr)
-      ? hdr
-      : null;
   const rung = selectLadderRung(videoCap(client, cap));
   if (!rung) throw new Error("No ladder rung fits the bitrate cap.");
   for (const candidate of client.videoCodecs) {
     if (candidate.profiles?.length === 0) continue;
+    const hdrProfile =
+      candidate.codec === "hevc"
+        ? "main10"
+        : candidate.codec === "av1"
+          ? "main"
+          : null;
+    const preservesHdr =
+      hdr !== "dolby-vision" &&
+      hdrProfile !== null &&
+      (candidate.profiles === undefined ||
+        candidate.profiles.includes(hdrProfile));
+    const toneMap = forceCpu
+      ? ("dolby-vision" as const)
+      : hdr !== "sdr" && (!client.hdr.includes(hdr) || !preservesHdr)
+        ? hdr
+        : null;
     const backend = selectBackend(
       capabilities,
       candidate.codec,
@@ -117,7 +128,10 @@ function decideVideo(
     return {
       action: "transcode" as const,
       codec: candidate.codec,
-      profile: candidate.profiles?.[0] ?? null,
+      profile:
+        hdr !== "sdr" && toneMap === null && hdrProfile !== null
+          ? hdrProfile
+          : (candidate.profiles?.[0] ?? null),
       level: candidate.maxLevel ?? null,
       width: Math.max(2, Math.floor((video.width * scale) / 2) * 2),
       height: Math.max(2, Math.floor((video.height * scale) / 2) * 2),

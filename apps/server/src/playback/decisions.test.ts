@@ -431,6 +431,96 @@ describe("decidePlayback video", () => {
     },
   );
 
+  const hdrOutputCases: [
+    string,
+    ClientProfile["videoCodecs"],
+    {
+      codec: string;
+      profile: string;
+      hdr: "sdr" | "hdr10";
+      toneMap: "hdr10" | null;
+      backend: "cpu" | "qsv";
+    },
+  ][] = [
+    [
+      "preferred h264 high",
+      [
+        { codec: "h264", profiles: ["high"] },
+        { codec: "hevc", profiles: ["main10"] },
+      ],
+      {
+        codec: "h264",
+        profile: "high",
+        hdr: "sdr",
+        toneMap: "hdr10",
+        backend: "cpu",
+      },
+    ],
+    [
+      "hevc main only",
+      [{ codec: "hevc", profiles: ["main"] }],
+      {
+        codec: "hevc",
+        profile: "main",
+        hdr: "sdr",
+        toneMap: "hdr10",
+        backend: "cpu",
+      },
+    ],
+    [
+      "hevc main before main10",
+      [{ codec: "hevc", profiles: ["main", "main10"] }],
+      {
+        codec: "hevc",
+        profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+    [
+      "unconstrained hevc",
+      [{ codec: "hevc" }],
+      {
+        codec: "hevc",
+        profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+    [
+      "av1 main",
+      [{ codec: "av1", profiles: ["main"] }],
+      {
+        codec: "av1",
+        profile: "main",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+  ];
+  test.each(hdrOutputCases)(
+    "selects an executable HDR output for %s",
+    (_label, videoCodecs, expected) => {
+      const result = decidePlayback(
+        { ...source, video: { ...dvVideo, dvProfile: 8 } },
+        { ...client, videoCodecs, hdr: ["sdr", "hdr10", "dolby-vision"] },
+        { isLan: false, sessionRequest: 3_000_000 },
+        {
+          qsv: { codecs: ["h264", "hevc", "av1"], toneMapping: [] },
+          cpu: cpuCapabilities.cpu,
+        },
+      );
+      expect(result.method).toBe("transcode");
+      expect(result.video).toMatchObject({
+        action: "transcode",
+        ...expected,
+      });
+    },
+  );
+
   const dvBaseLayerCases: [
     number,
     ClientProfile["hdr"],
@@ -545,6 +635,32 @@ describe("decidePlayback video", () => {
         toneMap: "dolby-vision",
         backend: "cpu",
         burnSubtitles: trigger === "subtitle",
+      });
+    },
+  );
+
+  test.each([null, 9])(
+    "tone maps a DV re-encode with profile %s instead of preserving metadata",
+    (dvProfile) => {
+      const result = decidePlayback(
+        { ...source, video: { ...dvVideo, dvProfile } },
+        {
+          ...client,
+          videoCodecs: [{ codec: "hevc", profiles: ["main10"] }],
+          hdr: ["sdr", "dolby-vision"],
+        },
+        { isLan: false, sessionRequest: 3_000_000 },
+        {
+          qsv: { codecs: ["hevc"], toneMapping: [] },
+          cpu: cpuCapabilities.cpu,
+        },
+      );
+      expect(result.method).toBe("transcode");
+      expect(result.video).toMatchObject({
+        action: "transcode",
+        hdr: "sdr",
+        toneMap: "dolby-vision",
+        backend: "cpu",
       });
     },
   );

@@ -40,10 +40,10 @@ Add local identity and access behind reusable server functions. Expose setup, lo
   - Validate JSON input at the handler boundary. Use stable error codes, no-store responses and HTTP-only same-site cookies, with Secure only on HTTPS.
   - Validate real HTTP login/me/logout, concurrent setup, HTTP and trusted HTTPS cookies, invalid requests and unchanged role health behavior. Run focused auth and role tests, server typecheck and build.
   - Done: auth/http.ts (createAuthHandler), api.ts third auth arg, index.ts wiring, http.test.ts. bun test http+api+roles: 15 pass / 0 fail against pendia-test-pg-22: concurrent two-server setup 201/409, login cookie semantics, bearer+cookie me, immediate logout rejection, real-peer rate limit 429, trusted-proxy Secure cookie, malformed/405/404/CSRF rejections, API key me/logout. tsc check, bun build and biome check clean. Evidence: .devin/todo5-evidence.md.
-- [ ] Run final checks and record the integration contract.
+- [x] Run final checks and record the integration contract.
   - Update the server README with auth functions, routes, settings and proxy assumptions.
   - Run frozen install, lint, check, build, all tests with disposable Postgres, and tests without DATABASE_URL. Record actual results below.
-  - File a non-draft PR after rebasing on origin/main. Address repository bot findings until the pushed head is green, clean and mergeable. Remove only the test container created for this issue when finished.
+  - Done: README Auth section appended. frozen install clean (91/195 no changes), biome lint clean (after whitespace-only format of uncommitted .devin/config.local.json), turbo check 5/5, turbo build 4/4 (server bundle 235.1 KB), bun test with Postgres 78 pass / 0 fail / 439 expects, without DATABASE_URL 19 pass / 59 skip / 0 fail with one skip message, CI guard verified (fails with DATABASE_URL required). Evidence: .devin/final-validation.md.
 
 ## Notes
 
@@ -61,3 +61,7 @@ Add local identity and access behind reusable server functions. Expose setup, lo
 - Review posture is adversarial at the HTTP boundary. Apply the trigger test to every finding. Use only existing CodeRabbit, Codex and Pullfrog reviews, with no independent reviewer workers.
 - Test Postgres will be `pendia-test-pg-22` on port 55422, using `postgresql://pendia:pendia@127.0.0.1:55422/pendia`. Tests create and drop unique databases and preserve the named database.
 - Push only after the pre-PR rebase so no force-push is needed. The parent owns merging.
+- After validation, file a non-draft PR after rebasing on origin/main. Address repository bot findings until the pushed head is green, clean and mergeable. Remove only the test container created for this issue when finished.
+- Final gate results (recorded in .devin/final-validation.md): `bun install --frozen-lockfile` no changes; `bun run lint` clean; `bun run check` 5/5 turbo tasks; `bun run build` 4/4; `bun test` with disposable Postgres 78 pass / 0 fail; `bun test` without DATABASE_URL 19 pass / 59 skip; CI guard fails as designed without DATABASE_URL.
+- HTTPS cookie flags were verified through direct HTTPS Requests and trusted-proxy handler inputs. A real TLS-terminating reverse proxy was not exercised.
+- During the run, shell compound/redirection commands were rejected by the permission layer; executable-first commands with exec.env resolved it.

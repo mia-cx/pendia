@@ -60,3 +60,70 @@ A local timer wakes the worker when its failed job becomes eligible again.
 On SIGTERM, shutdown stops new claim loops and drains active handlers before closing Postgres.
 Abrupt process loss does not recover running jobs in this slice. Handlers must be safe to retry after a reported failure.
 Plugin cron scheduling belongs to the plugin host, not this queue.
+
+## Auth
+
+The api and all roles serve these JSON routes. Setup creates the admin account only. It does not log in.
+
+| Method | Route | JSON input | Result |
+| --- | --- | --- | --- |
+| POST | `/api/auth/setup` | `username`, `password`, optional `displayName` | 201 with `user`, or 409 `SETUP_COMPLETE` |
+| POST | `/api/auth/login` | `username`, `password`, `clientName`, `deviceId`, `deviceName` | `token`, `user`, `session` |
+| GET | `/api/auth/me` | None | `user`, `credential` |
+| POST | `/api/auth/logout` | None | Revokes the current session or API key and returns `ok` |
+
+Setup and login require `Content-Type: application/json`. Request bodies have a 16 KiB limit.
+Usernames use ASCII letters, digits, dots, underscores and hyphens, start with a letter or digit, and have at most 64 characters.
+Usernames ignore surrounding whitespace and case. Passwords retain whitespace and allow 1 to 1024 characters.
+Display names, client names and device names have at most 128 characters. Device IDs allow 1 to 128 characters.
+
+Send credentials as `Authorization: Bearer <token>` or the `pendia_session` cookie. Query-string account tokens are ignored.
+An invalid Authorization header never falls back to cookies. Auth responses use `Cache-Control: no-store`.
+Errors return `{ "error": { "code": "...", "message": "..." } }`. Login failures use `INVALID_CREDENTIALS`; invalid sessions use `UNAUTHENTICATED`.
+Rate-limited requests return 429 `RATE_LIMITED` and `Retry-After` in seconds.
+
+Local passwords use Bun.password argon2id. Each login creates a separate session and returns its random token once.
+Postgres stores SHA-256 token digests, device metadata, creation time and last seen. API keys use the same digest storage.
+Authentication checks revocation, expiry and the enabled owner on every call. Tokens have no default server expiry.
+Cookies are HttpOnly and SameSite=Lax on both transports. Secure applies only on effective HTTPS.
+The persistent cookie has a maximum browser lifetime of 400 days, bounded by any session expiry. This does not expire native-client tokens.
+POST requests reject a foreign Origin or cross-site Fetch Metadata. Native clients can omit Origin.
+
+Server callers use these functions after authenticating the actor:
+
+- `accounts.ts`: `setupAdmin` and `createLocalUser`. Only setup accepts anonymous account creation; later users require `manage-users`.
+- `permissions.ts`: `checkPermission` and `requirePermission` for every later service. Group permissions form a union, then user overrides apply. Library rows override global view, and a matching library deny wins. Built-in admins bypass checks; disabled users do not.
+- `permissions.ts`: `createGroup`, `setUserGroups` and `setPermissionOverride` require `manage-users`. A null override restores inheritance. Membership replacement serializes per user.
+- `sessions.ts`: `login`, `authenticate`, `listSessions`, `revokeSession`, `createApiKey`, `listApiKeys` and `revokeApiKey`. Listing and revocation require ownership or `manage-users`. API keys belong to their creator and carry an integration name.
+
+These files live under `src/auth`. Call `login(db, input, address)` with the resolved client address, not a forwarded header string.
+The setup transaction holds a Postgres advisory lock. Its `auth.setupComplete` settings marker keeps setup closed after account deletion.
+
+### Auth settings
+
+The `settings` row with key `auth` holds one JSON object. Missing fields use these defaults:
+
+```json
+{
+  "sessionMaxAgeSeconds": null,
+  "loginMaxAttempts": 5,
+  "loginWindowSeconds": 900,
+  "trustedProxyAddresses": []
+}
+```
+
+Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
+Settings apply on the next request. Invalid stored settings fail closed. Admin settings screens belong to a later slice.
+A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
+
+Login attempts share independent address and normalized-account windows across API replicas. Successful logins consume an attempt too.
+A short Postgres transaction updates both counters before password work. Blocked requests do not extend either window.
+Expired counters under `auth.login.*` are removed on a later attempt. Configuration and setup markers remain intact.
+
+### Reverse proxies
+
+Trust uses exact IP addresses, not CIDRs or hostnames. IPv6 spelling is normalized; IPv4-mapped IPv6 matches the IPv4 address.
+Untrusted socket peers cannot supply forwarded address or protocol headers. Trusted chains are read from right to left, stopping at the first untrusted hop.
+`Forwarded` takes precedence over `X-Forwarded-For`. Malformed hops stop traversal.
+Trusted proxies must preserve Host and sanitize forwarded protocol headers. `X-Forwarded-Proto` supports a single sanitized value or a list matching the address chain.
+No proxy is trusted by default. Plain HTTP remains supported; TLS normally terminates at the trusted reverse proxy.

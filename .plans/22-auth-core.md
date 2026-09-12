@@ -6,8 +6,8 @@ Add local identity and access behind reusable server functions. Expose setup, lo
 
 ## Acceptance criteria
 
-- [ ] Login returns a per-device token; a revoked token is rejected on the next call.
-- [ ] Permission checks resolve through groups and per-user overrides; the built-in groups behave as the spec says.
+- [x] Login returns a per-device token; a revoked token is rejected on the next call.
+- [x] Permission checks resolve through groups and per-user overrides; the built-in groups behave as the spec says.
 - [ ] The rate limit trips after the configured attempts and clears after the window.
 - [ ] Forwarded headers from an untrusted address are ignored.
 - [x] The first-run path creates the admin exactly once, even under two concurrent requests.
@@ -24,10 +24,11 @@ Add local identity and access behind reusable server functions. Expose setup, lo
   - Add permission-checked local account creation with the users group by default. Return public user fields, never password hashes.
   - Validate simultaneous setup through two database clients, repeat rejection, argon2id storage, case-insensitive account uniqueness and permission checks. Run the server typecheck and build.
   - Done: auth/accounts.ts, auth/accounts.test.ts; postgresCode moved to auth/errors.ts. bun test accounts.test.ts: 4 pass / 0 fail (35 expects) against pendia-test-pg-22. Concurrent two-client setup yields exactly one admin/membership, marker persists after user deletion, duplicate normalized username CONFLICT. tsc check, bun build and biome check clean. Evidence: .devin/todo2-evidence.md.
-- [ ] Implement device sessions and integration API keys.
+- [x] Implement device sessions and integration API keys.
   - Return random opaque tokens once and persist SHA-256 digests. Authenticate against Postgres on every call, update last seen and reject revoked, expired or disabled credentials.
   - Add session listing and revocation for the owner or a user with manage-users. API keys have integration names and the same ownership checks.
   - Validate login, independent devices, immediate revocation, optional expiry, no default expiry, API keys and disabled users. Run the server typecheck and build.
+  - Done: auth/sessions.ts, auth/sessions.test.ts. bun test sessions.test.ts: 4 pass / 0 fail (35 expects) against pendia-test-pg-22: opaque base64url tokens, SHA-256 digests, lastSeen/lastUsed touch on authenticate, immediate revocation, DB-clock expiry, owner-or-manager rules, disabled owner rejection. tsc check, bun build and biome check clean. Evidence: .devin/todo3-evidence.md.
 - [ ] Add persisted auth settings, login limits and trusted proxy handling.
   - Read auth settings from Postgres. Default to no session maximum age, five login attempts per fifteen minutes and no trusted proxies.
   - Share independent address and case-insensitive account windows across processes using settings rows and a short transaction lock. Count attempts before password work and clear expired windows.

@@ -16,11 +16,12 @@ Read `CONTEXT.md`, `docs/spec/playback.md`, `docs/spec/transcoding.md` and ADR 0
 
 ## TODOs
 
-- [ ] Define the client profile, caps, ladder and backend capabilities.
+- [x] Define the client profile, caps, ladder and backend capabilities.
   - Use readonly plain data. Client video entries carry codec, accepted profiles, maximum level and dimensions, in preference order.
   - Apply the minimum policy cap off LAN. Keep the client's decoder bitrate limit separate from the LAN exemption.
   - Add the five named ladder rates and CPU capabilities. Select only an asserted backend, in QSV, VAAPI, NVENC, Vulkan, CPU order.
   - Validate cap permutations, missing caps, LAN, all ladder thresholds, below-minimum refusal, CPU fallback and backend preference. Run focused Bun tests and the server typecheck.
+  - Done: playback/policy.ts, playback/policy.test.ts. Red run failed on the missing module before implementation; `bun test apps/server/src/playback/policy.test.ts` passed 43 tests and 45 assertions: all six cap permutations, lone and tied caps, LAN bypass, literal ladder, all thresholds plus below-minimum undefined, CPU codec and tone-map assertions, backend preference and forceCpu. `bun run --cwd apps/server check` and `bunx --no-install biome check apps/server/src/playback` clean. Evidence: .devin/todo1-red.log, .devin/todo1-green.log, .devin/todo1-check.log, .devin/todo1-lint.log.
 - [ ] Implement per-stream decisions and the resulting play method.
   - Test the public decision function with table rows for every video constraint, audio branch and subtitle branch.
   - Decide direct play first. Re-evaluate lossless audio for HLS when any stream or container prevents direct play.

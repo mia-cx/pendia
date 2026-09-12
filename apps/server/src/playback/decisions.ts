@@ -48,7 +48,7 @@ function playbackHdr(video: VideoStream, client: ClientProfile) {
     : video.hdr;
 }
 
-/** Returns whether the video Stream plays unaltered under the client profile and cap. */
+/** Returns whether the video Stream plays without re-encoding under the client profile and cap. */
 export function videoPasses(
   video: VideoStream,
   client: ClientProfile,
@@ -191,6 +191,7 @@ export function decidePlayback(
   if (
     client.containers.includes(source.container) &&
     video.action === "copy" &&
+    !video.stripDolbyVision &&
     directAudio.every((audio) => audio.action === "copy") &&
     subtitles.every((subtitle) => subtitle.action === "copy")
   ) {

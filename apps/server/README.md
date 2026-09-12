@@ -244,7 +244,7 @@ Every event reaches only its audience, on live delivery and on replay alike: `li
 An open stream revalidates its credential every thirty seconds and again before any event that would be delivered past that deadline, so a revoked session or key, a disabled user or a permission change stops delivery within the interval and ends the stream — including mid-batch, where a suspended yield cannot stretch one validation over many rows.
 Audience decisions are memoised per event subject — the library, the job set or the session — and cleared whenever the credential refreshes, so a long replay costs one decision per subject rather than per row while staying within the same freshness bound.
 
-`events.stream` resumes through the `Last-Event-ID` header. A digit id replays the rows after it; a missing or unparseable id starts from the present.
+`events.stream` resumes through the `Last-Event-ID` header. A digit id within the signed bigint range replays the rows after it; a missing, unparseable or out-of-range id starts from the present.
 Two honest limits: a disconnect longer than the retention window loses the pruned events, and an event committed out of sequence order during a disconnect can be skipped by an id-ordered replay.
 
 Bun closes a connection idle for ten seconds and oRPC 1.15 sends no keep-alive comments, so the stream route lifts the idle timeout. Every other route keeps the default.

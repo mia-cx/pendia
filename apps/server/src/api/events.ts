@@ -118,6 +118,9 @@ type BrokerOptions = {
 
 const batchSize = 100;
 const eventIdPattern = /^\d+$/;
+// The id column is a signed bigserial; a larger Last-Event-ID cannot name a
+// row, so it falls through to starting from the present like any bad id.
+const maxEventId = (1n << 63n) - 1n;
 
 /** The broker returned by startEventBroker; one per api process. */
 export type EventBroker = Awaited<ReturnType<typeof startEventBroker>>;
@@ -174,8 +177,12 @@ export async function startEventBroker(
       audience.reset();
     };
     let cursor: bigint;
-    if (lastEventId !== undefined && eventIdPattern.test(lastEventId)) {
-      cursor = BigInt(lastEventId);
+    const requested =
+      lastEventId !== undefined && eventIdPattern.test(lastEventId)
+        ? BigInt(lastEventId)
+        : undefined;
+    if (requested !== undefined && requested <= maxEventId) {
+      cursor = requested;
     } else {
       const [latest] = await db
         .select({ id: events.id })

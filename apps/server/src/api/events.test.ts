@@ -745,6 +745,40 @@ describe.skipIf(!databaseUrl)("api events", () => {
       }
     }));
 
+  test("an oversized Last-Event-ID starts from the present", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token } = await seed(db);
+      const earlier: Event = {
+        kind: "library.changed",
+        libraryId: Bun.randomUUIDv7(),
+      };
+      await publishEvent(db, earlier);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        // Past the signed bigint range: the stream must open cleanly, replay
+        // nothing, and still receive what publishes next.
+        const stream = await openEvents(base, token, "99999999999999999999");
+        try {
+          await Bun.sleep(400);
+          expect(stream.frames).toHaveLength(0);
+          const later: Event = {
+            kind: "library.changed",
+            libraryId: Bun.randomUUIDv7(),
+          };
+          const want = stream.frames.length + 1;
+          await publishEvent(db, later);
+          await stream.waitFor(want, 3_000);
+          expect(seen(stream)).toEqual([later]);
+        } finally {
+          await stream.close();
+        }
+      } finally {
+        await server.stop();
+      }
+    }));
+
   test("an unauthenticated request to the stream answers 401", () =>
     withDatabase(async (_db, url) => {
       const server = await startPendia("api", { databaseUrl: url, port: 0 });

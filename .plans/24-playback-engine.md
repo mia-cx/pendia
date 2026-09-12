@@ -22,13 +22,14 @@ Read `CONTEXT.md`, `docs/spec/playback.md`, `docs/spec/transcoding.md` and ADR 0
   - Add the five named ladder rates and CPU capabilities. Select only an asserted backend, in QSV, VAAPI, NVENC, Vulkan, CPU order.
   - Validate cap permutations, missing caps, LAN, all ladder thresholds, below-minimum refusal, CPU fallback and backend preference. Run focused Bun tests and the server typecheck.
   - Done: playback/policy.ts, playback/policy.test.ts. Red run failed on the missing module before implementation; `bun test apps/server/src/playback/policy.test.ts` passed 43 tests and 45 assertions: all six cap permutations, lone and tied caps, LAN bypass, literal ladder, all thresholds plus below-minimum undefined, CPU codec and tone-map assertions, backend preference and forceCpu. `bun run --cwd apps/server check` and `bunx --no-install biome check apps/server/src/playback` clean. Evidence: .devin/todo1-red.log, .devin/todo1-green.log, .devin/todo1-check.log, .devin/todo1-lint.log.
-- [ ] Implement per-stream decisions and the resulting play method.
+- [x] Implement per-stream decisions and the resulting play method.
   - Test the public decision function with table rows for every video constraint, audio branch and subtitle branch.
   - Decide direct play first. Re-evaluate lossless audio for HLS when any stream or container prevents direct play.
   - Preserve HDR10 base layers for DV 7 and 8. Force the CPU tone map for unsupported DV 5.
   - Copy supported text. Convert unsupported text to sidecar WebVTT without video re-encoding. Burn unsupported bitmap subtitles.
   - Select a supported encoder and ladder rung only when video needs re-encoding. Preserve aspect ratio and never upscale.
   - Validate all three play methods, DV cases, TrueHD and DTS-HD in direct play and HLS, plus unavailable output paths. Run focused Bun tests and the server typecheck.
+  - Done: playback/decisions.ts, playback/decisions.test.ts. Red run against a naive all-copy stub failed 55 of 72 tests before implementation; `bun test apps/server/src/playback/decisions.test.ts` then passed 72 tests and 114 assertions: every video constraint row and boundary, all three play methods, text convert versus bitmap burn, DV 7/8 base-layer copy and strip flag, DV 5 forced CPU tone map, TrueHD and DTS-HD direct play versus HLS fallback, decoder cap on LAN, rung selection, scaling and no-upscale, throws for missing rung, backend and AAC fallback, plus input immutability. `bun run --cwd apps/server check` and `bunx --no-install biome check apps/server/src/playback` clean. Evidence: .devin/todo2-red.log, .devin/todo2-green.log, .devin/todo2-check.log, .devin/todo2-lint.log.
 - [ ] Derive segment timelines and check foreign Version alignment.
   - Derive boundaries nearest to each previous boundary plus four seconds. Ties choose the earlier keyframe.
   - Include zero and the duration endpoint. Require keyframes at segment starts, not at the terminal duration.

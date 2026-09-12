@@ -21,3 +21,15 @@ export class AuthError extends Error {
     this.status = errors[code][0];
   }
 }
+
+/** Unwraps a Postgres error code through drizzle's cause chain. */
+export function postgresCode(error: unknown): string | undefined {
+  let current = error;
+  while (current && typeof current === "object") {
+    const record = current as Record<string, unknown>;
+    if (typeof record.errno === "string") return record.errno;
+    if (typeof record.code === "string") return record.code;
+    current = record.cause;
+  }
+  return undefined;
+}

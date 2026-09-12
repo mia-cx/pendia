@@ -9,18 +9,7 @@ import {
   userPermissionOverrides,
   users,
 } from "../db/schema/index.ts";
-import { AuthError } from "./errors.ts";
-
-function postgresCode(error: unknown): string | undefined {
-  let current = error;
-  while (current && typeof current === "object") {
-    const record = current as Record<string, unknown>;
-    if (typeof record.errno === "string") return record.errno;
-    if (typeof record.code === "string") return record.code;
-    current = record.cause;
-  }
-  return undefined;
-}
+import { AuthError, postgresCode } from "./errors.ts";
 
 type Queryable = Pick<Database, "select">;
 

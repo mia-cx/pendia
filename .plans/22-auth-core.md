@@ -10,7 +10,7 @@ Add local identity and access behind reusable server functions. Expose setup, lo
 - [ ] Permission checks resolve through groups and per-user overrides; the built-in groups behave as the spec says.
 - [ ] The rate limit trips after the configured attempts and clears after the window.
 - [ ] Forwarded headers from an untrusted address are ignored.
-- [ ] The first-run path creates the admin exactly once, even under two concurrent requests.
+- [x] The first-run path creates the admin exactly once, even under two concurrent requests.
 
 ## TODOs
 
@@ -19,10 +19,11 @@ Add local identity and access behind reusable server functions. Expose setup, lo
   - Add permission-checked custom group creation, membership replacement and user override changes. Preserve built-in groups.
   - Validate with colocated Postgres tests for built-ins, custom group union, overrides, library precedence and forbidden mutations. Run the server typecheck and build.
   - Done: auth/errors.ts, auth/permissions.ts, auth/permissions.test.ts. bun test permissions.test.ts: 7 pass / 0 fail (50 expects) against pendia-test-pg-22, including a two-client concurrent replacement test; setUserGroups locks the target user row FOR UPDATE. tsc check, bun build and biome check clean. Evidence: .devin/todo1-evidence.md.
-- [ ] Implement local accounts and atomic first-run setup.
+- [x] Implement local accounts and atomic first-run setup.
   - Hash local passwords with Bun.password argon2id. Setup creates only one admin account and membership under a transaction advisory lock. Persist setup completion in settings.
   - Add permission-checked local account creation with the users group by default. Return public user fields, never password hashes.
   - Validate simultaneous setup through two database clients, repeat rejection, argon2id storage, case-insensitive account uniqueness and permission checks. Run the server typecheck and build.
+  - Done: auth/accounts.ts, auth/accounts.test.ts; postgresCode moved to auth/errors.ts. bun test accounts.test.ts: 4 pass / 0 fail (35 expects) against pendia-test-pg-22. Concurrent two-client setup yields exactly one admin/membership, marker persists after user deletion, duplicate normalized username CONFLICT. tsc check, bun build and biome check clean. Evidence: .devin/todo2-evidence.md.
 - [ ] Implement device sessions and integration API keys.
   - Return random opaque tokens once and persist SHA-256 digests. Authenticate against Postgres on every call, update last seen and reject revoked, expired or disabled credentials.
   - Add session listing and revocation for the owner or a user with manage-users. API keys have integration names and the same ownership checks.

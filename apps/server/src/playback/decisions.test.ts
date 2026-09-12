@@ -719,6 +719,52 @@ describe("decidePlayback video", () => {
       stripDolbyVision: false,
     });
   });
+
+  const levelCandidates: [
+    ClientProfile["videoCodecs"][number],
+    ClientProfile["videoCodecs"][number],
+  ][] = [
+    [
+      { codec: "h264", profiles: ["high"], maxLevel: 30 },
+      { codec: "hevc", profiles: ["main10"], maxLevel: 153 },
+    ],
+    [
+      { codec: "hevc", profiles: ["main"], maxLevel: 93 },
+      { codec: "h264", profiles: ["high"], maxLevel: 41 },
+    ],
+    [
+      { codec: "av1", profiles: ["main"], maxLevel: 8 },
+      { codec: "hevc", profiles: ["main10"], maxLevel: 153 },
+    ],
+  ];
+  test.each(levelCandidates)(
+    "skips output exceeding level constraints %o",
+    (limited, fallback) => {
+      const result = decidePlayback(
+        { ...source, video: { ...source.video, codec: "vp9" } },
+        { ...client, videoCodecs: [limited, fallback] },
+        { isLan: false },
+      );
+      expect(result.video).toMatchObject({
+        action: "transcode",
+        codec: fallback.codec,
+        level: fallback.maxLevel,
+      });
+    },
+  );
+
+  test("rejects an output that cannot fit the sole client's level", () => {
+    expect(() =>
+      decidePlayback(
+        source,
+        {
+          ...client,
+          videoCodecs: [{ codec: "h264", profiles: ["high"], maxLevel: 30 }],
+        },
+        { isLan: false },
+      ),
+    ).toThrow("No backend supports the required video output.");
+  });
 });
 
 describe("decidePlayback audio", () => {

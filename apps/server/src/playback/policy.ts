@@ -50,6 +50,80 @@ export function selectLadderRung(cap: number | null) {
   return ladder.find((rung) => cap === null || rung.bitrate <= cap);
 }
 
+type LevelBound = readonly [
+  level: number,
+  maxPicture: number,
+  maxBitrate: number,
+  maxWidth?: number,
+  maxHeight?: number,
+];
+const levelBounds: Readonly<
+  Record<string, { blockSize: number; bounds: readonly LevelBound[] }>
+> = {
+  h264: {
+    blockSize: 16,
+    bounds: [
+      [20, 396, 2_000_000],
+      [21, 792, 4_000_000],
+      [22, 1620, 4_000_000],
+      [30, 1620, 10_000_000],
+      [31, 3600, 14_000_000],
+      [32, 5120, 20_000_000],
+      [40, 8192, 20_000_000],
+      [41, 8192, 50_000_000],
+      [42, 8704, 50_000_000],
+      [50, 22080, 135_000_000],
+      [51, 36864, 240_000_000],
+    ],
+  },
+  hevc: {
+    blockSize: 1,
+    bounds: [
+      [60, 122880, 1_500_000],
+      [63, 245760, 3_000_000],
+      [90, 552960, 6_000_000],
+      [93, 983040, 10_000_000],
+      [120, 2228224, 12_000_000],
+      [123, 2228224, 20_000_000],
+      [150, 8912896, 25_000_000],
+    ],
+  },
+  av1: {
+    blockSize: 1,
+    bounds: [
+      [0, 147456, 1_500_000, 2048, 1152],
+      [1, 278784, 3_000_000, 2816, 1584],
+      [4, 665856, 6_000_000, 4352, 2448],
+      [5, 1065024, 10_000_000, 5504, 3096],
+      [8, 2359296, 12_000_000, 6144, 3456],
+      [9, 2359296, 20_000_000, 6144, 3456],
+      [12, 8912896, 30_000_000, 8192, 4352],
+    ],
+  },
+};
+
+/** Checks planned bitrate and frame size against conservative codec-level limits. */
+export function outputFitsLevel(
+  codec: string,
+  level: number,
+  width: number,
+  height: number,
+  bitrate: number,
+) {
+  const limits = levelBounds[codec];
+  if (!limits) return false;
+  const w = Math.ceil(width / limits.blockSize);
+  const h = Math.ceil(height / limits.blockSize);
+  return limits.bounds.some(
+    ([ceiling, maxPicture, maxBitrate, maxWidth, maxHeight]) =>
+      ceiling <= level &&
+      bitrate <= maxBitrate &&
+      w * h <= maxPicture &&
+      (maxWidth === undefined ? w * w <= 8 * maxPicture : w <= maxWidth) &&
+      (maxHeight === undefined ? h * h <= 8 * maxPicture : h <= maxHeight),
+  );
+}
+
 /** Encoder backends in preference order. */
 export const backendPreference = [
   "qsv",

@@ -6,6 +6,7 @@ import {
   effectiveCap,
   type Hdr,
   ladder,
+  outputFitsLevel,
   type PlaybackCaps,
   selectBackend,
   selectLadderRung,
@@ -198,4 +199,24 @@ describe("selectBackend", () => {
     };
     expect(selectBackend(table, "hevc", "dolby-vision", true)).toBe("cpu");
   });
+});
+
+describe("outputFitsLevel", () => {
+  const cases: [string, number, number, number, number, boolean][] = [
+    ["h264", 30, 720, 576, 10_000_000, true],
+    ["h264", 30, 720, 576, 10_000_001, false],
+    ["h264", 30, 1920, 1080, 6_000_000, false],
+    ["h264", 30, 2112, 16, 1_500_000, false],
+    ["hevc", 93, 1920, 1080, 6_000_000, false],
+    ["hevc", 123, 1920, 1080, 20_000_000, true],
+    ["av1", 8, 1920, 1080, 20_000_000, false],
+    ["av1", 9, 1920, 1080, 20_000_000, true],
+    ["vp9", 41, 1920, 1080, 6_000_000, false],
+  ];
+  test.each(cases)(
+    "checks %s level %i at %ix%i and %i bps",
+    (codec, level, width, height, bitrate, fits) => {
+      expect(outputFitsLevel(codec, level, width, height, bitrate)).toBe(fits);
+    },
+  );
 });

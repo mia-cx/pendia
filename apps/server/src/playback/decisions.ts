@@ -4,6 +4,7 @@ import {
   cpuCapabilities,
   effectiveCap,
   type Hdr,
+  outputFitsLevel,
   type PlaybackCaps,
   selectBackend,
   selectLadderRung,
@@ -142,6 +143,19 @@ function decideVideo(
       (candidate.maxWidth ?? Infinity) / video.width,
       (candidate.maxHeight ?? Infinity) / video.height,
     );
+    const width = Math.max(2, Math.floor((video.width * scale) / 2) * 2);
+    const height = Math.max(2, Math.floor((video.height * scale) / 2) * 2);
+    if (
+      candidate.maxLevel !== undefined &&
+      !outputFitsLevel(
+        candidate.codec,
+        candidate.maxLevel,
+        width,
+        height,
+        rung.bitrate,
+      )
+    )
+      continue;
     return {
       action: "transcode" as const,
       codec: candidate.codec,
@@ -150,8 +164,8 @@ function decideVideo(
           ? hdrProfile
           : (candidate.profiles?.[0] ?? null),
       level: candidate.maxLevel ?? null,
-      width: Math.max(2, Math.floor((video.width * scale) / 2) * 2),
-      height: Math.max(2, Math.floor((video.height * scale) / 2) * 2),
+      width,
+      height,
       bitrate: rung.bitrate,
       rung,
       hdr: toneMap === null ? hdr : ("sdr" as const),

@@ -208,4 +208,42 @@ describe.skipIf(!databaseUrl)("api router", () => {
         await server.stop();
       }
     }));
+
+  test("GET /api/openapi.json answers the generated document", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await seed(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const response = await fetch(`${base}/api/openapi.json`);
+        expect(response.status).toBe(200);
+        const doc = (await response.json()) as { paths?: object };
+        expect(Object.keys(doc.paths ?? {})).toContain("/items");
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("GET /api/items with no query string answers the default page", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token, rows } = await seed(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const rest = await fetch(`${base}/api/items`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(rest.status).toBe(200);
+        const body = (await rest.json()) as {
+          items: { id: string }[];
+          cursor: string | null;
+        };
+        expect(body.items).toHaveLength(rows.length);
+        expect(body.cursor).toBeNull();
+      } finally {
+        await server.stop();
+      }
+    }));
 });

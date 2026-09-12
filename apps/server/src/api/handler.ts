@@ -2,6 +2,7 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { Database } from "../db/client.ts";
 import type { ApiContext } from "./context.ts";
+import { openApiDocument } from "./openapi.ts";
 import { pendiaRouter } from "./router.ts";
 
 /** Creates the handler that serves the router over /rpc and /api. */
@@ -12,8 +13,10 @@ export function createApiHandler(db: Database) {
     request: Request,
     peerAddress: string,
   ): Promise<Response | undefined> => {
-    const context: ApiContext = { db, request, peerAddress };
     const { pathname } = new URL(request.url);
+    if (pathname === "/api/openapi.json" && request.method === "GET")
+      return Response.json(await openApiDocument());
+    const context: ApiContext = { db, request, peerAddress };
     const result =
       pathname === "/rpc" || pathname.startsWith("/rpc/")
         ? await rpc.handle(request, { prefix: "/rpc", context })

@@ -93,4 +93,21 @@ describe("openapi document", () => {
       expect.arrayContaining(["200", "400", "401", "403", "404"]),
     );
   });
+
+  test("declares both credential schemes as root alternatives", async () => {
+    const doc = await openApiDocument();
+    const components = doc.components as
+      | { securitySchemes?: Record<string, unknown> }
+      | undefined;
+    expect(components?.securitySchemes?.bearerAuth).toEqual({
+      type: "http",
+      scheme: "bearer",
+    });
+    expect(components?.securitySchemes?.cookieAuth).toEqual({
+      type: "apiKey",
+      in: "cookie",
+      name: "pendia_session",
+    });
+    expect(doc.security).toEqual([{ bearerAuth: [] }, { cookieAuth: [] }]);
+  });
 });

@@ -10,7 +10,8 @@ import {
 import { readAuthSettings } from "./settings.ts";
 import { requestIdentity } from "./transport.ts";
 
-const cookieName = "pendia_session";
+/** The session cookie the auth routes set and the API documents. */
+export const sessionCookieName = "pendia_session";
 const maxBodyBytes = 16_384;
 const cookieMaxAgeSeconds = 34_560_000;
 const bearerPattern = /^Bearer ([A-Za-z0-9_-]{43})$/i;
@@ -143,8 +144,8 @@ export function readSessionToken(request: Request): string {
   const values = header
     .split(";")
     .map((pair) => pair.trim())
-    .filter((pair) => pair.startsWith(`${cookieName}=`))
-    .map((pair) => pair.slice(cookieName.length + 1));
+    .filter((pair) => pair.startsWith(`${sessionCookieName}=`))
+    .map((pair) => pair.slice(sessionCookieName.length + 1));
   if (values.length !== 1 || !tokenPattern.test(values[0] ?? ""))
     throw new AuthError("UNAUTHENTICATED");
   return values[0] as string;
@@ -161,11 +162,11 @@ function sessionCookie(token: string, secure: boolean, expiresAt: Date | null) {
             Math.ceil((expiresAt.getTime() - Date.now()) / 1000),
           ),
         );
-  return `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+  return `${sessionCookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
 }
 
 const clearedCookie = (secure: boolean) =>
-  `${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
+  `${sessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 
 /** Creates the JSON auth handler for /api/auth routes. */
 export function createAuthHandler(db: Database) {

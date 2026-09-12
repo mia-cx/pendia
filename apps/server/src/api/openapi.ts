@@ -5,6 +5,7 @@ import {
   type SchemaConvertOptions,
 } from "@orpc/openapi";
 import { JSONSchema as EffectJSONSchema, Schema } from "effect";
+import { sessionCookieName } from "../auth/http.ts";
 import { pendiaRouter } from "./router.ts";
 
 /** The API version reported in the generated OpenAPI document. */
@@ -72,6 +73,13 @@ export function openApiDocument() {
   }).generate(pendiaRouter, {
     info: { title: "Pendia", version: apiVersion },
     servers: [{ url: "/api" }],
+    components: {
+      securitySchemes: {
+        bearerAuth: { type: "http", scheme: "bearer" },
+        cookieAuth: { type: "apiKey", in: "cookie", name: sessionCookieName },
+      },
+    },
+    security: [{ bearerAuth: [] }, { cookieAuth: [] }],
   });
   return documentPromise;
 }

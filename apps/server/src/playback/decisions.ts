@@ -73,6 +73,10 @@ export function videoPasses(
   );
 }
 
+function hdrOutputProfile(codec: string) {
+  return codec === "hevc" ? "main10" : codec === "av1" ? "main" : null;
+}
+
 function decideVideo(
   video: VideoStream,
   client: ClientProfile,
@@ -93,14 +97,27 @@ function decideVideo(
   const forceCpu = video.hdr === "dolby-vision" && video.dvProfile === 5;
   const rung = selectLadderRung(videoCap(client, cap));
   if (!rung) throw new Error("No ladder rung fits the bitrate cap.");
-  for (const candidate of client.videoCodecs) {
+  const candidates = [
+    ...new Set(client.videoCodecs.map((entry) => entry.codec)),
+  ].flatMap((codec) => {
+    const entries = client.videoCodecs.filter((entry) => entry.codec === codec);
+    const profile = hdrOutputProfile(codec);
+    if (
+      hdr === "sdr" ||
+      hdr === "dolby-vision" ||
+      !client.hdr.includes(hdr) ||
+      profile === null
+    )
+      return entries;
+    return entries.toSorted(
+      (a, b) =>
+        Number(b.profiles?.includes(profile) ?? true) -
+        Number(a.profiles?.includes(profile) ?? true),
+    );
+  });
+  for (const candidate of candidates) {
     if (candidate.profiles?.length === 0) continue;
-    const hdrProfile =
-      candidate.codec === "hevc"
-        ? "main10"
-        : candidate.codec === "av1"
-          ? "main"
-          : null;
+    const hdrProfile = hdrOutputProfile(candidate.codec);
     const preservesHdr =
       hdr !== "dolby-vision" &&
       hdrProfile !== null &&

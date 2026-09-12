@@ -40,6 +40,17 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
       expect(oidc?.scopes).toEqual(["openid", "profile", "email"]);
       await db
         .update(settings)
+        .set({
+          value: {
+            oidc: { ...oidcConfig, issuer: "http://127.0.0.1:9000/op" },
+          },
+        })
+        .where(eq(settings.key, "auth"));
+      expect((await readAuthSettings(db)).oidc?.issuer.href).toBe(
+        "http://127.0.0.1:9000/op",
+      );
+      await db
+        .update(settings)
         .set({ value: { oidc: null } })
         .where(eq(settings.key, "auth"));
       expect((await readAuthSettings(db)).oidc).toBeNull();
@@ -56,6 +67,7 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
         { ...oidcConfig, issuer: "not a url" },
         { ...oidcConfig, issuer: "id.mia.cx" },
         { ...oidcConfig, issuer: "ftp://id.mia.cx" },
+        { ...oidcConfig, issuer: "http://id.mia.cx" },
         { ...oidcConfig, issuer: "https://user:pass@id.mia.cx" },
         { ...oidcConfig, issuer: "https://id.mia.cx/?x=1" },
         { ...oidcConfig, issuer: "https://id.mia.cx/#frag" },
@@ -63,6 +75,9 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
         { ...oidcConfig, clientSecret: "" },
         { ...oidcConfig, scopes: "openid" },
         { ...oidcConfig, scopes: ["openid", " "] },
+        { ...oidcConfig, scopes: ["openid profile"] },
+        { ...oidcConfig, scopes: ["openid", 'bad"scope'] },
+        { ...oidcConfig, scopes: ["openid", "bad\\scope"] },
         { ...oidcConfig, scopes: [] },
         { ...oidcConfig, scopes: ["profile", "email"] },
       ]) {

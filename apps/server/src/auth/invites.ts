@@ -8,6 +8,8 @@ import { requirePermission } from "./permissions.ts";
 import { issueSession } from "./sessions.ts";
 import { readAuthSettings } from "./settings.ts";
 
+type InviteTransaction = Pick<Database, "update">;
+
 type AcceptLocalInput = {
   token: string;
   username: string;
@@ -66,6 +68,29 @@ export async function createInvite(
   }
 }
 
+/** Claims one live invite inside the caller's database transaction. */
+export async function claimInvite(
+  db: InviteTransaction,
+  token: string,
+  email?: string,
+) {
+  if (!tokenPattern.test(token)) throw new AuthError("INVALID_INVITE");
+  const conditions = [
+    eq(invites.tokenHash, createHash("sha256").update(token).digest()),
+    isNull(invites.acceptedAt),
+    gt(invites.expiresAt, sql`statement_timestamp()`),
+  ];
+  if (email !== undefined)
+    conditions.push(sql`lower(${invites.email}) = ${email.toLowerCase()}`);
+  const [invite] = await db
+    .update(invites)
+    .set({ acceptedAt: sql`clock_timestamp()` })
+    .where(and(...conditions))
+    .returning({ email: invites.email });
+  if (!invite) throw new AuthError("INVALID_INVITE");
+  return invite;
+}
+
 /** Accepts a live invite as a local account and returns its first session. */
 export async function acceptLocalInvite(db: Database, input: AcceptLocalInput) {
   if (!tokenPattern.test(input.token)) throw new AuthError("INVALID_INVITE");
@@ -86,18 +111,7 @@ export async function acceptLocalInvite(db: Database, input: AcceptLocalInput) {
   const config = await readAuthSettings(db);
   try {
     return await db.transaction(async (tx) => {
-      const [invite] = await tx
-        .update(invites)
-        .set({ acceptedAt: sql`clock_timestamp()` })
-        .where(
-          and(
-            eq(invites.tokenHash, digest),
-            isNull(invites.acceptedAt),
-            gt(invites.expiresAt, sql`statement_timestamp()`),
-          ),
-        )
-        .returning({ email: invites.email });
-      if (!invite) throw new AuthError("INVALID_INVITE");
+      const invite = await claimInvite(tx, input.token);
       const [members] = await tx
         .select({ id: groups.id })
         .from(groups)

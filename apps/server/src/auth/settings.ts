@@ -31,6 +31,8 @@ function requiredString(value: unknown): string {
   return value.trim();
 }
 
+const scopePattern = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
+
 function readOidc(value: unknown) {
   if (value == null) return null;
   if (typeof value !== "object" || Array.isArray(value)) invalid();
@@ -41,8 +43,12 @@ function readOidc(value: unknown) {
   } catch {
     invalid();
   }
+  const secure =
+    issuer.protocol === "https:" ||
+    (issuer.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]", "::1"].includes(issuer.hostname));
   if (
-    !["http:", "https:"].includes(issuer.protocol) ||
+    !secure ||
     issuer.username ||
     issuer.password ||
     issuer.search ||
@@ -51,7 +57,12 @@ function readOidc(value: unknown) {
     invalid();
   if (!Array.isArray(raw.scopes)) invalid();
   const scopes = [...new Set(raw.scopes.map(requiredString))];
-  if (!scopes.length || !scopes.includes("openid")) invalid();
+  if (
+    !scopes.length ||
+    !scopes.includes("openid") ||
+    scopes.some((scope) => !scopePattern.test(scope))
+  )
+    invalid();
   return {
     issuer,
     clientId: requiredString(raw.clientId),

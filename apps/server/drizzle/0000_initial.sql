@@ -588,4 +588,13 @@ BEGIN
 END;
 $$;--> statement-breakpoint
 CREATE TRIGGER streams_file_origin BEFORE INSERT OR UPDATE OF file_id, version_id ON streams
-FOR EACH ROW EXECUTE FUNCTION require_stream_file_origin();
+FOR EACH ROW EXECUTE FUNCTION require_stream_file_origin();--> statement-breakpoint
+-- Timelines are derived once. New boundaries need a new timeline identity.
+CREATE FUNCTION preserve_segment_boundaries() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'Segment timeline boundaries are immutable' USING ERRCODE = '23514';
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER segment_timelines_immutable_boundaries BEFORE UPDATE OF boundaries_seconds ON segment_timelines
+FOR EACH ROW WHEN (OLD.boundaries_seconds IS DISTINCT FROM NEW.boundaries_seconds)
+EXECUTE FUNCTION preserve_segment_boundaries();

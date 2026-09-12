@@ -23,6 +23,7 @@ bun run --cwd apps/server db:generate
 Review and commit the SQL and metadata under apps/server/drizzle together.
 Hand-written SQL handles the boundary validator, File and Stream origin rules, source timeline agreement and episode-range exclusion.
 It also limits SET NULL to version_id on progress.
+Timeline boundaries are immutable. Different boundaries need a new timeline row.
 Preserve these rules when a generated migration changes their constraints.
 
 The api and all roles apply pending migrations before listening. Other roles do not migrate.

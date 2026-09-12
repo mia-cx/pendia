@@ -132,6 +132,7 @@ export const segmentTimelines = pgTable(
       .notNull()
       .references(() => items.id, owned),
     cutKey: text("cut_key").notNull(),
+    // A migration trigger keeps derived boundaries immutable.
     boundariesSeconds: doublePrecision("boundaries_seconds").array().notNull(),
     createdAt: instant("created_at").notNull().defaultNow(),
   },

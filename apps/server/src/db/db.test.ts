@@ -649,6 +649,13 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       expect(stored.segmentTimelineId).toBe(timeline.id);
       await expect(
         db
+          .update(segmentTimelines)
+          .set({ boundariesSeconds: [0, 3, 5] })
+          .where(eq(segmentTimelines.id, timeline.id))
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      await expect(
+        db
           .update(versions)
           .set({ segmentTimelineId: otherCut.id })
           .where(eq(versions.id, version.id))

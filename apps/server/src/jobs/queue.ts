@@ -15,6 +15,9 @@ type EnqueueOptions = Partial<
 const claimLockKey = 0x70656e646a6fn;
 const maxRetryDelayMs = 60_000;
 
+/** The Postgres NOTIFY channel that wakes idle workers. */
+export const jobChannel = "pendia_jobs";
+
 type QueueOptions = { retryDelayMs?: number; concurrencyLimit?: number };
 
 /** Creates queue operations on the shared Postgres database. */
@@ -29,17 +32,20 @@ export function createJobQueue(
   return {
     /** Enqueues a typed payload with its scheduling options. */
     async enqueue(payload: JobPayload, options: EnqueueOptions = {}) {
-      const [job] = await db
-        .insert(jobs)
-        .values({
-          ...options,
-          type: payload.type,
-          payload,
-          maxAttempts: options.maxAttempts ?? 3,
-        })
-        .returning();
-      if (!job) throw new Error("Job insertion returned no row.");
-      return job;
+      return db.transaction(async (tx) => {
+        const [job] = await tx
+          .insert(jobs)
+          .values({
+            ...options,
+            type: payload.type,
+            payload,
+            maxAttempts: options.maxAttempts ?? 3,
+          })
+          .returning();
+        if (!job) throw new Error("Job insertion returned no row.");
+        await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
+        return job;
+      });
     },
 
     /** Claims the highest-priority ready job once across workers. */

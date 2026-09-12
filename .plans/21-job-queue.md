@@ -8,15 +8,15 @@ Read CONTEXT.md, docs/spec/topology.md section Jobs, docs/adr/0013-own-postgres-
 
 ## Acceptance criteria
 
-- [ ] Two workers claiming concurrently never take the same job.
+- [x] Two workers claiming concurrently never take the same job.
 - [ ] A failing job retries with backoff and stops at max attempts with its error stored.
-- [ ] Run after delays a job until its time; priority orders ready jobs.
+- [x] Run after delays a job until its time; priority orders ready jobs.
 - [ ] A concurrency key caps parallel jobs sharing it.
 - [ ] NOTIFY wakes an idle worker within 100 ms; without NOTIFY the poll still picks the job up.
 
 ## TODOs
 
-- [ ] Add enqueue, list, and atomic claim operations with shared disposable-database test support. Validate independent clients claiming concurrently, payload round-trips, descending priority, run-after eligibility, and schema test preservation.
+- [x] Add enqueue, list, and atomic claim operations with shared disposable-database test support. Validate independent clients claiming concurrently, payload round-trips, descending priority, run-after eligibility, and schema test preservation. Validation results are in Notes.
 - [ ] Add completion and exponential retries with retained errors and attempt fencing. Validate increasing retry delays, no early retry, terminal failure at max attempts, success, and stale completion rejection.
 - [ ] Enforce a shared concurrency-key cap during claims. Validate racing clients against the same key, independent keys, unkeyed jobs, and capacity returning after completion or failure.
 - [ ] Add the typed handler registry and worker loop with NOTIFY and slow polling. Validate registered dispatch, unknown types staying queued, idle notification latency below 100 ms, polling without notification, retries, and graceful shutdown.
@@ -24,6 +24,8 @@ Read CONTEXT.md, docs/spec/topology.md section Jobs, docs/adr/0013-own-postgres-
 - [ ] Document queue use and run final repository validation. Validate frozen install, lint, typecheck, build, all tests against Postgres, and local skipping without DATABASE_URL. Record actual results below.
 
 ## Notes
+
+- TODO 1 validation: Postgres queue and schema tests passed, 13 tests and 111 assertions. Server typecheck and focused Biome checks passed. Without DATABASE_URL, bun test passed 12 and skipped 13 with one message. With CI=true and no URL it failed as required. The first test execution was blocked by command permissions, so this TODO has green evidence but no observed red run.
 
 - Work only in this worktree on feat/21-job-queue. The parent committed the pre-existing .gitignore change as f9742ab. Never commit .devin.
 - Each TODO includes its tests and one buildable commit with Refs #21. The plan is committed first.

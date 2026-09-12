@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { and, eq, sql } from "drizzle-orm";
 import { startApiServer } from "../api.ts";
-import { createDatabase, type Database, probeDatabase } from "./client.ts";
+import { type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import {
   contributors,
@@ -27,39 +27,8 @@ import {
   users,
   versions,
 } from "./schema/index.ts";
+import { databaseUrl, withDatabase } from "./testing.ts";
 import { deleteItemSubtree, insertItem, moveItem } from "./tree.ts";
-
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl && process.env.CI)
-  throw new Error("DATABASE_URL is required for database tests in CI.");
-if (!databaseUrl)
-  console.info(
-    "Skipping database tests: set DATABASE_URL to a test Postgres server.",
-  );
-
-async function withDatabase(run: (db: Database, url: string) => Promise<void>) {
-  const admin = createDatabase(databaseUrl);
-  const name = `pendia_test_${Bun.randomUUIDv7().replaceAll("-", "")}`;
-  const url = new URL(databaseUrl ?? "");
-  url.pathname = `/${name}`;
-  const database = createDatabase(url.href);
-  let created = false;
-  try {
-    await admin.db.execute(sql`create database ${sql.identifier(name)}`);
-    created = true;
-    await run(database.db, url.href);
-  } finally {
-    try {
-      await database.close();
-      if (created)
-        await admin.db.execute(
-          sql`drop database ${sql.identifier(name)} with (force)`,
-        );
-    } finally {
-      await admin.close();
-    }
-  }
-}
 
 async function fixture(db: Database) {
   const [library] = await db

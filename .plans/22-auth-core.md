@@ -35,10 +35,11 @@ Add local identity and access behind reusable server functions. Expose setup, lo
   - Derive client address and protocol only through configured exact proxy addresses. Walk forwarded chains from the trusted peer toward the first untrusted hop.
   - Validate configured attempt limits, independent address/account limits, concurrent callers, window reset, live settings and spoofed forwarded headers. Run the server typecheck and build.
   - Done: auth/settings.ts, auth/rate-limit.ts, auth/transport.ts; login now takes a client address and consumes shared windows before password work, authenticate enforces configured session max age live. bun test (rate-limit+transport+sessions): 16 pass / 0 fail (81 expects) against pendia-test-pg-22; review cleanup fixed retryAfter to only count blocking counters and unparseable-peer trust. tsc check, bun build and biome check clean. Evidence: .devin/todo4-evidence.md.
-- [ ] Wire thin JSON auth handlers into api and all roles.
+- [x] Wire thin JSON auth handlers into api and all roles.
   - Serve POST setup/login/logout and GET me under `/api/auth`. Accept bearer tokens and same-origin cookies. Keep account tokens out of URLs.
   - Validate JSON input at the handler boundary. Use stable error codes, no-store responses and HTTP-only same-site cookies, with Secure only on HTTPS.
   - Validate real HTTP login/me/logout, concurrent setup, HTTP and trusted HTTPS cookies, invalid requests and unchanged role health behavior. Run focused auth and role tests, server typecheck and build.
+  - Done: auth/http.ts (createAuthHandler), api.ts third auth arg, index.ts wiring, http.test.ts. bun test http+api+roles: 15 pass / 0 fail against pendia-test-pg-22: concurrent two-server setup 201/409, login cookie semantics, bearer+cookie me, immediate logout rejection, real-peer rate limit 429, trusted-proxy Secure cookie, malformed/405/404/CSRF rejections, API key me/logout. tsc check, bun build and biome check clean. Evidence: .devin/todo5-evidence.md.
 - [ ] Run final checks and record the integration contract.
   - Update the server README with auth functions, routes, settings and proxy assumptions.
   - Run frozen install, lint, check, build, all tests with disposable Postgres, and tests without DATABASE_URL. Record actual results below.

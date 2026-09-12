@@ -1,4 +1,5 @@
 import { startApiServer } from "./api.ts";
+import { createAuthHandler } from "./auth/http.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 import { jobRegistry } from "./jobs/registry.ts";
@@ -154,7 +155,11 @@ export async function startPendia(
       log(role, "database.migrated");
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
-      apiServer = startApiServer(() => probeDatabase(databaseUrl), port);
+      apiServer = startApiServer(
+        () => probeDatabase(databaseUrl),
+        port,
+        createAuthHandler(database.db),
+      );
     }
     if (runsJobs && database) {
       worker = await startJobWorker(database.db, registry, {

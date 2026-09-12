@@ -4,12 +4,14 @@ import { readSessionToken } from "../auth/http.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { fromHost, runApi } from "./errors.ts";
+import type { EventBroker } from "./events.ts";
 
 /** The request-scoped context every API procedure receives. */
 export type ApiContext = {
   db: Database;
   request: Request;
   peerAddress: string;
+  events: EventBroker;
 };
 
 /** The error map every procedure shares so oRPC documents and types it. */

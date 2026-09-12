@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigserial,
   check,
   customType,
   foreignKey,
@@ -93,6 +94,18 @@ export const jobs = pgTable(
       .on(table.concurrencyKey)
       .where(sql`${table.state} = 'running'`),
   ],
+);
+
+// Events are durable so a reconnecting client can replay what it missed.
+export const events = pgTable(
+  "events",
+  {
+    id: bigserial("id", { mode: "bigint" }).primaryKey(),
+    kind: text("kind").notNull(),
+    payload: jsonb("payload").$type<JsonObject>().notNull(),
+    createdAt: instant("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("events_created_idx").on(table.createdAt)],
 );
 
 export type TranscoderBackend = {

@@ -1,8 +1,10 @@
+import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
 import { authenticated } from "./context.ts";
 import { runApi } from "./errors.ts";
 import { getItemDetail, listItemCards } from "./items.ts";
 import {
+  ApiEvent,
   connection,
   ItemCard,
   ItemDetail,
@@ -41,8 +43,16 @@ const getItem = authenticated
     runApi(getItemDetail(context.db, context.caller, input.id)),
   );
 
+const streamEvents = authenticated
+  .route({ method: "GET", path: "/events" })
+  .output(eventIterator(Schema.standardSchemaV1(ApiEvent)))
+  .handler(async function* ({ context, lastEventId, signal }) {
+    yield* context.events.subscribe({ lastEventId, signal });
+  });
+
 /** The API router: procedures defined once, served over both RPC and REST. */
 export const pendiaRouter = {
   me,
   items: { list: listItems, get: getItem },
+  events: { stream: streamEvents },
 };

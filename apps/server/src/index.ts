@@ -1,3 +1,4 @@
+import { startEventBroker } from "./api/events.ts";
 import { createApiHandler } from "./api/handler.ts";
 import { startApiServer } from "./api.ts";
 import { createAuthHandler } from "./auth/http.ts";
@@ -134,8 +135,9 @@ export async function startPendia(
     servesApi || runsJobs ? createDatabase(databaseUrl) : undefined;
   let apiServer: Bun.Server<undefined> | undefined;
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
+  let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops the worker, API server and database pool once, in that order. */
+  /** Stops the worker, API server, event broker and database pool once, in that order. */
   function stop() {
     stopping ??= (async () => {
       try {
@@ -144,7 +146,11 @@ export async function startPendia(
         try {
           await apiServer?.stop();
         } finally {
-          await database?.close();
+          try {
+            await eventBroker?.stop();
+          } finally {
+            await database?.close();
+          }
         }
       }
     })();
@@ -154,11 +160,12 @@ export async function startPendia(
     if (servesApi && database && databaseUrl) {
       await migrateDatabase(database.db);
       log(role, "database.migrated");
+      eventBroker = await startEventBroker(database.db);
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
-        api: createApiHandler(database.db),
+        api: createApiHandler(database.db, eventBroker),
       });
     }
     if (runsJobs && database) {

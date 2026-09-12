@@ -90,6 +90,7 @@ export function startApiServer(
         const response = await handlers.api(
           request,
           server.requestIP(request)?.address ?? "",
+          server,
         );
         if (response !== undefined) return response;
       }

@@ -139,17 +139,17 @@ export async function startPendia(
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
   let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops the worker, API server, event broker and database pool once, in that order. */
+  /** Stops the worker, event broker, API server and database pool once, in that order. */
   function stop() {
     stopping ??= (async () => {
       try {
         await worker?.stop();
       } finally {
         try {
-          await apiServer?.stop();
+          await eventBroker?.stop();
         } finally {
           try {
-            await eventBroker?.stop();
+            await apiServer?.stop();
           } finally {
             await database?.close();
           }

@@ -559,4 +559,22 @@ describe.skipIf(!databaseUrl)("api events", () => {
         await server.stop();
       }
     }));
+
+  test("stop resolves while an event stream is open", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token } = await seed(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const base = `http://127.0.0.1:${server.apiServer?.port}`;
+      const stream = await openEvents(base, token);
+      // The broker must stop before the server's graceful stop: an open
+      // stream is an in-flight response that only ends once the broker
+      // wakes its waiters, so stopping the server first waits forever.
+      const stopped = await Promise.race([
+        server.stop().then(() => true),
+        Bun.sleep(3_000).then(() => false),
+      ]);
+      await stream.close();
+      expect(stopped).toBe(true);
+    }));
 });

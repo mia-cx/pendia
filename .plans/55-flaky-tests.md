@@ -13,7 +13,7 @@ Replace narrow wall-clock assertions in the job worker NOTIFY test and the auth 
 
 ## TODOs
 
-- [ ] Rewrite the job worker test to prove NOTIFY handles the job before the ten-second poll fallback.
+- [x] Rewrite the job worker test to prove NOTIFY handles the job before the ten-second poll fallback.
   - Validation: run the focused NOTIFY wakeup test against disposable Postgres.
 - [ ] Give the blocking auth counter a CI-safe controlled lifetime while still proving the nonblocking counter cannot set `retryAfterSeconds`.
   - Validation: run the focused `retryAfter` test against disposable Postgres.
@@ -25,3 +25,4 @@ Replace narrow wall-clock assertions in the job worker NOTIFY test and the auth 
 - This run is unattended. Reasonable test-only choices will be made without an approval pause.
 - The NOTIFY test will retain a timeout only as a deadlock guard. A two-second guard remains well below its ten-second poll interval, so completion proves the notification caused the wakeup without treating 100 ms as a performance contract.
 - The rate-limit test will widen its controlled blocking lifetime from ten seconds to five minutes. That remains below the fresh nonblocking counter's 900-second lifetime, preserves the causal assertion, and gives a loaded runner enough scheduling margin.
+- `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55455/pendia bun test apps/server/src/jobs/worker.test.ts -t "wakes an idle worker through NOTIFY before the poll fallback"`: 1 pass, 7 filtered out, 0 fail.

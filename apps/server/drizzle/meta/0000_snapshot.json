@@ -1,5 +1,5 @@
 {
-  "id": "369f9f69-55e6-41f2-bfb5-f4ffb161e3f2",
+  "id": "5ac87272-cafa-4508-8fc3-67428611bf91",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -2094,7 +2094,7 @@
           "tableTo": "files",
           "columnsFrom": ["file_id", "version_id"],
           "columnsTo": ["id", "version_id"],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -2268,6 +2268,28 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "versions_source_file_rung_unique": {
+          "name": "versions_source_file_rung_unique",
+          "columns": [
+            {
+              "expression": "source_file_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "rung",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"versions\".\"origin\" = 'stored'",
           "concurrently": false,
           "method": "btree",
           "with": {}

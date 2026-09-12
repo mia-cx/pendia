@@ -501,7 +501,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       ).rejects.toMatchObject({ cause: { errno: "23503" } });
     }));
 
-  test("cascades Version ownership while preserving streams on File deletion and progress on Version deletion", () =>
+  test("checks stored timelines and rungs, cascades File streams and preserves progress on Version deletion", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const f = await fixture(db);
@@ -560,6 +560,19 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         })
         .returning();
       if (!timeline) throw new Error("Timeline missing.");
+      await db
+        .update(versions)
+        .set({ segmentTimelineId: timeline.id })
+        .where(eq(versions.id, version.id));
+      const [otherCut] = await db
+        .insert(segmentTimelines)
+        .values({
+          itemId: f.movie.id,
+          cutKey: "other-cut",
+          boundariesSeconds: [0, 3, 6],
+        })
+        .returning();
+      if (!otherCut) throw new Error("Other cut missing.");
       const storedValues = {
         segmentTimelineId: timeline.id,
         timelineAligned: true,
@@ -569,19 +582,37 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         rung: "720p",
         complete: true,
       } as const;
+      const storedVersion = {
+        itemId: f.movie.id,
+        itemKind: f.movie.kind,
+        libraryId: f.movie.libraryId,
+        label: "720p",
+        format: "video",
+        bytes: 50n,
+        ...storedValues,
+      } satisfies typeof versions.$inferInsert;
+      await expect(
+        db
+          .insert(versions)
+          .values({ ...storedVersion, segmentTimelineId: otherCut.id })
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
       const [stored] = await db
         .insert(versions)
-        .values({
-          itemId: f.movie.id,
-          itemKind: f.movie.kind,
-          libraryId: f.movie.libraryId,
-          label: "720p",
-          format: "video",
-          bytes: 50n,
-          ...storedValues,
-        })
+        .values(storedVersion)
         .returning();
       if (!stored) throw new Error("Stored Version missing.");
+      expect(stored.segmentTimelineId).toBe(timeline.id);
+      await expect(
+        db
+          .update(versions)
+          .set({ segmentTimelineId: otherCut.id })
+          .where(eq(versions.id, stored.id))
+          .execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23514" } });
+      await expect(
+        db.insert(versions).values(storedVersion).execute(),
+      ).rejects.toMatchObject({ cause: { errno: "23505" } });
       await expect(
         db
           .insert(files)
@@ -649,7 +680,6 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         await db.select().from(streams).orderBy(streams.fileId),
       ).toMatchObject([
         { versionId: version.id, fileId: secondFile.id, kind: "video" },
-        { versionId: version.id, fileId: null, kind: "video" },
       ]);
       expect(await db.select().from(versions)).toMatchObject([
         { id: version.id },
@@ -657,6 +687,9 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       expect(await db.select().from(files)).toMatchObject([
         { id: secondFile.id },
       ]);
+      await db.delete(files).where(eq(files.id, secondFile.id));
+      expect(await db.select().from(streams)).toEqual([]);
+      expect(await db.select().from(files)).toEqual([]);
       const mark = {
         userId: user.id,
         itemId: f.movie.id,

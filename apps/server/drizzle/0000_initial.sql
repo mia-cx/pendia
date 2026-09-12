@@ -438,7 +438,7 @@ ALTER TABLE "provider_ids" ADD CONSTRAINT "provider_ids_item_id_items_id_fk" FOR
 ALTER TABLE "provider_ids" ADD CONSTRAINT "provider_ids_contributor_id_contributors_id_fk" FOREIGN KEY ("contributor_id") REFERENCES "public"."contributors"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "segment_timelines" ADD CONSTRAINT "segment_timelines_item_id_items_id_fk" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "streams" ADD CONSTRAINT "streams_version_id_versions_id_fk" FOREIGN KEY ("version_id") REFERENCES "public"."versions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "streams" ADD CONSTRAINT "streams_file_version_fk" FOREIGN KEY ("file_id","version_id") REFERENCES "public"."files"("id","version_id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "streams" ADD CONSTRAINT "streams_file_version_fk" FOREIGN KEY ("file_id","version_id") REFERENCES "public"."files"("id","version_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "versions" ADD CONSTRAINT "versions_item_kind_fk" FOREIGN KEY ("item_id","item_kind") REFERENCES "public"."items"("id","kind") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "versions" ADD CONSTRAINT "versions_item_library_fk" FOREIGN KEY ("item_id","library_id") REFERENCES "public"."items"("id","library_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "versions" ADD CONSTRAINT "versions_source_file_fk" FOREIGN KEY ("source_file_id","item_id") REFERENCES "public"."files"("id","item_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -488,6 +488,7 @@ CREATE UNIQUE INDEX "streams_file_index_unique" ON "streams" USING btree ("file_
 CREATE UNIQUE INDEX "streams_version_index_unique" ON "streams" USING btree ("version_id","index") WHERE "streams"."file_id" is null;--> statement-breakpoint
 CREATE INDEX "versions_item_idx" ON "versions" USING btree ("item_id");--> statement-breakpoint
 CREATE INDEX "versions_source_file_idx" ON "versions" USING btree ("source_file_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "versions_source_file_rung_unique" ON "versions" USING btree ("source_file_id","rung") WHERE "versions"."origin" = 'stored';--> statement-breakpoint
 CREATE INDEX "favourites_recent_idx" ON "favourites" USING btree ("user_id","created_at" DESC NULLS LAST,"item_id");--> statement-breakpoint
 CREATE INDEX "progress_recent_idx" ON "progress" USING btree ("user_id","played_at" DESC NULLS LAST,"item_id");--> statement-breakpoint
 CREATE INDEX "progress_continue_idx" ON "progress" USING btree ("user_id","played_at" DESC NULLS LAST,"item_id") WHERE not "progress"."completed" and "progress"."position_seconds" > 0;--> statement-breakpoint
@@ -522,9 +523,22 @@ FOR EACH ROW EXECUTE FUNCTION require_fileless_stored_version();--> statement-br
 -- Keep the Item, Format and position when its Version disappears.
 ALTER TABLE "progress" DROP CONSTRAINT "progress_version_fk";--> statement-breakpoint
 ALTER TABLE "progress" ADD CONSTRAINT "progress_version_fk" FOREIGN KEY ("version_id","item_id","format") REFERENCES "public"."versions"("id","item_id","format") ON DELETE set null ("version_id") ON UPDATE no action;--> statement-breakpoint
--- Clear only the optional File reference when its container disappears.
-ALTER TABLE "streams" DROP CONSTRAINT "streams_file_version_fk";--> statement-breakpoint
-ALTER TABLE "streams" ADD CONSTRAINT "streams_file_version_fk" FOREIGN KEY ("file_id","version_id") REFERENCES "public"."files"("id","version_id") ON DELETE SET NULL ("file_id") ON UPDATE NO ACTION;--> statement-breakpoint
 -- Episode ranges include both endpoints and must not overlap within a season.
 ALTER TABLE "episodes" ADD CONSTRAINT "episodes_season_range_exclude"
-EXCLUDE USING gist ("season_id" WITH =, int4range("episode_number", coalesce("episode_end_number", "episode_number"), '[]') WITH &&);
+EXCLUDE USING gist ("season_id" WITH =, int4range("episode_number", coalesce("episode_end_number", "episode_number"), '[]') WITH &&);--> statement-breakpoint
+-- Stored encodes use the timeline of the Version that owns their source File.
+CREATE FUNCTION require_stored_source_timeline() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM files AS source_file
+    JOIN versions AS source_version ON source_version.id = source_file.version_id
+    WHERE source_file.id = NEW.source_file_id AND source_file.item_id = NEW.item_id
+      AND source_version.segment_timeline_id IS DISTINCT FROM NEW.segment_timeline_id
+  ) THEN
+    RAISE EXCEPTION 'Stored Version timeline must match its source Version' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$$;--> statement-breakpoint
+CREATE TRIGGER versions_stored_source_timeline BEFORE INSERT OR UPDATE ON versions
+FOR EACH ROW WHEN (NEW.origin = 'stored') EXECUTE FUNCTION require_stored_source_timeline();

@@ -157,6 +157,7 @@ export const versions = pgTable(
     format: format("format").notNull(),
     bytes: bigint("bytes", { mode: "bigint" }).notNull(),
     durationSeconds: doublePrecision("duration_seconds"),
+    // The migration checks stored timelines against the source File's Version.
     segmentTimelineId: uuid("segment_timeline_id"),
     timelineAligned: boolean("timeline_aligned").notNull().default(false),
     origin: versionOrigin("origin").notNull().default("imported"),
@@ -220,6 +221,9 @@ export const versions = pgTable(
     ),
     index("versions_item_idx").on(table.itemId),
     index("versions_source_file_idx").on(table.sourceFileId),
+    uniqueIndex("versions_source_file_rung_unique")
+      .on(table.sourceFileId, table.rung)
+      .where(sql`${table.origin} = 'stored'`),
   ],
 );
 
@@ -304,13 +308,12 @@ export const streams = pgTable(
     sampleRate: integer("sample_rate"),
   },
   (table) => [
-    // The migration narrows SET NULL to file_id so the Version remains attached.
     foreignKey({
       name: "streams_file_version_fk",
       columns: [table.fileId, table.versionId],
       foreignColumns: [files.id, files.versionId],
     })
-      .onDelete("set null")
+      .onDelete("cascade")
       .onUpdate("no action"),
     uniqueIndex("streams_file_index_unique")
       .on(table.fileId, table.index)

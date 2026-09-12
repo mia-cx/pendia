@@ -48,7 +48,11 @@ export function selectAdaptiveGroup(
             timeline.boundariesSeconds,
             version.keyframesSeconds,
             version.durationSeconds,
-          )) && videoPasses(version.video, client, cap),
+          )) &&
+      (version.origin !== "stored" ||
+        version.video.hdr === "sdr" ||
+        client.hdr.includes(version.video.hdr)) &&
+      videoPasses(version.video, client, cap),
   );
   for (const candidate of client.videoCodecs) {
     const variants = playable

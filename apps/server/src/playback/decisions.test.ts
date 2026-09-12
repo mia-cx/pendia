@@ -440,6 +440,8 @@ describe("decidePlayback video", () => {
       hdr: "sdr" | "hdr10";
       toneMap: "hdr10" | null;
       backend: "cpu" | "qsv";
+      width?: number;
+      height?: number;
     },
   ][] = [
     [
@@ -470,6 +472,37 @@ describe("decidePlayback video", () => {
     [
       "hevc main before main10",
       [{ codec: "hevc", profiles: ["main", "main10"] }],
+      {
+        codec: "hevc",
+        profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+    [
+      "split hevc profiles retain their dimension constraints",
+      [
+        { codec: "hevc", profiles: ["main"] },
+        { codec: "hevc", profiles: ["main10"], maxWidth: 640, maxHeight: 360 },
+      ],
+      {
+        codec: "hevc",
+        profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+        width: 640,
+        height: 360,
+      },
+    ],
+    [
+      "split hevc profiles spanning another codec",
+      [
+        { codec: "hevc", profiles: ["main"] },
+        { codec: "h264", profiles: ["high"] },
+        { codec: "hevc", profiles: ["main10"] },
+      ],
       {
         codec: "hevc",
         profile: "main10",

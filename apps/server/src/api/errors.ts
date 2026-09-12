@@ -62,7 +62,11 @@ export async function runApi<A>(
     throw new ORPCError(code, { message: reason });
   }
   console.error(
-    JSON.stringify({ level: "error", message: "api.request.failed" }),
+    JSON.stringify({
+      level: "error",
+      message: "api.request.failed",
+      error: Cause.pretty(exit.cause),
+    }),
   );
   throw new ORPCError("INTERNAL_SERVER_ERROR");
 }

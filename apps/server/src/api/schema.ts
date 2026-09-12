@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { maxPageSize } from "./pagination.ts";
 
 /** The kinds of library item the API exposes. */
 export const ItemKind = Schema.Literal("movie", "show", "season", "episode");
@@ -36,6 +37,20 @@ export const Me = Schema.Struct({
     id: Schema.UUID,
   }),
 });
+
+/** The page size input: REST sends a query string, RPC a number. */
+export const PageSize = Schema.Union(
+  Schema.Number,
+  Schema.NumberFromString,
+).pipe(
+  Schema.filter(
+    (size) => Number.isInteger(size) && size >= 1 && size <= maxPageSize,
+    {
+      message: () =>
+        `limit must be an integer from 1 to ${maxPageSize}, inclusive`,
+    },
+  ),
+);
 
 /** Builds a paginated connection shape over an item schema. */
 export function connection<A, I, R>(item: Schema.Schema<A, I, R>) {

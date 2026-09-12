@@ -1,5 +1,6 @@
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
 
 const defaultPort = 3000;
@@ -56,7 +57,10 @@ async function serveWeb(pathname: string, root: string): Promise<Response> {
 export function startApiServer(
   ready: () => Promise<boolean>,
   port = readPort(Bun.env.PENDIA_PORT),
-  auth?: ReturnType<typeof createAuthHandler>,
+  handlers: {
+    auth?: ReturnType<typeof createAuthHandler>;
+    api?: ReturnType<typeof createApiHandler>;
+  } = {},
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
 
@@ -76,10 +80,18 @@ export function startApiServer(
       }
 
       if (
-        auth &&
+        handlers.auth &&
         (pathname === "/api/auth" || pathname.startsWith("/api/auth/"))
       ) {
-        return auth(request, server.requestIP(request)?.address ?? "");
+        return handlers.auth(request, server.requestIP(request)?.address ?? "");
+      }
+
+      if (handlers.api && !isApplicationPath(pathname)) {
+        const response = await handlers.api(
+          request,
+          server.requestIP(request)?.address ?? "",
+        );
+        if (response !== undefined) return response;
       }
 
       if (isApplicationPath(pathname)) {

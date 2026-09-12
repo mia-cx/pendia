@@ -59,10 +59,16 @@ describe("api errors", () => {
       expect(error.status).toBe(500);
       expect(error.message).not.toContain(secret);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(JSON.parse(String(spy.mock.calls[0]?.[0]))).toEqual({
+      const line = JSON.parse(String(spy.mock.calls[0]?.[0])) as {
+        level: string;
+        message: string;
+        error: string;
+      };
+      expect(line).toMatchObject({
         level: "error",
         message: "api.request.failed",
       });
+      expect(line.error).toContain(secret);
     } finally {
       spy.mockRestore();
     }
@@ -81,6 +87,10 @@ describe("api errors", () => {
       );
       expect(error.status).toBe(500);
       expect(error.message).not.toContain(secret);
+      const line = JSON.parse(String(spy.mock.calls[0]?.[0])) as {
+        error: string;
+      };
+      expect(line.error).toContain(secret);
     } finally {
       spy.mockRestore();
     }

@@ -90,11 +90,13 @@ export async function viewableLibraryIds(
   userId: string,
 ): Promise<string[]> {
   const rows = await db.select({ id: libraries.id }).from(libraries);
-  const ids: string[] = [];
-  for (const row of rows) {
-    if (await checkPermission(db, userId, "view", row.id)) ids.push(row.id);
-  }
-  return ids;
+  // The checks are independent reads, so they run concurrently. A set-based
+  // join is deliberately not used: it would duplicate checkPermission's
+  // precedence rules, which must stay single-sourced.
+  const allowed = await Promise.all(
+    rows.map((row) => checkPermission(db, userId, "view", row.id)),
+  );
+  return rows.filter((_, index) => allowed[index]).map((row) => row.id);
 }
 
 /** Throws FORBIDDEN when an enabled user lacks a permission. */

@@ -1,5 +1,6 @@
 import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { createAuthHandler } from "./auth/http.ts";
 
 const defaultPort = 3000;
 const defaultWebRoot = fileURLToPath(
@@ -55,12 +56,13 @@ async function serveWeb(pathname: string, root: string): Promise<Response> {
 export function startApiServer(
   ready: () => Promise<boolean>,
   port = readPort(Bun.env.PENDIA_PORT),
+  auth?: ReturnType<typeof createAuthHandler>,
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
 
   return Bun.serve({
     port,
-    async fetch(request) {
+    async fetch(request, server) {
       const { pathname } = new URL(request.url);
 
       if (pathname === "/healthz") {
@@ -71,6 +73,13 @@ export function startApiServer(
         return (await ready())
           ? Response.json({ status: "ready" })
           : Response.json({ status: "database unavailable" }, { status: 503 });
+      }
+
+      if (
+        auth &&
+        (pathname === "/api/auth" || pathname.startsWith("/api/auth/"))
+      ) {
+        return auth(request, server.requestIP(request)?.address ?? "");
       }
 
       if (isApplicationPath(pathname)) {

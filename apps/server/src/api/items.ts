@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Schema } from "effect";
 import { Effect } from "effect";
+import { AuthError } from "../auth/errors.ts";
 import { requirePermission, viewableLibraryIds } from "../auth/permissions.ts";
 import type { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
@@ -47,20 +48,15 @@ export function listItemCards(
 ) {
   return Effect.gen(function* () {
     // Without a library the list is scoped to every library the caller may view.
-    let scope;
-    if (input.libraryId === undefined) {
-      const viewable = yield* fromHost(() =>
-        viewableLibraryIds(db, caller.user.id),
-      );
-      if (viewable.length === 0)
-        return yield* new ApiError({ code: "FORBIDDEN" });
-      scope = inArray(items.libraryId, viewable);
-    } else {
-      yield* fromHost(() =>
-        requirePermission(db, caller.user.id, "view", input.libraryId),
-      );
-      scope = eq(items.libraryId, input.libraryId);
-    }
+    const scope = yield* fromHost(async () => {
+      if (input.libraryId !== undefined) {
+        await requirePermission(db, caller.user.id, "view", input.libraryId);
+        return eq(items.libraryId, input.libraryId);
+      }
+      const viewable = await viewableLibraryIds(db, caller.user.id);
+      if (viewable.length === 0) throw new AuthError("FORBIDDEN");
+      return inArray(items.libraryId, viewable);
+    });
     const limit = input.limit ?? defaultPageSize;
     const key =
       input.cursor === undefined ? undefined : decodeCursor(input.cursor);

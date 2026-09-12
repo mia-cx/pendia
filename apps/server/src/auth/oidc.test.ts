@@ -42,7 +42,7 @@ const rsa = {
 
 async function startProvider(
   claims: ProviderClaims,
-  options: { omitUserInfo?: boolean } = {},
+  options: { omitUserInfo?: boolean; userInfo?: ProviderClaims } = {},
 ) {
   const signing = await crypto.subtle.generateKey(rsa, true, [
     "sign",
@@ -53,11 +53,19 @@ async function startProvider(
   const jwk = { ...exported, kid: "pendia-test", alg: "RS256", use: "sig" };
   const pending = new Map<
     string,
-    { nonce: string; challenge: string; redirectUri: string }
+    {
+      nonce: string;
+      challenge: string;
+      redirectUri: string;
+      claims: { idToken: ProviderClaims; userInfo: ProviderClaims | null };
+    }
   >();
-  const tokens = new Set<string>();
+  const tokens = new Map<string, ProviderClaims>();
   const provider = {
-    claims,
+    claims: {
+      idToken: claims,
+      userInfo: options.userInfo ?? null,
+    },
     rogueSign: false,
     observed: {
       discovery: 0,
@@ -135,7 +143,12 @@ async function startProvider(
         )
           return json({ error: "invalid_request" }, 400);
         const code = randomBytes(16).toString("hex");
-        pending.set(code, { nonce, challenge, redirectUri: redirect });
+        pending.set(code, {
+          nonce,
+          challenge,
+          redirectUri: redirect,
+          claims: provider.claims,
+        });
         const target = new URL(redirect);
         target.searchParams.set("code", code);
         target.searchParams.set("state", state);
@@ -170,8 +183,8 @@ async function startProvider(
           return json({ error: "invalid_grant" }, 400);
         provider.observed.verifierOk = true;
         const accessToken = randomBytes(24).toString("base64url");
-        tokens.add(accessToken);
-        const current = provider.claims;
+        tokens.set(accessToken, grant.claims.userInfo ?? grant.claims.idToken);
+        const current = grant.claims.idToken;
         const idToken = await sign({
           iss: issuer,
           sub: current.sub,
@@ -198,15 +211,14 @@ async function startProvider(
       if (url.pathname === "/userinfo") {
         provider.observed.userinfo += 1;
         const authorization = request.headers.get("authorization") ?? "";
-        if (!tokens.has(authorization.replace(/^Bearer\s+/i, "")))
-          return json({ error: "invalid_token" }, 401);
-        const current = provider.claims;
+        const served = tokens.get(authorization.replace(/^Bearer\s+/i, ""));
+        if (!served) return json({ error: "invalid_token" }, 401);
         return json({
-          sub: current.sub,
-          email: current.email,
-          email_verified: current.emailVerified,
-          preferred_username: current.preferredUsername,
-          name: current.name,
+          sub: served.sub,
+          email: served.email,
+          email_verified: served.emailVerified,
+          preferred_username: served.preferredUsername,
+          name: served.name,
         });
       }
       return new Response("not found", { status: 404 });
@@ -216,8 +228,8 @@ async function startProvider(
   return {
     issuer: provider.issuer,
     observed: provider.observed,
-    setClaims(next: ProviderClaims) {
-      provider.claims = next;
+    setClaims(next: ProviderClaims, userInfo: ProviderClaims | null = null) {
+      provider.claims = { idToken: next, userInfo };
     },
     signWithRogue() {
       provider.rogueSign = true;
@@ -256,10 +268,15 @@ function oidcCallback(flow: { callbackUrl?: string; flowCookie: string }) {
   });
 }
 
-async function configureOidc(db: Database, issuer: string) {
+async function configureOidc(
+  db: Database,
+  issuer: string,
+  trustedProxyAddresses: string[] = [],
+) {
   await db.insert(settings).values({
     key: "auth",
     value: {
+      trustedProxyAddresses,
       oidc: {
         issuer,
         clientId: "pendia",
@@ -757,6 +774,159 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         expect(stored?.oidcIssuer).toBeNull();
         expect(await db.select().from(users)).toHaveLength(2);
         expect(await db.select().from(sessions)).toHaveLength(0);
+      } finally {
+        await server.stop();
+        await provider.stop();
+      }
+    }));
+
+  test("a differing unverified UserInfo email cannot link an account", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const provider = await startProvider(
+        {
+          sub: "subject-mismatch",
+          email: "verified@example.com",
+          emailVerified: true,
+        },
+        {
+          userInfo: {
+            sub: "subject-mismatch",
+            email: "other@example.com",
+          },
+        },
+      );
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        await configureOidc(db, provider.issuer);
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "secret",
+        });
+        const verified = await createLocalUser(db, admin.id, {
+          username: "verified",
+          password: "pass",
+        });
+        await db
+          .update(users)
+          .set({ email: "verified@example.com" })
+          .where(eq(users.id, verified.id));
+        const other = await createLocalUser(db, admin.id, {
+          username: "other",
+          password: "pass",
+        });
+        await db
+          .update(users)
+          .set({ email: "other@example.com" })
+          .where(eq(users.id, other.id));
+
+        const callback = await oidcCallback(await oidcLogin(base));
+        expect(callback.status).toBe(401);
+        expect(
+          ((await callback.json()) as { error: { code: string } }).error.code,
+        ).toBe("OIDC_FAILED");
+        const stored = await db.select().from(users);
+        for (const row of stored) {
+          expect(row.oidcIssuer).toBeNull();
+          expect(row.oidcSubject).toBeNull();
+        }
+        expect(await db.select().from(sessions)).toHaveLength(0);
+      } finally {
+        await server.stop();
+        await provider.stop();
+      }
+    }));
+
+  test("a trusted proxy forwarding HTTPS yields an https callback", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const provider = await startProvider({
+        sub: "proxied-subject",
+        email: "proxied@example.com",
+        emailVerified: true,
+      });
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        await configureOidc(db, provider.issuer, ["127.0.0.1"]);
+        await setupAdmin(db, { username: "admin", password: "secret" });
+
+        const params = new URLSearchParams({
+          clientName: device.clientName,
+          deviceId: device.deviceId,
+          deviceName: device.deviceName,
+        });
+        const start = await fetch(`${base}/api/auth/oidc/login?${params}`, {
+          redirect: "manual",
+          headers: { "x-forwarded-proto": "https" },
+        });
+        expect(start.status).toBe(302);
+        const location = new URL(start.headers.get("location") ?? "");
+        expect(location.searchParams.get("redirect_uri")).toBe(
+          `https://127.0.0.1:${server.apiServer?.port}/api/auth/oidc/callback`,
+        );
+        const cookie = start.headers.get("set-cookie") ?? "";
+        expect(cookie).toContain("pendia_oidc_flow=");
+        expect(cookie).toContain("Secure");
+      } finally {
+        await server.stop();
+        await provider.stop();
+      }
+    }));
+
+  test("concurrent invited signups with the same username both succeed", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const provider = await startProvider({
+        sub: "twin-1",
+        email: "one@example.com",
+        emailVerified: true,
+        preferredUsername: "Same Name",
+      });
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        await configureOidc(db, provider.issuer);
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "secret",
+        });
+        const first = await createInvite(db, admin.id, {
+          email: "one@example.com",
+          expiresInSeconds: 600,
+        });
+        const second = await createInvite(db, admin.id, {
+          email: "two@example.com",
+          expiresInSeconds: 600,
+        });
+        const flowOne = await oidcLogin(base, { invite: first.token });
+        provider.setClaims({
+          sub: "twin-2",
+          email: "two@example.com",
+          emailVerified: true,
+          preferredUsername: "Same Name",
+        });
+        const flowTwo = await oidcLogin(base, { invite: second.token });
+
+        const [callbackOne, callbackTwo] = await Promise.all([
+          oidcCallback(flowOne),
+          oidcCallback(flowTwo),
+        ]);
+        expect(callbackOne.status).toBe(200);
+        expect(callbackTwo.status).toBe(200);
+        const bodyOne = (await callbackOne.json()) as {
+          user: { id: string; username: string };
+        };
+        const bodyTwo = (await callbackTwo.json()) as {
+          user: { id: string; username: string };
+        };
+        const usernames = [bodyOne.user.username, bodyTwo.user.username];
+        expect(new Set(usernames).size).toBe(2);
+        expect(usernames).toContain("same-name");
+        const suffixed = usernames.find((name) => name !== "same-name");
+        expect(suffixed).toMatch(/^same-name-[0-9a-f]{8}$/);
+        expect(await db.select().from(sessions)).toHaveLength(2);
       } finally {
         await server.stop();
         await provider.stop();

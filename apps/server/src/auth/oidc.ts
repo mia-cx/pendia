@@ -3,7 +3,6 @@ import { and, eq, sql } from "drizzle-orm";
 import * as oauth from "oauth4webapi";
 import type { Database } from "../db/client.ts";
 import { groups, userGroups, users } from "../db/schema/index.ts";
-import { publicUserFields } from "./accounts.ts";
 import { AuthError, postgresCode } from "./errors.ts";
 import { claimInvite } from "./invites.ts";
 import { issueSession } from "./sessions.ts";
@@ -137,11 +136,38 @@ function pickString(primary: unknown, fallback: unknown) {
   return value;
 }
 
-function pickBoolean(primary: unknown, fallback: unknown) {
-  const value = primary === undefined ? fallback : primary;
-  if (value === undefined) return undefined;
+function strictString(value: unknown): string {
+  if (typeof value !== "string") failed();
+  return value;
+}
+
+function strictBoolean(value: unknown): boolean {
   if (typeof value !== "boolean") failed();
   return value;
+}
+
+function pickEmail(
+  idClaims: { email?: unknown; email_verified?: unknown },
+  userInfo: oauth.UserInfoResponse | undefined,
+) {
+  const idEmail =
+    idClaims.email === undefined ? undefined : strictString(idClaims.email);
+  const idVerified =
+    idClaims.email_verified === undefined
+      ? undefined
+      : strictBoolean(idClaims.email_verified);
+  if (userInfo === undefined || userInfo.email === undefined)
+    return { email: idEmail, emailVerified: idVerified };
+  const infoEmail = strictString(userInfo.email);
+  if (userInfo.email_verified !== undefined)
+    return {
+      email: infoEmail,
+      emailVerified: strictBoolean(userInfo.email_verified),
+    };
+  const same =
+    idEmail !== undefined &&
+    idEmail.trim().toLowerCase() === infoEmail.trim().toLowerCase();
+  return { email: infoEmail, emailVerified: same ? idVerified : false };
 }
 
 function flowDeviceId(value: unknown): string {
@@ -249,25 +275,27 @@ export async function startOidcLogin(
   }
 }
 
-async function availableUsername(
-  db: Pick<Database, "select">,
-  preferredUsername: string | undefined,
-  email: string,
-) {
+function constraintName(error: unknown): string | undefined {
+  let current = error;
+  while (current && typeof current === "object") {
+    const record = current as Record<string, unknown>;
+    if (typeof record.constraint_name === "string")
+      return record.constraint_name;
+    if (typeof record.constraint === "string") return record.constraint;
+    current = record.cause;
+  }
+  return undefined;
+}
+
+function usernameBase(preferredUsername: string | undefined, email: string) {
   const source = preferredUsername?.trim() || email.split("@")[0] || "";
-  const base =
+  return (
     source
       .toLowerCase()
       .replace(/[^a-z0-9_.-]+/g, "-")
       .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")
-      .slice(0, 64) || "user";
-  const [taken] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(sql`lower(${users.username}) = ${base}`)
-    .limit(1);
-  if (!taken) return base;
-  return `${base.slice(0, 55)}-${randomBytes(4).toString("hex")}`;
+      .slice(0, 64) || "user"
+  );
 }
 
 /** Finishes an OIDC flow and returns a linked user's first device session. */
@@ -319,11 +347,7 @@ export async function finishOidcLogin(
     }
     identity = {
       sub: idClaims.sub,
-      email: pickString(userInfo?.email, idClaims.email),
-      emailVerified: pickBoolean(
-        userInfo?.email_verified,
-        idClaims.email_verified,
-      ),
+      ...pickEmail(idClaims, userInfo),
       preferredUsername: pickString(
         userInfo?.preferred_username,
         idClaims.preferred_username,
@@ -401,31 +425,49 @@ export async function finishOidcLogin(
         .limit(1);
       if (!members)
         throw new Error("Seeded users group missing; run migrations first.");
-      const username = await availableUsername(
-        tx,
-        identity.preferredUsername,
-        email,
-      );
+      const base = usernameBase(identity.preferredUsername, email);
+      const candidates = [
+        base,
+        ...Array.from(
+          { length: 3 },
+          () => `${base.slice(0, 55)}-${randomBytes(4).toString("hex")}`,
+        ),
+      ];
       const displayName = (
         identity.name?.trim() ||
         identity.preferredUsername?.trim() ||
         email
       ).slice(0, 128);
-      const [user] = await tx
-        .insert(users)
-        .values({
-          username,
-          displayName,
-          email,
-          oidcIssuer: config.issuer.href,
-          oidcSubject: identity.sub,
-        })
-        .returning(publicUserFields);
-      if (!user) throw new Error("User insert returned no row.");
-      await tx
-        .insert(userGroups)
-        .values({ userId: user.id, groupId: members.id });
-      return issueSession(tx, user.id, device, settings.sessionMaxAgeSeconds);
+      let userId: string | undefined;
+      for (const username of candidates) {
+        try {
+          const [inserted] = await tx.transaction((nested) =>
+            nested
+              .insert(users)
+              .values({
+                username,
+                displayName,
+                email,
+                oidcIssuer: config.issuer.href,
+                oidcSubject: identity.sub,
+              })
+              .returning({ id: users.id }),
+          );
+          if (inserted) {
+            userId = inserted.id;
+            break;
+          }
+        } catch (error) {
+          if (
+            postgresCode(error) !== "23505" ||
+            constraintName(error) !== "users_username_unique"
+          )
+            throw error;
+        }
+      }
+      if (userId === undefined) failed();
+      await tx.insert(userGroups).values({ userId, groupId: members.id });
+      return issueSession(tx, userId, device, settings.sessionMaxAgeSeconds);
     });
   } catch (error) {
     if (postgresCode(error) === "23505") failed();

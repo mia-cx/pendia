@@ -139,6 +139,12 @@ function checkOrigin(request: Request, secure: boolean): void {
   if (origin !== expected) throw new AuthError("FORBIDDEN");
 }
 
+function effectiveUrl(request: Request, secure: boolean) {
+  const url = new URL(request.url);
+  url.protocol = secure ? "https:" : "http:";
+  return url;
+}
+
 function requiredQuery(url: URL, name: string): string {
   const value = url.searchParams.get(name);
   if (value === null) throw new AuthError("INVALID_INPUT");
@@ -317,7 +323,7 @@ export function createAuthHandler(db: Database) {
         }
         case "/api/auth/oidc/login": {
           if (!config.oidc) throw new AuthError("NOT_FOUND");
-          const url = new URL(request.url);
+          const url = effectiveUrl(request, identity.secure);
           const result = await startOidcLogin(
             config.oidc,
             new URL(oidcFlowPath, url).href,
@@ -346,7 +352,7 @@ export function createAuthHandler(db: Database) {
             const result = await finishOidcLogin(
               db,
               config.oidc,
-              new URL(request.url),
+              effectiveUrl(request, identity.secure),
               flow,
             );
             const headers = new Headers();

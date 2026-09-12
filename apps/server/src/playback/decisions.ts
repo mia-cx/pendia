@@ -74,8 +74,19 @@ export function videoPasses(
   );
 }
 
-function hdrOutputProfile(codec: string) {
-  return codec === "hevc" ? "main10" : codec === "av1" ? "main" : null;
+const hdrProfiles: Readonly<Record<string, readonly string[]>> = {
+  h264: ["high10", "high422", "high444"],
+  hevc: ["main10", "main12"],
+  av1: ["main", "high", "professional"],
+  vp9: ["2", "3"],
+};
+
+function hdrOutputProfile(candidate: ClientProfile["videoCodecs"][number]) {
+  const profiles = hdrProfiles[candidate.codec] ?? [];
+  return candidate.profiles === undefined
+    ? (profiles[0] ?? null)
+    : (candidate.profiles.find((profile) => profiles.includes(profile)) ??
+        null);
 }
 
 function decideVideo(
@@ -102,28 +113,18 @@ function decideVideo(
     ...new Set(client.videoCodecs.map((entry) => entry.codec)),
   ].flatMap((codec) => {
     const entries = client.videoCodecs.filter((entry) => entry.codec === codec);
-    const profile = hdrOutputProfile(codec);
-    if (
-      hdr === "sdr" ||
-      hdr === "dolby-vision" ||
-      !client.hdr.includes(hdr) ||
-      profile === null
-    )
+    if (hdr === "sdr" || hdr === "dolby-vision" || !client.hdr.includes(hdr))
       return entries;
     return entries.toSorted(
       (a, b) =>
-        Number(b.profiles?.includes(profile) ?? true) -
-        Number(a.profiles?.includes(profile) ?? true),
+        Number(hdrOutputProfile(b) !== null) -
+        Number(hdrOutputProfile(a) !== null),
     );
   });
   for (const candidate of candidates) {
     if (candidate.profiles?.length === 0) continue;
-    const hdrProfile = hdrOutputProfile(candidate.codec);
-    const preservesHdr =
-      hdr !== "dolby-vision" &&
-      hdrProfile !== null &&
-      (candidate.profiles === undefined ||
-        candidate.profiles.includes(hdrProfile));
+    const hdrProfile = hdrOutputProfile(candidate);
+    const preservesHdr = hdr !== "dolby-vision" && hdrProfile !== null;
     const toneMap = forceCpu
       ? ("dolby-vision" as const)
       : hdr !== "sdr" && (!client.hdr.includes(hdr) || !preservesHdr)

@@ -556,6 +556,29 @@ describe("decidePlayback video", () => {
     },
   );
 
+  test.each([
+    ["av1", "high"],
+    ["h264", "high10"],
+  ])("preserves HDR with accepted %s profile %s", (codec, profile) => {
+    const result = decidePlayback(
+      { ...source, video: { ...dvVideo, dvProfile: 8 } },
+      {
+        ...client,
+        videoCodecs: [{ codec, profiles: [profile] }],
+        hdr: ["sdr", "hdr10", "dolby-vision"],
+      },
+      { isLan: false, sessionRequest: 3_000_000 },
+    );
+    expect(result.video).toMatchObject({
+      action: "transcode",
+      codec,
+      profile,
+      hdr: "hdr10",
+      toneMap: null,
+      backend: "cpu",
+    });
+  });
+
   const dvBaseLayerCases: [
     number,
     ClientProfile["hdr"],

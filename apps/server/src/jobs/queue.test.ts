@@ -15,6 +15,24 @@ async function databaseNow(db: Database) {
   return row.now;
 }
 
+async function claimWhenReady(queue: ReturnType<typeof createJobQueue>) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const job = await queue.claim();
+    if (job) return job;
+    await Bun.sleep(10);
+  }
+  throw new Error("No claimable job before the deadline.");
+}
+
+test("rejects non-positive or non-finite retry delays", () => {
+  const db = {} as Database;
+  for (const retryDelayMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
+    expect(() => createJobQueue(db, { retryDelayMs })).toThrow(
+      "Retry delay must be positive and finite.",
+    );
+});
+
 describe.skipIf(!databaseUrl)("Job queue", () => {
   test("enqueues typed payloads and lists them with filters and paging", () =>
     withDatabase(async (db) => {
@@ -155,6 +173,111 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
       expect(
         (await listJobs(db, { state: "queued" })).map((job) => job.id),
       ).toEqual([future.id]);
+    }));
+
+  test("retries failures with exponential backoff and fails at max attempts", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db, { retryDelayMs: 200 });
+      const job = await queue.enqueue(probePayload());
+      const first = await queue.claim();
+      if (!first) throw new Error("First claim missing.");
+      expect(first.attempts).toBe(1);
+      const beforeFirst = await databaseNow(db);
+      const retried = await queue.fail(first, "first error");
+      const afterFirst = await databaseNow(db);
+      expect(retried).toMatchObject({
+        id: job.id,
+        state: "queued",
+        attempts: 1,
+        error: "first error",
+      });
+      expect(retried?.runAfter.getTime()).toBeGreaterThanOrEqual(
+        beforeFirst.getTime() + 200 - 1,
+      );
+      expect(retried?.runAfter.getTime()).toBeLessThanOrEqual(
+        afterFirst.getTime() + 200 + 1,
+      );
+      expect(await queue.claim()).toBeUndefined();
+
+      const second = await claimWhenReady(queue);
+      expect(second.attempts).toBe(2);
+      const beforeSecond = await databaseNow(db);
+      const retriedSecond = await queue.fail(second, new Error("second error"));
+      const afterSecond = await databaseNow(db);
+      expect(retriedSecond).toMatchObject({
+        id: job.id,
+        state: "queued",
+        attempts: 2,
+        error: "second error",
+      });
+      expect(retriedSecond?.runAfter.getTime()).toBeGreaterThanOrEqual(
+        beforeSecond.getTime() + 400 - 1,
+      );
+      expect(retriedSecond?.runAfter.getTime()).toBeLessThanOrEqual(
+        afterSecond.getTime() + 400 + 1,
+      );
+      expect(await queue.claim()).toBeUndefined();
+
+      const third = await claimWhenReady(queue);
+      expect(third.attempts).toBe(3);
+      const failed = await queue.fail(third, new Error("final error"));
+      expect(failed).toMatchObject({
+        id: job.id,
+        state: "failed",
+        attempts: 3,
+        error: "final error",
+      });
+      expect(await queue.claim()).toBeUndefined();
+      expect(await listJobs(db, { state: "failed" })).toMatchObject([
+        { id: job.id, state: "failed", attempts: 3, error: "final error" },
+      ]);
+    }));
+
+  test("completes a retried attempt and rejects stale attempts", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db, { retryDelayMs: 20 });
+      const job = await queue.enqueue(probePayload());
+      const first = await queue.claim();
+      if (!first) throw new Error("First claim missing.");
+      await queue.fail(first, "old error");
+      const second = await claimWhenReady(queue);
+      expect(second.attempts).toBe(2);
+      expect(await queue.complete(first)).toBeUndefined();
+      expect(await queue.fail(first, "stale error")).toBeUndefined();
+      expect(await listJobs(db, { state: "running" })).toMatchObject([
+        { id: job.id, attempts: 2, error: "old error" },
+      ]);
+      const completed = await queue.complete(second);
+      expect(completed).toMatchObject({
+        id: job.id,
+        state: "completed",
+        attempts: 2,
+        error: "old error",
+      });
+      expect(await queue.fail(second, "late error")).toBeUndefined();
+      expect(await queue.complete(second)).toBeUndefined();
+      expect(await queue.claim()).toBeUndefined();
+    }));
+
+  test("caps the retry delay at sixty seconds", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db, { retryDelayMs: 120_000 });
+      await queue.enqueue(probePayload());
+      const first = await queue.claim();
+      if (!first) throw new Error("First claim missing.");
+      const before = await databaseNow(db);
+      const retried = await queue.fail(first, "boom");
+      const after = await databaseNow(db);
+      expect(retried?.state).toBe("queued");
+      expect(retried?.runAfter.getTime()).toBeGreaterThanOrEqual(
+        before.getTime() + 60_000 - 1,
+      );
+      expect(retried?.runAfter.getTime()).toBeLessThanOrEqual(
+        after.getTime() + 60_000 + 1,
+      );
     }));
 
   test("claims nothing when the type filter is empty", () =>

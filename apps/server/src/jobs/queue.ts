@@ -13,9 +13,17 @@ type EnqueueOptions = Partial<
 >;
 
 const claimLockKey = 0x70656e646a6fn;
+const maxRetryDelayMs = 60_000;
+
+type QueueOptions = { retryDelayMs?: number };
 
 /** Creates queue operations on the shared Postgres database. */
-export function createJobQueue(db: Database) {
+export function createJobQueue(
+  db: Database,
+  { retryDelayMs = 1_000 }: QueueOptions = {},
+) {
+  if (!Number.isFinite(retryDelayMs) || retryDelayMs <= 0)
+    throw new Error("Retry delay must be positive and finite.");
   return {
     /** Enqueues a typed payload with its scheduling options. */
     async enqueue(payload: JobPayload, options: EnqueueOptions = {}) {
@@ -59,6 +67,46 @@ export function createJobQueue(db: Database) {
           .returning();
         return claimed;
       });
+    },
+
+    /** Completes only the currently running attempt. */
+    async complete(job: Pick<Job, "id" | "attempts">) {
+      const [completed] = await db
+        .update(jobs)
+        .set({ state: "completed" })
+        .where(
+          and(
+            eq(jobs.id, job.id),
+            eq(jobs.state, "running"),
+            eq(jobs.attempts, job.attempts),
+          ),
+        )
+        .returning();
+      return completed;
+    },
+
+    /** Retains the error and schedules a retry unless attempts are exhausted. */
+    async fail(job: Pick<Job, "id" | "attempts">, error: unknown) {
+      const delay = Math.min(
+        maxRetryDelayMs,
+        retryDelayMs * 2 ** (job.attempts - 1),
+      );
+      const [failed] = await db
+        .update(jobs)
+        .set({
+          state: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then 'queued'::job_state else 'failed'::job_state end`,
+          error: error instanceof Error ? error.message : String(error),
+          runAfter: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then clock_timestamp() + ${delay} * interval '1 millisecond' else ${jobs.runAfter} end`,
+        })
+        .where(
+          and(
+            eq(jobs.id, job.id),
+            eq(jobs.state, "running"),
+            eq(jobs.attempts, job.attempts),
+          ),
+        )
+        .returning();
+      return failed;
     },
   };
 }

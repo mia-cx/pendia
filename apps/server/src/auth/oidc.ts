@@ -147,7 +147,7 @@ function strictBoolean(value: unknown): boolean {
 }
 
 function pickEmail(
-  idClaims: { email?: unknown; email_verified?: unknown },
+  idClaims: oauth.IDToken,
   userInfo: oauth.UserInfoResponse | undefined,
 ) {
   const idEmail =

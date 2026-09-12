@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { type JobPayload, jobs } from "../db/schema/index.ts";
@@ -206,6 +206,41 @@ describe.skipIf(!databaseUrl)("Job worker", () => {
         expect(calls).toBe(2);
       } finally {
         await worker.stop();
+      }
+    }));
+
+  test("wakes for a scheduled retry before the poll interval despite host clock offset", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const calls: number[] = [];
+      const registry = createJobRegistry();
+      registry.register("probe", async () => {
+        calls.push(performance.now());
+        if (calls.length === 1) throw new Error("retry");
+      });
+      const queue = createJobQueue(db);
+      const worker = await startJobWorker(db, registry, { concurrency: 1 });
+      const realNow = Date.now;
+      const clock = spyOn(Date, "now").mockImplementation(
+        () => realNow() + 60_000,
+      );
+      try {
+        const job = await queue.enqueue(probePayload(), { maxAttempts: 2 });
+        const completed = await waitForJobState(db, job.id, "completed");
+        expect(calls).toHaveLength(2);
+        expect(completed).toMatchObject({ attempts: 2, error: "retry" });
+        const first = calls[0];
+        const second = calls[1];
+        if (first === undefined || second === undefined)
+          throw new Error("Retry calls missing.");
+        expect(second - first).toBeGreaterThanOrEqual(990);
+        expect(second - first).toBeLessThan(2_000);
+      } finally {
+        try {
+          await worker.stop();
+        } finally {
+          clock.mockRestore();
+        }
       }
     }));
 

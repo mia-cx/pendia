@@ -60,7 +60,7 @@ export function createJobQueue(
             and(
               eq(jobs.state, "queued"),
               lt(jobs.attempts, jobs.maxAttempts),
-              lte(jobs.runAfter, sql`now()`),
+              lte(jobs.runAfter, sql`statement_timestamp()`),
               inArray(jobs.type, [...types]),
               or(
                 isNull(jobs.concurrencyKey),
@@ -118,7 +118,7 @@ export function createJobQueue(
           ),
         )
         .returning();
-      return failed;
+      return failed ? { ...failed, retryDelayMs: delay } : undefined;
     },
   };
 }

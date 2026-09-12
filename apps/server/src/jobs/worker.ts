@@ -32,6 +32,7 @@ export async function startJobWorker(
   let stopped = false;
   let generation = 0;
   const waiters = new Set<() => void>();
+  const retryTimers = new Set<ReturnType<typeof setTimeout>>();
   function wake() {
     generation++;
     for (const finish of waiters) finish();
@@ -52,7 +53,14 @@ export async function startJobWorker(
     try {
       await registry.run(job);
     } catch (error) {
-      await queue.fail(job, error);
+      const retried = await queue.fail(job, error);
+      if (!stopped && retried?.state === "queued") {
+        const timer = setTimeout(() => {
+          retryTimers.delete(timer);
+          wake();
+        }, retried.retryDelayMs);
+        retryTimers.add(timer);
+      }
       return;
     }
     await queue.complete(job);
@@ -82,6 +90,8 @@ export async function startJobWorker(
       stopping ??= (async () => {
         stopped = true;
         wake();
+        for (const timer of retryTimers) clearTimeout(timer);
+        retryTimers.clear();
         try {
           await Promise.all(loops);
         } finally {

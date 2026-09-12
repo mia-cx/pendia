@@ -54,6 +54,7 @@ The default maxAttempts is three. Exhausted jobs stay failed with their error st
 Completion and failure only update the matching running attempt. A later successful attempt retains the previous error.
 
 Enqueue commits the row and NOTIFY together. LISTEN wakes idle workers; a five-second poll catches missed notifications and future jobs.
+A local timer wakes the worker when its failed job becomes eligible again.
 `startJobWorker` accepts concurrency, pollIntervalMs, queueOptions, and onError options.
 `startPendia` accepts workerOptions and an optional registry for an embedded server.
 On SIGTERM, shutdown stops new claim loops and drains active handlers before closing Postgres.

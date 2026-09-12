@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { sql } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import type { JobPayload } from "../db/schema/index.ts";
@@ -368,6 +369,44 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
       await queue.complete(first);
       const released = await queue.claim();
       expect(released?.id).toBe(a2.id);
+    }));
+
+  test("claim rechecks eligibility after waiting on the claim lock", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const second = createDatabase(url);
+      let pending: ReturnType<typeof queue.claim> | undefined;
+      let expectedId: string | undefined;
+      try {
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(${0x70656e646a6fn})`,
+          );
+          const job = await queue.enqueue(probePayload(), {
+            runAfter: new Date((await databaseNow(db)).getTime() + 250),
+          });
+          expectedId = job.id;
+          const secondQueue = createJobQueue(second.db);
+          pending = secondQueue.claim();
+          const deadline = Date.now() + 1_000;
+          for (;;) {
+            const rows = await db.$client<
+              { count: number }[]
+            >`select count(*)::integer as count from pg_locks where locktype = 'advisory' and not granted and database = (select oid from pg_database where datname = current_database())`;
+            if ((rows[0]?.count ?? 0) > 0) break;
+            if (Date.now() > deadline)
+              throw new Error("Pending claim lock wait was not observed.");
+            await Bun.sleep(10);
+          }
+          await Bun.sleep(300);
+        });
+        if (!pending) throw new Error("Pending claim was not started.");
+        const claimed = await pending;
+        expect(claimed?.id).toBe(expectedId);
+      } finally {
+        await second.close();
+      }
     }));
 
   test("claims nothing when the type filter is empty", () =>

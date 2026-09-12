@@ -26,6 +26,51 @@ function positiveInteger(
   return value;
 }
 
+function requiredString(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) invalid();
+  return value.trim();
+}
+
+const scopePattern = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
+
+function readOidc(value: unknown) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) invalid();
+  const raw = value as Record<string, unknown>;
+  let issuer: URL;
+  try {
+    issuer = new URL(requiredString(raw.issuer));
+  } catch {
+    invalid();
+  }
+  const secure =
+    issuer.protocol === "https:" ||
+    (issuer.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]", "::1"].includes(issuer.hostname));
+  if (
+    !secure ||
+    issuer.username ||
+    issuer.password ||
+    issuer.search ||
+    issuer.hash
+  )
+    invalid();
+  if (!Array.isArray(raw.scopes)) invalid();
+  const scopes = [...new Set(raw.scopes.map(requiredString))];
+  if (
+    !scopes.length ||
+    !scopes.includes("openid") ||
+    scopes.some((scope) => !scopePattern.test(scope))
+  )
+    invalid();
+  return {
+    issuer,
+    clientId: requiredString(raw.clientId),
+    clientSecret: requiredString(raw.clientSecret),
+    scopes,
+  };
+}
+
 /** Reads live auth configuration from settings, applying documented defaults. */
 export async function readAuthSettings(db: Database) {
   const [row] = await db
@@ -65,10 +110,13 @@ export async function readAuthSettings(db: Database) {
     return normalized;
   });
 
+  const oidc = readOidc(config.oidc);
+
   return {
     sessionMaxAgeSeconds,
     loginMaxAttempts,
     loginWindowSeconds,
     trustedProxyAddresses,
+    oidc,
   };
 }

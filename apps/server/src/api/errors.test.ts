@@ -6,8 +6,10 @@ import { ApiError, fromHost, runApi } from "./errors.ts";
 
 const cases: [AuthError["code"], string, number][] = [
   ["INVALID_INPUT", "BAD_REQUEST", 400],
+  ["INVALID_INVITE", "BAD_REQUEST", 400],
   ["INVALID_CREDENTIALS", "UNAUTHORIZED", 401],
   ["UNAUTHENTICATED", "UNAUTHORIZED", 401],
+  ["OIDC_FAILED", "UNAUTHORIZED", 401],
   ["FORBIDDEN", "FORBIDDEN", 403],
   ["NOT_FOUND", "NOT_FOUND", 404],
   ["CONFLICT", "CONFLICT", 409],

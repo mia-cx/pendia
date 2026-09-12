@@ -8,6 +8,12 @@ import { requirePermission } from "./permissions.ts";
 import { consumeLoginAttempt } from "./rate-limit.ts";
 import { readAuthSettings } from "./settings.ts";
 
+type DeviceInput = {
+  clientName: string;
+  deviceId: string;
+  deviceName: string;
+};
+
 type LoginInput = {
   username: string;
   password: string;
@@ -15,6 +21,8 @@ type LoginInput = {
   deviceId: string;
   deviceName: string;
 };
+
+type SessionTransaction = Pick<Database, "select" | "insert">;
 
 const usernamePattern = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/;
@@ -49,6 +57,21 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest();
 }
 
+function prepareDevice(input: DeviceInput) {
+  const clientName = input.clientName.trim();
+  const deviceName = input.deviceName.trim();
+  if (
+    clientName.length < 1 ||
+    clientName.length > 128 ||
+    deviceName.length < 1 ||
+    deviceName.length > 128 ||
+    input.deviceId.length < 1 ||
+    input.deviceId.length > 128
+  )
+    throw new AuthError("INVALID_INPUT");
+  return { clientName, deviceId: input.deviceId, deviceName };
+}
+
 let dummyHash: Promise<string> | undefined;
 
 async function verifyPassword(password: string, stored: string | null) {
@@ -81,27 +104,54 @@ async function ownOrManager(
   if (userId !== actorId) await requirePermission(db, actorId, "manage-users");
 }
 
+/** Issues a device session inside the caller's database transaction. */
+export async function issueSession(
+  db: SessionTransaction,
+  userId: string,
+  input: DeviceInput,
+  maxAgeSeconds: number | null,
+) {
+  const device = prepareDevice(input);
+  const token = newToken();
+  const [enabled] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, userId), isNull(users.disabledAt)))
+    .for("update");
+  if (!enabled) throw new AuthError("INVALID_CREDENTIALS");
+  const [session] = await db
+    .insert(sessions)
+    .values({
+      userId,
+      tokenHash: hashToken(token),
+      clientName: device.clientName,
+      deviceId: device.deviceId,
+      deviceName: device.deviceName,
+      expiresAt:
+        maxAgeSeconds === null
+          ? null
+          : sql`clock_timestamp() + ${maxAgeSeconds} * interval '1 second'`,
+    })
+    .returning(safeSessionFields);
+  if (!session) throw new Error("Session insert returned no row.");
+  const user = await enabledUserById(db, userId);
+  if (!user) throw new AuthError("INVALID_CREDENTIALS");
+  return { token, user, session };
+}
+
 /** Logs in a local user and returns a new device session with its opaque token. */
 export async function login(db: Database, input: LoginInput, address: string) {
   const username = input.username.trim().toLowerCase();
-  const clientName = input.clientName.trim();
-  const deviceName = input.deviceName.trim();
+  prepareDevice(input);
   if (
     !usernamePattern.test(username) ||
     input.password.length < 1 ||
-    input.password.length > 1024 ||
-    clientName.length < 1 ||
-    clientName.length > 128 ||
-    deviceName.length < 1 ||
-    deviceName.length > 128 ||
-    input.deviceId.length < 1 ||
-    input.deviceId.length > 128
+    input.password.length > 1024
   )
     throw new AuthError("INVALID_INPUT");
 
   const config = await readAuthSettings(db);
   await consumeLoginAttempt(db, address, username, config);
-  const maxAgeSeconds = config.sessionMaxAgeSeconds;
 
   const [found] = await db
     .select()
@@ -115,33 +165,9 @@ export async function login(db: Database, input: LoginInput, address: string) {
   if (!found || found.disabledAt || !verified)
     throw new AuthError("INVALID_CREDENTIALS");
 
-  const token = newToken();
-  return db.transaction(async (tx) => {
-    const [enabled] = await tx
-      .select({ id: users.id })
-      .from(users)
-      .where(and(eq(users.id, found.id), isNull(users.disabledAt)))
-      .for("update");
-    if (!enabled) throw new AuthError("INVALID_CREDENTIALS");
-    const [session] = await tx
-      .insert(sessions)
-      .values({
-        userId: found.id,
-        tokenHash: hashToken(token),
-        clientName,
-        deviceId: input.deviceId,
-        deviceName,
-        expiresAt:
-          maxAgeSeconds === null
-            ? null
-            : sql`clock_timestamp() + ${maxAgeSeconds} * interval '1 second'`,
-      })
-      .returning(safeSessionFields);
-    if (!session) throw new Error("Session insert returned no row.");
-    const user = await enabledUserById(tx, found.id);
-    if (!user) throw new AuthError("INVALID_CREDENTIALS");
-    return { token, user, session };
-  });
+  return db.transaction((tx) =>
+    issueSession(tx, found.id, input, config.sessionMaxAgeSeconds),
+  );
 }
 
 const enabledOwner = (userId: unknown) =>

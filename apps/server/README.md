@@ -67,14 +67,23 @@ The api and all roles serve these JSON routes. Setup creates the admin account o
 The first accepted setup request owns a fresh instance. Keep it inaccessible to untrusted clients until setup completes.
 Use a private bind address, firewall or restricted ingress during setup. Expose the instance only after creating the admin.
 
-| Method | Route | JSON input | Result |
+| Method | Route | Input | Result |
 | --- | --- | --- | --- |
 | POST | `/api/auth/setup` | `username`, `password`, optional `displayName` | 201 with `user`, or 409 `SETUP_COMPLETE` |
 | POST | `/api/auth/login` | `username`, `password`, `clientName`, `deviceId`, `deviceName` | `token`, `user`, `session` |
+| POST | `/api/auth/invites` | `email`, `expiresInSeconds` | 201 with one-time `token` and safe `invite` |
+| POST | `/api/auth/invites/accept` | `token`, `username`, `password`, optional `displayName`, `clientName`, `deviceId`, `deviceName` | 201 with `token`, `user`, `session` and session cookie |
+| GET | `/api/auth/oidc/login` | Query `clientName`, `deviceId`, `deviceName`, optional `invite` | 302 to the configured provider |
+| GET | `/api/auth/oidc/callback` | Provider callback | 200 with `token`, `user`, `session` and session cookie |
 | GET | `/api/auth/me` | None | `user`, `credential` |
 | POST | `/api/auth/logout` | None | Revokes the current session or API key and returns `ok` |
 
-Setup and login require `Content-Type: application/json`. Request bodies have a 16 KiB limit.
+Invite creation requires `manage-users` and accepts bearer or session-cookie auth. Invite tokens are random, stored only as SHA-256 digests, expire, and work once.
+Invite acceptance and new OIDC accounts require a live invite. Existing OIDC subjects log in directly.
+Only `email_verified: true` can link an existing account. An unverified email never links, but a matching live invite can create a separate account.
+OIDC uses discovery, authorization code, state, nonce, PKCE S256, signed ID-token validation, confidential Basic client authentication, and UserInfo subject validation when advertised.
+
+Setup, local login, invite creation and local invite acceptance require `Content-Type: application/json`. Request bodies have a 16 KiB limit.
 Usernames use ASCII letters, digits, dots, underscores and hyphens, start with a letter or digit, and have at most 64 characters.
 Usernames ignore surrounding whitespace and case. Passwords retain whitespace and allow 1 to 1024 characters.
 Display names, client names and device names have at most 128 characters. Device IDs allow 1 to 128 characters.
@@ -110,9 +119,25 @@ The `settings` row with key `auth` holds one JSON object. Missing fields use the
   "sessionMaxAgeSeconds": null,
   "loginMaxAttempts": 5,
   "loginWindowSeconds": 900,
-  "trustedProxyAddresses": []
+  "trustedProxyAddresses": [],
+  "oidc": null
 }
 ```
+
+To enable OIDC, set `oidc` to an object:
+
+```json
+{
+  "oidc": {
+    "issuer": "https://id.mia.cx/application/o/pendia/",
+    "clientId": "<client-id>",
+    "clientSecret": "<client-secret>",
+    "scopes": ["openid", "profile", "email"]
+  }
+}
+```
+
+The issuer, clientId and clientSecret fields are required. `openid` must be included, and scopes use OAuth scope-token characters. HTTPS is required except loopback HTTP for tests. Keep client secrets out of source control and logs.
 
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
 Settings apply on the next request. Invalid stored settings fail closed. Admin settings screens belong to a later slice.
@@ -121,6 +146,50 @@ A session maximum age also limits existing sessions by creation time. Clearing i
 Login attempts share independent address and normalized-account windows across API replicas. Successful logins consume an attempt too.
 A short Postgres transaction updates both counters before password work. Blocked requests do not extend either window.
 Expired counters under `auth.login.*` are removed on a later attempt. Configuration and setup markers remain intact.
+
+### Authentik at id.mia.cx
+
+In authentik Admin, go to Applications > Applications > New Application.
+Application name: `Pendia`. Application slug: `pendia`.
+Provider type: `OAuth2/OpenID Connect`.
+Authorization flow: `default-provider-authorization-implicit-consent`.
+Client type: `Confidential`. Copy the generated Client ID and Client Secret into Pendia's auth setting.
+Redirect URI type: `Strict`, purpose `Authorization`.
+Redirect URI: `<pendia-public-origin>/api/auth/oidc/callback`, where `<pendia-public-origin>` is Pendia's public scheme and host with no trailing slash, such as `https://pendia.example.com`.
+Signing key: select an available signing key.
+Selected scopes/property mappings: `openid`, `profile`, `email`.
+Allowed grant type: `authorization_code`.
+Issuer mode: `Each provider has a different issuer, based on the application slug`, the default.
+Pendia issuer: `https://id.mia.cx/application/o/pendia/`.
+Discovery document: `https://id.mia.cx/application/o/pendia/.well-known/openid-configuration`.
+Authentik must emit `email` and `email_verified`. Only verified email links an existing Pendia account.
+Reverse proxies and firewalls must allow server-side discovery, token, JWKS, and UserInfo requests between Pendia and id.mia.cx.
+
+The admin settings screen is a later issue. Until then, configure OIDC with this PostgreSQL 18 upsert:
+
+```sql
+INSERT INTO settings (id, key, value)
+VALUES (
+  uuidv7(),
+  'auth',
+  jsonb_build_object(
+    'oidc',
+    jsonb_build_object(
+      'issuer', 'https://id.mia.cx/application/o/pendia/',
+      'clientId', '<client-id>',
+      'clientSecret', '<client-secret>',
+      'scopes', jsonb_build_array('openid', 'profile', 'email')
+    )
+  )
+)
+ON CONFLICT (key) DO UPDATE
+SET value = settings.value || EXCLUDED.value,
+    updated_at = clock_timestamp();
+```
+
+This preserves the existing top-level auth keys. Replace the two placeholders before execution.
+
+Live validation after merge: set the Client ID and Secret, open `/api/auth/oidc/login?clientName=Web&deviceId=<stable-device-id>&deviceName=<browser-name>`, authenticate, and confirm `/api/auth/me` returns that session. For a first OIDC account, add `&invite=<one-time-invite-token>`.
 
 ### Reverse proxies
 

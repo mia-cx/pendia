@@ -13,6 +13,7 @@ import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
+import { persistScanTimelines } from "./timelines.ts";
 import { readLibraryFile, walkLibrary } from "./walker.ts";
 
 /** Scan one canonical directory of a movies library into Items, Versions, Files and Streams. */
@@ -119,6 +120,8 @@ export async function scanDirectory(
             label,
             bytes: member.bytes,
             durationSeconds: member.probe.durationSeconds,
+            keyframesSeconds: member.probe.keyframesSeconds,
+            lazyIndexPending: member.probe.keyframesSeconds === null,
           })
           .where(eq(versions.id, versionId));
         await tx
@@ -142,6 +145,8 @@ export async function scanDirectory(
             format: "video",
             bytes: member.bytes,
             durationSeconds: member.probe.durationSeconds,
+            keyframesSeconds: member.probe.keyframesSeconds,
+            lazyIndexPending: member.probe.keyframesSeconds === null,
           })
           .returning();
         if (!version) {
@@ -212,6 +217,7 @@ export async function scanDirectory(
           );
       }
     }
+    await persistScanTimelines(tx, itemId);
     return { itemId, versionIds };
   });
   return { ...written, probed };

@@ -162,7 +162,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const before = await migrationState(db);
-      expect(before.journal).toHaveLength(3);
+      expect(before.journal).toHaveLength(4);
       expect(before.tables).toHaveLength(34);
       expect(before.extensions).toEqual([
         { extname: "btree_gist" },
@@ -204,7 +204,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             { code: 0, stderr: "" },
           ]);
           const state = await migrationState(db);
-          expect(state.journal).toHaveLength(3);
+          expect(state.journal).toHaveLength(4);
           expect(state.tables).toHaveLength(34);
           expect(state.groups).toHaveLength(2);
         } finally {
@@ -356,6 +356,49 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         .values({ type: payload.type, payload, maxAttempts: 3 })
         .returning();
       expect(job?.payload).toEqual(payload);
+    }));
+
+  test("persists Version keyframe indexes with the lazy flag", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const f = await fixture(db);
+      const [version] = await db
+        .insert(versions)
+        .values({
+          itemId: f.movie.id,
+          itemKind: f.movie.kind,
+          libraryId: f.movie.libraryId,
+          label: "Original",
+          format: "video",
+          bytes: 100n,
+        })
+        .returning();
+      if (!version) throw new Error("Version missing.");
+      expect(version.keyframesSeconds).toBeNull();
+      expect(version.lazyIndexPending).toBe(true);
+      await db
+        .update(versions)
+        .set({ keyframesSeconds: [0, 2, 4], lazyIndexPending: false })
+        .where(eq(versions.id, version.id));
+      const [indexed] = await db
+        .select()
+        .from(versions)
+        .where(eq(versions.id, version.id));
+      expect(indexed?.keyframesSeconds).toEqual([0, 2, 4]);
+      expect(indexed?.lazyIndexPending).toBe(false);
+      await db
+        .update(versions)
+        .set({ keyframesSeconds: null, lazyIndexPending: true })
+        .where(eq(versions.id, version.id));
+      const [reset] = await db
+        .select()
+        .from(versions)
+        .where(eq(versions.id, version.id));
+      expect(reset).toMatchObject({
+        id: version.id,
+        keyframesSeconds: null,
+        lazyIndexPending: true,
+      });
     }));
 
   test("rejects invalid Version kinds, formats and mismatched ownership", () =>

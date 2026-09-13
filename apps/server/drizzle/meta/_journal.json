@@ -22,6 +22,13 @@
       "when": 1789258083222,
       "tag": "0002_wild_agent_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789307776329,
+      "tag": "0003_nifty_sunspot",
+      "breakpoints": true
     }
   ]
 }

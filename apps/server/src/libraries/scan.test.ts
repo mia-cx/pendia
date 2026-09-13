@@ -31,6 +31,7 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
+import { applyMetadata } from "../metadata/service.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 
 const folder = "Alien (1979) {tmdb-348}";

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createVideoFixture, withVideoFixture } from "./fixtures.ts";
+import { createKeyframeFixture } from "./keyframe-fixtures.ts";
 import { parseProbeOutput, probeVideo } from "./probe.ts";
 
 interface IndependentStream {
@@ -139,6 +140,27 @@ describe("probeVideo", () => {
     });
   });
 
+  test("attaches the container keyframe index to a real MP4", async () => {
+    await withVideoFixture(async (dir) => {
+      const file = join(dir, "Fixture.mp4");
+      await createKeyframeFixture(file);
+      const result = await probeVideo(file);
+      expect(result.keyframesSeconds).toEqual([0, 2, 4, 6, 8, 10]);
+      expect(result.container).toBe("mp4");
+    });
+  });
+
+  test("returns a null index for fragmented MP4 with valid metadata", async () => {
+    await withVideoFixture(async (dir) => {
+      const file = join(dir, "Fixture.mp4");
+      await createKeyframeFixture(file, { fragmented: true });
+      const result = await probeVideo(file);
+      expect(result.keyframesSeconds).toBeNull();
+      expect(result.durationSeconds).toBeGreaterThan(0);
+      expect(result.streams[0]).toMatchObject({ kind: "video", codec: "h264" });
+    });
+  });
+
   test("rejects a nonexistent file", async () => {
     await withVideoFixture(async (dir) => {
       await expect(probeVideo(join(dir, "missing.mkv"))).rejects.toThrow(
@@ -188,6 +210,7 @@ describe("parseProbeOutput", () => {
     expect(stream?.hdr).toBe("hdr10");
     expect(result.container).toBe("mkv");
     expect(result.durationSeconds).toBeNull();
+    expect(result.keyframesSeconds).toBeNull();
   });
 
   test("prefers Dolby Vision, then HDR10+, then transfer-based HDR", () => {

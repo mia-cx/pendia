@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { copyFile, mkdir, utimes, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, rename, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
@@ -664,6 +664,54 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         for (const path of [ep1Part2, ep2Part1, ep2Part3]) {
           expect(byPath.get(path)?.id).toBe(idsByPath.get(path));
         }
+      });
+    }));
+
+  test("keeps stale File orders bounded across repeated scans", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const part1 = join(seasonDir, "Show S01E01 - part1.mkv");
+        const part2 = join(seasonDir, "Show S01E01 - part2.mkv");
+        await createVideoFixture(part1);
+        await copyFile(part1, part2);
+
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(1);
+        const initialFiles = await db.select().from(files);
+        expect(initialFiles).toHaveLength(2);
+        const idsByPath = new Map(
+          initialFiles.map((file) => [file.path, file.id]),
+        );
+
+        await rename(part1, join(seasonDir, "Show S01E01 - part1.removed"));
+
+        for (let index = 0; index < 32; index++) {
+          await scanShowDirectory(db, library.id, show);
+        }
+
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(2);
+        const part1Path = "Show/Season 01/Show S01E01 - part1.mkv";
+        const part2Path = "Show/Season 01/Show S01E01 - part2.mkv";
+        const byPath = new Map(fileRows.map((file) => [file.path, file]));
+        const kept = byPath.get(part2Path);
+        const stale = byPath.get(part1Path);
+        if (!kept || !stale) throw new Error("Fixture File missing.");
+        expect(kept.order).toBe(0);
+        expect(stale.order).toBe(1);
+        expect(idsByPath.get(part2Path)).toBe(kept.id);
+        expect(idsByPath.get(part1Path)).toBe(stale.id);
+        expect(Math.max(...fileRows.map((file) => file.order))).toBe(1);
       });
     }));
 });

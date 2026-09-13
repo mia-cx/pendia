@@ -215,7 +215,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
 
-Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year` and `addedAt`.
+Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}`.
 Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.
@@ -302,8 +302,8 @@ Movie folder suffixes `{tmdb-348}`, `{imdb-tt0078748}` and `{tvdb=123}` become p
 
 An existing provider id fetches its record directly. Otherwise providers search by title and optional year in configured order. Only one unique best result at or above the threshold matches. Ties and exhausted providers store `unmatched` for admin work.
 
-A match updates Item metadata, replaces Item provider ids and Credits, and maps credit names to Contributors. Failed TMDB HTTP calls are retried by the existing job queue.
+A match updates Item metadata, upserts fetched provider ids and preserves other scanned ids, replaces Credits, and maps credit names to Contributors. Failed TMDB HTTP calls are retried by the existing job queue. A completed provider-fetch job publishes `library.changed`.
 
 The first poster original is stored at `<canonical-folder>/.pendia/artwork/<artwork-id>`. This slice implements only the colocated backend. Parent and leaf symlinks are not followed.
 
-`GET /api/artwork/{artwork-id}?width={1..4096}` serves resized artwork. Sharp resizes without enlargement and preserves the source format. The response carries a strong ETag and honors `If-None-Match`. Each API process caches up to 128 resized representations. The route is anonymous by default; `auth.artworkRequiresAuth: true` requires the bearer token or session cookie.
+`GET /api/artwork/{artwork-id}?width={1..4096}` serves resized artwork. Sharp resizes without enlargement and preserves the source format. The response carries a strong ETag and honors `If-None-Match`. Browser and shared caches revalidate each request while the API process keeps up to 128 resized copies. The route is anonymous by default; `auth.artworkRequiresAuth: true` requires the bearer token or session cookie.

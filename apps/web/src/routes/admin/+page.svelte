@@ -3,22 +3,24 @@ const sections = [
   {
     href: "/admin/libraries",
     label: "Libraries",
-    blurb: "Add media folders, rename them and follow each scan.",
+    blurb: "Add, rename, scan and delete media libraries.",
   },
   {
     href: "/admin/users",
     label: "Users",
-    blurb: "Create accounts, set group membership and tune per-user access.",
+    blurb:
+      "Create accounts and invites, and manage sessions, groups and access per user.",
   },
   {
     href: "/admin/groups",
     label: "Groups",
-    blurb: "Create custom groups and choose the permissions they grant.",
+    blurb: "Create custom groups and edit the permissions they grant.",
   },
   {
     href: "/admin/settings",
     label: "Settings",
-    blurb: "Set trusted proxies, the artwork toggle and provider keys.",
+    blurb:
+      "Set trusted proxies and provider keys, toggle artwork auth and check OIDC.",
   },
 ];
 </script>

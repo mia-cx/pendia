@@ -1,4 +1,5 @@
 import { readMatroskaKeyframes } from "./keyframes/matroska.ts";
+import { readMp4Keyframes } from "./keyframes/mp4.ts";
 import { FileIndexReader, InvalidIndex } from "./keyframes/reader.ts";
 
 /** A container-only keyframe read and its byte cost. */
@@ -22,7 +23,11 @@ export async function readKeyframeIndex(path: string): Promise<KeyframeIndex> {
           ? "mp4"
           : null;
     const keyframesSeconds =
-      container === "matroska" ? await readMatroskaKeyframes(reader) : null;
+      container === "matroska"
+        ? await readMatroskaKeyframes(reader)
+        : container === "mp4"
+          ? await readMp4Keyframes(reader)
+          : null;
     return { keyframesSeconds, bytesRead: reader.bytesRead };
   } catch (error) {
     if (error instanceof InvalidIndex) {

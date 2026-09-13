@@ -5,11 +5,14 @@ import { asc, eq } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
+  episodes,
   files,
   itemAncestors,
   items,
   libraries,
   movies,
+  seasons,
+  shows,
   streams,
   versions,
 } from "../db/schema/index.ts";
@@ -19,7 +22,7 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
-import { scanDirectory } from "./scan.ts";
+import { scanDirectory, scanShowDirectory } from "./scan.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
@@ -337,5 +340,268 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
       } finally {
         await db.close();
       }
+    }));
+});
+
+const showFolder = "The Expanse (2015) {tvdb-280619}";
+const specialsFile = `${showFolder}/Specials/The Expanse S00E01.mkv`;
+const splitPart1 = `${showFolder}/Season 01/The Expanse S01E01 - part1.mkv`;
+const splitPart2 = `${showFolder}/Season 01/The Expanse S01E01 - part2.mkv`;
+const rangeFile = `${showFolder}/Season 01/The Expanse S01E02-E03.mkv`;
+
+async function populateShow(root: string) {
+  const specialsDir = join(root, showFolder, "Specials");
+  const seasonDir = join(root, showFolder, "Season 01");
+  await mkdir(specialsDir, { recursive: true });
+  await mkdir(join(seasonDir, "extras"), { recursive: true });
+  await createVideoFixture(join(root, specialsFile));
+  await createVideoFixture(join(root, splitPart1));
+  await createVideoFixture(join(root, splitPart2));
+  await createVideoFixture(join(root, rangeFile));
+  await createVideoFixture(join(seasonDir, "extras", "making-of S01E09.mkv"));
+}
+
+describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
+  test("writes a Show tree with split and ranged Episode Versions", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await populateShow(root);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const result = await scanShowDirectory(db, library.id, showFolder);
+        expect(result.probed).toBe(4);
+        expect(result.versionIds).toHaveLength(3);
+        expect(result.itemId).not.toBeNull();
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows).toHaveLength(6);
+        const show = itemRows.find((item) => item.kind === "show");
+        const seasonItems = itemRows.filter((item) => item.kind === "season");
+        const episodeItems = itemRows.filter((item) => item.kind === "episode");
+        expect(seasonItems).toHaveLength(2);
+        expect(episodeItems).toHaveLength(3);
+        expect(show).toMatchObject({
+          id: result.itemId,
+          libraryId: library.id,
+          kind: "show",
+          parentId: null,
+          title: "The Expanse",
+          year: 2015,
+          canonicalFolder: showFolder,
+        });
+        const specials = seasonItems.find(
+          (item) => item.canonicalFolder === `${showFolder}/Specials`,
+        );
+        const seasonOne = seasonItems.find(
+          (item) => item.canonicalFolder === `${showFolder}/Season 01`,
+        );
+        expect(specials?.parentId).toBe(show?.id);
+        expect(seasonOne?.parentId).toBe(show?.id);
+        const pilot = episodeItems.find(
+          (item) => item.parentId === specials?.id,
+        );
+        const split = episodeItems.find(
+          (item) =>
+            item.parentId === seasonOne?.id && item.title === "Episode 1",
+        );
+        const ranged = episodeItems.find(
+          (item) =>
+            item.parentId === seasonOne?.id && item.title === "Episodes 2-3",
+        );
+        if (!show || !specials || !seasonOne || !pilot || !split || !ranged) {
+          throw new Error("Fixture Item missing.");
+        }
+
+        expect(await db.select().from(shows)).toMatchObject([
+          { itemId: show.id },
+        ]);
+        const seasonRows = await db.select().from(seasons);
+        expect(seasonRows).toHaveLength(2);
+        expect(
+          seasonRows.find((row) => row.itemId === specials.id),
+        ).toMatchObject({
+          showId: show.id,
+          seasonNumber: 0,
+        });
+        expect(
+          seasonRows.find((row) => row.itemId === seasonOne.id),
+        ).toMatchObject({
+          showId: show.id,
+          seasonNumber: 1,
+        });
+        const episodeRows = await db.select().from(episodes);
+        expect(episodeRows).toHaveLength(3);
+        expect(
+          episodeRows.find((row) => row.itemId === pilot.id),
+        ).toMatchObject({
+          seasonId: specials.id,
+          episodeNumber: 1,
+          episodeEndNumber: null,
+        });
+        expect(
+          episodeRows.find((row) => row.itemId === split.id),
+        ).toMatchObject({
+          seasonId: seasonOne.id,
+          episodeNumber: 1,
+          episodeEndNumber: null,
+        });
+        expect(
+          episodeRows.find((row) => row.itemId === ranged.id),
+        ).toMatchObject({
+          seasonId: seasonOne.id,
+          episodeNumber: 2,
+          episodeEndNumber: 3,
+        });
+
+        const closure = await db.select().from(itemAncestors);
+        const pairs = closure
+          .map((row) => `${row.ancestorId}->${row.descendantId}:${row.depth}`)
+          .sort();
+        const expectedPairs = [show, specials, seasonOne, pilot, split, ranged]
+          .map((item) => `${item.id}->${item.id}:0`)
+          .concat([
+            `${show.id}->${specials.id}:1`,
+            `${show.id}->${seasonOne.id}:1`,
+            `${show.id}->${pilot.id}:2`,
+            `${show.id}->${split.id}:2`,
+            `${show.id}->${ranged.id}:2`,
+            `${specials.id}->${pilot.id}:1`,
+            `${seasonOne.id}->${split.id}:1`,
+            `${seasonOne.id}->${ranged.id}:1`,
+          ])
+          .sort();
+        expect(pairs).toEqual(expectedPairs);
+
+        const versionRows = await db.select().from(versions);
+        expect(versionRows).toHaveLength(3);
+        const episodeIds = [pilot.id, split.id, ranged.id];
+        for (const version of versionRows) {
+          expect(version).toMatchObject({
+            itemKind: "episode",
+            libraryId: library.id,
+            format: "video",
+            origin: "imported",
+          });
+          expect(episodeIds).toContain(version.itemId);
+        }
+
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(4);
+        const byPath = new Map(fileRows.map((file) => [file.path, file]));
+        const part1 = byPath.get(splitPart1);
+        const part2 = byPath.get(splitPart2);
+        const range = byPath.get(rangeFile);
+        const special = byPath.get(specialsFile);
+        if (!part1 || !part2 || !range || !special) {
+          throw new Error("Fixture File missing.");
+        }
+        expect(part1.versionId).toBe(part2.versionId);
+        expect(part1.order).toBe(0);
+        expect(part2.order).toBe(1);
+        expect(part1.itemId).toBe(split.id);
+        expect(part2.itemId).toBe(split.id);
+        expect(range.versionId).not.toBe(part1.versionId);
+        expect(range.itemId).toBe(ranged.id);
+        expect(range.order).toBe(0);
+        expect(special.versionId).not.toBe(part1.versionId);
+        expect(special.versionId).not.toBe(range.versionId);
+        expect(special.itemId).toBe(pilot.id);
+        expect(result.versionIds).toEqual([
+          special.versionId,
+          part1.versionId,
+          range.versionId,
+        ]);
+        expect(
+          byPath.get(`${showFolder}/Season 01/extras/making-of S01E09.mkv`),
+        ).toBeUndefined();
+
+        const streamRows = await db
+          .select()
+          .from(streams)
+          .orderBy(asc(streams.fileId), asc(streams.index));
+        expect(streamRows).toHaveLength(12);
+        for (const file of fileRows) {
+          const owned = streamRows.filter(
+            (stream) => stream.fileId === file.id,
+          );
+          const probed = await probeVideo(join(root, file.path));
+          expect(streamKeys(owned)).toEqual(
+            probed.streams.map(
+              (stream) => `${stream.index}:${stream.kind}:${stream.codec}`,
+            ),
+          );
+        }
+
+        const splitVersion = versionRows.find(
+          (version) => version.id === part1.versionId,
+        );
+        expect(splitVersion?.bytes).toBe(part1.bytes + part2.bytes);
+        expect(splitVersion?.durationSeconds).toBe(
+          (part1.durationSeconds ?? 0) + (part2.durationSeconds ?? 0),
+        );
+
+        const snapshotIds = async () => ({
+          items: (await db.select({ id: items.id }).from(items))
+            .map((row) => row.id)
+            .sort(),
+          shows: (await db.select({ id: shows.itemId }).from(shows))
+            .map((row) => row.id)
+            .sort(),
+          seasons: (await db.select({ id: seasons.itemId }).from(seasons))
+            .map((row) => row.id)
+            .sort(),
+          episodes: (await db.select({ id: episodes.itemId }).from(episodes))
+            .map((row) => row.id)
+            .sort(),
+          versions: (await db.select({ id: versions.id }).from(versions))
+            .map((row) => row.id)
+            .sort(),
+          files: (await db.select({ id: files.id }).from(files))
+            .map((row) => row.id)
+            .sort(),
+          streams: (await db.select({ id: streams.id }).from(streams))
+            .map((row) => row.id)
+            .sort(),
+        });
+        const before = await snapshotIds();
+        for (const [itemId, title] of [
+          [show.id, "Curated Expanse"],
+          [seasonOne.id, "Curated Season"],
+          [split.id, "Curated Episode"],
+        ] as const) {
+          await db.update(items).set({ title }).where(eq(items.id, itemId));
+        }
+
+        const seen: string[] = [];
+        const second = await scanShowDirectory(
+          db,
+          library.id,
+          showFolder,
+          async (path) => {
+            seen.push(path);
+            return probeVideo(path);
+          },
+        );
+        expect(second.itemId).toBe(result.itemId);
+        expect(second.versionIds).toEqual(result.versionIds);
+        expect(second.probed).toBe(0);
+        expect(seen).toHaveLength(0);
+        expect(await snapshotIds()).toEqual(before);
+        const curated = await db.select().from(items);
+        expect(curated.find((item) => item.id === show.id)?.title).toBe(
+          "Curated Expanse",
+        );
+        expect(curated.find((item) => item.id === seasonOne.id)?.title).toBe(
+          "Curated Season",
+        );
+        expect(curated.find((item) => item.id === split.id)?.title).toBe(
+          "Curated Episode",
+        );
+      });
     }));
 });

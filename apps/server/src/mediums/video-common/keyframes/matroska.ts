@@ -13,12 +13,23 @@ const ID_TRACK_ENTRY = 0xae;
 const ID_TRACK_NUMBER = 0xd7;
 const ID_TRACK_TYPE = 0x83;
 const ID_TRACK_TIMESTAMP_SCALE = 0x23314f;
+const ID_CODEC_DELAY = 0x56aa;
 const ID_CUES = 0x1c53bb6b;
 const ID_CUE_POINT = 0xbb;
 const ID_CUE_TIME = 0xb3;
 const ID_CUE_TRACK_POSITIONS = 0xb7;
 const ID_CUE_TRACK = 0xf7;
+const ID_CUE_CLUSTER_POSITION = 0xf1;
+const ID_CUE_RELATIVE_POSITION = 0xf0;
+const ID_CUE_CODEC_STATE = 0xea;
+const ID_CUE_REFERENCE = 0xdb;
 const ID_CLUSTER = 0x1f43b675;
+const ID_CLUSTER_TIMESTAMP = 0xe7;
+const ID_SIMPLE_BLOCK = 0xa3;
+const ID_BLOCK_GROUP = 0xa0;
+const ID_BLOCK = 0xa1;
+const ID_REFERENCE_BLOCK = 0xfb;
+const ID_BLOCK_CODEC_STATE = 0xa4;
 
 const TRACK_TYPE_VIDEO = 1;
 const DEFAULT_TIMESTAMP_SCALE = 1_000_000;
@@ -209,7 +220,11 @@ const selectVideoTrack = async (
   reader: IndexReader,
   at: number,
   segmentEnd: number,
-): Promise<{ trackNumber: number; trackScale: number }> => {
+): Promise<{
+  trackNumber: number;
+  trackScale: number;
+  codecDelay: number;
+}> => {
   const el = await readElementHeader(reader, at, segmentEnd);
   if (el.id !== ID_TRACKS) {
     throw invalid("seek target id mismatch");
@@ -223,6 +238,7 @@ const selectVideoTrack = async (
     let number: number | null = null;
     let type: number | null = null;
     let scale = 1;
+    let codecDelay = 0;
     for (const field of childElements(entryView)) {
       if (field.id === ID_TRACK_NUMBER) {
         number = elementUint(entryView, field);
@@ -230,20 +246,141 @@ const selectVideoTrack = async (
         type = elementUint(entryView, field);
       } else if (field.id === ID_TRACK_TIMESTAMP_SCALE) {
         scale = floatAt(entryView, field);
+      } else if (field.id === ID_CODEC_DELAY) {
+        codecDelay = elementUint(entryView, field);
       }
     }
     if (type === TRACK_TYPE_VIDEO) {
-      if (number === null) {
+      if (number === null || number <= 0) {
         throw invalid("video track without a track number");
       }
-      return { trackNumber: number, trackScale: scale };
+      return { trackNumber: number, trackScale: scale, codecDelay };
     }
   }
   throw invalid("no video track");
 };
 
+const readBlockPrefix = async (
+  reader: IndexReader,
+  el: ElementRange,
+): Promise<{ track: number; timecode: number; flags: number }> => {
+  if (el.dataEnd === null) {
+    throw invalid("unknown-size block");
+  }
+  const first = await reader.read(el.dataStart, 1);
+  const trackLength = vintLength(first[0] ?? 0);
+  if (trackLength === 0 || el.dataStart + trackLength + 3 > el.dataEnd) {
+    throw invalid("truncated block header");
+  }
+  const buf = await reader.read(el.dataStart, trackLength + 3);
+  if (buf.length !== trackLength + 3) {
+    throw invalid("truncated block header");
+  }
+  const capacity = (1n << BigInt(7 * trackLength)) - 1n;
+  const track = Number(bigUintAt(buf, 0, trackLength) & capacity);
+  if (!Number.isSafeInteger(track) || track === 0) {
+    throw invalid("bad block track number");
+  }
+  return {
+    track,
+    timecode: buf.readInt16BE(trackLength),
+    flags: buf.readUInt8(trackLength + 2),
+  };
+};
+
+const isRandomAccessCue = async (
+  reader: IndexReader,
+  segmentStart: number,
+  segmentEnd: number,
+  clusterPosition: number,
+  relativePosition: number,
+  trackNumber: number,
+  cueTime: number,
+): Promise<boolean> => {
+  const cluster = await readElementHeader(
+    reader,
+    segmentStart + clusterPosition,
+    segmentEnd,
+  );
+  if (cluster.id !== ID_CLUSTER || cluster.dataEnd === null) {
+    return false;
+  }
+  const clusterEnd = cluster.dataEnd;
+  const target = cluster.dataStart + relativePosition;
+  if (target >= clusterEnd) {
+    return false;
+  }
+  let clusterTimestamp: number | null = null;
+  let firstBlock = -1;
+  let cursor = cluster.dataStart;
+  while (cursor < clusterEnd) {
+    const child = await readElementHeader(reader, cursor, clusterEnd);
+    if (child.dataEnd === null) {
+      throw invalid("unknown-size Cluster child");
+    }
+    if (child.id === ID_CLUSTER_TIMESTAMP) {
+      const payload = await readElementPayload(reader, child);
+      clusterTimestamp = uintAt(payload, 0, payload.length);
+    } else if (child.id === ID_SIMPLE_BLOCK || child.id === ID_BLOCK_GROUP) {
+      firstBlock = child.start;
+      break;
+    }
+    cursor = child.dataEnd;
+  }
+  if (clusterTimestamp === null || firstBlock < 0 || target < firstBlock) {
+    return false;
+  }
+  const targetEl = await readElementHeader(reader, target, clusterEnd);
+  if (targetEl.id === ID_SIMPLE_BLOCK) {
+    const prefix = await readBlockPrefix(reader, targetEl);
+    if (
+      prefix.track !== trackNumber ||
+      (prefix.flags & 0x80) === 0 ||
+      (prefix.flags & 0x06) !== 0
+    ) {
+      return false;
+    }
+    return clusterTimestamp + prefix.timecode === cueTime;
+  }
+  if (targetEl.id === ID_BLOCK_GROUP) {
+    const groupEnd = targetEl.dataEnd;
+    if (groupEnd === null) {
+      return false;
+    }
+    let blocks = 0;
+    let timecode = 0;
+    let groupCursor = targetEl.dataStart;
+    while (groupCursor < groupEnd) {
+      const child = await readElementHeader(reader, groupCursor, groupEnd);
+      if (child.dataEnd === null) {
+        throw invalid("unknown-size BlockGroup child");
+      }
+      if (child.id === ID_BLOCK) {
+        const prefix = await readBlockPrefix(reader, child);
+        if (prefix.track !== trackNumber || (prefix.flags & 0x06) !== 0) {
+          return false;
+        }
+        blocks += 1;
+        timecode = prefix.timecode;
+      } else if (
+        child.id === ID_REFERENCE_BLOCK ||
+        child.id === ID_BLOCK_CODEC_STATE
+      ) {
+        return false;
+      }
+      groupCursor = child.dataEnd;
+    }
+    if (blocks !== 1) {
+      return false;
+    }
+    return clusterTimestamp + timecode === cueTime;
+  }
+  return false;
+};
+
 const cueSeconds = async (
   reader: IndexReader,
+  segmentStart: number,
   at: number,
   segmentEnd: number,
   trackNumber: number,
@@ -262,23 +399,69 @@ const cueSeconds = async (
     const pointView = payloadView(view, point);
     let cueTime: number | null = null;
     let onTrack = false;
+    let clusterPosition: number | null = null;
+    let relativePosition: number | null = null;
     for (const part of childElements(pointView)) {
       if (part.id === ID_CUE_TIME) {
         cueTime = elementUint(pointView, part);
       } else if (part.id === ID_CUE_TRACK_POSITIONS) {
         const positionsView = payloadView(pointView, part);
+        let track: number | null = null;
+        let cluster: number | null = null;
+        let relative: number | null = null;
+        let codecState = 0;
+        let hasReference = false;
         for (const position of childElements(positionsView)) {
-          if (
-            position.id === ID_CUE_TRACK &&
-            elementUint(positionsView, position) === trackNumber
-          ) {
-            onTrack = true;
+          if (position.id === ID_CUE_TRACK) {
+            track = elementUint(positionsView, position);
+          } else if (position.id === ID_CUE_CLUSTER_POSITION) {
+            cluster = elementUint(positionsView, position);
+          } else if (position.id === ID_CUE_RELATIVE_POSITION) {
+            relative = elementUint(positionsView, position);
+          } else if (position.id === ID_CUE_CODEC_STATE) {
+            codecState = elementUint(positionsView, position);
+          } else if (position.id === ID_CUE_REFERENCE) {
+            hasReference = true;
           }
         }
+        if (track !== trackNumber) {
+          continue;
+        }
+        onTrack = true;
+        if (
+          cluster === null ||
+          relative === null ||
+          codecState !== 0 ||
+          hasReference
+        ) {
+          throw invalid("unsupported cue positions");
+        }
+        clusterPosition = cluster;
+        relativePosition = relative;
       }
     }
-    if (cueTime === null || !onTrack) {
+    if (!onTrack) {
       continue;
+    }
+    if (
+      cueTime === null ||
+      clusterPosition === null ||
+      relativePosition === null
+    ) {
+      throw invalid("selected cue is incomplete");
+    }
+    if (
+      !(await isRandomAccessCue(
+        reader,
+        segmentStart,
+        segmentEnd,
+        clusterPosition,
+        relativePosition,
+        trackNumber,
+        cueTime,
+      ))
+    ) {
+      throw invalid("cue target is not a random-access point");
     }
     const value = (cueTime * scale) / 1e9;
     if (Number.isFinite(value) && value >= 0) {
@@ -397,16 +580,17 @@ export async function readMatroskaKeyframes(
     return null;
   }
   const scale = await timestampScale(reader, found.get(ID_INFO), segmentEnd);
-  const { trackNumber, trackScale } = await selectVideoTrack(
+  const { trackNumber, trackScale, codecDelay } = await selectVideoTrack(
     reader,
     tracksAt,
     segmentEnd,
   );
-  if (trackScale !== 1 || scale <= 0) {
+  if (trackScale !== 1 || scale <= 0 || codecDelay !== 0) {
     return null;
   }
   const seconds = await cueSeconds(
     reader,
+    segmentStart,
     cuesAt,
     segmentEnd,
     trackNumber,

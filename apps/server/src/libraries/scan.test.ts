@@ -177,7 +177,7 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
             seen.push(path);
             return probeVideo(path);
           };
-          const first = await scanDirectory(db, library.id, folder, probe);
+          const first = await scanDirectory(db, library.id, folder, { probe });
           expect(seen).toHaveLength(2);
           const fileIds = (await db.select().from(files))
             .map((file) => file.id)
@@ -186,7 +186,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
             .map((stream) => stream.id)
             .sort();
 
-          const second = await scanDirectory(db, library.id, folder, probe);
+          const second = await scanDirectory(db, library.id, folder, {
+            probe,
+          });
           expect(second.itemId).toBe(first.itemId);
           expect(second.versionIds).toEqual(first.versionIds);
           expect(second.probed).toBe(0);
@@ -206,7 +208,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
               tags: ["curated"],
             })
             .where(eq(items.id, first.itemId ?? ""));
-          const curated = await scanDirectory(db, library.id, folder, probe);
+          const curated = await scanDirectory(db, library.id, folder, {
+            probe,
+          });
           expect(curated.itemId).toBe(first.itemId);
           expect(curated.versionIds).toEqual(first.versionIds);
           expect(curated.probed).toBe(0);
@@ -217,7 +221,7 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
 
           const touched = new Date("2026-02-03T00:00:00Z");
           await utimes(join(root, file1080), touched, touched);
-          const third = await scanDirectory(db, library.id, folder, probe);
+          const third = await scanDirectory(db, library.id, folder, { probe });
           expect(third.itemId).toBe(first.itemId);
           expect(third.versionIds).toEqual(first.versionIds);
           expect(third.probed).toBe(1);
@@ -251,11 +255,8 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           const touched = new Date("2026-02-03T00:00:00Z");
           await utimes(join(root, file1080), touched, touched);
           const absolute = join(root, file1080);
-          const result = await scanDirectory(
-            db,
-            library.id,
-            folder,
-            async (path) => {
+          const result = await scanDirectory(db, library.id, folder, {
+            probe: async (path) => {
               const probed = await probeVideo(path);
               if (path !== absolute) return probed;
               return {
@@ -265,7 +266,7 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
                 ),
               };
             },
-          );
+          });
           expect(result.probed).toBe(1);
 
           const after = await db
@@ -289,15 +290,17 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
         await withLibrary(db, root, async (library) => {
           const absolute = join(root, file2160);
           await expect(
-            scanDirectory(db, library.id, folder, async (path) => {
-              const probed = await probeVideo(path);
-              if (path !== absolute) return probed;
-              return {
-                ...probed,
-                streams: probed.streams.filter(
-                  (stream) => stream.kind !== "video",
-                ),
-              };
+            scanDirectory(db, library.id, folder, {
+              probe: async (path) => {
+                const probed = await probeVideo(path);
+                if (path !== absolute) return probed;
+                return {
+                  ...probed,
+                  streams: probed.streams.filter(
+                    (stream) => stream.kind !== "video",
+                  ),
+                };
+              },
             }),
           ).rejects.toThrow("no video stream");
           expect(await db.select().from(items)).toHaveLength(0);

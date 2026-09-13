@@ -13,7 +13,7 @@ Add the shows medium beside movies. It recognizes Sonarr-style show and season l
 
 ## TODOs
 
-- [ ] 1. Add the shows Medium definition and Sonarr path grouping.
+- [x] 1. Add the shows Medium definition and Sonarr path grouping.
   - Register Show, Season and Episode against their existing extension tables. Only Episode has Versions.
   - Use the top-level show folder as the canonical folder. Accept `Season N` and `Specials`, with Specials as season zero. Parse `SxxEyy`, `SxxEyy-Ezz` and `SxxEyyEzz` episode forms.
   - Group `partN`, `ptN` and `cdN` filename suffixes into one Version with ordered paths. Keep one multi-episode path as one Episode carrying its start and end numbers. Apply the movies medium's video, extras and Pendia-store rules.
@@ -41,6 +41,7 @@ Add the shows medium beside movies. It recognizes Sonarr-style show and season l
 
 ## Notes
 
+- TODO1 done: `apps/server/src/mediums/shows.ts` (`showsMedium` satisfies Medium over the existing shows/seasons/episodes tables; `groupShowPaths` returns ShowPathGroup/SeasonPathGroup/EpisodePathGroup/ShowVersionPathGroup) plus colocated `shows.test.ts`. Results: `bun test apps/server/src/mediums/shows.test.ts` 19 pass 0 fail, `bun run --cwd apps/server check` clean, `bun run --cwd apps/server build` bundled 602 modules, `bunx biome check` on the three files clean, `git diff --check` clean. Decisions: Season canonicalFolder is `<show>/<season-folder>`; season titles default to `Specials`/`Season N`; episodes merge on episodeNumber keeping the widest end; a split Version key is the marker-stripped stem while every non-split path is its own Version; the literal top-level `extras` folder stays reserved and `isVideoExtra` runs on the path after the show folder.
 - This run is unattended. The lead owns design, review, commits, pushes, comments and the pull request. The built-in SWE-2 sidekick implements and validates each TODO from an exact brief.
 - Work stays in `/home/mia/mia-cx/pendia/.worktrees/shows` on `feat/26-shows-medium`. The initial base is clean at `0e8ac31`, equal to `origin/main`.
 - The repository does not define split-part spelling. This plan accepts the common terminal `partN`, `ptN` and `cdN` forms, separated by spaces, dots, underscores or hyphens. The part marker affects File order but not Version identity.

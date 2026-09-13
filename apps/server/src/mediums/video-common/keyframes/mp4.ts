@@ -449,7 +449,41 @@ export async function readMp4Keyframes(
       traks.push(child);
     }
   }
+  const chapterTrackIds = new Set<number>();
+  const tracks: { box: Box; id: number | null }[] = [];
   for (const trak of traks) {
+    const tkhd = await firstChild(reader, trak, "tkhd");
+    let id: number | null = null;
+    if (tkhd !== null) {
+      const data = await boxPayload(reader, tkhd);
+      const offset = data[0] === 0 ? 12 : data[0] === 1 ? 20 : null;
+      if (offset === null || data.length < offset + 4) {
+        throw invalid("unsupported tkhd");
+      }
+      id = data.readUInt32BE(offset);
+    }
+    tracks.push({ box: trak, id });
+    const tref = await firstChild(reader, trak, "tref");
+    if (tref !== null) {
+      const chap = await firstChild(reader, tref, "chap");
+      if (chap !== null) {
+        const data = await boxPayload(reader, chap);
+        if (data.length % 4 !== 0) {
+          throw invalid("truncated chapter track reference");
+        }
+        for (let at = 0; at < data.length; at += 4) {
+          chapterTrackIds.add(data.readUInt32BE(at));
+        }
+      }
+    }
+  }
+  for (const { box: trak, id } of tracks) {
+    if (id !== null && chapterTrackIds.has(id)) {
+      continue;
+    }
+    if (id === null && chapterTrackIds.size > 0) {
+      return null;
+    }
     const result = await readTrakKeyframes(reader, trak, movieTimescale);
     if (result !== undefined) {
       return result;

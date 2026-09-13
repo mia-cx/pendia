@@ -36,3 +36,10 @@ Replace narrow wall-clock assertions in the job worker NOTIFY test and the auth 
 - `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55455/pendia bun test`: exit 0, 392 pass, 0 fail, 1199 expect() calls, 25 files, 47.14s (`/tmp/issue55-db-test.log`).
 - `bun test` without `DATABASE_URL`: exit 0, 276 pass, 116 skip, 0 fail, 475 expect() calls, 25 files, 147ms (`/tmp/issue55-no-db-test.log`).
 - The ten-consecutive-CI criterion is supported by twenty consecutive local fresh-process passes plus the deterministic assertion design; no GitHub-hosted runs have occurred yet. GitHub-hosted CI remains pending until the PR is filed.
+- Codex review flagged that warmup completion plus a fixed sleep did not prove the worker had parked in `wait()`, so the test now resolves an `idle` promise when a `setTimeout` spy observes the ten-second poll timer installed after the warmup handler ran.
+- Worker focused loop after idle synchronization: 20/20 fresh `bun test` invocations passed, 0 failed (`/tmp/issue55-worker-20-idle-sync.log`).
+- `bun run lint` (review baseline): exit 0, Biome checked 89 files, no fixes applied (`/tmp/issue55-review-lint.log`).
+- `bun run check` (review baseline): exit 0, 6/6 turbo tasks successful (3 cached), 3.011s; svelte-check 0 errors, 0 warnings (`/tmp/issue55-review-check.log`).
+- `bun run build` (review baseline): exit 0, 4/4 turbo tasks successful (3 cached), 1.758s (`/tmp/issue55-review-build.log`).
+- `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55455/pendia bun test` (review baseline): exit 0, 392 pass, 0 fail, 1199 expect() calls, 25 files, 45.06s (`/tmp/issue55-review-db-test.log`).
+- `bun test` without `DATABASE_URL` (review baseline): exit 0, 276 pass, 116 skip, 0 fail, 475 expect() calls, 25 files, 148ms (`/tmp/issue55-review-no-db-test.log`).

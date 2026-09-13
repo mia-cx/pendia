@@ -91,23 +91,45 @@ describe.skipIf(!databaseUrl)("Job worker", () => {
   test("wakes an idle worker through NOTIFY before the poll fallback", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
-      let invoked = Promise.withResolvers<string>();
+      const pollIntervalMs = 10_000;
+      const warmupPayload = probePayload();
+      const idle = Promise.withResolvers<void>();
+      let warmupHandled = false;
+      const invoked = Promise.withResolvers<string>();
       const registry = createJobRegistry();
       registry.register("probe", async (payload) => {
+        if (payload.fileId === warmupPayload.fileId) {
+          warmupHandled = true;
+          return;
+        }
         invoked.resolve(payload.fileId);
       });
+      const realSetTimeout = setTimeout;
+      const timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(
+        Object.assign(
+          (
+            handler: Bun.TimerHandler,
+            timeout: number | undefined,
+            ...args: unknown[]
+          ) => {
+            const timer = realSetTimeout(handler, timeout, ...args);
+            if (warmupHandled && timeout === pollIntervalMs) idle.resolve();
+            return timer;
+          },
+          realSetTimeout,
+        ),
+      );
       const queue = createJobQueue(db);
       const worker = await startJobWorker(db, registry, {
         concurrency: 1,
-        pollIntervalMs: 10_000,
+        pollIntervalMs,
       });
       const producer = createDatabase(url);
       try {
-        const warmup = await queue.enqueue(probePayload());
+        const warmup = await queue.enqueue(warmupPayload);
         await waitForJobState(db, warmup.id, "completed");
-        await Bun.sleep(30);
+        await idle.promise;
 
-        invoked = Promise.withResolvers();
         const producerQueue = createJobQueue(producer.db);
         const payload = probePayload();
         const job = await producerQueue.enqueue(payload);
@@ -131,8 +153,12 @@ describe.skipIf(!databaseUrl)("Job worker", () => {
         expect(fileId).toBe(payload.fileId);
         await waitForJobState(db, job.id, "completed");
       } finally {
-        await worker.stop();
-        await producer.close();
+        try {
+          await worker.stop();
+          await producer.close();
+        } finally {
+          timeoutSpy.mockRestore();
+        }
       }
     }));
 

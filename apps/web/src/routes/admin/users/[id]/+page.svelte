@@ -58,6 +58,10 @@ function serial<T>(run: () => Promise<T>) {
   return next;
 }
 
+function currentVisit(target: string, generation: number) {
+  return target === id && generation === routeGeneration;
+}
+
 function resetRouteState() {
   routeGeneration += 1;
   capInput = null;
@@ -109,14 +113,14 @@ async function saveSettings(event: SubmitEvent) {
         contentRatingCeiling: rating === "" ? null : rating,
       }),
     );
-    if (target !== id || generation !== routeGeneration) return;
+    if (!currentVisit(target, generation)) return;
     access.set(updated);
     capInput = null;
     ratingInput = null;
   } catch (error) {
-    if (target === id) settingsFailure = readFailure(error);
+    if (currentVisit(target, generation)) settingsFailure = readFailure(error);
   } finally {
-    if (target === id) settingsBusy = false;
+    if (currentVisit(target, generation)) settingsBusy = false;
   }
 }
 
@@ -140,13 +144,13 @@ async function saveGroups() {
         groupIds: checked,
       }),
     );
-    if (target !== id || generation !== routeGeneration) return;
+    if (!currentVisit(target, generation)) return;
     access.set(updated);
     groupSel = {};
   } catch (error) {
-    if (target === id) groupsFailure = readFailure(error);
+    if (currentVisit(target, generation)) groupsFailure = readFailure(error);
   } finally {
-    if (target === id) groupsBusy = false;
+    if (currentVisit(target, generation)) groupsBusy = false;
   }
 }
 
@@ -171,12 +175,13 @@ async function setOverride(permission: Permission, value: string) {
         allowed: value === "allow" ? true : value === "deny" ? false : null,
       }),
     );
-    if (target !== id || generation !== routeGeneration) return;
+    if (!currentVisit(target, generation)) return;
     access.set(updated);
   } catch (error) {
-    if (target === id) overrideFailures[permission] = readFailure(error);
+    if (currentVisit(target, generation))
+      overrideFailures[permission] = readFailure(error);
   } finally {
-    if (target === id) overrideBusy[permission] = false;
+    if (currentVisit(target, generation)) overrideBusy[permission] = false;
   }
 }
 
@@ -201,12 +206,13 @@ async function setAccess(libraryId: string, value: string) {
         allowed: value === "allow" ? true : value === "deny" ? false : null,
       }),
     );
-    if (target !== id || generation !== routeGeneration) return;
+    if (!currentVisit(target, generation)) return;
     access.set(updated);
   } catch (error) {
-    if (target === id) libraryFailures[libraryId] = readFailure(error);
+    if (currentVisit(target, generation))
+      libraryFailures[libraryId] = readFailure(error);
   } finally {
-    if (target === id) libraryBusy[libraryId] = false;
+    if (currentVisit(target, generation)) libraryBusy[libraryId] = false;
   }
 }
 
@@ -217,13 +223,15 @@ async function revoke(sessionId: string) {
   delete revokeFailures[sessionId];
   try {
     await serial(() => client.users.revokeSession({ id: sessionId }));
-    if (target !== id || generation !== routeGeneration) return;
+    if (!currentVisit(target, generation)) return;
     await sessions.reload();
+    if (!currentVisit(target, generation)) return;
     if (sessions.failure?.code === "UNAUTHORIZED") await goto("/login");
   } catch (error) {
-    if (target === id) revokeFailures[sessionId] = readFailure(error);
+    if (currentVisit(target, generation))
+      revokeFailures[sessionId] = readFailure(error);
   } finally {
-    if (target === id) revoking[sessionId] = false;
+    if (currentVisit(target, generation)) revoking[sessionId] = false;
   }
 }
 </script>

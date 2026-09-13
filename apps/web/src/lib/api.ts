@@ -19,7 +19,9 @@ export function createPendiaClient(
     url: `${options.origin ?? ""}/rpc`,
     headers: options.headers ?? {},
     fetch:
-      transport === undefined ? undefined : (request) => transport(request),
+      transport === undefined
+        ? undefined
+        : (request, init) => transport(request, init),
   });
   return createORPCClient<PendiaClient>(link);
 }

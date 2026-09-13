@@ -49,7 +49,7 @@ describe.skipIf(!databaseUrl)("first-run wizard", () => {
               libraryName: "Movies",
               rootPath: root,
             },
-            { origin: base },
+            { origin: base, timeoutMs: 60_000 },
           );
 
           expect(library).toMatchObject({

@@ -96,7 +96,7 @@ export async function setGroupPermissions(
   db: Database,
   actorId: string,
   groupId: string,
-  input: Permission[],
+  input: readonly Permission[],
 ) {
   await requireAdmin(db, actorId);
   const [group] = await db

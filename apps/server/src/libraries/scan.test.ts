@@ -813,6 +813,8 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(episodeRows).toMatchObject([
           { episodeNumber: 1, episodeEndNumber: 2 },
         ]);
+        const firstEpisodeId = episodeRows[0]?.itemId;
+        if (!firstEpisodeId) throw new Error("Fixture Episode missing.");
         const firstFileIds = (await db.select().from(files))
           .map((file) => file.id)
           .sort();
@@ -835,19 +837,72 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         if (!surviving) throw new Error("Fixture File missing.");
         expect(second.versionIds).toEqual([surviving.versionId]);
 
+        await copyFile(single, join(seasonDir, "Show S01E02.mkv"));
+
         const third = await scanShowDirectory(db, library.id, show);
-        expect(third.versionIds).toEqual(second.versionIds);
-        expect(await db.select().from(episodes)).toMatchObject([
-          { episodeNumber: 1, episodeEndNumber: 2 },
+        const thirdFiles = await db.select().from(files);
+        expect(thirdFiles).toHaveLength(3);
+        const added = thirdFiles.find(
+          (file) => file.path === "Show/Season 01/Show S01E02.mkv",
+        );
+        if (!added) throw new Error("Fixture File missing.");
+        expect(third.versionIds).toEqual([
+          surviving.versionId,
+          added.versionId,
+        ]);
+
+        const thirdEpisodes = await db
+          .select()
+          .from(episodes)
+          .orderBy(asc(episodes.episodeNumber));
+        expect(thirdEpisodes).toMatchObject([
+          {
+            itemId: firstEpisodeId,
+            episodeNumber: 1,
+            episodeEndNumber: null,
+          },
+          { episodeNumber: 2, episodeEndNumber: null },
+        ]);
+        const addedEpisodeId = thirdEpisodes[1]?.itemId;
+        if (!addedEpisodeId) throw new Error("Fixture Episode missing.");
+        expect(added.itemId).toBe(addedEpisodeId);
+        const thirdVersions = await db.select().from(versions);
+        expect(thirdVersions).toHaveLength(3);
+        expect(thirdVersions.map((version) => version.id).sort()).toEqual(
+          expect.arrayContaining(first.versionIds),
+        );
+        expect(thirdFiles.map((file) => file.id).sort()).toEqual(
+          expect.arrayContaining(firstFileIds),
+        );
+        const addedVersion = thirdVersions.find(
+          (version) => version.id === added.versionId,
+        );
+        expect(addedVersion?.itemId).toBe(addedEpisodeId);
+
+        const fourth = await scanShowDirectory(db, library.id, show);
+        expect(fourth.versionIds).toEqual(third.versionIds);
+        expect(
+          await db.select().from(episodes).orderBy(asc(episodes.episodeNumber)),
+        ).toMatchObject([
+          {
+            itemId: firstEpisodeId,
+            episodeNumber: 1,
+            episodeEndNumber: null,
+          },
+          {
+            itemId: addedEpisodeId,
+            episodeNumber: 2,
+            episodeEndNumber: null,
+          },
         ]);
         expect(
           (await db.select().from(files)).map((file) => file.id).sort(),
-        ).toEqual(firstFileIds);
+        ).toEqual(thirdFiles.map((file) => file.id).sort());
         expect(
           (await db.select().from(versions))
             .map((version) => version.id)
             .sort(),
-        ).toEqual(first.versionIds.sort());
+        ).toEqual(thirdVersions.map((version) => version.id).sort());
       });
     }));
 });

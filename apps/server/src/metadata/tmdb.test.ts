@@ -138,6 +138,34 @@ describe("TMDB metadata provider", () => {
     ).rejects.toThrow("timed out");
   });
 
+  test("preserves the timeout reason when a response body stalls", async () => {
+    const request = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (signal === null || signal === undefined)
+        throw new Error("Missing request signal.");
+      return {
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise<unknown>((_resolve, reject) => {
+            if (signal.aborted) {
+              reject(signal.reason);
+              return;
+            }
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          }),
+      } as unknown as Response;
+    }) as typeof fetch;
+    const provider = createTmdbMetadataProvider(apiKey, request, 1);
+    const error = await provider
+      .search({ title: "X", kind: "movie" })
+      .catch((cause: unknown) => cause);
+    expect((error as Error).name).toBe("TimeoutError");
+    expect((error as Error).message).not.toBe("Invalid TMDB response.");
+  });
+
   test("rejects invalid request timeouts without a request", () => {
     const { calls, request } = jsonRequest({ results: [] });
     for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {

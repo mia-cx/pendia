@@ -28,7 +28,12 @@ async function logout() {
     await signOut();
     await goto("/login");
   } catch (error) {
-    signOutFailure = readFailure(error);
+    const failure = readFailure(error);
+    if (failure.code === "UNAUTHORIZED") {
+      await goto("/login");
+    } else {
+      signOutFailure = failure;
+    }
   } finally {
     signingOut = false;
   }

@@ -8,7 +8,12 @@ import { setPermissionOverride } from "../auth/permissions.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { items, libraries, libraryAccess } from "../db/schema/index.ts";
+import {
+  artwork,
+  items,
+  libraries,
+  libraryAccess,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import type { pendiaRouter } from "./router.ts";
@@ -356,6 +361,47 @@ describe.skipIf(!databaseUrl)("api router", () => {
         const error = await capture(rpcClient(base, token).items.list({}));
         expect(error.code).toBe("FORBIDDEN");
         expect(error.status).toBe(403);
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("cards and details expose the selected poster artwork id", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token, rows } = await seed(db);
+      const [poster] = await db
+        .insert(artwork)
+        .values({
+          itemId: rows[0]?.id ?? "",
+          versionId: null,
+          type: "poster",
+          sourceUrl: "https://image.example/poster.png",
+          backend: "colocated",
+          storageKey: "movie-0/.pendia/artwork/poster",
+          selected: true,
+        })
+        .returning();
+      if (!poster) throw new Error("Artwork insert returned no row.");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = rpcClient(base, token);
+        const page = await client.items.list({});
+        expect(
+          page.items.find((item) => item.id === rows[0]?.id)?.posterArtworkId,
+        ).toBe(poster.id);
+        expect(
+          page.items.find((item) => item.id === rows[1]?.id)?.posterArtworkId,
+        ).toBeNull();
+        const detail = await client.items.get({ id: rows[0]?.id ?? "" });
+        expect(detail.posterArtworkId).toBe(poster.id);
+        const rest = await fetch(`${base}/api/items/${rows[0]?.id}`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        expect(rest.status).toBe(200);
+        const body = (await rest.json()) as { posterArtworkId: string | null };
+        expect(body.posterArtworkId).toBe(poster.id);
       } finally {
         await server.stop();
       }

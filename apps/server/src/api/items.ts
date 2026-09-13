@@ -5,7 +5,7 @@ import { AuthError } from "../auth/errors.ts";
 import { requirePermission, viewableLibraryIds } from "../auth/permissions.ts";
 import type { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { items } from "../db/schema/index.ts";
+import { artwork, items } from "../db/schema/index.ts";
 import { ApiError, fromHost } from "./errors.ts";
 import { after, decodeCursor, defaultPageSize, toPage } from "./pagination.ts";
 import type { ItemKind } from "./schema.ts";
@@ -33,6 +33,14 @@ const cardFields = {
   title: items.title,
   year: items.year,
   addedAt: instantText(items.addedAt),
+  posterArtworkId: sql<string | null>`(
+    select ${artwork.id}
+    from ${artwork}
+    where ${artwork.itemId} = "items"."id"
+      and ${artwork.type} = 'poster'
+      and ${artwork.selected} = true
+    limit 1
+  )`,
 };
 
 const detailFields = {

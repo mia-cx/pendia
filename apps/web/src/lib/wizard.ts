@@ -41,18 +41,21 @@ export async function createAdmin(
   };
 }
 
-/** Creates the first library as a movies library and starts its scan. */
+/** Creates the first library as a movies library. */
 export async function createFirstLibrary(
   session: WizardSession,
   input: { name: string; rootPath: string },
 ) {
-  const library = await session.client.libraries.create({
+  return session.client.libraries.create({
     name: input.name,
     medium: "movies",
     rootPath: input.rootPath,
   });
-  const { jobId } = await session.client.libraries.scan({ id: library.id });
-  return { library, jobId };
+}
+
+/** Starts a library scan and returns the run's root job id. */
+export async function startScan(session: WizardSession, libraryId: string) {
+  return session.client.libraries.scan({ id: libraryId });
 }
 
 /** Runs the whole first-run wizard and returns its settled scan status. */
@@ -67,10 +70,11 @@ export async function runFirstRunWizard(
   options: WizardOptions & { timeoutMs?: number } = {},
 ) {
   const session = await createAdmin(input, options);
-  const { library, jobId } = await createFirstLibrary(session, {
+  const library = await createFirstLibrary(session, {
     name: input.libraryName,
     rootPath: input.rootPath,
   });
+  const { jobId } = await startScan(session, library.id);
   const status = await waitForScan(session.client, library.id, {
     timeoutMs: options.timeoutMs,
     runId: jobId,

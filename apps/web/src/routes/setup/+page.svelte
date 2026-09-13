@@ -1,12 +1,12 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
-import { goto } from "$app/navigation";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 import {
   createAdmin,
   createFirstLibrary,
+  startScan,
   type WizardSession,
 } from "$lib/wizard.ts";
 import "$lib/admin.css";
@@ -77,13 +77,14 @@ async function submitLibrary(event: SubmitEvent) {
   busy = true;
   failure = undefined;
   try {
-    const created = await createFirstLibrary(session, {
+    const library = await createFirstLibrary(session, {
       name: libraryName,
       rootPath,
     });
-    libraryId = created.library.id;
-    runId = created.jobId;
+    libraryId = library.id;
     step = 2;
+    const { jobId } = await startScan(session, libraryId);
+    runId = jobId;
     await watchScan();
   } catch (error) {
     failure = readFailure(error);
@@ -97,7 +98,7 @@ async function rescan() {
   busy = true;
   failure = undefined;
   try {
-    const { jobId } = await session.client.libraries.scan({ id: libraryId });
+    const { jobId } = await startScan(session, libraryId);
     runId = jobId;
     await watchScan();
   } catch (error) {
@@ -213,6 +214,10 @@ async function rescan() {
         {:else if !scanSettled}
           <p class="muted">Scanning the library.</p>
         {/if}
+      {:else if failure}
+        <button type="button" onclick={rescan} disabled={busy}>
+          Scan again
+        </button>
       {:else}
         <p class="muted">Starting the scan.</p>
       {/if}

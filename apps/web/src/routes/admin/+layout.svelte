@@ -2,6 +2,8 @@
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { signOut } from "$lib/auth.ts";
+import Failure from "$lib/components/Failure.svelte";
+import { readFailure } from "$lib/errors.ts";
 import "$lib/admin.css";
 import type { LayoutProps } from "./$types";
 
@@ -15,13 +17,20 @@ const sections = [
 ];
 
 let signingOut = $state(false);
+let signOutFailure = $state<ReturnType<typeof readFailure> | undefined>(
+  undefined,
+);
 
 async function logout() {
   signingOut = true;
+  signOutFailure = undefined;
   try {
     await signOut();
-  } finally {
     await goto("/login");
+  } catch (error) {
+    signOutFailure = readFailure(error);
+  } finally {
+    signingOut = false;
   }
 }
 </script>
@@ -45,6 +54,9 @@ async function logout() {
   </nav>
   <div class="who">
     <span class="muted">{data.me.user.displayName}</span>
+    {#if signOutFailure}
+      <Failure failure={signOutFailure} />
+    {/if}
     <button type="button" onclick={logout} disabled={signingOut}
       >Sign out</button
     >

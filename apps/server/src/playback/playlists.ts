@@ -1,3 +1,22 @@
+/** One file name inside a session's HLS URL space. */
+export type HlsName =
+  | { kind: "master" }
+  | { kind: "media" }
+  | { kind: "init" }
+  | { kind: "segment"; index: number };
+
+/** Parses the last path segment of an HLS URL; null when it names nothing we serve. */
+export function parseHlsName(name: string): HlsName | null {
+  if (name === "master.m3u8") return { kind: "master" };
+  if (name === "media.m3u8") return { kind: "media" };
+  if (name === "init.mp4") return { kind: "init" };
+  const segment = /^(\d+)\.m4s$/.exec(name)?.[1];
+  if (segment === undefined) return null;
+  // Canonical names only: no leading zeros beyond "0" itself.
+  if (segment !== "0" && segment.startsWith("0")) return null;
+  return { kind: "segment", index: Number(segment) };
+}
+
 /** The single variant a remux master playlist advertises. */
 export type PlaylistVariant = {
   bandwidth: number; // bits per second, integer

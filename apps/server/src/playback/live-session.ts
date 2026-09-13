@@ -43,10 +43,11 @@ export function runStarted(state: LiveState, startIndex: number): LiveState {
   };
 }
 
-/** Records segments the current run finished; the frontier advances to the highest. */
+/** Records segments a run finished; the frontier advances to the highest unless the event is stale. */
 export function segmentsReady(
   state: LiveState,
   indexes: readonly number[],
+  advanceFrontier = true,
 ): LiveState {
   const ready = new Set(state.ready);
   for (const index of indexes) {
@@ -59,7 +60,9 @@ export function segmentsReady(
         ? null
         : {
             startIndex: state.run.startIndex,
-            frontier: Math.max(state.run.frontier, ...indexes),
+            frontier: advanceFrontier
+              ? Math.max(state.run.frontier, ...indexes)
+              : state.run.frontier,
           },
   };
 }

@@ -269,6 +269,27 @@ export async function scanDirectory(
       itemId = created.id;
     }
 
+    for (const [provider, value] of Object.entries(group.providerIds)) {
+      const [existingId] = await tx
+        .select()
+        .from(providerIds)
+        .where(
+          and(
+            eq(providerIds.itemId, itemId),
+            eq(providerIds.provider, provider),
+          ),
+        );
+      if (existingId) {
+        if (existingId.value !== value)
+          await tx
+            .update(providerIds)
+            .set({ value })
+            .where(eq(providerIds.id, existingId.id));
+      } else {
+        await tx.insert(providerIds).values({ provider, value, itemId });
+      }
+    }
+
     const versionIds: string[] = [];
     for (const member of members) {
       const label = videoVersionLabel(member.path, member.probe);

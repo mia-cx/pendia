@@ -228,8 +228,10 @@ export async function startPendia(
         runtimeRegistry.register(type, async (_payload, job) =>
           registry.run(job),
         );
-      if (!registry.types().includes("scan"))
+      if (!runtimeRegistry.types().includes("scan"))
         registerLibraryJobs(database.db, runtimeRegistry);
+      if (!runtimeRegistry.types().includes("provider-fetch"))
+        registerMetadataJobs(database.db, runtimeRegistry);
       worker = await startJobWorker(database.db, runtimeRegistry, {
         ...workerOptions,
         onError:

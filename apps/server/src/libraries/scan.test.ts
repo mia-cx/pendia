@@ -151,6 +151,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
               depth: 0,
             },
           ]);
+          expect(await db.select().from(providerIds)).toMatchObject([
+            { provider: "tmdb", value: "348", itemId: result.itemId },
+          ]);
 
           const versionRows = await db
             .select()
@@ -284,6 +287,12 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           expect(
             (await db.select().from(streams)).map((stream) => stream.id).sort(),
           ).toEqual(streamIds);
+          expect(
+            await db
+              .select()
+              .from(providerIds)
+              .where(eq(providerIds.itemId, first.itemId ?? "")),
+          ).toEqual([expect.objectContaining({ id: initialId?.id })]);
         });
       });
     }));

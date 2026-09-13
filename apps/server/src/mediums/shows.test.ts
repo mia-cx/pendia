@@ -130,6 +130,21 @@ describe("identify", () => {
     expect(identify("Show/Season 01/nested/Show S01E01.mkv")).toBeNull();
   });
 
+  test("rejects split extras after removing the part marker", () => {
+    for (const path of [
+      "Show/Season 01/Show S01E01-trailer-part1.mkv",
+      "Show/Season 01/Show S01E01.sample.pt2.mkv",
+      "Show/Season 01/Show S01E01_featurette_cd3.mkv",
+    ]) {
+      expect(identify(path)).toBeNull();
+      expect(groupShowPaths([path])).toEqual([]);
+    }
+    expect(identify("Show/Season 01/Show S01E01 - part1.mkv")).toEqual({
+      kind: "episode",
+      canonicalFolder: "Show",
+    });
+  });
+
   test("rejects non-video files", () => {
     expect(identify("Show/Season 01/Show S01E01.srt")).toBeNull();
     expect(identify("Show/Season 01/Show S01E01.jpg")).toBeNull();

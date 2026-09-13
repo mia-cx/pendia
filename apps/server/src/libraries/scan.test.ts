@@ -905,4 +905,102 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         ).toEqual(thirdVersions.map((version) => version.id).sort());
       });
     }));
+
+  test("does not widen into a retained standalone Episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const firstPath = join(seasonDir, "Show S01E01.mkv");
+        const secondPath = join(seasonDir, "Show S01E02.mkv");
+        await createVideoFixture(firstPath);
+        await copyFile(firstPath, secondPath);
+
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(2);
+        const firstEpisodes = await db
+          .select()
+          .from(episodes)
+          .orderBy(asc(episodes.episodeNumber));
+        expect(firstEpisodes).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: null },
+          { episodeNumber: 2, episodeEndNumber: null },
+        ]);
+        const firstEpisodeIds = firstEpisodes.map((row) => row.itemId);
+        const firstFileIds = (await db.select().from(files))
+          .map((file) => file.id)
+          .sort();
+        expect(firstFileIds).toHaveLength(2);
+
+        await copyFile(firstPath, join(seasonDir, "Show S01E01-E02.mkv"));
+        await rename(firstPath, join(seasonDir, "Show S01E01.removed"));
+        await rename(secondPath, join(seasonDir, "Show S01E02.removed"));
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(1);
+        const secondEpisodes = await db
+          .select()
+          .from(episodes)
+          .orderBy(asc(episodes.episodeNumber));
+        expect(secondEpisodes).toMatchObject([
+          {
+            itemId: firstEpisodeIds[0],
+            episodeNumber: 1,
+            episodeEndNumber: null,
+          },
+          {
+            itemId: firstEpisodeIds[1],
+            episodeNumber: 2,
+            episodeEndNumber: null,
+          },
+        ]);
+        const versionRows = await db.select().from(versions);
+        expect(versionRows).toHaveLength(3);
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(3);
+        const rangedFile = fileRows.find(
+          (file) => file.path === "Show/Season 01/Show S01E01-E02.mkv",
+        );
+        if (!rangedFile || !firstEpisodeIds[0]) {
+          throw new Error("Fixture File missing.");
+        }
+        expect(rangedFile.itemId).toBe(firstEpisodeIds[0]);
+        expect(second.versionIds).toEqual([rangedFile.versionId]);
+        expect(
+          versionRows.find((version) => version.id === rangedFile.versionId)
+            ?.itemId,
+        ).toBe(firstEpisodeIds[0]);
+        expect(fileRows.map((file) => file.id).sort()).toEqual(
+          expect.arrayContaining(firstFileIds),
+        );
+        expect(versionRows.map((version) => version.id).sort()).toEqual(
+          expect.arrayContaining(first.versionIds),
+        );
+
+        const third = await scanShowDirectory(db, library.id, show);
+        expect(third.versionIds).toEqual(second.versionIds);
+        expect(
+          await db.select().from(episodes).orderBy(asc(episodes.episodeNumber)),
+        ).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: null },
+          { episodeNumber: 2, episodeEndNumber: null },
+        ]);
+        expect(
+          (await db.select().from(files)).map((file) => file.id).sort(),
+        ).toEqual(fileRows.map((file) => file.id).sort());
+        expect(
+          (await db.select().from(versions))
+            .map((version) => version.id)
+            .sort(),
+        ).toEqual(versionRows.map((version) => version.id).sort());
+      });
+    }));
 });

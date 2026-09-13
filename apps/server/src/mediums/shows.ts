@@ -183,6 +183,14 @@ function analyze(path: string): AcceptedPath | null {
   const split = splitMarkerPattern.exec(stem);
   const versionStem = split?.[1] ?? stem;
   const part = split?.[2] === undefined ? null : Number(split[2]);
+  if (
+    split !== null &&
+    isExtra(
+      `${canonicalFolder}/${seasonFolder}/${versionStem}${posix.extname(name)}`,
+    )
+  ) {
+    return null;
+  }
   const episode = episodeNumbers(versionStem);
   if (episode === null || episode.season !== season) {
     return null;

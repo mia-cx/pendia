@@ -63,13 +63,24 @@ function matchesIfNoneMatch(header: string | null, etag: string): boolean {
 /** Creates the binary artwork HTTP handler with a process-local resize cache. */
 export function createArtworkHandler(
   db: Database,
-  options: { resize?: ArtworkResize; maxCacheEntries?: number } = {},
+  options: {
+    resize?: ArtworkResize;
+    maxCacheEntries?: number;
+    maxCacheBytes?: number;
+  } = {},
 ): (request: Request) => Promise<Response | undefined> {
   const maxCacheEntries = options.maxCacheEntries ?? 128;
-  if (!Number.isSafeInteger(maxCacheEntries) || maxCacheEntries < 1)
+  const maxCacheBytes = options.maxCacheBytes ?? 64 * 1024 * 1024;
+  if (
+    !Number.isSafeInteger(maxCacheEntries) ||
+    maxCacheEntries < 1 ||
+    !Number.isSafeInteger(maxCacheBytes) ||
+    maxCacheBytes < 1
+  )
     throw new Error("Invalid artwork cache size.");
   const resize = options.resize ?? sharpResize;
   const cache = new Map<string, { bytes: Uint8Array; contentType: string }>();
+  let cacheBytes = 0;
 
   return async (request) => {
     const url = new URL(request.url);
@@ -113,9 +124,13 @@ export function createArtworkHandler(
       if (original === null)
         return jsonError(404, "NOT_FOUND", "Artwork not found.");
 
+      const effectiveWidth =
+        original.artwork.width === null
+          ? width
+          : Math.min(width, original.artwork.width);
       const hasher = new Bun.CryptoHasher("sha256");
       hasher.update(original.bytes);
-      hasher.update(`;w=${width}`);
+      hasher.update(`;w=${effectiveWidth}`);
       const etag = `"${hasher.digest("hex")}"`;
       const headers = {
         ETag: etag,
@@ -130,11 +145,17 @@ export function createArtworkHandler(
         cache.delete(etag);
         cache.set(etag, result);
       } else {
-        result = await resize(original.bytes, width);
-        cache.set(etag, result);
-        if (cache.size > maxCacheEntries) {
-          const oldest = cache.keys().next().value;
-          if (oldest !== undefined) cache.delete(oldest);
+        result = await resize(original.bytes, effectiveWidth);
+        if (result.bytes.byteLength <= maxCacheBytes) {
+          cache.set(etag, result);
+          cacheBytes += result.bytes.byteLength;
+          while (cache.size > maxCacheEntries || cacheBytes > maxCacheBytes) {
+            const oldest = cache.keys().next().value;
+            if (oldest === undefined) break;
+            const evicted = cache.get(oldest);
+            cache.delete(oldest);
+            if (evicted !== undefined) cacheBytes -= evicted.bytes.byteLength;
+          }
         }
       }
       return new Response(Buffer.from(result.bytes), {

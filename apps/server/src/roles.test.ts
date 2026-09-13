@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { migrateDatabase } from "./db/migrate.ts";
-import type { JobPayload } from "./db/schema/index.ts";
+import { type JobPayload, transcoderCapabilities } from "./db/schema/index.ts";
 import { databaseUrl, withDatabase } from "./db/testing.ts";
 import { type Role, startPendia } from "./index.ts";
 import { createJobQueue, type Job, listJobs } from "./jobs/queue.ts";
@@ -62,8 +62,12 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
         port: 0,
         registry,
         workerOptions: { pollIntervalMs: 20 },
+        transcoderOptions: { port: 0 },
       });
       try {
+        expect(server.transcoder).toBeDefined();
+        const nodes = await db.select().from(transcoderCapabilities);
+        expect(nodes).toMatchObject([{ id: server.transcoder?.nodeId }]);
         const ready = await fetch(
           `http://127.0.0.1:${server.apiServer?.port}/readyz`,
         );
@@ -76,6 +80,51 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
       } finally {
         await server.stop();
       }
+    }));
+
+  test("transcoder role registers its node, answers the internal route and unregisters on stop", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const server = await startPendia("transcoder", {
+        databaseUrl: url,
+        transcoderOptions: { port: 0 },
+      });
+      try {
+        const transcoder = server.transcoder;
+        if (transcoder === undefined) {
+          throw new Error("Expected a transcoder handle.");
+        }
+        const nodes = await db.select().from(transcoderCapabilities);
+        expect(nodes).toMatchObject([
+          { id: transcoder.nodeId, address: transcoder.address, backends: [] },
+        ]);
+        expect(transcoder.address).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+
+        const health = await fetch(`${transcoder.address}/healthz`);
+        expect(health.status).toBe(200);
+
+        const scope = `${transcoder.address}/internal/playback/${Bun.randomUUIDv7()}/${Bun.randomUUIDv7()}/hls`;
+        const badToken = await fetch(`${scope}/master.m3u8?token=bad`);
+        expect(badToken.status).toBe(401);
+        expect(await badToken.json()).toMatchObject({
+          error: { code: "UNAUTHENTICATED" },
+        });
+        expect((await fetch(`${scope}/master.m3u8`)).status).toBe(401);
+        expect(
+          (
+            await fetch(`${scope}/master.m3u8?token=bad`, {
+              method: "POST",
+            })
+          ).status,
+        ).toBe(405);
+        expect((await fetch(`${scope}/evil.txt?token=x`)).status).toBe(404);
+      } finally {
+        await server.stop();
+      }
+      expect(await db.select().from(transcoderCapabilities)).toHaveLength(0);
+      await expect(
+        fetch(`http://127.0.0.1:${server.transcoder?.port}/healthz`),
+      ).rejects.toThrow();
     }));
 
   for (const role of [
@@ -98,6 +147,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
           port: 0,
           registry,
           workerOptions: { pollIntervalMs: 20 },
+          transcoderOptions: { port: 0 },
         });
         try {
           await Bun.sleep(100);

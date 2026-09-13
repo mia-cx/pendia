@@ -58,12 +58,14 @@ export type ScanChange =
     };
 
 export type JobPayload =
+  // A directory scan's runId is the id of the root job that fanned it out.
   | {
       type: "scan";
       libraryId: string;
       path: string;
       changes?: ScanChange[];
       reconcileMissing?: boolean;
+      runId?: string;
     }
   | { type: "probe"; fileId: string }
   | { type: "provider-fetch"; itemId: string; provider: string }

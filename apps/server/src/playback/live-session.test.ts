@@ -78,6 +78,12 @@ describe("segmentsReady", () => {
     expect(next.ready).toEqual(new Set([7]));
     expect(next.run).toBeNull();
   });
+
+  test("a stale event adds indexes without moving the frontier", () => {
+    const next = segmentsReady(running, [8, 9], false);
+    expect(next.ready).toEqual(new Set([0, 1, 2, 8, 9]));
+    expect(next.run).toEqual({ startIndex: 0, frontier: 2 });
+  });
 });
 
 describe("runEnded", () => {

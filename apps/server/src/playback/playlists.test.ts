@@ -4,6 +4,8 @@ import {
   buildMasterPlaylist,
   buildMediaPlaylist,
   codecString,
+  type HlsName,
+  parseHlsName,
   segmentCount,
 } from "./playlists.ts";
 
@@ -93,6 +95,26 @@ describe("segmentCount", () => {
     expect(segmentCount([0, 3, 6, 9, 12.021])).toBe(4);
     expect(segmentCount([0, 5])).toBe(1);
   });
+});
+
+describe("parseHlsName", () => {
+  const known: [string, HlsName][] = [
+    ["master.m3u8", { kind: "master" }],
+    ["media.m3u8", { kind: "media" }],
+    ["init.mp4", { kind: "init" }],
+    ["0.m4s", { kind: "segment", index: 0 }],
+    ["12.m4s", { kind: "segment", index: 12 }],
+  ];
+  test.each(known)("%s -> %o", (name, expected) => {
+    expect(parseHlsName(name)).toEqual(expected);
+  });
+
+  test.each(["../x", "01.m4s", "00.m4s", "x.m4s", "1.mp4", "", "init.MP4"])(
+    "rejects %s",
+    (name) => {
+      expect(parseHlsName(name)).toBeNull();
+    },
+  );
 });
 
 describe("codecString", () => {

@@ -18,6 +18,7 @@ export type WizardSession = {
 export async function setupOpen(options: WizardOptions = {}) {
   const { complete } = await createPendiaClient({
     origin: options.origin,
+    fetch: options.fetch,
   }).setup.status();
   return !complete;
 }
@@ -37,6 +38,7 @@ export async function createAdmin(
     client: createPendiaClient({
       origin: options.origin,
       headers: { authorization: `Bearer ${token}` },
+      fetch: options.fetch,
     }),
   };
 }

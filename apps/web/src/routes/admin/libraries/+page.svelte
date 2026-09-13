@@ -67,8 +67,12 @@ async function loadStatuses(rows: readonly LibraryRow[]) {
   const next: Record<string, ScanStatus> = {};
   const failed: Record<string, string> = {};
   for (const result of results) {
-    if (result.status) next[result.id] = result.status;
-    else failed[result.id] = "The scan status could not be read.";
+    if (result.status) {
+      next[result.id] = result.status;
+      delete scanFailures[result.id];
+    } else {
+      failed[result.id] = "The scan status could not be read.";
+    }
   }
   statuses = next;
   statusFailures = failed;

@@ -138,7 +138,7 @@ export async function readAuthSettings(db: Pick<Database, "select">) {
 
 /** The auth settings an admin may write in this slice. */
 export type AuthSettingsPatch = {
-  trustedProxyAddresses?: string[];
+  trustedProxyAddresses?: readonly string[];
   artworkRequiresAuth?: boolean;
 };
 

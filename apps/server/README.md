@@ -120,6 +120,7 @@ The `settings` row with key `auth` holds one JSON object. Missing fields use the
   "loginMaxAttempts": 5,
   "loginWindowSeconds": 900,
   "trustedProxyAddresses": [],
+  "artworkRequiresAuth": false,
   "oidc": null
 }
 ```
@@ -140,7 +141,8 @@ To enable OIDC, set `oidc` to an object:
 The issuer, clientId and clientSecret fields are required. `openid` must be included, and scopes use OAuth scope-token characters. HTTPS is required except loopback HTTP for tests. Keep client secrets out of source control and logs.
 
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
-Settings apply on the next request. Invalid stored settings fail closed. Admin settings screens belong to a later slice.
+`artworkRequiresAuth` is a boolean defaulting to false. `settings.update` writes `trustedProxyAddresses` and `artworkRequiresAuth` only.
+Settings apply on the next request. Invalid stored settings fail closed.
 A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
 
 Login attempts share independent address and normalized-account windows across API replicas. Successful logins consume an attempt too.
@@ -165,7 +167,7 @@ Discovery document: `https://id.mia.cx/application/o/pendia/.well-known/openid-c
 Authentik must emit `email` and `email_verified`. Only verified email links an existing Pendia account.
 Reverse proxies and firewalls must allow server-side discovery, token, JWKS, and UserInfo requests between Pendia and id.mia.cx.
 
-The admin settings screen is a later issue. Until then, configure OIDC with this PostgreSQL 18 upsert:
+OIDC stays read-only over the API in this slice. Configure it with this PostgreSQL 18 upsert:
 
 ```sql
 INSERT INTO settings (id, key, value)
@@ -209,9 +211,40 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `items.list` | GET `/api/items` | `libraryId`, `kind`, `limit`, `cursor` | `{ items, cursor }` of cards |
 | `items.get` | GET `/api/items/{id}` | `id` in the path | the detail shape |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
+| `setup.status` | GET `/api/setup/status` | None | `{ complete }` |
+| `users.list` | GET `/api/users` | None | `AdminUser` array |
+| `users.get` | GET `/api/users/{id}` | `id` | `UserAccess` |
+| `users.create` | POST `/api/users` | `username`, `password`, optional `displayName` | `UserAccount` |
+| `users.sessions` | GET `/api/users/{id}/sessions` | `id` | `Session` array |
+| `users.revokeSession` | POST `/api/sessions/{id}/revoke` | `id` | `{ ok: true }` |
+| `users.setGroups` | PUT `/api/users/{id}/groups` | `id`, `groupIds` | `UserAccess` |
+| `users.setOverride` | PUT `/api/users/{id}/overrides/{permission}` | `id`, `permission`, nullable `allowed` | `UserAccess` |
+| `users.setSettings` | PUT `/api/users/{id}/settings` | `id`, nullable `bitrateCapBps`, nullable `contentRatingCeiling` | `UserAccess` |
+| `users.setLibraryAccess` | PUT `/api/users/{id}/libraries/{libraryId}` | `id`, `libraryId`, nullable `allowed` | `UserAccess` |
+| `groups.list` | GET `/api/groups` | None | `Group` array |
+| `groups.create` | POST `/api/groups` | `name`, `permissions` | `Group` |
+| `groups.setPermissions` | PUT `/api/groups/{id}/permissions` | `id`, `permissions` | `Group` |
+| `settings.get` | GET `/api/settings` | None | `ServerSettings` |
+| `settings.update` | PATCH `/api/settings` | optional `trustedProxyAddresses`, optional `artworkRequiresAuth` | `ServerSettings` |
+| `settings.setProviderKey` | PUT `/api/settings/providers/{name}` | `name`, `value` | `ServerSettings` |
+| `settings.deleteProviderKey` | DELETE `/api/settings/providers/{name}` | `name` | `ServerSettings` |
 
 Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
+
+`setup.status` is the only unauthenticated procedure. The first-run wizard asks it before any account exists, and it leaks one boolean that `POST /api/auth/setup` already leaks through its 409.
+The other admin procedures check permissions inside the auth slice: `manage-users` for user reads and settings, `manage-server` for server settings, and built-in admin membership for group and library access writes.
+
+`users.get` and the four `users.set*` mutations all answer the full `UserAccess` shape, so the per-user screen refreshes in one round trip.
+`users.setOverride` restores inheritance on a null `allowed`. `users.setLibraryAccess` writes user rows only; group access rows stay unexposed in this slice.
+`bitrateCapBps` crosses the API as a nullable integer and the service stores it as bigint. `contentRatingCeiling` trims, rejects blanks and clears on null.
+Session and user instants cross as ISO-8601 at millisecond precision, because the auth slice hands back `Date` values. Item instants stay the database's own UTC text.
+
+Group permission edits apply to custom groups only. The built-in `admins` and `users` groups reject writes: admins bypass every check, and `users` is the documented default group.
+
+`settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured and the provider key names. No read returns a provider key value or the OIDC client secret; provider keys are write-only over the API.
+Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `settings.update`. OIDC stays read-only in this slice.
+`artworkRequiresAuth` is stored and editable, but nothing enforces it yet because no artwork route exists in tree.
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year` and `addedAt`.
 Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
@@ -264,7 +297,9 @@ Library administration requires `manage-libraries` on every procedure. The API e
 | `libraries.update` | PATCH `/api/libraries/{id}` | `id`, `name` | Library |
 | `libraries.delete` | DELETE `/api/libraries/{id}` | `id` | `{ ok: true }` |
 | `libraries.scan` | POST `/api/libraries/{id}/scan` | `id` | `{ jobId }` |
+| `libraries.scanStatus` | GET `/api/libraries/{id}/scan-status` | `id` | `ScanStatus` |
 
+A ScanStatus contains the library id, scan job counts for the four job states, and the newest scan job's id, state and error, or null when the library never scanned.
 A Library contains `id`, `name`, `medium` and `rootPath`. Names trim surrounding whitespace and allow 1 to 128 characters. Roots must be absolute. Roots and mediums cannot change through `update`. Deleting a library removes its database records, never its files. Mutations use the auth module's origin checks.
 
 The returned scan job walks the root and enqueues one scan per canonical movie or show folder in one transaction. Every root and directory job carries `library:<id>` as its concurrency key. The existing queue key limit applies. Worker and all roles register the built-in handler on startup. An explicit custom scan handler takes precedence.

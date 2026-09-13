@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { permissions } from "../db/schema/index.ts";
 import { maxPageSize } from "./pagination.ts";
 
 /** The kinds of library item the API exposes. */
@@ -74,6 +75,92 @@ export function connection<A, I, R>(item: Schema.Schema<A, I, R>) {
     cursor: Schema.NullOr(Schema.String),
   });
 }
+
+/** The flat permission names the auth slice enforces. */
+export const PermissionName = Schema.Literal(...permissions);
+
+/** The account shape user creation returns. */
+export const UserAccount = Schema.Struct({
+  id: Schema.UUID,
+  username: Schema.String,
+  displayName: Schema.String,
+});
+
+/** The user shape the admin screens list and edit. */
+export const AdminUser = Schema.Struct({
+  id: Schema.UUID,
+  username: Schema.String,
+  displayName: Schema.String,
+  email: Schema.NullOr(Schema.String),
+  disabledAt: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+});
+
+/** A permission group with its granted permission names. */
+export const Group = Schema.Struct({
+  id: Schema.UUID,
+  name: Schema.String,
+  builtIn: Schema.Boolean,
+  permissions: Schema.Array(PermissionName),
+});
+
+/** The per-user bitrate cap and content-rating ceiling. */
+export const UserSettings = Schema.Struct({
+  bitrateCapBps: Schema.NullOr(Schema.Int),
+  contentRatingCeiling: Schema.NullOr(Schema.String),
+});
+
+/** One user's full access shape behind the per-user screen. */
+export const UserAccess = Schema.Struct({
+  user: AdminUser,
+  groupIds: Schema.Array(Schema.UUID),
+  overrides: Schema.Array(
+    Schema.Struct({ permission: PermissionName, allowed: Schema.Boolean }),
+  ),
+  libraryAccess: Schema.Array(
+    Schema.Struct({ libraryId: Schema.UUID, allowed: Schema.Boolean }),
+  ),
+  settings: UserSettings,
+});
+
+/** A device session row the admin can inspect and revoke. */
+export const Session = Schema.Struct({
+  id: Schema.UUID,
+  userId: Schema.UUID,
+  clientName: Schema.String,
+  deviceId: Schema.String,
+  deviceName: Schema.String,
+  createdAt: Schema.String,
+  lastSeenAt: Schema.String,
+  expiresAt: Schema.NullOr(Schema.String),
+  revokedAt: Schema.NullOr(Schema.String),
+});
+
+/** The server settings the admin reads; no secret ever appears. */
+export const ServerSettings = Schema.Struct({
+  trustedProxyAddresses: Schema.Array(Schema.String),
+  artworkRequiresAuth: Schema.Boolean,
+  oidcConfigured: Schema.Boolean,
+  providerKeys: Schema.Array(Schema.String),
+});
+
+/** Scan job counts and the newest scan job for one library. */
+export const ScanStatus = Schema.Struct({
+  libraryId: Schema.UUID,
+  counts: Schema.Struct({
+    queued: Schema.Int,
+    running: Schema.Int,
+    completed: Schema.Int,
+    failed: Schema.Int,
+  }),
+  latest: Schema.NullOr(
+    Schema.Struct({
+      id: Schema.UUID,
+      state: Schema.Literal("queued", "running", "completed", "failed"),
+      error: Schema.NullOr(Schema.String),
+    }),
+  ),
+});
 
 /** A cross-process event streamed to subscribed clients. */
 export const ApiEvent = Schema.Union(

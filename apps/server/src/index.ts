@@ -7,6 +7,7 @@ import { migrateDatabase } from "./db/migrate.ts";
 import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
 import { registerLibraryJobs } from "./libraries/jobs.ts";
+import { createLibraryRepair, type RepairOptions } from "./libraries/repair.ts";
 import {
   type ChangeDebouncerOptions,
   createChangeDebouncer,
@@ -125,6 +126,7 @@ type StartOptions = {
   workerOptions?: Parameters<typeof startJobWorker>[2];
   brokerOptions?: Parameters<typeof startEventBroker>[1];
   changeOptions?: ChangeDebouncerOptions;
+  repairOptions?: RepairOptions;
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -137,6 +139,7 @@ export async function startPendia(
     workerOptions,
     brokerOptions,
     changeOptions,
+    repairOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
@@ -147,8 +150,9 @@ export async function startPendia(
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
   let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
   let changeDebouncer: ReturnType<typeof createChangeDebouncer> | undefined;
+  let repair: ReturnType<typeof createLibraryRepair> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops the API server, change debouncer, worker, event broker and database pool once, in that order. */
+  /** Stops the API server, change debouncer, repair controller, worker, event broker and database pool once, in that order. */
   function stop() {
     stopping ??= (async () => {
       try {
@@ -158,12 +162,16 @@ export async function startPendia(
           await changeDebouncer?.close();
         } finally {
           try {
-            await worker?.stop();
+            await repair?.stop();
           } finally {
             try {
-              await eventBroker?.stop();
+              await worker?.stop();
             } finally {
-              await database?.close();
+              try {
+                await eventBroker?.stop();
+              } finally {
+                await database?.close();
+              }
             }
           }
         }
@@ -186,6 +194,20 @@ export async function startPendia(
                 level: "error",
                 role: "api",
                 message: "changes.error",
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            )),
+      });
+      repair = createLibraryRepair(database.db, {
+        ...repairOptions,
+        onError:
+          repairOptions?.onError ??
+          ((error: unknown) =>
+            console.error(
+              JSON.stringify({
+                level: "error",
+                role: "api",
+                message: "repair.error",
                 error: error instanceof Error ? error.message : String(error),
               }),
             )),
@@ -221,6 +243,7 @@ export async function startPendia(
             )),
       });
     }
+    repair?.start();
     startRoles(role, apiServer, worker !== undefined);
     return { apiServer, stop };
   } catch (error) {

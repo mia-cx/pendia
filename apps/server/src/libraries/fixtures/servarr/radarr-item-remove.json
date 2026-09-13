@@ -1,0 +1,19 @@
+{
+  "eventType": "MovieDelete",
+  "instanceName": "Radarr",
+  "applicationUrl": "http://radarr:7878",
+  "movie": {
+    "id": 7,
+    "title": "Alien",
+    "year": 1979,
+    "releaseDate": "1979-05-25",
+    "folderPath": "/media/movies/Alien (1979) {tmdb-348}",
+    "tmdbId": 348,
+    "imdbId": "tt0078748",
+    "overview": "The crew of a commercial spacecraft encounters a deadly lifeform.",
+    "genres": ["Horror", "Science Fiction"],
+    "tags": ["favourites"]
+  },
+  "deletedFiles": false,
+  "addImportExclusion": false
+}

@@ -118,6 +118,10 @@ const translateChanges = (
         ];
       }
       if (payload.eventType === shape.itemDeleteEvent) {
+        if (typeof payload.deletedFiles !== "boolean") {
+          throw new Error(shape.message);
+        }
+        if (!payload.deletedFiles) return [];
         const item = requireObject(payload[shape.itemKey]);
         return [
           {

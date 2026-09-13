@@ -13,6 +13,7 @@ export async function waitForScan(
     timeoutMs?: number;
     intervalMs?: number;
     signal?: AbortSignal;
+    runId?: string;
     onStatus?: (status: ScanStatus) => void;
   } = {},
 ) {
@@ -20,7 +21,10 @@ export async function waitForScan(
     options.timeoutMs === undefined ? null : Date.now() + options.timeoutMs;
   const intervalMs = options.intervalMs ?? 250;
   for (;;) {
-    const status = await client.libraries.scanStatus({ id: libraryId });
+    const status = await client.libraries.scanStatus({
+      id: libraryId,
+      runId: options.runId,
+    });
     options.onStatus?.(status);
     const { counts } = status;
     if (

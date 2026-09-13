@@ -16,6 +16,7 @@ const stepTitles = ["Create the admin", "Add the first library", "Scan"];
 let step = $state(0);
 let session = $state<WizardSession | undefined>(undefined);
 let libraryId = $state("");
+let runId = $state<string | undefined>(undefined);
 let status = $state<ScanStatus | undefined>(undefined);
 let busy = $state(false);
 let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
@@ -63,6 +64,7 @@ async function watchScan() {
   if (!session) return;
   status = await waitForScan(session.client, libraryId, {
     signal: controller.signal,
+    runId,
     onStatus: (reading) => {
       status = reading;
     },
@@ -80,6 +82,7 @@ async function submitLibrary(event: SubmitEvent) {
       rootPath,
     });
     libraryId = created.library.id;
+    runId = created.jobId;
     step = 2;
     await watchScan();
   } catch (error) {
@@ -94,7 +97,8 @@ async function rescan() {
   busy = true;
   failure = undefined;
   try {
-    await session.client.libraries.scan({ id: libraryId });
+    const { jobId } = await session.client.libraries.scan({ id: libraryId });
+    runId = jobId;
     await watchScan();
   } catch (error) {
     failure = readFailure(error);

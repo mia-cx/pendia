@@ -112,9 +112,10 @@ async function scanNow(row: LibraryRow) {
   scanBusy[row.id] = true;
   delete scanFailures[row.id];
   try {
-    await client.libraries.scan({ id: row.id });
+    const { jobId } = await client.libraries.scan({ id: row.id });
     statuses[row.id] = await waitForScan(client, row.id, {
       signal: controller.signal,
+      runId: jobId,
       onStatus: (reading) => {
         statuses[row.id] = reading;
       },

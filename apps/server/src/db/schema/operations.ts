@@ -42,7 +42,8 @@ export const pluginLockfile = pgTable("plugin_lockfile", {
 });
 
 export type JobPayload =
-  | { type: "scan"; libraryId: string; path: string }
+  // A directory scan's runId is the id of the root job that fanned it out.
+  | { type: "scan"; libraryId: string; path: string; runId?: string }
   | { type: "probe"; fileId: string }
   | { type: "provider-fetch"; itemId: string; provider: string }
   | { type: "store"; sourceFileId: string; rung: string }

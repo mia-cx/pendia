@@ -20,7 +20,7 @@ export function registerLibraryJobs(
   db: Database,
   registry: ReturnType<typeof createJobRegistry>,
 ) {
-  registry.register("scan", async (payload) => {
+  registry.register("scan", async (payload, job) => {
     const [library] = await db
       .select()
       .from(libraries)
@@ -58,7 +58,12 @@ export function registerLibraryJobs(
       const queue = createJobQueue(tx);
       for (const group of groups)
         await queue.enqueue(
-          { type: "scan", libraryId: library.id, path: group.canonicalFolder },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: group.canonicalFolder,
+            runId: job.id,
+          },
           { concurrencyKey },
         );
     });

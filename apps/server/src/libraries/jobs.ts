@@ -29,10 +29,10 @@ export function registerLibraryJobs(
     if (payload.path !== ".") {
       const result = await scanDirectory(db, library.id, payload.path);
       if (result.itemId !== null) {
-        await createJobQueue(db).enqueue({
-          type: "provider-fetch",
-          itemId: result.itemId,
-        });
+        await createJobQueue(db).enqueue(
+          { type: "provider-fetch", itemId: result.itemId },
+          { concurrencyKey: `provider:${result.itemId}` },
+        );
       }
       await publishEvent(db, {
         kind: "library.changed",

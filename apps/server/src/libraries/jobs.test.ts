@@ -185,10 +185,33 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         expect(queued.map((job) => job.payload)).toEqual([
           { type: "provider-fetch", itemId: item.id },
         ]);
+        expect(queued[0]?.concurrencyKey).toBe(`provider:${item.id}`);
         expect(await db.select().from(events)).toMatchObject([
           { kind: "library.changed" },
         ]);
       });
+    }));
+
+  test("provider-fetch jobs on one item claim one at a time", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const itemId = Bun.randomUUIDv7();
+      const key = `provider:${itemId}`;
+      const first = await queue.enqueue(
+        { type: "provider-fetch", itemId },
+        { concurrencyKey: key },
+      );
+      const second = await queue.enqueue(
+        { type: "provider-fetch", itemId },
+        { concurrencyKey: key },
+      );
+      const claimed = await queue.claim(["provider-fetch"]);
+      expect(claimed?.id).toBe(first.id);
+      expect(await queue.claim(["provider-fetch"])).toBeUndefined();
+      await queue.complete(claimed ?? first);
+      const next = await queue.claim(["provider-fetch"]);
+      expect(next?.id).toBe(second.id);
     }));
 
   test("an empty directory scan enqueues no provider-fetch job", () =>

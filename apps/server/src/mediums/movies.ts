@@ -70,14 +70,21 @@ function identify(
 
 const providerSuffixSource = "\\{(tmdb|imdb|tvdb)[-=]([^}]*)\\}";
 
+const providerValuePatterns: Record<string, RegExp> = {
+  imdb: /^tt[1-9][0-9]*$/i,
+  tmdb: /^[1-9][0-9]*$/,
+  tvdb: /^[1-9][0-9]*$/,
+};
+
 function folderProviderIds(canonicalFolder: string): Record<string, string> {
   const ids: Record<string, string> = {};
   const pattern = new RegExp(providerSuffixSource, "gi");
   for (const match of posix.basename(canonicalFolder).matchAll(pattern)) {
     const provider = (match[1] ?? "").toLowerCase();
     const value = (match[2] ?? "").trim();
-    if (value.length === 0 || provider in ids) continue;
-    ids[provider] = value;
+    if (provider in ids || !providerValuePatterns[provider]?.test(value))
+      continue;
+    ids[provider] = provider === "imdb" ? value.toLowerCase() : value;
   }
   return ids;
 }

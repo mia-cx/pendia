@@ -12,7 +12,7 @@ import {
 } from "../db/schema/index.ts";
 import { insertItem } from "../db/tree.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
-import { groupShowPaths, showsMedium } from "../mediums/shows.ts";
+import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
@@ -246,7 +246,7 @@ export async function scanShowDirectory(
   if (library.medium !== "shows") throw new AuthError("INVALID_INPUT");
 
   const walked: string[] = [];
-  for await (const file of walkLibrary(library.rootPath, showsMedium.scan, {
+  for await (const file of walkLibrary(library.rootPath, showsScan, {
     path,
   })) {
     walked.push(file.path);

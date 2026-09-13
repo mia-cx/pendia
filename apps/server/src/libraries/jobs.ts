@@ -6,7 +6,7 @@ import { libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
-import { groupShowPaths, showsMedium } from "../mediums/shows.ts";
+import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { walkLibrary } from "./walker.ts";
 
@@ -26,8 +26,7 @@ export function registerLibraryJobs(
       .from(libraries)
       .where(eq(libraries.id, payload.libraryId));
     if (!library) throw new AuthError("NOT_FOUND");
-    const rules =
-      library.medium === "movies" ? moviesMedium.scan : showsMedium.scan;
+    const rules = library.medium === "movies" ? moviesMedium.scan : showsScan;
     if (payload.path !== ".") {
       if (library.medium === "movies") {
         await scanDirectory(db, library.id, payload.path);

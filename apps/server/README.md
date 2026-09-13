@@ -215,7 +215,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
 
-Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year` and `addedAt`.
+Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}`.
 Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.

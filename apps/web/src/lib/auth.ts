@@ -6,7 +6,12 @@ export type AuthOptions = {
   fetch?: typeof globalThis.fetch;
 };
 
-type PublicUser = { id: string; username: string; displayName: string };
+/** The public account shape the auth routes return. */
+export type PublicUser = {
+  id: string;
+  username: string;
+  displayName: string;
+};
 
 type SessionInfo = {
   id: string;

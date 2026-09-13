@@ -364,6 +364,14 @@ export async function scanShowDirectory(
         seasonId = created.id;
       }
 
+      const persistedEpisodes = await tx
+        .select({
+          itemId: episodes.itemId,
+          episodeNumber: episodes.episodeNumber,
+        })
+        .from(episodes)
+        .where(eq(episodes.seasonId, seasonId));
+
       for (const episodeGroup of seasonGroup.episodes) {
         const [existingEpisode] = await tx
           .select({ item: items, episode: episodes })
@@ -395,8 +403,14 @@ export async function scanShowDirectory(
               candidate.episodeNumber > discoveredEnd &&
               candidate.episodeNumber <= existingEnd,
           );
+          const blocksWidening = persistedEpisodes.some(
+            (candidate) =>
+              candidate.itemId !== episodeId &&
+              candidate.episodeNumber > existingEnd &&
+              candidate.episodeNumber <= discoveredEnd,
+          );
           if (
-            discoveredEnd > existingEnd ||
+            (discoveredEnd > existingEnd && !blocksWidening) ||
             (discoveredEnd < existingEnd && overlapsDiscoveredEpisode)
           ) {
             await tx

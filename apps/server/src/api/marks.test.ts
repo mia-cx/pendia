@@ -18,6 +18,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertItem } from "../db/tree.ts";
 import { startPendia } from "../index.ts";
 import { encodeCursor } from "./pagination.ts";
 import type { pendiaRouter } from "./router.ts";
@@ -642,6 +643,69 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
         });
         expect(rest.status).toBe(200);
         expect(await rest.json()).toEqual(shelf);
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("serves the shows next up contribution over RPC and REST", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const fx = await seed(db);
+      const [library] = await db
+        .insert(libraries)
+        .values({ name: "Shows", medium: "shows", rootPath: "/srv/shows" })
+        .returning();
+      if (!library) throw new Error("Library insert returned no row.");
+      const show = await insertItem(db, {
+        libraryId: library.id,
+        kind: "show",
+        title: "Show",
+        canonicalFolder: "Show",
+        extension: {},
+      });
+      const season = await insertItem(db, {
+        libraryId: library.id,
+        kind: "season",
+        parentId: show.id,
+        title: "Season 1",
+        canonicalFolder: "Show/Season 01",
+        extension: { seasonNumber: 1 },
+      });
+      const e1 = await insertItem(db, {
+        libraryId: library.id,
+        kind: "episode",
+        parentId: season.id,
+        title: "Episode 1",
+        canonicalFolder: "Show/Season 01",
+        extension: { episodeNumber: 1, episodeEndNumber: null },
+      });
+      const e2 = await insertItem(db, {
+        libraryId: library.id,
+        kind: "episode",
+        parentId: season.id,
+        title: "Episode 2",
+        canonicalFolder: "Show/Season 01",
+        extension: { episodeNumber: 2, episodeEndNumber: null },
+      });
+      await addProgress(db, {
+        userId: fx.owner.id,
+        itemId: e1.id,
+        versionId: null,
+        positionSeconds: 120,
+        completed: true,
+        playedAt: "2026-01-01T00:00:00Z",
+      });
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = rpcClient(base, fx.keyToken);
+        expect(await client.shelves.nextUp()).toEqual([e2.id]);
+        const rest = await fetch(`${base}/api/shelves/next-up`, {
+          headers: { authorization: `Bearer ${fx.keyToken}` },
+        });
+        expect(rest.status).toBe(200);
+        expect(await rest.json()).toEqual([e2.id]);
       } finally {
         await server.stop();
       }

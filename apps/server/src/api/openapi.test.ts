@@ -52,6 +52,7 @@ describe("openapi document", () => {
         "/items/{itemId}/favourite",
         "/items/{itemId}/rating",
         "/shelves/continue-watching",
+        "/shelves/next-up",
       ]),
     );
   });
@@ -109,6 +110,7 @@ describe("openapi document", () => {
       ["/items/{itemId}/favourite", "put"],
       ["/items/{itemId}/rating", "put"],
       ["/shelves/continue-watching", "get"],
+      ["/shelves/next-up", "get"],
     ];
     for (const [path, method] of expected) {
       const operation = paths?.[path]?.[method];
@@ -141,6 +143,13 @@ describe("openapi document", () => {
     expect(Object.keys(shelfEntry)).toEqual(
       expect.arrayContaining(["item", "progress", "durationSeconds"]),
     );
+    const nextUpSchema = paths?.["/shelves/next-up"]?.get?.responses?.["200"]
+      ?.content?.["application/json"]?.schema as
+      | { type?: string; items?: { type?: string; format?: string } }
+      | undefined;
+    expect(nextUpSchema?.type).toBe("array");
+    expect(nextUpSchema?.items?.type).toBe("string");
+    expect(nextUpSchema?.items?.format).toBe("uuid");
   });
 
   test("no reference in the document dangles into $defs", async () => {

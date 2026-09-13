@@ -714,4 +714,78 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(Math.max(...fileRows.map((file) => file.order))).toBe(1);
       });
     }));
+
+  test("keeps equivalent season folder splits as distinct Versions", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const season1Dir = join(root, show, "Season 1");
+        await mkdir(season1Dir, { recursive: true });
+        const part1 = join(season1Dir, "Show S01E01 - part1.mkv");
+        await createVideoFixture(part1);
+
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(1);
+        const firstFiles = await db.select().from(files);
+        expect(firstFiles).toHaveLength(1);
+        const firstFileIds = firstFiles.map((file) => file.id);
+
+        const season01Dir = join(root, show, "Season 01");
+        await mkdir(season01Dir, { recursive: true });
+        await copyFile(part1, join(season01Dir, "Show S01E01 - part2.mkv"));
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(2);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows.filter((item) => item.kind === "show")).toHaveLength(1);
+        expect(itemRows.filter((item) => item.kind === "season")).toHaveLength(
+          1,
+        );
+        expect(itemRows.filter((item) => item.kind === "episode")).toHaveLength(
+          1,
+        );
+        expect(await db.select().from(seasons)).toMatchObject([
+          { seasonNumber: 1 },
+        ]);
+        expect(await db.select().from(episodes)).toMatchObject([
+          { episodeNumber: 1 },
+        ]);
+
+        const versionRows = await db.select().from(versions);
+        expect(versionRows).toHaveLength(2);
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(2);
+        for (const file of fileRows) {
+          expect(file.order).toBe(0);
+        }
+        expect(new Set(fileRows.map((file) => file.versionId))).toHaveLength(2);
+        expect(fileRows.map((file) => file.id)).toEqual(
+          expect.arrayContaining(firstFileIds),
+        );
+        expect(versionRows.map((version) => version.id)).toEqual(
+          expect.arrayContaining(first.versionIds),
+        );
+
+        const third = await scanShowDirectory(db, library.id, show);
+        expect(third.versionIds).toEqual(second.versionIds);
+        const stableFiles = await db.select().from(files);
+        expect(stableFiles).toHaveLength(2);
+        expect(stableFiles.map((file) => file.id).sort()).toEqual(
+          fileRows.map((file) => file.id).sort(),
+        );
+        expect(
+          (await db.select().from(versions))
+            .map((version) => version.id)
+            .sort(),
+        ).toEqual(versionRows.map((version) => version.id).sort());
+      });
+    }));
 });

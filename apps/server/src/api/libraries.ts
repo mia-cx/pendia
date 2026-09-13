@@ -84,12 +84,24 @@ const scan = authenticatedMutation
 
 const scanStatus = authenticated
   .route({ method: "GET", path: "/libraries/{id}/scan-status" })
-  .input(idInput)
+  .input(
+    Schema.standardSchemaV1(
+      Schema.Struct({
+        id: Schema.UUID,
+        runId: Schema.optional(Schema.UUID),
+      }),
+    ),
+  )
   .output(Schema.standardSchemaV1(ScanStatus))
   .handler(async ({ context, input }) =>
     runApi(
       fromHost(() =>
-        libraryScanStatus(context.db, context.caller.user.id, input.id),
+        libraryScanStatus(
+          context.db,
+          context.caller.user.id,
+          input.id,
+          input.runId,
+        ),
       ),
     ),
   );

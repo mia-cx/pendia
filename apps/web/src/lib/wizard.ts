@@ -73,6 +73,7 @@ export async function runFirstRunWizard(
   });
   const status = await waitForScan(session.client, library.id, {
     timeoutMs: options.timeoutMs,
+    runId: jobId,
   });
   return { session, library, jobId, status };
 }

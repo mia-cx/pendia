@@ -81,8 +81,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
               type: "scan",
               libraryId: libraryA.id,
               path: "Blade Runner (1982)",
+              runId: rootJob.id,
             },
-            { type: "scan", libraryId: libraryA.id, path: "Alien (1979)" },
+            {
+              type: "scan",
+              libraryId: libraryA.id,
+              path: "Alien (1979)",
+              runId: rootJob.id,
+            },
           ]);
           for (const job of fanned) {
             expect(job.concurrencyKey).toBe(libraryConcurrencyKey(libraryA.id));
@@ -103,6 +109,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             type: "scan",
             libraryId: libraryA.id,
             path: "Alien (1979)",
+            runId: rootJob.id,
           });
           expect(await queue.claim()).toBeUndefined();
           await queue.complete(first ?? rootJob);
@@ -111,6 +118,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             type: "scan",
             libraryId: libraryA.id,
             path: "Blade Runner (1982)",
+            runId: rootJob.id,
           });
         }),
       );
@@ -128,7 +136,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         const queue = createJobQueue(db);
         const registry = createJobRegistry();
         registerLibraryJobs(db, registry);
-        await queue.enqueue(
+        const rootJob = await queue.enqueue(
           { type: "scan", libraryId: library.id, path: "." },
           { concurrencyKey: libraryConcurrencyKey(library.id) },
         );
@@ -149,8 +157,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             type: "scan",
             libraryId: library.id,
             path: "Blade Runner (1982)",
+            runId: rootJob.id,
           },
-          { type: "scan", libraryId: library.id, path: "Alien (1979)" },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "Alien (1979)",
+            runId: rootJob.id,
+          },
         ]);
         expect(
           children.every(

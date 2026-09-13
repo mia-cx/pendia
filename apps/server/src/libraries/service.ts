@@ -126,11 +126,12 @@ export async function scanLibrary(db: Database, actorId: string, id: string) {
   return { jobId: job.id };
 }
 
-/** Reports the newest scan run's counts and newest job for a caller holding manage-libraries. */
+/** Reports one scan run's counts and newest job for a caller holding manage-libraries. */
 export async function libraryScanStatus(
   db: Database,
   actorId: string,
   id: string,
+  runId?: string,
 ) {
   await requirePermission(db, actorId, "manage-libraries");
   const [library] = await db
@@ -142,21 +143,37 @@ export async function libraryScanStatus(
     eq(jobs.type, "scan"),
     sql`${jobs.payload}->>'libraryId' = ${id}`,
   );
-  const [root] = await db
-    .select({ id: jobs.id })
-    .from(jobs)
-    .where(and(where, sql`${jobs.payload}->>'path' = '.'`))
-    .orderBy(desc(jobs.id))
-    .limit(1);
-  const runId = root?.id ?? null;
-  const runWhere =
-    runId === null ? where : and(where, sql`${jobs.id} >= ${runId}::uuid`);
+  let run: string | null;
+  if (runId === undefined) {
+    const [root] = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(where, sql`${jobs.payload}->>'path' = '.'`))
+      .orderBy(desc(jobs.id))
+      .limit(1);
+    run = root?.id ?? null;
+  } else {
+    const [named] = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(where, eq(jobs.id, runId)))
+      .limit(1);
+    if (!named) throw new AuthError("NOT_FOUND");
+    run = named.id;
+  }
+  const empty = { queued: 0, running: 0, completed: 0, failed: 0 };
+  if (run === null)
+    return { libraryId: id, counts: empty, latest: null, runId: null };
+  const runWhere = and(
+    where,
+    sql`(${jobs.id} = ${run}::uuid or ${jobs.payload}->>'runId' = ${run})`,
+  );
   const grouped = await db
     .select({ state: jobs.state, count: sql<number>`count(*)::int` })
     .from(jobs)
     .where(runWhere)
     .groupBy(jobs.state);
-  const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
+  const counts = { ...empty };
   for (const row of grouped) counts[row.state] = row.count;
   const [latest] = await db
     .select({ id: jobs.id, state: jobs.state, error: jobs.error })
@@ -164,5 +181,5 @@ export async function libraryScanStatus(
     .where(runWhere)
     .orderBy(desc(jobs.id))
     .limit(1);
-  return { libraryId: id, counts, latest: latest ?? null, runId };
+  return { libraryId: id, counts, latest: latest ?? null, runId: run };
 }

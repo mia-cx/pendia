@@ -76,11 +76,7 @@ export async function setProviderKey(
 ) {
   await requirePermission(db, actorId, "manage-server");
   const key = normalizeName(name);
-  if (
-    value.length < 1 ||
-    value.length > maxValueLength ||
-    value.includes("\0")
-  )
+  if (value.length < 1 || value.length > maxValueLength || value.includes("\0"))
     throw new AuthError("INVALID_INPUT");
   return writeKeys(db, (keys) => {
     keys[key] = value;

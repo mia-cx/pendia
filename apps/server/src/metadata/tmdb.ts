@@ -62,15 +62,17 @@ async function requestJson(
   url: URL,
   timeoutMs: number,
 ): Promise<unknown> {
+  const signal = AbortSignal.timeout(timeoutMs);
   const response = await request(url, {
     headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal,
   });
   if (!response.ok)
     throw new Error(`TMDB request failed with status ${response.status}.`);
   try {
     return await response.json();
   } catch {
+    if (signal.aborted) throw signal.reason;
     invalid();
   }
 }

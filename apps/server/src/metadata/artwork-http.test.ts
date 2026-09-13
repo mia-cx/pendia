@@ -308,6 +308,90 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
       });
     }));
 
+  test("concurrent misses share one in-flight resize", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        let started!: () => void;
+        const resizeStarted = new Promise<void>((resolve) => {
+          started = resolve;
+        });
+        let release!: (result: {
+          bytes: Uint8Array;
+          contentType: string;
+        }) => void;
+        const gate = new Promise<{
+          bytes: Uint8Array;
+          contentType: string;
+        }>((resolve) => {
+          release = resolve;
+        });
+        const resize: ArtworkResize = async (_input, width) => {
+          calls.push(width);
+          started();
+          return gate;
+        };
+        await withServer(db, { resize }, async (base) => {
+          const url = `${base}/api/artwork/${row.id}?width=4`;
+          const first = fetch(url);
+          const second = fetch(url);
+          await resizeStarted;
+          expect(calls).toEqual([4]);
+          release({
+            bytes: new Uint8Array([1, 2, 4]),
+            contentType: "image/x-artwork",
+          });
+          const [one, two] = await Promise.all([first, second]);
+          expect(one.status).toBe(200);
+          expect(two.status).toBe(200);
+          expect(two.headers.get("etag")).toBe(one.headers.get("etag"));
+          expect(Buffer.from(await one.arrayBuffer())).toEqual(
+            Buffer.from([1, 2, 4]),
+          );
+          expect(Buffer.from(await two.arrayBuffer())).toEqual(
+            Buffer.from([1, 2, 4]),
+          );
+          expect(calls).toEqual([4]);
+          const third = await fetch(url);
+          expect(third.status).toBe(200);
+          await third.arrayBuffer();
+          expect(calls).toEqual([4]);
+        });
+      });
+    }));
+
+  test("a rejected in-flight resize does not poison the cache key", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        let attempt = 0;
+        const resize: ArtworkResize = async (_input, width) => {
+          calls.push(width);
+          attempt += 1;
+          if (attempt === 1) throw new Error("first resize fails");
+          return {
+            bytes: new Uint8Array([width]),
+            contentType: "image/x-artwork",
+          };
+        };
+        await withServer(db, { resize }, async (base) => {
+          const url = `${base}/api/artwork/${row.id}?width=4`;
+          const failed = await fetch(url);
+          expect(failed.status).toBe(500);
+          const retried = await fetch(url);
+          expect(retried.status).toBe(200);
+          expect(Buffer.from(await retried.arrayBuffer())).toEqual(
+            Buffer.from([4]),
+          );
+          expect(calls).toEqual([4, 4]);
+        });
+      });
+    }));
+
   test("rejects invalid cache bounds", () =>
     withDatabase(async (db) => {
       for (const maxCacheBytes of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {

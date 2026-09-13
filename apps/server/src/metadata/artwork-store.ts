@@ -17,6 +17,7 @@ import {
 } from "node:path";
 import type { MetadataResult } from "@pendia/plugin-api";
 import { and, eq } from "drizzle-orm";
+import sharp from "sharp";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, libraries } from "../db/schema/index.ts";
@@ -104,34 +105,65 @@ export async function storeArtworkOriginal(
   if (!response.ok)
     throw new Error(`Artwork request failed with status ${response.status}.`);
   const bytes = new Uint8Array(await response.arrayBuffer());
-
-  const [selected] = await db
-    .select()
-    .from(artwork)
-    .where(
-      and(
-        eq(artwork.itemId, itemId),
-        eq(artwork.type, candidate.type),
-        eq(artwork.selected, true),
-      ),
-    );
-  const reused = selected?.backend === "colocated" ? selected : undefined;
-  const artworkId = reused?.id ?? Bun.randomUUIDv7();
-  const storageKey =
-    reused?.storageKey ??
-    `${item.canonicalFolder}/.pendia/artwork/${artworkId}`;
-  const { root, target } = resolveStoragePath(library.rootPath, storageKey);
-  await walkStorageDirectory(root, dirname(target), true);
-  const temporary = `${target}.${Bun.randomUUIDv7()}.tmp`;
+  let dimensions: { width: number; height: number };
   try {
-    await writeFile(temporary, bytes);
-    await rename(temporary, target);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
+    const meta = await sharp(bytes).metadata();
+    const width = meta.width ?? 0;
+    const height = meta.height ?? 0;
+    if (
+      !Number.isInteger(width) ||
+      width < 1 ||
+      !Number.isInteger(height) ||
+      height < 1
+    )
+      throw new Error("Invalid artwork response.");
+    dimensions = { width, height };
+  } catch {
+    throw new Error("Invalid artwork response.");
   }
 
   return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(items)
+      .where(eq(items.id, itemId))
+      .for("update");
+    if (!locked) throw new AuthError("NOT_FOUND");
+    const [lockedLibrary] = await tx
+      .select()
+      .from(libraries)
+      .where(eq(libraries.id, locked.libraryId));
+    if (!lockedLibrary) throw new AuthError("NOT_FOUND");
+
+    const [selected] = await tx
+      .select()
+      .from(artwork)
+      .where(
+        and(
+          eq(artwork.itemId, itemId),
+          eq(artwork.type, candidate.type),
+          eq(artwork.selected, true),
+        ),
+      );
+    const reused = selected?.backend === "colocated" ? selected : undefined;
+    const artworkId = reused?.id ?? Bun.randomUUIDv7();
+    const storageKey =
+      reused?.storageKey ??
+      `${locked.canonicalFolder}/.pendia/artwork/${artworkId}`;
+    const { root, target } = resolveStoragePath(
+      lockedLibrary.rootPath,
+      storageKey,
+    );
+    await walkStorageDirectory(root, dirname(target), true);
+    const temporary = `${target}.${Bun.randomUUIDv7()}.tmp`;
+    try {
+      await writeFile(temporary, bytes);
+      await rename(temporary, target);
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    }
+
     await tx
       .update(artwork)
       .set({ selected: false })
@@ -149,6 +181,8 @@ export async function storeArtworkOriginal(
           sourceUrl: candidate.url,
           backend: "colocated",
           storageKey,
+          width: dimensions.width,
+          height: dimensions.height,
           selected: true,
         })
         .where(eq(artwork.id, reused.id))
@@ -166,8 +200,8 @@ export async function storeArtworkOriginal(
         sourceUrl: candidate.url,
         backend: "colocated",
         storageKey,
-        width: null,
-        height: null,
+        width: dimensions.width,
+        height: dimensions.height,
         selected: true,
       })
       .returning();
@@ -191,7 +225,13 @@ export async function readArtworkOriginal(
     .select()
     .from(artwork)
     .where(eq(artwork.id, artworkId));
-  if (!row || row.itemId === null || row.backend !== "colocated") return null;
+  if (
+    !row ||
+    row.itemId === null ||
+    row.backend !== "colocated" ||
+    !row.selected
+  )
+    return null;
   const [item] = await db.select().from(items).where(eq(items.id, row.itemId));
   if (!item) return null;
   const [library] = await db

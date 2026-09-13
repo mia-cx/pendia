@@ -91,7 +91,7 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           expect(response.status).toBe(200);
           expect(response.headers.get("content-type")).toBe("image/png");
           expect(response.headers.get("cache-control")).toBe(
-            "public, max-age=86400",
+            "public, max-age=0, must-revalidate",
           );
           expect(response.headers.get("x-content-type-options")).toBe(
             "nosniff",
@@ -158,7 +158,7 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           expect(matched.status).toBe(304);
           expect(matched.headers.get("etag")).toBe(etag);
           expect(matched.headers.get("cache-control")).toBe(
-            "public, max-age=86400",
+            "public, max-age=0, must-revalidate",
           );
           const listed = await fetch(url, {
             headers: { "if-none-match": `"other", ${etag}` },
@@ -173,7 +173,16 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           await weak.arrayBuffer();
           expect(calls).toEqual([4]);
 
-          const replacement = Buffer.alloc(png.byteLength, 7);
+          const replacement = await sharp({
+            create: {
+              width: 4,
+              height: 4,
+              channels: 3,
+              background: { r: 0, g: 255, b: 0 },
+            },
+          })
+            .png()
+            .toBuffer();
           await storeArtworkOriginal(
             db,
             item.id,
@@ -220,7 +229,10 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
         const { row } = await seed(db, root, png);
         await withServer(db, {}, async (base) => {
           const url = `${base}/api/artwork/${row.id}?width=4`;
-          expect((await fetch(url)).status).toBe(200);
+          const open = await fetch(url);
+          expect(open.status).toBe(200);
+          const oldTag = open.headers.get("etag") ?? "";
+          await open.arrayBuffer();
           await db.insert(settings).values({
             key: "auth",
             value: { artworkRequiresAuth: true },
@@ -233,6 +245,10 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
               message: "Authentication required.",
             },
           });
+          const staleTag = await fetch(url, {
+            headers: { "if-none-match": oldTag },
+          });
+          expect(staleTag.status).toBe(401);
           const malformed = await fetch(url, {
             headers: { authorization: "Bearer nope" },
           });
@@ -246,7 +262,36 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
             headers: { authorization: `Bearer ${token}` },
           });
           expect(authed.status).toBe(200);
+          expect(authed.headers.get("cache-control")).toBe(
+            "private, max-age=0, must-revalidate",
+          );
           await authed.arrayBuffer();
+          const authed304 = await fetch(url, {
+            headers: {
+              authorization: `Bearer ${token}`,
+              "if-none-match": oldTag,
+            },
+          });
+          expect(authed304.status).toBe(304);
+          expect(authed304.headers.get("cache-control")).toBe(
+            "private, max-age=0, must-revalidate",
+          );
+        });
+      });
+    }));
+
+  test("a deselected artwork row answers 404", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        await db
+          .update(artwork)
+          .set({ selected: false })
+          .where(eq(artwork.id, row.id));
+        await withServer(db, {}, async (base) => {
+          const response = await fetch(`${base}/api/artwork/${row.id}?width=4`);
+          expect(response.status).toBe(404);
         });
       });
     }));

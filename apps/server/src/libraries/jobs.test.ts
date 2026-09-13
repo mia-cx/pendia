@@ -186,27 +186,63 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
       });
     }));
 
-  test("missing and non-movie libraries reject", () =>
+  test("a missing library rejects", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const registry = createJobRegistry();
+      registerLibraryJobs(db, registry);
+      const libraryId = Bun.randomUUIDv7();
+      const job = await queue.enqueue(
+        { type: "scan", libraryId, path: "." },
+        { concurrencyKey: libraryConcurrencyKey(libraryId) },
+      );
+      const claimed = await queue.claim();
+      if (!claimed) throw new Error("Job was not claimed.");
+      await expectHandlerError(registry.run(claimed), "NOT_FOUND");
+      await queue.complete(claimed);
+      expect(job.id).toBe(claimed.id);
+    }));
+
+  test("a shows root job fans out once per canonical Show folder", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
-        const shows = await insertLibrary(db, "Shows", root, "shows");
+        const tree: Record<string, string[]> = {
+          "A Show (2020)/Season 01": [
+            "A Show S01E01.mkv",
+            "A Show S01E02-E03.mkv",
+          ],
+          "A Show (2020)/Specials": ["A Show S00E01.mkv"],
+          "B Show/Season 02": ["B Show S02E01.mkv"],
+          "B Show/Season 02/extras": ["B Show S02E09.mkv"],
+        };
+        for (const [dir, names] of Object.entries(tree)) {
+          await mkdir(join(root, dir), { recursive: true });
+          for (const name of names) {
+            await writeFile(join(root, dir, name), "dummy");
+          }
+        }
+        const library = await insertLibrary(db, "Shows", root, "shows");
         const queue = createJobQueue(db);
         const registry = createJobRegistry();
         registerLibraryJobs(db, registry);
-        for (const [libraryId, code] of [
-          [Bun.randomUUIDv7(), "NOT_FOUND"],
-          [shows.id, "INVALID_INPUT"],
-        ] as const) {
-          const job = await queue.enqueue(
-            { type: "scan", libraryId, path: "." },
-            { concurrencyKey: libraryConcurrencyKey(libraryId) },
-          );
-          const claimed = await queue.claim();
-          if (!claimed) throw new Error("Job was not claimed.");
-          await expectHandlerError(registry.run(claimed), code);
-          await queue.complete(claimed);
-          expect(job.id).toBe(claimed.id);
+
+        const rootJob = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "." },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim();
+        expect(claimed?.id).toBe(rootJob.id);
+        await registry.run(claimed ?? rootJob);
+
+        const fanned = await listJobs(db, { state: "queued" });
+        expect(fanned.map((job) => job.payload)).toEqual([
+          { type: "scan", libraryId: library.id, path: "B Show" },
+          { type: "scan", libraryId: library.id, path: "A Show (2020)" },
+        ]);
+        for (const job of fanned) {
+          expect(job.concurrencyKey).toBe(libraryConcurrencyKey(library.id));
         }
       });
     }));

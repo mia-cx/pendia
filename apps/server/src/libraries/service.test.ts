@@ -6,7 +6,6 @@ import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { listJobs } from "../jobs/queue.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
@@ -77,11 +76,11 @@ describe.skipIf(!databaseUrl)("library service", () => {
           "rootPath",
         ]);
         const second = await createLibrary(db, admin.id, {
-          name: "Anime",
-          medium: "movies",
+          name: "Shows",
+          medium: "shows",
           rootPath: root,
         });
-        expect(await listLibraries(db, admin.id)).toEqual([second, created]);
+        expect(await listLibraries(db, admin.id)).toEqual([created, second]);
         expect(await getLibrary(db, admin.id, created.id)).toEqual(created);
         const renamed = await updateLibrary(db, admin.id, created.id, {
           name: "  Film Collection ",
@@ -149,14 +148,6 @@ describe.skipIf(!databaseUrl)("library service", () => {
           "INVALID_INPUT",
         );
       }
-      await expectAuthError(
-        createLibrary(db, admin.id, {
-          name: "Shows",
-          medium: "shows",
-          rootPath: "/srv/shows",
-        }),
-        "INVALID_INPUT",
-      );
       const library = await createLibrary(db, admin.id, {
         name: "Movies",
         medium: "movies",
@@ -206,20 +197,40 @@ describe.skipIf(!databaseUrl)("library service", () => {
       );
     }));
 
-  test("scanLibrary rejects a non-movies library without enqueuing", () =>
+  test("scanLibrary enqueues both medium roots with the library key", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const { admin } = await seed(db);
-      const [shows] = await db
-        .insert(libraries)
-        .values({ name: "Shows", medium: "shows", rootPath: "/srv/shows" })
-        .returning();
-      if (!shows) throw new Error("Library insert returned no row.");
-      await expectAuthError(
-        scanLibrary(db, admin.id, shows.id),
-        "INVALID_INPUT",
-      );
-      expect(await listJobs(db)).toHaveLength(0);
+      const moviesLibrary = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      const showsLibrary = await createLibrary(db, admin.id, {
+        name: "Shows",
+        medium: "shows",
+        rootPath: "/srv/shows",
+      });
+      for (const library of [moviesLibrary, showsLibrary]) {
+        await scanLibrary(db, admin.id, library.id);
+      }
+      const jobs = await listJobs(db);
+      expect(jobs).toHaveLength(2);
+      expect(
+        jobs.map((job) => ({
+          payload: job.payload,
+          concurrencyKey: job.concurrencyKey,
+        })),
+      ).toEqual([
+        {
+          payload: { type: "scan", libraryId: showsLibrary.id, path: "." },
+          concurrencyKey: libraryConcurrencyKey(showsLibrary.id),
+        },
+        {
+          payload: { type: "scan", libraryId: moviesLibrary.id, path: "." },
+          concurrencyKey: libraryConcurrencyKey(moviesLibrary.id),
+        },
+      ]);
     }));
 
   test("scanLibrary enqueues a root scan job with the library key", () =>

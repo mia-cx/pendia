@@ -514,12 +514,16 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         release();
         const [rowA, rowB] = await Promise.all([first, second]);
         expect(rowB.id).toBe(rowA.id);
-        expect(rowB.storageKey).toBe(rowA.storageKey);
         expect(await db.select().from(artwork)).toHaveLength(1);
+        const [final] = await db.select().from(artwork);
+        if (!final) throw new Error("Stored artwork missing.");
         const names = await readdir(
           join(root, item.canonicalFolder, ".pendia", "artwork"),
         );
-        expect(names).toEqual([rowA.id]);
+        expect(names).toHaveLength(1);
+        expect(`${item.canonicalFolder}/.pendia/artwork/${names[0]}`).toBe(
+          final.storageKey,
+        );
       });
     }));
 
@@ -555,7 +559,175 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const names = await readdir(
           join(root, item.canonicalFolder, ".pendia", "artwork"),
         );
-        expect(names).toEqual([first.id]);
+        expect(names).toHaveLength(1);
+        expect(names[0]?.startsWith(`${first.id}.`)).toBe(true);
+      });
+    }));
+
+  test("an image that decodes metadata but not pixels leaves state untouched", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const first = await storeArtworkOriginal(db, item.id, poster, request);
+        const truncated = png.subarray(0, 70);
+        const meta = await sharp(truncated).metadata();
+        expect({ width: meta.width, height: meta.height }).toEqual({
+          width: 8,
+          height: 8,
+        });
+        const corrupt = mockRequest(() => new Response(Buffer.from(truncated)));
+        await expect(
+          storeArtworkOriginal(
+            db,
+            item.id,
+            { type: "poster", url: "https://image.example/truncated.png" },
+            corrupt.request,
+          ),
+        ).rejects.toThrow("Invalid artwork response.");
+        const [row] = await db
+          .select()
+          .from(artwork)
+          .where(eq(artwork.id, first.id));
+        expect(row).toMatchObject({
+          sourceUrl: poster.url,
+          storageKey: first.storageKey,
+          width: 8,
+          height: 8,
+          selected: true,
+        });
+        expect(await readFile(join(root, first.storageKey))).toEqual(png);
+      });
+    }));
+
+  test("a declared Content-Length over the limit rejects before retaining", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        let cancelled = false;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(4));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        });
+        const { calls, request } = mockRequest(
+          () =>
+            new Response(stream, {
+              headers: { "content-length": String(png.length + 1) },
+            }),
+        );
+        await expect(
+          storeArtworkOriginal(
+            db,
+            item.id,
+            poster,
+            request,
+            30_000,
+            png.length,
+          ),
+        ).rejects.toThrow("Artwork response too large.");
+        expect(cancelled).toBe(true);
+        expect(calls).toHaveLength(1);
+        expect(await db.select().from(artwork)).toHaveLength(0);
+        await expect(
+          access(join(root, "Alien (1979)", ".pendia")),
+        ).rejects.toThrow();
+      });
+    }));
+
+  test("a stream crossing the limit cancels the reader and rejects", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        let cancelled = false;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(3));
+            controller.enqueue(new Uint8Array(3));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        });
+        const { request } = mockRequest(() => new Response(stream));
+        await expect(
+          storeArtworkOriginal(db, item.id, poster, request, 30_000, 4),
+        ).rejects.toThrow("Artwork response too large.");
+        expect(cancelled).toBe(true);
+        expect(await db.select().from(artwork)).toHaveLength(0);
+        await expect(
+          access(join(root, "Alien (1979)", ".pendia")),
+        ).rejects.toThrow();
+      });
+    }));
+
+  test("rejects invalid download limits before any request", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { calls, request } = mockRequest(() => new Response(png));
+        for (const maxDownloadBytes of [0, -1, 1.5, Number.NaN]) {
+          await expect(
+            storeArtworkOriginal(
+              db,
+              item.id,
+              poster,
+              request,
+              30_000,
+              maxDownloadBytes,
+            ),
+          ).rejects.toThrow("Invalid artwork download limit.");
+        }
+        expect(calls).toHaveLength(0);
+        expect(await db.select().from(artwork)).toHaveLength(0);
+      });
+    }));
+
+  test("a rolled-back replacement keeps the old row and bytes", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const first = await storeArtworkOriginal(db, item.id, poster, request);
+        await db.execute(sql`
+          alter table artwork
+          add constraint reject_new_source
+          check (source_url <> 'https://image.example/new.jpg')
+        `);
+        await expect(
+          storeArtworkOriginal(
+            db,
+            item.id,
+            { type: "poster", url: "https://image.example/new.jpg" },
+            request,
+          ),
+        ).rejects.toThrow();
+        const [row] = await db
+          .select()
+          .from(artwork)
+          .where(eq(artwork.id, first.id));
+        expect(row).toMatchObject({
+          sourceUrl: poster.url,
+          storageKey: first.storageKey,
+          width: 8,
+          height: 8,
+          selected: true,
+        });
+        expect(await readFile(join(root, first.storageKey))).toEqual(png);
+        const names = await readdir(
+          join(root, item.canonicalFolder, ".pendia", "artwork"),
+        );
+        const basename = first.storageKey.split("/").pop();
+        if (basename === undefined) throw new Error("Basename missing.");
+        expect(names).toContain(basename);
       });
     }));
 

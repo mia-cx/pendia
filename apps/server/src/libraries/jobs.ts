@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { libraries } from "../db/schema/index.ts";
+import { items, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
@@ -42,11 +42,18 @@ export function registerLibraryJobs(
       });
       return;
     }
-    const paths: string[] = [];
+    const walked: string[] = [];
     for await (const file of walkLibrary(library.rootPath, moviesMedium.scan))
-      paths.push(file.path);
-    const groups = groupMoviePaths(paths);
-    if (groups.length === 0) {
+      walked.push(file.path);
+    const paths = new Set(
+      groupMoviePaths(walked).map((group) => group.canonicalFolder),
+    );
+    const existing = await db
+      .select({ canonicalFolder: items.canonicalFolder })
+      .from(items)
+      .where(and(eq(items.libraryId, library.id), eq(items.kind, "movie")));
+    for (const item of existing) paths.add(item.canonicalFolder);
+    if (paths.size === 0) {
       await publishEvent(db, {
         kind: "library.changed",
         libraryId: library.id,
@@ -56,9 +63,9 @@ export function registerLibraryJobs(
     const concurrencyKey = libraryConcurrencyKey(library.id);
     await db.transaction(async (tx) => {
       const queue = createJobQueue(tx);
-      for (const group of groups)
+      for (const path of paths)
         await queue.enqueue(
-          { type: "scan", libraryId: library.id, path: group.canonicalFolder },
+          { type: "scan", libraryId: library.id, path },
           { concurrencyKey },
         );
     });

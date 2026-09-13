@@ -107,6 +107,20 @@ export async function applyScanChanges(
         .where(
           and(eq(files.libraryId, libraryId), eq(files.path, previousPath)),
         );
+      const [destination] = await db
+        .select()
+        .from(files)
+        .where(and(eq(files.libraryId, libraryId), eq(files.path, path)));
+      if (file && destination) {
+        if (file.id === destination.id) continue;
+        if (destination.itemId === file.itemId) {
+          await db
+            .delete(versions)
+            .where(eq(versions.id, destination.versionId));
+        } else {
+          await deleteItemSubtree(db, destination.itemId);
+        }
+      }
       if (file) {
         await db.update(files).set({ path }).where(eq(files.id, file.id));
         const [item] = await db

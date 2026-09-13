@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
@@ -186,21 +186,50 @@ describe("walkLibrary", () => {
   test("throws on a missing or relative root", () =>
     withVideoFixture(async (root) => {
       await populate(root);
-      await expect(collect(join(root, "missing"))).rejects.toThrow(
-        MissingLibraryPathError,
+      const missingRoot = await collect(join(root, "missing")).catch(
+        (error: unknown) => error,
       );
+      expect(missingRoot).toBeInstanceOf(MissingLibraryPathError);
+      expect((missingRoot as MissingLibraryPathError).scope).toBe("root");
       await expect(collect("relative/root")).rejects.toThrow();
     }));
 
   test("throws MissingLibraryPathError for a missing requested subtree", () =>
     withVideoFixture(async (root) => {
       await populate(root);
-      await expect(
-        collect(root, { path: "Alien (1979)/Gone" }),
-      ).rejects.toThrow(MissingLibraryPathError);
-      await expect(
-        collect(root, { path: "Alien (1979)/gone.mkv" }),
-      ).rejects.toThrow(MissingLibraryPathError);
+      const missingDirectory = await collect(root, {
+        path: "Alien (1979)/Gone",
+      }).catch((error: unknown) => error);
+      expect(missingDirectory).toBeInstanceOf(MissingLibraryPathError);
+      expect((missingDirectory as MissingLibraryPathError).scope).toBe(
+        "requested",
+      );
+      const missingFile = await collect(root, {
+        path: "Alien (1979)/gone.mkv",
+      }).catch((error: unknown) => error);
+      expect(missingFile).toBeInstanceOf(MissingLibraryPathError);
+      expect((missingFile as MissingLibraryPathError).scope).toBe("requested");
+    }));
+
+  test("a file vanishing mid-walk reports an entry scope", () =>
+    withVideoFixture(async (root) => {
+      await populate(root);
+      const walk = async () => {
+        for await (const file of walkLibrary(root, moviesMedium.scan, {
+          path: "Alien (1979)",
+          recursive: false,
+        })) {
+          if (file.path.endsWith("1080p.mkv")) {
+            await rm(join(root, "Alien (1979)/Alien.1979.2160p.mkv"));
+          }
+        }
+      };
+      const vanished = await walk().catch((error: unknown) => error);
+      expect(vanished).toBeInstanceOf(MissingLibraryPathError);
+      expect((vanished as MissingLibraryPathError).scope).toBe("entry");
+      expect((vanished as MissingLibraryPathError).path).toBe(
+        "Alien (1979)/Alien.1979.2160p.mkv",
+      );
     }));
 
   test("recursive false lists only direct files of the subtree", () =>
@@ -268,9 +297,32 @@ describe("walkLibraryDirectories", () => {
   test("throws MissingLibraryPathError for a missing root", () =>
     withVideoFixture(async (root) => {
       await populate(root);
-      await expect(collectDirectories(join(root, "missing"))).rejects.toThrow(
-        MissingLibraryPathError,
+      const missingRoot = await collectDirectories(join(root, "missing")).catch(
+        (error: unknown) => error,
       );
+      expect(missingRoot).toBeInstanceOf(MissingLibraryPathError);
+      expect((missingRoot as MissingLibraryPathError).scope).toBe("root");
+    }));
+
+  test("skips a directory that vanishes between listing and resolution", () =>
+    withVideoFixture(async (root) => {
+      await populate(root);
+      const seen: string[] = [];
+      for await (const directory of walkLibraryDirectories(
+        root,
+        moviesMedium.scan,
+      )) {
+        seen.push(directory.path);
+        if (directory.path === ".") {
+          await rm(join(root, "Collection"), { recursive: true });
+        }
+      }
+      expect(seen).toEqual([
+        ".",
+        "Alien (1979)",
+        "Alien (1979)/Behind.The.Scenes",
+        "Alien (1979)/Deleted.Scenes",
+      ]);
     }));
 });
 
@@ -301,6 +353,10 @@ describe("readLibraryFile", () => {
       await expect(
         readLibraryFile(root, "Alien (1979)/../../etc/passwd"),
       ).rejects.toThrow();
-      await expect(readLibraryFile(root, "missing.mkv")).rejects.toThrow();
+      const missingFile = await readLibraryFile(root, "missing.mkv").catch(
+        (error: unknown) => error,
+      );
+      expect(missingFile).toBeInstanceOf(MissingLibraryPathError);
+      expect((missingFile as MissingLibraryPathError).scope).toBe("entry");
     }));
 });

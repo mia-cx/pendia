@@ -17,7 +17,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { createJobQueue } from "../jobs/queue.ts";
+import { createJobQueue, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import {
   createVideoFixture,
@@ -26,6 +26,7 @@ import {
 import { setItemProviderIds } from "./changes.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { scanDirectory } from "./scan.ts";
+import { MissingLibraryPathError } from "./walker.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
@@ -151,6 +152,174 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           ["imdb", "tt0078748", itemId],
           ["tmdb", "348", itemId],
         ]);
+      });
+    }));
+
+  test("a move change reconciles a destination scanned before it arrived", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const [file] = await db.select().from(files);
+        const [version] = await db.select().from(versions);
+        if (!file || !version) {
+          throw new Error("Initial scan produced no File.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 9,
+          playCount: 4,
+        });
+        await setItemProviderIds(db, itemId, { tmdb: "348" });
+        const progressBefore = await db.select().from(progress);
+
+        const movedFolder = "Alien Remastered (1979) {tmdb-348}";
+        const movedPath = `${movedFolder}/Alien.1080p.mkv`;
+        await rename(dir, join(root, movedFolder));
+        const temporary = await scanDirectory(db, library.id, movedFolder);
+        expect(temporary.itemId).not.toBe(itemId);
+        expect(await db.select().from(items)).toHaveLength(2);
+
+        await runScanJob(db, library.id, movedFolder, [
+          {
+            kind: "move",
+            path: movedPath,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows).toHaveLength(1);
+        expect(itemRows[0]).toMatchObject({
+          id: itemId,
+          canonicalFolder: movedFolder,
+        });
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(1);
+        expect(fileRows[0]).toMatchObject({
+          id: file.id,
+          versionId: version.id,
+          itemId,
+          path: movedPath,
+        });
+        const versionRows = await db.select().from(versions);
+        expect(versionRows.map((row) => row.id)).toEqual([version.id]);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+        const idRows = await db.select().from(providerIds);
+        expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
+          ["tmdb", itemId],
+        ]);
+      });
+    }));
+
+  test("a scan job fails without deleting rows when the root vanished", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        await scanDirectory(db, library.id, folder);
+        const [version] = await db.select().from(versions);
+        const itemRows = await db.select().from(items);
+        const fileRows = await db.select().from(files);
+        if (!version || itemRows.length === 0 || fileRows.length === 0) {
+          throw new Error("Initial scan produced no rows.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: itemRows[0]?.id ?? "",
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 21,
+        });
+        const progressRows = await db.select().from(progress);
+
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const moved = `${root}-unavailable`;
+        await rename(root, moved);
+        try {
+          const claimed = await queue.claim();
+          if (!claimed) throw new Error("Scan job was not claimed.");
+          const failure = await registry.run(claimed).then(
+            () => undefined as unknown,
+            (error: unknown) => error,
+          );
+          expect(failure).toBeInstanceOf(MissingLibraryPathError);
+          expect((failure as MissingLibraryPathError).scope).toBe("root");
+          await queue.fail(claimed, failure);
+        } finally {
+          await rename(moved, root);
+        }
+
+        expect(await db.select().from(items)).toEqual(itemRows);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toEqual(fileRows);
+        expect(await db.select().from(progress)).toEqual(progressRows);
+      });
+    }));
+
+  test("a manual root scan fans out to an Item folder missing on disk", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        await scanDirectory(db, library.id, folder);
+        await rm(dir, { recursive: true });
+
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "." },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimedRoot = await queue.claim();
+        if (!claimedRoot) throw new Error("Root job was not claimed.");
+        await registry.run(claimedRoot);
+        await queue.complete(claimedRoot);
+
+        const fanned = await listJobs(db, { state: "queued", type: "scan" });
+        expect(fanned.map((job) => job.payload)).toEqual([
+          { type: "scan", libraryId: library.id, path: folder },
+        ]);
+        const claimedChild = await queue.claim();
+        if (!claimedChild) throw new Error("Child job was not claimed.");
+        await registry.run(claimedChild);
+        await queue.complete(claimedChild);
+
+        expect(await db.select().from(items)).toEqual([]);
+        expect(await db.select().from(versions)).toEqual([]);
+        expect(await db.select().from(files)).toEqual([]);
+        expect(await db.select().from(streams)).toEqual([]);
       });
     }));
 

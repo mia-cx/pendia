@@ -12,6 +12,7 @@ export const ItemCard = Schema.Struct({
   title: Schema.String,
   year: Schema.NullOr(Schema.Int),
   addedAt: Schema.String,
+  posterArtworkId: Schema.NullOr(Schema.UUID),
 });
 
 /** The item shape returned by detail endpoints. */

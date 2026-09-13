@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
-import type { Database } from "../db/client.ts";
+import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
@@ -255,13 +255,145 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       }
     }));
 
-  test("a timer flush failure reports once and close rejects it", () =>
+  test("close waits for a submission blocked on the libraries lock", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const library = await insertLibrary(db, "Movies", "/media/movies");
+      const debouncer = createChangeDebouncer(db, { delayMs: 60_000 });
+      const second = createDatabase(url);
+      let release = () => {};
+      try {
+        const locked = second.db.transaction(async (tx) => {
+          await tx.execute(sql`lock table libraries in access exclusive mode`);
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        });
+        const lockDeadline = Date.now() + 2_000;
+        for (;;) {
+          const rows = await db.$client<{ count: number }[]>`
+            select count(*)::integer as count from pg_locks
+            where locktype = 'relation' and granted
+              and mode = 'AccessExclusiveLock'
+              and relation = 'libraries'::regclass`;
+          if ((rows[0]?.count ?? 0) > 0) break;
+          if (Date.now() >= lockDeadline) {
+            throw new Error("Libraries lock was not observed.");
+          }
+          await Bun.sleep(10);
+        }
+        const submission = debouncer.submit("radarr", [
+          {
+            kind: "add",
+            path: "/media/movies/Alien (1979)/Alien.mkv",
+            providerIds: {},
+          },
+        ]);
+        const deadline = Date.now() + 2_000;
+        for (;;) {
+          const rows = await db.$client<{ count: number }[]>`
+            select count(*)::integer as count from pg_locks
+            where locktype = 'relation' and not granted
+              and relation = 'libraries'::regclass`;
+          if ((rows[0]?.count ?? 0) > 0) break;
+          if (Date.now() >= deadline) {
+            throw new Error("Submit lock wait was not observed.");
+          }
+          await Bun.sleep(10);
+        }
+        let closeResolved = false;
+        const closing = debouncer.close();
+        void closing.then(
+          () => {
+            closeResolved = true;
+          },
+          () => {},
+        );
+        await Bun.sleep(50);
+        expect(closeResolved).toBe(false);
+        release();
+        await submission;
+        await closing;
+        const found = await listJobs(db, { type: "scan" });
+        expect(found).toHaveLength(1);
+        expect(found[0]?.payload).toEqual({
+          type: "scan",
+          libraryId: library.id,
+          path: "Alien (1979)",
+          changes: [
+            {
+              kind: "add",
+              path: "Alien (1979)/Alien.mkv",
+              providerIds: {},
+            },
+          ],
+        });
+        await locked;
+      } finally {
+        release();
+        await second.close();
+      }
+    }));
+
+  test("a failed timer flush retries the same ordered batch", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const library = await insertLibrary(db, "Movies", "/media/movies");
+      const errors: unknown[] = [];
+      const debouncer = createChangeDebouncer(db, {
+        delayMs: 30,
+        onError: (error) => {
+          errors.push(error);
+        },
+      });
+      await debouncer.submit("radarr", [
+        {
+          kind: "add",
+          path: "/media/movies/Alien (1979)/Alien.1080p.mkv",
+          providerIds: {},
+        },
+        {
+          kind: "delete",
+          path: "/media/movies/Alien (1979)/Alien.720p.mkv",
+          target: "file",
+          providerIds: {},
+        },
+      ]);
+      await db.execute(sql`alter table jobs rename to jobs_paused`);
+      const deadline = Date.now() + 2_000;
+      while (errors.length === 0 && Date.now() < deadline) await Bun.sleep(10);
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      await db.execute(sql`alter table jobs_paused rename to jobs`);
+      const jobs = await waitForScanJobs(db, 1);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.payload).toEqual({
+        type: "scan",
+        libraryId: library.id,
+        path: "Alien (1979)",
+        changes: [
+          {
+            kind: "add",
+            path: "Alien (1979)/Alien.1080p.mkv",
+            providerIds: {},
+          },
+          {
+            kind: "delete",
+            path: "Alien (1979)/Alien.720p.mkv",
+            target: "file",
+            providerIds: {},
+          },
+        ],
+      });
+      await debouncer.close();
+    }));
+
+  test("a permanent flush failure keeps reporting and close rejects", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await insertLibrary(db, "Movies", "/media/movies");
       const errors: unknown[] = [];
       const debouncer = createChangeDebouncer(db, {
-        delayMs: 200,
+        delayMs: 100,
         onError: (error) => {
           errors.push(error);
           throw new Error("Reporting failed.");
@@ -277,8 +409,8 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       await db.execute(sql`drop table jobs`);
       const deadline = Date.now() + 2_000;
       while (errors.length === 0 && Date.now() < deadline) await Bun.sleep(10);
-      expect(errors).toHaveLength(1);
-      await expect(debouncer.close()).rejects.toBe(errors[0]);
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      await expect(debouncer.close()).rejects.toThrow();
     }));
 
   test("duplicate library roots reject as ambiguous", () =>

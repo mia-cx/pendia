@@ -483,7 +483,7 @@ export async function scanShowDirectory(
           versionIds.push(versionId);
 
           const versionFiles = await tx
-            .select({ order: files.order })
+            .select({ id: files.id, path: files.path, order: files.order })
             .from(files)
             .where(eq(files.versionId, versionId));
           const maxOrder = versionFiles.reduce(
@@ -538,6 +538,22 @@ export async function scanShowDirectory(
               fileId = created.id;
             }
             await upsertFileStreams(tx, versionId, fileId, member.probe);
+          }
+
+          const memberPaths = new Set(versionGroup.paths);
+          const staleFiles = versionFiles
+            .filter((file) => !memberPaths.has(file.path))
+            .sort(
+              (a, b) =>
+                a.order - b.order ||
+                a.path.localeCompare(b.path) ||
+                a.id.localeCompare(b.id),
+            );
+          for (const [index, file] of staleFiles.entries()) {
+            await tx
+              .update(files)
+              .set({ order: members.length + index })
+              .where(eq(files.id, file.id));
           }
         }
       }

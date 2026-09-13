@@ -19,6 +19,7 @@ import { AuthError } from "../auth/errors.ts";
 import { requirePermission, viewableLibraryIds } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import {
+  artwork,
   favourites,
   items,
   progress,
@@ -150,6 +151,14 @@ export async function continueWatching(
         title: items.title,
         year: items.year,
         addedAt: instantText(items.addedAt),
+        posterArtworkId: sql<string | null>`(
+          select ${artwork.id}
+          from ${artwork}
+          where ${artwork.itemId} = "items"."id"
+            and ${artwork.type} = 'poster'
+            and ${artwork.selected} = true
+          limit 1
+        )`,
       },
       progress: {
         userId: progress.userId,

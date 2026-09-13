@@ -27,11 +27,21 @@ export function registerLibraryJobs(
       .where(eq(libraries.id, payload.libraryId));
     if (!library) throw new AuthError("NOT_FOUND");
     const rules = library.medium === "movies" ? moviesMedium.scan : showsScan;
+    if (
+      payload.path === "." &&
+      payload.changes !== undefined &&
+      payload.changes.length > 0
+    )
+      throw new AuthError("INVALID_INPUT");
     if (payload.path !== ".") {
       if (library.medium === "movies") {
-        await scanDirectory(db, library.id, payload.path);
+        await scanDirectory(db, library.id, payload.path, {
+          changes: payload.changes,
+        });
       } else {
-        await scanShowDirectory(db, library.id, payload.path);
+        await scanShowDirectory(db, library.id, payload.path, {
+          changes: payload.changes,
+        });
       }
       await publishEvent(db, {
         kind: "library.changed",

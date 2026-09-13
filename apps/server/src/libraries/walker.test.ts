@@ -3,7 +3,12 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
-import { type LibraryFile, readLibraryFile, walkLibrary } from "./walker.ts";
+import {
+  type LibraryFile,
+  MissingLibraryPathError,
+  readLibraryFile,
+  walkLibrary,
+} from "./walker.ts";
 
 async function collect(
   root: string,
@@ -179,8 +184,21 @@ describe("walkLibrary", () => {
   test("throws on a missing or relative root", () =>
     withVideoFixture(async (root) => {
       await populate(root);
-      await expect(collect(join(root, "missing"))).rejects.toThrow();
+      await expect(collect(join(root, "missing"))).rejects.toThrow(
+        MissingLibraryPathError,
+      );
       await expect(collect("relative/root")).rejects.toThrow();
+    }));
+
+  test("throws MissingLibraryPathError for a missing requested subtree", () =>
+    withVideoFixture(async (root) => {
+      await populate(root);
+      await expect(
+        collect(root, { path: "Alien (1979)/Gone" }),
+      ).rejects.toThrow(MissingLibraryPathError);
+      await expect(
+        collect(root, { path: "Alien (1979)/gone.mkv" }),
+      ).rejects.toThrow(MissingLibraryPathError);
     }));
 
   test("recursive false lists only direct files of the subtree", () =>

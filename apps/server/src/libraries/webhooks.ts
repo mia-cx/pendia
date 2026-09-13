@@ -229,7 +229,16 @@ export function createChangeDebouncer(
             providerIds: change.providerIds,
           };
         }
-        directory = dirname(found.relativePath);
+        if (source === "sonarr") {
+          const top = found.relativePath.split("/")[0];
+          if (top === undefined || top === "")
+            throw new InvalidWebhookError(
+              "Webhook path must name a show folder.",
+            );
+          directory = top;
+        } else {
+          directory = dirname(found.relativePath);
+        }
       }
       resolved.push({
         key: `${found.libraryId}:${directory}`,

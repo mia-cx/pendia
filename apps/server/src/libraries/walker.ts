@@ -11,6 +11,15 @@ export interface LibraryFile {
   modifiedAt: Date;
 }
 
+/** Signals that the requested library subtree does not exist. */
+export class MissingLibraryPathError extends Error {}
+
+const isEnoent = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  error.code === "ENOENT";
+
 const normalizeRelative = (path: string): string => {
   if (path.includes("\0")) {
     throw new Error("Library path contains NUL.");
@@ -85,7 +94,17 @@ export async function* walkLibrary(
       .some((part) => part.toLowerCase().endsWith(".pendia")) ||
     (rules.isExtra(`${relative}/placeholder.mkv`) &&
       !rules.identify(`${relative}/${posix.basename(relative)}.mkv`));
-  const start = await resolveEntry(rootPath, options.path ?? ".");
+  let start: Awaited<ReturnType<typeof resolveEntry>>;
+  try {
+    start = await resolveEntry(rootPath, options.path ?? ".");
+  } catch (error) {
+    if (isEnoent(error)) {
+      throw new MissingLibraryPathError(
+        `Library subtree does not exist: ${options.path ?? "."}`,
+      );
+    }
+    throw error;
+  }
   if (start.stat.isFile()) {
     if (rules.identify(start.relative) && !rules.isExtra(start.relative)) {
       yield toLibraryFile(start.relative, start.stat);

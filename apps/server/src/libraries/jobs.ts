@@ -27,7 +27,13 @@ export function registerLibraryJobs(
     if (!library) throw new AuthError("NOT_FOUND");
     if (library.medium !== "movies") throw new AuthError("INVALID_INPUT");
     if (payload.path !== ".") {
-      await scanDirectory(db, library.id, payload.path);
+      const result = await scanDirectory(db, library.id, payload.path);
+      if (result.itemId !== null) {
+        await createJobQueue(db).enqueue({
+          type: "provider-fetch",
+          itemId: result.itemId,
+        });
+      }
       await publishEvent(db, {
         kind: "library.changed",
         libraryId: library.id,

@@ -141,6 +141,7 @@ describe("walkLibrary", () => {
           canonicalFolder: "Collection/Shorts",
           title: "Shorts",
           year: null,
+          providerIds: {},
           paths: ["Collection/Shorts/Shorts.mkv"],
         },
       ]);

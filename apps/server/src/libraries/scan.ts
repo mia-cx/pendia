@@ -390,7 +390,15 @@ export async function scanShowDirectory(
             existingEpisode.episode.episodeNumber;
           const discoveredEnd =
             episodeGroup.episodeEndNumber ?? episodeGroup.episodeNumber;
-          if (discoveredEnd > existingEnd) {
+          const overlapsDiscoveredEpisode = seasonGroup.episodes.some(
+            (candidate) =>
+              candidate.episodeNumber > discoveredEnd &&
+              candidate.episodeNumber <= existingEnd,
+          );
+          if (
+            discoveredEnd > existingEnd ||
+            (discoveredEnd < existingEnd && overlapsDiscoveredEpisode)
+          ) {
             await tx
               .update(episodes)
               .set({ episodeEndNumber: episodeGroup.episodeEndNumber })

@@ -80,6 +80,10 @@ export function createArtworkHandler(
     throw new Error("Invalid artwork cache size.");
   const resize = options.resize ?? sharpResize;
   const cache = new Map<string, { bytes: Uint8Array; contentType: string }>();
+  const inFlight = new Map<
+    string,
+    Promise<{ bytes: Uint8Array; contentType: string }>
+  >();
   let cacheBytes = 0;
 
   return async (request) => {
@@ -145,16 +149,32 @@ export function createArtworkHandler(
         cache.delete(etag);
         cache.set(etag, result);
       } else {
-        result = await resize(original.bytes, effectiveWidth);
-        if (result.bytes.byteLength <= maxCacheBytes) {
+        let pending = inFlight.get(etag);
+        if (pending === undefined) {
+          pending = resize(original.bytes, effectiveWidth);
+          inFlight.set(etag, pending);
+          const cleanup = () => {
+            if (inFlight.get(etag) === pending) inFlight.delete(etag);
+          };
+          pending.then(cleanup, cleanup);
+        }
+        const resized = await pending;
+        result = cache.get(etag);
+        if (result) {
+          cache.delete(etag);
           cache.set(etag, result);
-          cacheBytes += result.bytes.byteLength;
-          while (cache.size > maxCacheEntries || cacheBytes > maxCacheBytes) {
-            const oldest = cache.keys().next().value;
-            if (oldest === undefined) break;
-            const evicted = cache.get(oldest);
-            cache.delete(oldest);
-            if (evicted !== undefined) cacheBytes -= evicted.bytes.byteLength;
+        } else {
+          result = resized;
+          if (result.bytes.byteLength <= maxCacheBytes) {
+            cache.set(etag, result);
+            cacheBytes += result.bytes.byteLength;
+            while (cache.size > maxCacheEntries || cacheBytes > maxCacheBytes) {
+              const oldest = cache.keys().next().value;
+              if (oldest === undefined) break;
+              const evicted = cache.get(oldest);
+              cache.delete(oldest);
+              if (evicted !== undefined) cacheBytes -= evicted.bytes.byteLength;
+            }
           }
         }
       }

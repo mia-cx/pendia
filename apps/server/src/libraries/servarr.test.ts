@@ -84,6 +84,12 @@ describe("sonarr webhook changes", () => {
       ],
     );
   });
+
+  test("series removal without deleted files emits nothing", async () => {
+    expect(sonarrChanges(await loadFixture("sonarr-item-remove.json"))).toEqual(
+      [],
+    );
+  });
 });
 
 describe("radarr webhook changes", () => {
@@ -140,6 +146,12 @@ describe("radarr webhook changes", () => {
       ],
     );
   });
+
+  test("movie removal without deleted files emits nothing", async () => {
+    expect(radarrChanges(await loadFixture("radarr-item-remove.json"))).toEqual(
+      [],
+    );
+  });
 });
 
 describe("webhook change guards", () => {
@@ -168,7 +180,24 @@ describe("webhook change guards", () => {
       sonarrChanges({ eventType: "Rename", series: { path: "/x" } }),
     ).toThrow("Invalid Sonarr webhook payload.");
     expect(() =>
-      sonarrChanges({ eventType: "SeriesDelete", series: {} }),
+      sonarrChanges({
+        eventType: "SeriesDelete",
+        deletedFiles: true,
+        series: {},
+      }),
+    ).toThrow("Invalid Sonarr webhook payload.");
+    expect(() =>
+      sonarrChanges({
+        eventType: "SeriesDelete",
+        series: { path: "/media/shows/Foundation" },
+      }),
+    ).toThrow("Invalid Sonarr webhook payload.");
+    expect(() =>
+      sonarrChanges({
+        eventType: "SeriesDelete",
+        deletedFiles: "yes",
+        series: { path: "/media/shows/Foundation" },
+      }),
     ).toThrow("Invalid Sonarr webhook payload.");
     expect(() => radarrChanges({ eventType: "Download" })).toThrow(
       "Invalid Radarr webhook payload.",
@@ -182,12 +211,19 @@ describe("webhook change guards", () => {
     expect(() =>
       radarrChanges({ eventType: "MovieDelete", movie: {} }),
     ).toThrow("Invalid Radarr webhook payload.");
+    expect(() =>
+      radarrChanges({
+        eventType: "MovieDelete",
+        movie: { folderPath: "/media/movies/x" },
+      }),
+    ).toThrow("Invalid Radarr webhook payload.");
   });
 
   test("zero and empty provider ids are omitted and numerics become strings", () => {
     expect(
       sonarrChanges({
         eventType: "SeriesDelete",
+        deletedFiles: true,
         series: {
           path: "/media/shows/Gone",
           tvdbId: 0,
@@ -207,6 +243,7 @@ describe("webhook change guards", () => {
     expect(
       radarrChanges({
         eventType: "MovieDelete",
+        deletedFiles: true,
         movie: { folderPath: "/media/movies/Gone", tmdbId: 12, imdbId: "" },
       }),
     ).toEqual([

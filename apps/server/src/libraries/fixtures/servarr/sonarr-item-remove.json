@@ -1,0 +1,18 @@
+{
+  "eventType": "SeriesDelete",
+  "instanceName": "Sonarr",
+  "applicationUrl": "http://sonarr:8989",
+  "series": {
+    "id": 12,
+    "title": "Foundation",
+    "path": "/media/shows/Foundation",
+    "tvdbId": 366972,
+    "tvMazeId": 46789,
+    "tmdbId": 106379,
+    "imdbId": "tt0804484",
+    "type": "standard",
+    "year": 2021,
+    "genres": ["Drama", "Sci-Fi & Fantasy"]
+  },
+  "deletedFiles": false
+}

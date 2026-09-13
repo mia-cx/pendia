@@ -67,6 +67,21 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     }));
 
+  test("inherited object names are not mistaken for stored keys", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      await expect(
+        removeProviderKey(db, admin.id, "constructor"),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(
+        await setProviderKey(db, admin.id, "constructor", "secret"),
+      ).toEqual(["constructor"]);
+      expect(await listProviderKeys(db, admin.id)).toEqual(["constructor"]);
+      expect(await removeProviderKey(db, admin.id, "constructor")).toEqual([]);
+      expect(await listProviderKeys(db, admin.id)).toEqual([]);
+    }));
+
   test("invalid names and values are INVALID_INPUT", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

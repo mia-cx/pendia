@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, rename, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   files,
   items,
+  jobs,
   libraries,
   streams,
   versions,
@@ -162,6 +164,61 @@ describe.skipIf(!databaseUrl)("library repair", () => {
       });
     }));
 
+  test("a queued repair scan suppresses duplicates until it completes", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        await insertLibrary(db, root);
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(1);
+
+        await createVideoFixture(join(root, file2160));
+        expect(await repair.run()).toBe(0);
+        expect(
+          await listJobs(db, { state: "queued", type: "scan" }),
+        ).toHaveLength(1);
+
+        await drainScanJobs(db);
+        expect(await repair.run()).toBe(1);
+        await drainScanJobs(db);
+        expect(await repair.run()).toBe(0);
+        expect(await db.select().from(items)).toHaveLength(1);
+        expect(await db.select().from(versions)).toHaveLength(2);
+      });
+    }));
+
+  test("a failed repair scan is re-enqueued for the unchanged directory", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(1);
+
+        const queue = createJobQueue(db);
+        const claimed = await queue.claim();
+        if (!claimed) throw new Error("Repair scan was not claimed.");
+        await db
+          .update(jobs)
+          .set({ state: "failed" })
+          .where(eq(jobs.id, claimed.id));
+
+        expect(await repair.run()).toBe(1);
+        const queued = await listJobs(db, { state: "queued", type: "scan" });
+        expect(queued).toHaveLength(1);
+        expect(queued[0]?.id).not.toBe(claimed.id);
+        expect(queued[0]?.payload).toEqual({
+          type: "scan",
+          libraryId: library.id,
+          path: folder,
+        });
+      });
+    }));
+
   test("a missing root skips the library and keeps its snapshot", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -206,8 +263,9 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         repair.start();
         try {
           await waitForScanJobs(db, 1);
+          await drainScanJobs(db);
           await createVideoFixture(join(root, file2160));
-          await waitForScanJobs(db, 2);
+          await waitForScanJobs(db, 1);
         } finally {
           await repair.stop();
           await repair.stop();
@@ -222,7 +280,7 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         expect(
           await listJobs(db, { state: "queued", type: "scan" }),
         ).toHaveLength(baseline.length);
-        expect(baseline.length).toBeGreaterThanOrEqual(2);
+        expect(baseline.length).toBeGreaterThanOrEqual(1);
         expect(errors).toEqual([]);
       });
     }));

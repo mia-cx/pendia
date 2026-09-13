@@ -84,6 +84,42 @@ async function walkStorageDirectory(
   }
 }
 
+async function readBoundedBody(
+  response: Response,
+  maxDownloadBytes: number,
+): Promise<Uint8Array> {
+  const declared = response.headers.get("content-length")?.trim() ?? "";
+  if (/^\d+$/.test(declared) && Number(declared) > maxDownloadBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("Artwork response too large.");
+  }
+  if (response.body === null) return new Uint8Array(0);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxDownloadBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error("Artwork response too large.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 /** Stores one selected artwork original in the Item's colocated backend. */
 export async function storeArtworkOriginal(
   db: Database,
@@ -91,9 +127,12 @@ export async function storeArtworkOriginal(
   candidate: ArtworkCandidate,
   request: typeof fetch = fetch,
   timeoutMs = 30_000,
+  maxDownloadBytes = 32 * 1024 * 1024,
 ) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
     throw new Error("Invalid artwork request timeout.");
+  if (!Number.isSafeInteger(maxDownloadBytes) || maxDownloadBytes < 1)
+    throw new Error("Invalid artwork download limit.");
   const [item] = await db.select().from(items).where(eq(items.id, itemId));
   if (!item) throw new AuthError("NOT_FOUND");
   const [library] = await db
@@ -108,10 +147,11 @@ export async function storeArtworkOriginal(
   });
   if (!response.ok)
     throw new Error(`Artwork request failed with status ${response.status}.`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readBoundedBody(response, maxDownloadBytes);
   let dimensions: { width: number; height: number };
   try {
-    const meta = await sharp(bytes).metadata();
+    const image = sharp(bytes);
+    const meta = await image.metadata();
     const width = meta.width ?? 0;
     const height = meta.height ?? 0;
     if (
@@ -121,12 +161,13 @@ export async function storeArtworkOriginal(
       height < 1
     )
       throw new Error("Invalid artwork response.");
+    await image.stats();
     dimensions = { width, height };
   } catch {
     throw new Error("Invalid artwork response.");
   }
 
-  return db.transaction(async (tx) => {
+  const stored = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select()
       .from(items)
@@ -151,9 +192,11 @@ export async function storeArtworkOriginal(
       );
     const reused = selected?.backend === "colocated" ? selected : undefined;
     const artworkId = reused?.id ?? Bun.randomUUIDv7();
-    const storageKey =
-      reused?.storageKey ??
-      `${locked.canonicalFolder}/.pendia/artwork/${artworkId}`;
+    const previousTarget =
+      reused === undefined
+        ? undefined
+        : resolveStoragePath(lockedLibrary.rootPath, reused.storageKey).target;
+    const storageKey = `${locked.canonicalFolder}/.pendia/artwork/${artworkId}.${Bun.randomUUIDv7()}`;
     const { root, target } = resolveStoragePath(
       lockedLibrary.rootPath,
       storageKey,
@@ -192,7 +235,7 @@ export async function storeArtworkOriginal(
         .where(eq(artwork.id, reused.id))
         .returning();
       if (!row) throw new Error("Artwork update returned no row.");
-      return row;
+      return { row, previousTarget, target };
     }
     const [row] = await tx
       .insert(artwork)
@@ -210,8 +253,14 @@ export async function storeArtworkOriginal(
       })
       .returning();
     if (!row) throw new Error("Artwork insertion returned no row.");
-    return row;
+    return { row, previousTarget, target };
   });
+  if (
+    stored.previousTarget !== undefined &&
+    stored.previousTarget !== stored.target
+  )
+    await rm(stored.previousTarget, { force: true }).catch(() => {});
+  return stored.row;
 }
 
 /** A stored artwork original: exact bytes plus its artwork row. */

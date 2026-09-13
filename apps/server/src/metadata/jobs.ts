@@ -10,6 +10,15 @@ import { applyMetadata } from "./service.ts";
 import { readMetadataSettings } from "./settings.ts";
 import { createTmdbMetadataProvider } from "./tmdb.ts";
 
+async function publishLibraryChanged(db: Database, itemId: string) {
+  const [item] = await db.select().from(items).where(eq(items.id, itemId));
+  if (!item) throw new AuthError("NOT_FOUND");
+  await publishEvent(db, {
+    kind: "library.changed",
+    libraryId: item.libraryId,
+  });
+}
+
 /** Registers the built-in provider-fetch job handler. */
 export function registerMetadataJobs(
   db: Database,
@@ -22,21 +31,13 @@ export function registerMetadataJobs(
     if (config.tmdb !== null)
       providers.push(createTmdbMetadataProvider(config.tmdb.apiKey, request));
     const application = await applyMetadata(db, payload.itemId, providers);
-    if (application.state === "matched") {
-      const poster = application.artwork.find(
-        (candidate) => candidate.type === "poster",
-      );
-      if (poster)
-        await storeArtworkOriginal(db, payload.itemId, poster, request);
-    }
-    const [item] = await db
-      .select()
-      .from(items)
-      .where(eq(items.id, payload.itemId));
-    if (!item) throw new AuthError("NOT_FOUND");
-    await publishEvent(db, {
-      kind: "library.changed",
-      libraryId: item.libraryId,
-    });
+    await publishLibraryChanged(db, payload.itemId);
+    if (application.state !== "matched") return;
+    const poster = application.artwork.find(
+      (candidate) => candidate.type === "poster",
+    );
+    if (poster === undefined) return;
+    await storeArtworkOriginal(db, payload.itemId, poster, request);
+    await publishLibraryChanged(db, payload.itemId);
   });
 }

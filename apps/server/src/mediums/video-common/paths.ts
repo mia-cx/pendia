@@ -30,7 +30,7 @@ const extraNames = new Set([
 ]);
 
 const normalizedName = (name: string) =>
-  name.toLowerCase().replace(/[-_]+/g, " ");
+  name.toLowerCase().replace(/[ ._-]+/g, " ");
 
 /** Whether a library-relative path names a video file by extension. */
 export function isVideoPath(path: string): boolean {

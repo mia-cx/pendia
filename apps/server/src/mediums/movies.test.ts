@@ -29,6 +29,14 @@ describe("isVideoExtra", () => {
     expect(isVideoExtra("Alien (1979)/Alien_featurette.mkv")).toBe(true);
   });
 
+  test("recognizes dotted compound extras directories", () => {
+    for (const folder of ["Behind.The.Scenes", "Deleted.Scenes"]) {
+      const path = `Alien (1979)/${folder}/clip.mkv`;
+      expect(isVideoExtra(path)).toBe(true);
+      expect(identify(path)).toBeNull();
+    }
+  });
+
   test("flags Pendia store paths", () => {
     expect(isVideoExtra("Alien (1979)/.pendia/artwork.mkv")).toBe(true);
     expect(isVideoExtra("Alien (1979)/file.mkv.pendia/init.mp4")).toBe(true);

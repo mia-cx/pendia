@@ -24,6 +24,10 @@ async function populate(root: string) {
     join(root, "Alien (1979)", "extras", "making-of.mkv"),
     "extra",
   );
+  for (const folder of ["Behind.The.Scenes", "Deleted.Scenes"]) {
+    await mkdir(join(root, "Alien (1979)", folder));
+    await writeFile(join(root, "Alien (1979)", folder, "clip.mkv"), "extra");
+  }
   await writeFile(join(root, "Alien (1979)", "Alien-trailer.mkv"), "trailer");
   await mkdir(join(root, "Alien (1979)", "movie.mkv.pendia"));
   await writeFile(

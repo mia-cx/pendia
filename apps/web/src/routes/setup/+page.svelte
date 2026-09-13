@@ -129,7 +129,12 @@ async function rescan() {
     {#if step === 0}
       <form onsubmit={submitAdmin}>
         <h2>Create the admin</h2>
-        {#if failure}
+        {#if failure?.code === "CONFLICT"}
+          <p class="muted">
+            Setup is already complete, so the admin needs to
+            <a class="open" href="/login">sign in</a>.
+          </p>
+        {:else if failure}
           <Failure {failure} />
         {/if}
         <label for="username">Username</label>

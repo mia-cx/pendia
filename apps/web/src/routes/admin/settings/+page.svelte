@@ -80,14 +80,11 @@ async function addKey(event: SubmitEvent) {
   event.preventDefault();
   keyBusy = true;
   keyFailure = undefined;
+  const name = keyName.trim();
+  const value = keyValue;
   try {
     settings.set(
-      await serial(() =>
-        client.settings.setProviderKey({
-          name: keyName.trim(),
-          value: keyValue,
-        }),
-      ),
+      await serial(() => client.settings.setProviderKey({ name, value })),
     );
     keyName = "";
     keyValue = "";

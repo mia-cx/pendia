@@ -15,6 +15,13 @@
       "when": 1789246493244,
       "tag": "0001_clever_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789258083222,
+      "tag": "0002_wild_agent_brand",
+      "breakpoints": true
     }
   ]
 }

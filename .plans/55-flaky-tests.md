@@ -6,7 +6,7 @@ Replace narrow wall-clock assertions in the job worker NOTIFY test and the auth 
 
 ## Acceptance criteria
 
-- [x] Both tests pass ten times in a row on CI without a re-run.
+- [ ] Both tests pass ten times in a row on CI without a re-run.
 - [x] The NOTIFY test still proves a wakeup happens without the slow poll.
 - [x] Each affected test passes twenty times in a row against disposable Postgres.
 - [x] The repository lint, typecheck, build, database-backed test, and database-free test gates pass.

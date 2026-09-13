@@ -13,6 +13,11 @@ import {
   createChangeDebouncer,
   createServarrWebhookHandler,
 } from "./libraries/webhooks.ts";
+import {
+  startTranscoder,
+  type Transcoder,
+  type TranscoderOptions,
+} from "./transcoder/index.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -102,6 +107,7 @@ function startRoles(
   role: Role,
   apiServer: Bun.Server<undefined> | undefined,
   workerStarted: boolean,
+  transcoder: Transcoder | undefined,
 ): void {
   const activeRoles = role === "all" ? roles.slice(0, -1) : [role];
 
@@ -115,6 +121,15 @@ function startRoles(
 
     if (activeRole === "worker" && workerStarted) continue;
 
+    if (activeRole === "transcoder" && transcoder) {
+      log(activeRole, "transcoder.listening", {
+        port: transcoder.port,
+        address: transcoder.address,
+        nodeId: transcoder.nodeId,
+      });
+      continue;
+    }
+
     log(activeRole, "role.idle");
   }
 }
@@ -127,6 +142,7 @@ type StartOptions = {
   brokerOptions?: Parameters<typeof startEventBroker>[1];
   changeOptions?: ChangeDebouncerOptions;
   repairOptions?: RepairOptions;
+  transcoderOptions?: TranscoderOptions;
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -140,39 +156,48 @@ export async function startPendia(
     brokerOptions,
     changeOptions,
     repairOptions,
+    transcoderOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
   const runsJobs = role === "worker" || role === "all";
+  const runsTranscoder = role === "transcoder" || role === "all";
   const database =
-    servesApi || runsJobs ? createDatabase(databaseUrl) : undefined;
+    servesApi || runsJobs || runsTranscoder
+      ? createDatabase(databaseUrl)
+      : undefined;
   let apiServer: Bun.Server<undefined> | undefined;
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
   let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
   let changeDebouncer: ReturnType<typeof createChangeDebouncer> | undefined;
   let repair: ReturnType<typeof createLibraryRepair> | undefined;
+  let transcoder: Transcoder | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops accepting API work, then stops the debouncer, repair, worker, broker, API drain and database pool once. */
+  /** Stops accepting API work, then stops the transcoder, debouncer, repair, worker, broker, API drain and database pool once. */
   function stop() {
     stopping ??= (async () => {
       const apiStopped = Promise.resolve(apiServer?.stop());
       apiStopped.catch(() => {});
       try {
-        await changeDebouncer?.close();
+        await transcoder?.stop();
       } finally {
         try {
-          await repair?.stop();
+          await changeDebouncer?.close();
         } finally {
           try {
-            await worker?.stop();
+            await repair?.stop();
           } finally {
             try {
-              await eventBroker?.stop();
+              await worker?.stop();
             } finally {
               try {
-                await apiStopped;
+                await eventBroker?.stop();
               } finally {
-                await database?.close();
+                try {
+                  await apiStopped;
+                } finally {
+                  await database?.close();
+                }
               }
             }
           }
@@ -214,6 +239,11 @@ export async function startPendia(
               }),
             )),
       });
+    }
+    if (runsTranscoder && database) {
+      transcoder = await startTranscoder(database.db, transcoderOptions);
+    }
+    if (servesApi && database && databaseUrl && eventBroker) {
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
@@ -246,8 +276,8 @@ export async function startPendia(
       });
     }
     repair?.start();
-    startRoles(role, apiServer, worker !== undefined);
-    return { apiServer, stop };
+    startRoles(role, apiServer, worker !== undefined, transcoder);
+    return { apiServer, transcoder, stop };
   } catch (error) {
     await stop();
     throw error;

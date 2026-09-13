@@ -143,6 +143,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
           databaseUrl: url,
           port: 0,
           workerOptions: { pollIntervalMs: 20 },
+          transcoderOptions: { port: 0 },
         });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
@@ -501,6 +502,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
               databaseUrl: url,
               port: 0,
               workerOptions: { pollIntervalMs: 20 },
+              transcoderOptions: { port: 0 },
             });
             try {
               const base = `http://127.0.0.1:${server.apiServer?.port}`;

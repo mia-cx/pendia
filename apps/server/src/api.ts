@@ -4,21 +4,22 @@ import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 
-const defaultPort = 3000;
 const defaultWebRoot = fileURLToPath(
   new URL("../../web/build/", import.meta.url),
 );
 
-function readPort(value: string | undefined): number {
+/** Reads a TCP port from an environment variable, falling back when unset. */
+export function readPort(name: string, fallback: number): number {
+  const value = Bun.env[name];
   if (value === undefined) {
-    return defaultPort;
+    return fallback;
   }
 
   const port = Number(value);
 
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error(
-      `PENDIA_PORT must be an integer from 1 to 65535. Found "${value}".`,
+      `${name} must be an integer from 1 to 65535. Found "${value}".`,
     );
   }
 
@@ -57,7 +58,7 @@ async function serveWeb(pathname: string, root: string): Promise<Response> {
  */
 export function startApiServer(
   ready: () => Promise<boolean>,
-  port = readPort(Bun.env.PENDIA_PORT),
+  port = readPort("PENDIA_PORT", 3000),
   handlers: {
     auth?: ReturnType<typeof createAuthHandler>;
     api?: ReturnType<typeof createApiHandler>;

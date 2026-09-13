@@ -4,8 +4,9 @@ import { startApiServer } from "./api.ts";
 import { createAuthHandler } from "./auth/http.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
-import { jobRegistry } from "./jobs/registry.ts";
+import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
+import { registerLibraryJobs } from "./libraries/jobs.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -171,7 +172,14 @@ export async function startPendia(
       });
     }
     if (runsJobs && database) {
-      worker = await startJobWorker(database.db, registry, {
+      const runtimeRegistry = createJobRegistry();
+      for (const type of registry.types())
+        runtimeRegistry.register(type, async (_payload, job) =>
+          registry.run(job),
+        );
+      if (!registry.types().includes("scan"))
+        registerLibraryJobs(database.db, runtimeRegistry);
+      worker = await startJobWorker(database.db, runtimeRegistry, {
         ...workerOptions,
         onError:
           workerOptions?.onError ??

@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { authenticated, authenticateRequest } from "./context.ts";
 import { runApi } from "./errors.ts";
 import { getItemDetail, listItemCards } from "./items.ts";
+import { libraryProcedures } from "./libraries.ts";
 import {
   ApiEvent,
   connection,
@@ -60,5 +61,6 @@ const streamEvents = authenticated
 export const pendiaRouter = {
   me,
   items: { list: listItems, get: getItem },
+  libraries: libraryProcedures,
   events: { stream: streamEvents },
 };

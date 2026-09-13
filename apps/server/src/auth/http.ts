@@ -131,7 +131,8 @@ function optionalString(
   return value;
 }
 
-function checkOrigin(request: Request, secure: boolean): void {
+/** Rejects cross-site requests and foreign Origin headers on cookie-capable calls. */
+export function checkOrigin(request: Request, secure: boolean): void {
   if (request.headers.get("sec-fetch-site") === "cross-site")
     throw new AuthError("FORBIDDEN");
   const origin = request.headers.get("origin");

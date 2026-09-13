@@ -1,0 +1,244 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
+import { AuthError } from "../auth/errors.ts";
+import type { Database } from "../db/client.ts";
+import { migrateDatabase } from "../db/migrate.ts";
+import { libraries } from "../db/schema/index.ts";
+import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { listJobs } from "../jobs/queue.ts";
+import { libraryConcurrencyKey } from "./jobs.ts";
+import {
+  createLibrary,
+  deleteLibrary,
+  getLibrary,
+  listLibraries,
+  scanLibrary,
+  updateLibrary,
+} from "./service.ts";
+
+async function seed(db: Database) {
+  const admin = await setupAdmin(db, {
+    username: "admin",
+    password: "admin-pass",
+  });
+  const viewer = await createLocalUser(db, admin.id, {
+    username: "viewer",
+    password: "viewer-pass",
+  });
+  return { admin, viewer };
+}
+
+async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), "pendia-library-"));
+  try {
+    return await run(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function expectAuthError(
+  promise: Promise<unknown>,
+  code: AuthError["code"],
+): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(AuthError);
+    expect((error as AuthError).code).toBe(code);
+    return;
+  }
+  throw new Error(`Expected AuthError ${code}.`);
+}
+
+describe.skipIf(!databaseUrl)("library service", () => {
+  test("creates, renames, lists, gets and deletes a library", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      await withTempRoot(async (root) => {
+        const created = await createLibrary(db, admin.id, {
+          name: "  Movies  ",
+          medium: "movies",
+          rootPath: `${root}/movies/..`,
+        });
+        expect(created).toMatchObject({
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        expect(Object.keys(created).sort()).toEqual([
+          "id",
+          "medium",
+          "name",
+          "rootPath",
+        ]);
+        const second = await createLibrary(db, admin.id, {
+          name: "Anime",
+          medium: "movies",
+          rootPath: root,
+        });
+        expect(await listLibraries(db, admin.id)).toEqual([second, created]);
+        expect(await getLibrary(db, admin.id, created.id)).toEqual(created);
+        const renamed = await updateLibrary(db, admin.id, created.id, {
+          name: "  Film Collection ",
+        });
+        expect(renamed).toEqual({ ...created, name: "Film Collection" });
+        expect(await deleteLibrary(db, admin.id, created.id)).toEqual({
+          ok: true,
+        });
+        expect(await listLibraries(db, admin.id)).toEqual([second]);
+      });
+    }));
+
+  test("delete leaves files on disk untouched", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      await withTempRoot(async (root) => {
+        const fixture = join(root, "keep.mkv");
+        await writeFile(fixture, "movie bytes");
+        const library = await createLibrary(db, admin.id, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        await deleteLibrary(db, admin.id, library.id);
+        expect(await readFile(fixture, "utf8")).toBe("movie bytes");
+      });
+    }));
+
+  test("unknown ids fail with NOT_FOUND", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const missing = Bun.randomUUIDv7();
+      await expectAuthError(getLibrary(db, admin.id, missing), "NOT_FOUND");
+      await expectAuthError(
+        updateLibrary(db, admin.id, missing, { name: "x" }),
+        "NOT_FOUND",
+      );
+      await expectAuthError(deleteLibrary(db, admin.id, missing), "NOT_FOUND");
+      await expectAuthError(scanLibrary(db, admin.id, missing), "NOT_FOUND");
+    }));
+
+  test("invalid names and roots fail with INVALID_INPUT", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      for (const name of ["", "   ", "x".repeat(129), "bad\0name"]) {
+        await expectAuthError(
+          createLibrary(db, admin.id, {
+            name,
+            medium: "movies",
+            rootPath: "/srv/movies",
+          }),
+          "INVALID_INPUT",
+        );
+      }
+      for (const rootPath of ["relative/movies", "/srv/mov\0ies", ""]) {
+        await expectAuthError(
+          createLibrary(db, admin.id, {
+            name: "Movies",
+            medium: "movies",
+            rootPath,
+          }),
+          "INVALID_INPUT",
+        );
+      }
+      await expectAuthError(
+        createLibrary(db, admin.id, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: "/srv/shows",
+        }),
+        "INVALID_INPUT",
+      );
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      await expectAuthError(
+        updateLibrary(db, admin.id, library.id, { name: "" }),
+        "INVALID_INPUT",
+      );
+      await expectAuthError(
+        updateLibrary(db, admin.id, library.id, { name: "bad\0name" }),
+        "INVALID_INPUT",
+      );
+      expect((await getLibrary(db, admin.id, library.id)).name).toBe("Movies");
+    }));
+
+  test("non-admin actors cannot perform any operation", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin, viewer } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      await expectAuthError(listLibraries(db, viewer.id), "FORBIDDEN");
+      await expectAuthError(getLibrary(db, viewer.id, library.id), "FORBIDDEN");
+      await expectAuthError(
+        createLibrary(db, viewer.id, {
+          name: "x",
+          medium: "movies",
+          rootPath: "/x",
+        }),
+        "FORBIDDEN",
+      );
+      await expectAuthError(
+        updateLibrary(db, viewer.id, library.id, { name: "x" }),
+        "FORBIDDEN",
+      );
+      await expectAuthError(
+        deleteLibrary(db, viewer.id, library.id),
+        "FORBIDDEN",
+      );
+      await expectAuthError(
+        scanLibrary(db, viewer.id, library.id),
+        "FORBIDDEN",
+      );
+    }));
+
+  test("scanLibrary rejects a non-movies library without enqueuing", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const [shows] = await db
+        .insert(libraries)
+        .values({ name: "Shows", medium: "shows", rootPath: "/srv/shows" })
+        .returning();
+      if (!shows) throw new Error("Library insert returned no row.");
+      await expectAuthError(
+        scanLibrary(db, admin.id, shows.id),
+        "INVALID_INPUT",
+      );
+      expect(await listJobs(db)).toHaveLength(0);
+    }));
+
+  test("scanLibrary enqueues a root scan job with the library key", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      const { jobId } = await scanLibrary(db, admin.id, library.id);
+      const [job] = await listJobs(db);
+      expect(job).toMatchObject({
+        id: jobId,
+        type: "scan",
+        state: "queued",
+        concurrencyKey: libraryConcurrencyKey(library.id),
+        payload: { type: "scan", libraryId: library.id, path: "." },
+      });
+    }));
+});

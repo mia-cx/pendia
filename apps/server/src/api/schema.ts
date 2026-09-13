@@ -25,6 +25,21 @@ export const ItemDetail = Schema.Struct({
   updatedAt: Schema.String,
 });
 
+/** The library shape returned by library endpoints. */
+export const Library = Schema.Struct({
+  id: Schema.UUID,
+  name: Schema.String,
+  medium: Schema.Literal("movies", "shows"),
+  rootPath: Schema.String,
+});
+
+/** The fields accepted when a library is created. */
+export const LibraryInput = Schema.Struct({
+  name: Schema.String,
+  medium: Schema.Literal("movies"),
+  rootPath: Schema.String,
+});
+
 /** The authenticated caller returned by the me procedure. */
 export const Me = Schema.Struct({
   user: Schema.Struct({

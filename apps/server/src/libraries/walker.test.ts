@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { describe, expect, spyOn, test } from "bun:test";
+import type { PathLike, StatOptions } from "node:fs";
+import * as fsp from "node:fs/promises";
+import { mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
@@ -230,6 +232,70 @@ describe("walkLibrary", () => {
       expect((vanished as MissingLibraryPathError).path).toBe(
         "Alien (1979)/Alien.1979.2160p.mkv",
       );
+    }));
+
+  test("a root removed before the child stat reports root scope", () =>
+    withVideoFixture(async (root) => {
+      await mkdir(join(root, "Child"));
+      const moved = `${root}-moved`;
+      let swapped = false;
+      const realLstat = fsp.lstat;
+      const spy = spyOn(fsp, "lstat").mockImplementation((async (
+        path: PathLike,
+        options?: StatOptions,
+      ) => {
+        const stat = await realLstat(path, options);
+        if (!swapped && path === root) {
+          swapped = true;
+          await rename(root, moved);
+        }
+        return stat;
+      }) as typeof realLstat);
+      try {
+        const error = await collect(root, { path: "Child" }).catch(
+          (failure: unknown) => failure,
+        );
+        expect(error).toBeInstanceOf(MissingLibraryPathError);
+        expect((error as MissingLibraryPathError).scope).toBe("root");
+        expect((error as MissingLibraryPathError).path).toBe(".");
+      } finally {
+        spy.mockRestore();
+        if (swapped) await rename(moved, root);
+      }
+    }));
+
+  test("a root replaced before the child stat reports root scope", () =>
+    withVideoFixture(async (root) => {
+      await mkdir(join(root, "Child"));
+      const moved = `${root}-moved`;
+      let swapped = false;
+      const realLstat = fsp.lstat;
+      const spy = spyOn(fsp, "lstat").mockImplementation((async (
+        path: PathLike,
+        options?: StatOptions,
+      ) => {
+        const stat = await realLstat(path, options);
+        if (!swapped && path === root) {
+          swapped = true;
+          await rename(root, moved);
+          await mkdir(root);
+        }
+        return stat;
+      }) as typeof realLstat);
+      try {
+        const error = await collect(root, { path: "Child" }).catch(
+          (failure: unknown) => failure,
+        );
+        expect(error).toBeInstanceOf(MissingLibraryPathError);
+        expect((error as MissingLibraryPathError).scope).toBe("root");
+        expect((error as MissingLibraryPathError).path).toBe(".");
+      } finally {
+        spy.mockRestore();
+        if (swapped) {
+          await rm(root, { recursive: true });
+          await rename(moved, root);
+        }
+      }
     }));
 
   test("recursive false lists only direct files of the subtree", () =>

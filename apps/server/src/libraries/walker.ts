@@ -70,6 +70,21 @@ async function resolveEntry(
       stat = await lstat(absolute, { bigint: true });
     } catch (error) {
       if (isEnoent(error)) {
+        let currentRoot: BigIntStats;
+        try {
+          currentRoot = await lstat(rootPath, { bigint: true });
+        } catch (rootError) {
+          if (isEnoent(rootError))
+            throw new MissingLibraryPathError(".", "root");
+          throw rootError;
+        }
+        if (
+          !currentRoot.isDirectory() ||
+          currentRoot.dev !== rootStat.dev ||
+          currentRoot.ino !== rootStat.ino
+        ) {
+          throw new MissingLibraryPathError(".", "root");
+        }
         throw new MissingLibraryPathError(
           parts.slice(0, index + 1).join("/"),
           scope,

@@ -47,7 +47,7 @@ export function isVideoExtra(path: string): boolean {
     return true;
   }
   const stem = basename(path, extname(path)).toLowerCase();
-  return /(?:^|[ ._-])(?:trailer|sample|featurette|behindthescenes|deleted|interview|scene|short)$/.test(
+  return /(?:^|[ ._-])(?:trailers?|samples?|featurettes?|behind[ ._-]*the[ ._-]*scenes|deleted(?:[ ._-]*scenes?)?|interviews?|scenes?|shorts?)$/.test(
     stem,
   );
 }

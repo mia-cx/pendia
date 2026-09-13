@@ -117,6 +117,10 @@ describe("walkLibrary", () => {
         join(root, "Alien (1979)", "extras", "Shorts", "Shorts.mkv"),
         "extra",
       );
+      await writeFile(
+        join(root, "Alien (1979)", "extras", "extras.mkv"),
+        "extra",
+      );
       await mkdir(join(root, "Collection", ".pendia", "Shorts"), {
         recursive: true,
       });

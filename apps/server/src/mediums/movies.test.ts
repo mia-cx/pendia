@@ -112,6 +112,44 @@ describe("identify", () => {
     expect(identify("Collection/.pendia/Shorts/Shorts.mkv")).toBeNull();
   });
 
+  test("reserves extras directories even when a file matches their name", () => {
+    expect(identify("extras/extras.mkv")).toBeNull();
+    expect(identify("Alien (1979)/extras/extras.mkv")).toBeNull();
+    expect(identify("Collection/EXTRAS/EXTRAS.mkv")).toBeNull();
+    expect(identify("Extras (2005)/Extras.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Extras (2005)",
+    });
+    expect(identify("Collection/Shorts/Shorts.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Collection/Shorts",
+    });
+  });
+
+  test("excludes separated and plural extra suffixes but retains movie titles", () => {
+    for (const suffix of [
+      "behind-the-scenes",
+      "behind_the_scenes",
+      "behind.the.scenes",
+      "deleted-scenes",
+      "deleted_scenes",
+      "deleted.scenes",
+      "deleted",
+      "trailers",
+      "samples",
+      "featurettes",
+      "interviews",
+      "scenes",
+      "shorts",
+    ]) {
+      expect(identify(`Alien (1979)/Alien-${suffix}.mkv`)).toBeNull();
+    }
+    expect(identify("Behind the Scenes (2020)/Behind-the-Scenes.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Behind the Scenes (2020)",
+    });
+  });
+
   test("never identifies Pendia store paths even under matching names", () => {
     expect(identify(".pendia/.pendia.mkv")).toBeNull();
     expect(identify("film.mkv.pendia/film.mkv.pendia.mkv")).toBeNull();

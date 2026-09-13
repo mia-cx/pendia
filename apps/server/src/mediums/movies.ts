@@ -29,7 +29,13 @@ function isExtra(path: string): boolean {
   }
   const folder = posix.dirname(path);
   if (
-    folder.split("/").some((part) => part.toLowerCase().endsWith(".pendia"))
+    folder
+      .split("/")
+      .some(
+        (part) =>
+          part.toLowerCase() === "extras" ||
+          part.toLowerCase().endsWith(".pendia"),
+      )
   ) {
     return true;
   }

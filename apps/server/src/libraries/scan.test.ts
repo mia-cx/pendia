@@ -10,6 +10,7 @@ import {
   items,
   libraries,
   movies,
+  providerIds,
   streams,
   versions,
 } from "../db/schema/index.ts";
@@ -95,6 +96,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
               descendantId: result.itemId,
               depth: 0,
             },
+          ]);
+          expect(await db.select().from(providerIds)).toMatchObject([
+            { provider: "tmdb", value: "348", itemId: result.itemId },
           ]);
 
           const versionRows = await db
@@ -186,6 +190,16 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
             .map((stream) => stream.id)
             .sort();
 
+          const [initialId] = await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, first.itemId ?? ""));
+          expect(initialId).toMatchObject({
+            provider: "tmdb",
+            value: "348",
+            itemId: first.itemId,
+          });
+
           const second = await scanDirectory(db, library.id, folder, probe);
           expect(second.itemId).toBe(first.itemId);
           expect(second.versionIds).toEqual(first.versionIds);
@@ -225,6 +239,12 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           expect(
             (await db.select().from(streams)).map((stream) => stream.id).sort(),
           ).toEqual(streamIds);
+          expect(
+            await db
+              .select()
+              .from(providerIds)
+              .where(eq(providerIds.itemId, first.itemId ?? "")),
+          ).toEqual([expect.objectContaining({ id: initialId?.id })]);
         });
       });
     }));

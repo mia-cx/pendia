@@ -5,6 +5,7 @@ import {
   files,
   items,
   libraries,
+  providerIds,
   streams,
   versions,
 } from "../db/schema/index.ts";
@@ -96,6 +97,27 @@ export async function scanDirectory(
         extension: {},
       });
       itemId = created.id;
+    }
+
+    for (const [provider, value] of Object.entries(group.providerIds)) {
+      const [existingId] = await tx
+        .select()
+        .from(providerIds)
+        .where(
+          and(
+            eq(providerIds.itemId, itemId),
+            eq(providerIds.provider, provider),
+          ),
+        );
+      if (existingId) {
+        if (existingId.value !== value)
+          await tx
+            .update(providerIds)
+            .set({ value })
+            .where(eq(providerIds.id, existingId.id));
+      } else {
+        await tx.insert(providerIds).values({ provider, value, itemId });
+      }
     }
 
     const versionIds: string[] = [];

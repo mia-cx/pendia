@@ -197,6 +197,10 @@ describe("parse", () => {
       title: "Alien",
       year: 1979,
     });
+    expect(parse("Alien (1979) {TVDB=123} {tmdb-}")).toEqual({
+      title: "Alien",
+      year: 1979,
+    });
   });
 
   test("accepts a title-only folder", () => {
@@ -258,12 +262,41 @@ describe("groupMoviePaths", () => {
         canonicalFolder: "Alien (1979)",
         title: "Alien",
         year: 1979,
+        providerIds: {},
         paths: [
           "Alien (1979)/Alien.1979.1080p.mkv",
           "Alien (1979)/Alien.1979.2160p.mkv",
         ],
       },
     ]);
+  });
+
+  test("extracts Radarr provider ids from the canonical folder", () => {
+    const folder = "Alien (1979) {tmdb-348} {imdb-tt0078748} {tvdb=123}";
+    const groups = groupMoviePaths([`${folder}/Alien.mkv`]);
+    expect(groups).toEqual([
+      {
+        canonicalFolder: folder,
+        title: "Alien",
+        year: 1979,
+        providerIds: { tmdb: "348", imdb: "tt0078748", tvdb: "123" },
+        paths: [`${folder}/Alien.mkv`],
+      },
+    ]);
+  });
+
+  test("lowercases providers, trims values and keeps the first duplicate", () => {
+    const folder = "Alien (1979) {TMDB- 348 } {tmdb-999} {Imdb=tt0078748}";
+    const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);
+    expect(group?.providerIds).toEqual({ tmdb: "348", imdb: "tt0078748" });
+    expect(group?.title).toBe("Alien");
+  });
+
+  test("ignores empty provider id values", () => {
+    const folder = "Alien (1979) {tmdb-} {tvdb- }";
+    const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);
+    expect(group?.providerIds).toEqual({});
+    expect(group?.title).toBe("Alien");
   });
 
   test("does not split explicit edition tags into separate groups", () => {
@@ -305,6 +338,7 @@ describe("groupMoviePaths", () => {
         canonicalFolder: "Alien (1979)",
         title: "Alien",
         year: 1979,
+        providerIds: {},
         paths: ["Alien (1979)/Alien.1979.2160p.mkv"],
       },
     ]);
@@ -321,6 +355,7 @@ describe("groupMoviePaths", () => {
         canonicalFolder: "The Interview (2014)",
         title: "The Interview",
         year: 2014,
+        providerIds: {},
         paths: ["The Interview (2014)/The Interview.mkv"],
       },
     ]);
@@ -337,6 +372,7 @@ describe("groupMoviePaths", () => {
         canonicalFolder: "Shorts",
         title: "Shorts",
         year: null,
+        providerIds: {},
         paths: ["Shorts/Shorts.mkv"],
       },
     ]);

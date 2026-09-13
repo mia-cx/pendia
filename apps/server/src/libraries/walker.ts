@@ -12,7 +12,15 @@ export interface LibraryFile {
 }
 
 /** Signals that the requested library subtree does not exist. */
-export class MissingLibraryPathError extends Error {}
+export class MissingLibraryPathError extends Error {
+  constructor(
+    readonly path: string,
+    readonly scope: "root" | "requested" | "entry",
+  ) {
+    super(`Library path does not exist: ${path}`);
+    this.name = "MissingLibraryPathError";
+  }
+}
 
 const isEnoent = (error: unknown): boolean =>
   typeof error === "object" &&
@@ -37,11 +45,18 @@ const normalizeRelative = (path: string): string => {
 async function resolveEntry(
   rootPath: string,
   path: string,
+  scope: "requested" | "entry",
 ): Promise<{ absolute: string; relative: string; stat: BigIntStats }> {
   if (!isAbsolute(rootPath)) {
     throw new Error("Library root must be an absolute path.");
   }
-  const rootStat = await lstat(rootPath, { bigint: true });
+  let rootStat: BigIntStats;
+  try {
+    rootStat = await lstat(rootPath, { bigint: true });
+  } catch (error) {
+    if (isEnoent(error)) throw new MissingLibraryPathError(".", "root");
+    throw error;
+  }
   if (!rootStat.isDirectory()) {
     throw new Error("Library root is not a directory.");
   }
@@ -51,7 +66,17 @@ async function resolveEntry(
   const parts = relative === "." ? [] : relative.split("/");
   for (const [index, part] of parts.entries()) {
     absolute = resolve(absolute, part);
-    stat = await lstat(absolute, { bigint: true });
+    try {
+      stat = await lstat(absolute, { bigint: true });
+    } catch (error) {
+      if (isEnoent(error)) {
+        throw new MissingLibraryPathError(
+          parts.slice(0, index + 1).join("/"),
+          scope,
+        );
+      }
+      throw error;
+    }
     if (stat.isSymbolicLink()) {
       throw new Error(`Library path crosses a symlink: ${relative}`);
     }
@@ -74,7 +99,7 @@ export async function readLibraryFile(
   rootPath: string,
   path: string,
 ): Promise<LibraryFile> {
-  const { relative, stat } = await resolveEntry(rootPath, path);
+  const { relative, stat } = await resolveEntry(rootPath, path, "entry");
   if (!stat.isFile()) {
     throw new Error(`Not a regular file: ${relative}`);
   }
@@ -93,17 +118,7 @@ export async function* walkLibrary(
   options: { path?: string; recursive?: boolean } = {},
 ): AsyncGenerator<LibraryFile> {
   const recursive = options.recursive ?? true;
-  let start: Awaited<ReturnType<typeof resolveEntry>>;
-  try {
-    start = await resolveEntry(rootPath, options.path ?? ".");
-  } catch (error) {
-    if (isEnoent(error)) {
-      throw new MissingLibraryPathError(
-        `Library subtree does not exist: ${options.path ?? "."}`,
-      );
-    }
-    throw error;
-  }
+  const start = await resolveEntry(rootPath, options.path ?? ".", "requested");
   if (start.stat.isFile()) {
     if (rules.identify(start.relative) && !rules.isExtra(start.relative)) {
       yield toLibraryFile(start.relative, start.stat);
@@ -129,7 +144,7 @@ export async function* walkLibrary(
       }
       if (entry.isDirectory()) {
         if (recursive && !prunesDirectory(rules, child)) {
-          const validated = await resolveEntry(rootPath, child);
+          const validated = await resolveEntry(rootPath, child, "entry");
           if (validated.stat.isDirectory()) {
             yield* visit(validated.absolute, validated.relative);
           }
@@ -160,15 +175,7 @@ export async function* walkLibraryDirectories(
   rootPath: string,
   rules: ScanRules,
 ): AsyncGenerator<LibraryDirectory> {
-  let start: Awaited<ReturnType<typeof resolveEntry>>;
-  try {
-    start = await resolveEntry(rootPath, ".");
-  } catch (error) {
-    if (isEnoent(error)) {
-      throw new MissingLibraryPathError("Library subtree does not exist: .");
-    }
-    throw error;
-  }
+  const start = await resolveEntry(rootPath, ".", "requested");
   if (!start.stat.isDirectory() || prunesDirectory(rules, start.relative)) {
     return;
   }
@@ -201,7 +208,18 @@ export async function* walkLibraryDirectories(
     }
     yield { path: relative, modifiedNs: stat.mtimeNs, files };
     for (const child of directories) {
-      const validated = await resolveEntry(rootPath, child);
+      let validated: Awaited<ReturnType<typeof resolveEntry>>;
+      try {
+        validated = await resolveEntry(rootPath, child, "entry");
+      } catch (error) {
+        if (
+          error instanceof MissingLibraryPathError &&
+          error.scope === "entry"
+        ) {
+          continue;
+        }
+        throw error;
+      }
       if (validated.stat.isDirectory()) {
         yield* visit(validated.absolute, validated.relative, validated.stat);
       }

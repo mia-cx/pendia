@@ -1,4 +1,11 @@
-import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import {
   dirname,
   isAbsolute,
@@ -46,7 +53,11 @@ async function statOrNull(path: string) {
   }
 }
 
-async function ensureRealDirectory(root: string, directory: string) {
+async function walkStorageDirectory(
+  root: string,
+  directory: string,
+  create: boolean,
+) {
   const rel = relative(root, directory);
   if (rel === "" || isAbsolute(rel) || rel.split(sep).includes(".."))
     throw new Error("Invalid artwork storage path.");
@@ -58,6 +69,7 @@ async function ensureRealDirectory(root: string, directory: string) {
     current = join(current, part);
     let stat = await statOrNull(current);
     if (stat === null) {
+      if (!create) throw new Error("Invalid artwork storage path.");
       try {
         await mkdir(current);
       } catch (error) {
@@ -109,7 +121,7 @@ export async function storeArtworkOriginal(
     reused?.storageKey ??
     `${item.canonicalFolder}/.pendia/artwork/${artworkId}`;
   const { root, target } = resolveStoragePath(library.rootPath, storageKey);
-  await ensureRealDirectory(root, dirname(target));
+  await walkStorageDirectory(root, dirname(target), true);
   const temporary = `${target}.${Bun.randomUUIDv7()}.tmp`;
   try {
     await writeFile(temporary, bytes);
@@ -162,4 +174,36 @@ export async function storeArtworkOriginal(
     if (!row) throw new Error("Artwork insertion returned no row.");
     return row;
   });
+}
+
+/** A stored artwork original: exact bytes plus its artwork row. */
+export interface ArtworkOriginal {
+  bytes: Uint8Array;
+  artwork: typeof artwork.$inferSelect;
+}
+
+/** Reads one colocated artwork original without following symlinks. */
+export async function readArtworkOriginal(
+  db: Database,
+  artworkId: string,
+): Promise<ArtworkOriginal | null> {
+  const [row] = await db
+    .select()
+    .from(artwork)
+    .where(eq(artwork.id, artworkId));
+  if (!row || row.itemId === null || row.backend !== "colocated") return null;
+  const [item] = await db.select().from(items).where(eq(items.id, row.itemId));
+  if (!item) return null;
+  const [library] = await db
+    .select()
+    .from(libraries)
+    .where(eq(libraries.id, item.libraryId));
+  if (!library) return null;
+  const { root, target } = resolveStoragePath(library.rootPath, row.storageKey);
+  await walkStorageDirectory(root, dirname(target), false);
+  const stat = await statOrNull(target);
+  if (stat === null) return null;
+  if (stat.isSymbolicLink() || !stat.isFile())
+    throw new Error("Invalid artwork storage path.");
+  return { bytes: new Uint8Array(await readFile(target)), artwork: row };
 }

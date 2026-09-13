@@ -252,8 +252,18 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
 
         const fanned = await listJobs(db, { state: "queued" });
         expect(fanned.map((job) => job.payload)).toEqual([
-          { type: "scan", libraryId: library.id, path: "B Show" },
-          { type: "scan", libraryId: library.id, path: "A Show (2020)" },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "B Show",
+            runId: rootJob.id,
+          },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "A Show (2020)",
+            runId: rootJob.id,
+          },
         ]);
         for (const job of fanned) {
           expect(job.concurrencyKey).toBe(libraryConcurrencyKey(library.id));

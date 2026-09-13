@@ -6,6 +6,7 @@ import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 import {
   createAdmin,
   createFirstLibrary,
+  type LibraryMedium,
   startScan,
   type WizardSession,
 } from "$lib/wizard.ts";
@@ -26,6 +27,7 @@ let password = $state("");
 let displayName = $state("");
 let libraryName = $state("");
 let rootPath = $state("");
+let medium = $state<LibraryMedium>("movies");
 
 const scanSettled = $derived(
   status !== undefined &&
@@ -80,6 +82,7 @@ async function submitLibrary(event: SubmitEvent) {
     const library = await createFirstLibrary(session, {
       name: libraryName,
       rootPath,
+      medium,
     });
     libraryId = library.id;
     step = 2;
@@ -185,7 +188,11 @@ async function rescan() {
         <p class="muted">
           Enter an absolute path on the server, like /srv/movies.
         </p>
-        <p class="muted">Medium: Movies</p>
+        <label for="medium">Medium</label>
+        <select id="medium" name="medium" bind:value={medium}>
+          <option value="movies">Movies</option>
+          <option value="shows">Shows</option>
+        </select>
         <button type="submit" disabled={busy}>Add library and scan</button>
       </form>
     {:else}

@@ -383,7 +383,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
             rootPath: root,
           });
 
-          await client.libraries.scan({ id: library.id });
+          const { jobId } = await client.libraries.scan({ id: library.id });
           const jobs = await waitForLibraryJobs(db, library.id);
           expect(jobs).toHaveLength(2);
           expect(
@@ -396,7 +396,12 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
               ),
           ).toEqual([
             { type: "scan", libraryId: library.id, path: "." },
-            { type: "scan", libraryId: library.id, path: "Show (2020)" },
+            {
+              type: "scan",
+              libraryId: library.id,
+              path: "Show (2020)",
+              runId: jobId,
+            },
           ]);
           for (const job of jobs) {
             expect(job.state).toBe("completed");

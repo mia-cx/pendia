@@ -9,12 +9,18 @@ import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 const list = resource(() => client.libraries.list());
 type LibraryRow = NonNullable<typeof list.data>[number];
 
+const mediumNames: Record<LibraryRow["medium"], string> = {
+  movies: "Movies",
+  shows: "Shows",
+};
+
 let statuses = $state<Record<string, ScanStatus>>({});
 let statusFailures = $state<Record<string, string>>({});
 let statusTicket = 0;
 
 let addName = $state("");
 let addRoot = $state("");
+let addMedium = $state<LibraryRow["medium"]>("movies");
 let addBusy = $state(false);
 let addFailure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
 
@@ -75,7 +81,7 @@ async function addLibrary(event: SubmitEvent) {
   try {
     await client.libraries.create({
       name: addName,
-      medium: "movies",
+      medium: addMedium,
       rootPath: addRoot,
     });
     addName = "";
@@ -204,7 +210,7 @@ function scanCell(row: LibraryRow): string {
               {row.name}
             {/if}
           </td>
-          <td>{row.medium === "movies" ? "Movies" : row.medium}</td>
+          <td>{mediumNames[row.medium]}</td>
           <td class="path">{row.rootPath}</td>
           <td class="scan">
             {#if scanFailures[row.id]}
@@ -274,7 +280,12 @@ function scanCell(row: LibraryRow): string {
   <label for="addRoot">Root path</label>
   <input id="addRoot" name="rootPath" required bind:value={addRoot} />
   <p class="muted">Enter an absolute path on the server, like /srv/movies.</p>
-  <p class="muted">Medium: Movies</p>
+  <label for="addMedium">Medium</label>
+  <select id="addMedium" name="medium" bind:value={addMedium}>
+    {#each Object.entries(mediumNames) as [value, label] (value)}
+      <option {value}>{label}</option>
+    {/each}
+  </select>
   <button type="submit" disabled={addBusy}>Add library</button>
 </form>
 

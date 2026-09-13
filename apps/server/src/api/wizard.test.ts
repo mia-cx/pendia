@@ -49,6 +49,7 @@ describe.skipIf(!databaseUrl)("first-run wizard", () => {
               password: "admin-pass",
               libraryName: "Movies",
               rootPath: root,
+              libraryMedium: "movies",
             },
             { origin: base, timeoutMs: 60_000 },
           );

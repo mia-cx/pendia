@@ -17,6 +17,7 @@ import {
   items,
   libraries,
   libraryAccess,
+  segmentTimelines,
   sessionRegistry,
   settings,
   streams,
@@ -168,6 +169,27 @@ async function addMedia(
       disposition: { attached_pic: true },
     });
   return { version, file };
+}
+
+async function alignTimeline(
+  db: Database,
+  version: { id: string; itemId: string; durationSeconds: number | null },
+) {
+  const duration = version.durationSeconds;
+  if (duration === null) throw new Error("Version has no duration.");
+  const [timeline] = await db
+    .insert(segmentTimelines)
+    .values({
+      itemId: version.itemId,
+      cutKey: "original",
+      boundariesSeconds: [0, 4, duration],
+    })
+    .returning();
+  if (!timeline) throw new Error("Timeline insert returned no row.");
+  await db
+    .update(versions)
+    .set({ segmentTimelineId: timeline.id, timelineAligned: true })
+    .where(eq(versions.id, version.id));
 }
 
 async function seedPlayback(
@@ -335,10 +357,11 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       }
     }));
 
-  test("remux and transcode decisions return no session or URL", () =>
+  test("remux opens a session and transcode returns no session or URL", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
+      await alignTimeline(db, fx.version);
       const second = await addItem(db, fx.library.id, "Sequel");
       await addMedia(db, fx.library.id, second.id, { audioCodec: "ac3" });
       const server = await startPendia("api", { databaseUrl: url, port: 0 });
@@ -350,13 +373,26 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           versionId: fx.version.id,
           profile: { ...profile, containers: ["mkv"] },
         });
-        expect(remuxed).toEqual({
+        expect(remuxed).toMatchObject({
           method: "remux",
           itemId: fx.item.id,
           versionId: fx.version.id,
-          sessionId: null,
-          url: null,
-          expiresAt: null,
+        });
+        if (remuxed.sessionId === null || remuxed.url === null)
+          throw new Error("Remux must return a session and URL.");
+        expect(remuxed.expiresAt).not.toBeNull();
+        expect(remuxed.url).toMatch(
+          new RegExp(
+            `^/api/playback/${remuxed.sessionId}/${fx.item.id}/hls/master\\.m3u8\\?token=`,
+          ),
+        );
+        const [remuxRow] = await db
+          .select()
+          .from(sessionRegistry)
+          .where(eq(sessionRegistry.id, remuxed.sessionId));
+        expect(remuxRow).toMatchObject({
+          playMethod: "remux",
+          transcoderNodeId: null,
         });
 
         const [sequelVersion] = await db
@@ -380,7 +416,28 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         const rows = await db
           .select({ id: sessionRegistry.id })
           .from(sessionRegistry);
-        expect(rows).toHaveLength(0);
+        expect(rows).toHaveLength(1);
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("remux without an aligned timeline answers 409", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = rpcClient(base, fx.keyToken);
+        const failure = await capture(
+          client.playback.plan({
+            itemId: fx.item.id,
+            versionId: fx.version.id,
+            profile: { ...profile, containers: ["mkv"] },
+          }),
+        );
+        expect(failure.status).toBe(409);
       } finally {
         await server.stop();
       }
@@ -680,7 +737,41 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       }
     }));
 
-  test("refresh rejects foreign, stopped and non-direct sessions", () =>
+  test("refresh returns the master URL for a remux session", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db);
+      await alignTimeline(db, fx.version);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = rpcClient(base, fx.keyToken);
+        const planned = await client.playback.plan({
+          itemId: fx.item.id,
+          versionId: fx.version.id,
+          profile: { ...profile, containers: ["mkv"] },
+        });
+        if (planned.sessionId === null) throw new Error("Expected a session.");
+        const refreshed = await client.playback.refresh({
+          sessionId: planned.sessionId,
+          itemId: fx.item.id,
+        });
+        expect(refreshed).toMatchObject({
+          method: "remux",
+          itemId: fx.item.id,
+          versionId: fx.version.id,
+          sessionId: planned.sessionId,
+        });
+        expect(refreshed.expiresAt).not.toBeNull();
+        expect(refreshed.url).toContain(
+          `/api/playback/${planned.sessionId}/${fx.item.id}/hls/master.m3u8?token=`,
+        );
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("refresh rejects foreign and stopped sessions and serves remux", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
@@ -717,13 +808,14 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           }),
         );
         expect(foreign.status).toBe(401);
-        const nonDirect = await capture(
-          rpcClient(base, fx.keyToken).playback.refresh({
-            sessionId: remuxSession.id,
-            itemId: fx.item.id,
-          }),
+        const remuxed = await rpcClient(base, fx.keyToken).playback.refresh({
+          sessionId: remuxSession.id,
+          itemId: fx.item.id,
+        });
+        expect(remuxed.method).toBe("remux");
+        expect(remuxed.url).toContain(
+          `/api/playback/${remuxSession.id}/${fx.item.id}/hls/master.m3u8?token=`,
         );
-        expect(nonDirect.status).toBe(401);
         await db
           .update(sessionRegistry)
           .set({ state: "stopped" })

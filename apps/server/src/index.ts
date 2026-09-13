@@ -243,12 +243,18 @@ export async function startPendia(
     if (runsTranscoder && database) {
       transcoder = await startTranscoder(database.db, transcoderOptions);
     }
-    if (servesApi && database && databaseUrl && eventBroker) {
+    if (
+      servesApi &&
+      database &&
+      databaseUrl &&
+      eventBroker &&
+      changeDebouncer
+    ) {
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
-        api: createApiHandler(database.db, eventBroker),
+        api: createApiHandler(database.db, eventBroker, transcoder),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
       });
     }

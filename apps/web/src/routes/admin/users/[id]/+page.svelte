@@ -48,7 +48,6 @@ let libraryFailures = $state<Record<string, FailureShape>>({});
 let revoking = $state<Record<string, boolean>>({});
 let revokeFailures = $state<Record<string, FailureShape>>({});
 
-let accessTicket = 0;
 let pending: Promise<unknown> = Promise.resolve();
 
 function serial<T>(run: () => Promise<T>) {
@@ -82,7 +81,6 @@ const ratingValue = $derived(
 
 async function saveSettings(event: SubmitEvent) {
   const target = id;
-  const ticket = ++accessTicket;
   event.preventDefault();
   settingsBusy = true;
   settingsFailure = undefined;
@@ -107,7 +105,7 @@ async function saveSettings(event: SubmitEvent) {
         contentRatingCeiling: rating === "" ? null : rating,
       }),
     );
-    if (target !== id || ticket !== accessTicket) return;
+    if (target !== id) return;
     access.set(updated);
     capInput = null;
     ratingInput = null;
@@ -120,7 +118,6 @@ async function saveSettings(event: SubmitEvent) {
 
 async function saveGroups() {
   const target = id;
-  const ticket = ++accessTicket;
   groupsBusy = true;
   groupsFailure = undefined;
   try {
@@ -138,7 +135,7 @@ async function saveGroups() {
         groupIds: checked,
       }),
     );
-    if (target !== id || ticket !== accessTicket) return;
+    if (target !== id) return;
     access.set(updated);
     groupSel = {};
   } catch (error) {
@@ -158,7 +155,6 @@ function overrideValue(permission: string): string {
 
 async function setOverride(permission: Permission, value: string) {
   const target = id;
-  const ticket = ++accessTicket;
   overrideBusy[permission] = true;
   delete overrideFailures[permission];
   try {
@@ -169,7 +165,7 @@ async function setOverride(permission: Permission, value: string) {
         allowed: value === "allow" ? true : value === "deny" ? false : null,
       }),
     );
-    if (target !== id || ticket !== accessTicket) return;
+    if (target !== id) return;
     access.set(updated);
   } catch (error) {
     if (target === id) overrideFailures[permission] = readFailure(error);
@@ -188,7 +184,6 @@ function accessValue(libraryId: string): string {
 
 async function setAccess(libraryId: string, value: string) {
   const target = id;
-  const ticket = ++accessTicket;
   libraryBusy[libraryId] = true;
   delete libraryFailures[libraryId];
   try {
@@ -199,7 +194,7 @@ async function setAccess(libraryId: string, value: string) {
         allowed: value === "allow" ? true : value === "deny" ? false : null,
       }),
     );
-    if (target !== id || ticket !== accessTicket) return;
+    if (target !== id) return;
     access.set(updated);
   } catch (error) {
     if (target === id) libraryFailures[libraryId] = readFailure(error);

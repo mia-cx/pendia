@@ -64,13 +64,15 @@ export async function runFirstRunWizard(
     libraryName: string;
     rootPath: string;
   },
-  options: WizardOptions = {},
+  options: WizardOptions & { timeoutMs?: number } = {},
 ) {
   const session = await createAdmin(input, options);
   const { library, jobId } = await createFirstLibrary(session, {
     name: input.libraryName,
     rootPath: input.rootPath,
   });
-  const status = await waitForScan(session.client, library.id);
+  const status = await waitForScan(session.client, library.id, {
+    timeoutMs: options.timeoutMs,
+  });
   return { session, library, jobId, status };
 }

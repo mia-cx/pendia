@@ -192,14 +192,22 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
             type: "poster",
             sourceUrl: "https://image.tmdb.org/t/p/original/poster.jpg",
             backend: "colocated",
-            storageKey: `${folder}/.pendia/artwork/${rows[0]?.id}`,
             selected: true,
           },
         ]);
+        expect(rows[0]?.storageKey).toMatch(
+          new RegExp(
+            `^Alien \\(1979\\) \\{tmdb-550\\}/\\.pendia/artwork/${rows[0]?.id}\\.[0-9a-f-]{36}$`,
+          ),
+        );
         expect(await readFile(join(root, rows[0]?.storageKey ?? ""))).toEqual(
           png,
         );
         expect(await db.select().from(events)).toMatchObject([
+          {
+            kind: "library.changed",
+            payload: { kind: "library.changed", libraryId: library.id },
+          },
           {
             kind: "library.changed",
             payload: { kind: "library.changed", libraryId: library.id },
@@ -379,7 +387,75 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         expect(rows[0]?.selected).toBe(true);
         expect(await db.select().from(events)).toMatchObject([
           { kind: "library.changed" },
+          { kind: "library.changed" },
         ]);
+      });
+    }));
+
+  test("a poster failure keeps the committed metadata event and retries", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        await db
+          .insert(providerIds)
+          .values({ provider: "tmdb", value: "550", itemId: item.id });
+        await db.insert(settings).values({
+          key: "metadata",
+          value: { tmdb: { apiKey: "test-key" } },
+        });
+        let imageFails = true;
+        const { request } = mockRequest((url) => {
+          if (url.hostname === "api.themoviedb.org")
+            return Response.json(tmdbDetail);
+          if (imageFails) return new Response("oops", { status: 503 });
+          return new Response(png);
+        });
+        const queue = createJobQueue(db, { retryDelayMs: 1 });
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request);
+        const job = await queue.enqueue({
+          type: "provider-fetch",
+          itemId: item.id,
+        });
+        const claimed = await queue.claim(["provider-fetch"]);
+        if (!claimed) throw new Error("Job was not claimed.");
+        await expect(registry.run(claimed)).rejects.toThrow(
+          "Artwork request failed with status 503.",
+        );
+        await queue.fail(claimed, new Error("Artwork request failed."));
+
+        expect(await storedItem(db, item.id)).toMatchObject({
+          title: "Fight Club",
+          year: 1999,
+          metadataState: "matched",
+        });
+        expect(
+          await db.select().from(credits).where(eq(credits.itemId, item.id)),
+        ).toHaveLength(3);
+        expect(
+          await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, item.id)),
+        ).toHaveLength(2);
+        expect(await db.select().from(artwork)).toHaveLength(0);
+        expect(await db.select().from(events)).toMatchObject([
+          { kind: "library.changed" },
+        ]);
+        expect(await db.select().from(events)).toHaveLength(1);
+
+        imageFails = false;
+        await db
+          .update(jobs)
+          .set({ runAfter: new Date(0) })
+          .where(eq(jobs.id, job.id));
+        const retried = await queue.claim(["provider-fetch"]);
+        expect(retried?.id).toBe(job.id);
+        await registry.run(retried ?? job);
+        await queue.complete(retried ?? job);
+        expect(await db.select().from(artwork)).toHaveLength(1);
+        expect(await db.select().from(events)).toHaveLength(3);
       });
     }));
 

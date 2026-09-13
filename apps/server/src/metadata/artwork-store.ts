@@ -409,7 +409,13 @@ export async function readArtworkOriginal(
     .select()
     .from(artwork)
     .where(eq(artwork.id, artworkId));
-  if (!row || row.itemId === null || row.backend !== "colocated") return null;
+  if (
+    !row ||
+    row.itemId === null ||
+    row.backend !== "colocated" ||
+    !row.selected
+  )
+    return null;
   const [item] = await db.select().from(items).where(eq(items.id, row.itemId));
   if (!item) return null;
   const [library] = await db

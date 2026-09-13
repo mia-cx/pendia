@@ -156,7 +156,9 @@ export async function libraryScanStatus(
     const [named] = await db
       .select({ id: jobs.id })
       .from(jobs)
-      .where(and(where, eq(jobs.id, runId)))
+      .where(
+        and(where, eq(jobs.id, runId), sql`${jobs.payload}->>'path' = '.'`),
+      )
       .limit(1);
     if (!named) throw new AuthError("NOT_FOUND");
     run = named.id;

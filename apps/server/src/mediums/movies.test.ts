@@ -272,31 +272,31 @@ describe("groupMoviePaths", () => {
   });
 
   test("extracts Radarr provider ids from the canonical folder", () => {
-    const folder = "Alien (1979) {tmdb-348} {imdb-tt78748} {tvdb=123}";
+    const folder = "Alien (1979) {tmdb-348} {imdb-tt0078748} {tvdb=123}";
     const groups = groupMoviePaths([`${folder}/Alien.mkv`]);
     expect(groups).toEqual([
       {
         canonicalFolder: folder,
         title: "Alien",
         year: 1979,
-        providerIds: { tmdb: "348", imdb: "tt78748", tvdb: "123" },
+        providerIds: { tmdb: "348", imdb: "tt0078748", tvdb: "123" },
         paths: [`${folder}/Alien.mkv`],
       },
     ]);
   });
 
   test("lowercases providers, trims values and keeps the first duplicate", () => {
-    const folder = "Alien (1979) {TMDB- 348 } {tmdb-999} {Imdb=TT78748}";
+    const folder = "Alien (1979) {TMDB- 348 } {tmdb-999} {Imdb=TT0078748}";
     const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);
-    expect(group?.providerIds).toEqual({ tmdb: "348", imdb: "tt78748" });
+    expect(group?.providerIds).toEqual({ tmdb: "348", imdb: "tt0078748" });
     expect(group?.title).toBe("Alien");
   });
 
   test("ignores malformed values and keeps a later valid duplicate", () => {
     const folder =
-      "Alien (1979) {tmdb-abc} {imdb-123} {tvdb-x2} {tmdb-0} {imdb-tt0} {tmdb-348}";
+      "Alien (1979) {tmdb-abc} {imdb-123} {tvdb-x2} {tmdb-0} {imdb-tt0} {imdb-tt0000000} {tmdb-348} {imdb-tt0078748}";
     const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);
-    expect(group?.providerIds).toEqual({ tmdb: "348" });
+    expect(group?.providerIds).toEqual({ tmdb: "348", imdb: "tt0078748" });
     expect(group?.title).toBe("Alien");
   });
 

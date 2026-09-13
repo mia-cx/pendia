@@ -385,10 +385,12 @@ export async function scanShowDirectory(
             throw new AuthError("CONFLICT");
           }
           episodeId = existingEpisode.item.id;
-          if (
-            existingEpisode.episode.episodeEndNumber !==
-            episodeGroup.episodeEndNumber
-          ) {
+          const existingEnd =
+            existingEpisode.episode.episodeEndNumber ??
+            existingEpisode.episode.episodeNumber;
+          const discoveredEnd =
+            episodeGroup.episodeEndNumber ?? episodeGroup.episodeNumber;
+          if (discoveredEnd > existingEnd) {
             await tx
               .update(episodes)
               .set({ episodeEndNumber: episodeGroup.episodeEndNumber })

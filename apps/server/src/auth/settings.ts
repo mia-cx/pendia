@@ -72,7 +72,7 @@ function readOidc(value: unknown) {
 }
 
 /** Reads live auth configuration from settings, applying documented defaults. */
-export async function readAuthSettings(db: Database) {
+export async function readAuthSettings(db: Pick<Database, "select">) {
   const [row] = await db
     .select({ value: settings.value })
     .from(settings)

@@ -41,7 +41,7 @@ async function memberships(db: Queryable, userId: string) {
 
 /** Reports whether an enabled user holds a permission via groups, overrides or library access. */
 export async function checkPermission(
-  db: Database,
+  db: Queryable,
   userId: string,
   permission: Permission,
   libraryId?: string,
@@ -101,7 +101,7 @@ export async function viewableLibraryIds(
 
 /** Throws FORBIDDEN when an enabled user lacks a permission. */
 export async function requirePermission(
-  db: Database,
+  db: Queryable,
   userId: string,
   permission: Permission,
   libraryId?: string,

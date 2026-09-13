@@ -23,7 +23,7 @@ type PublishOptions = { retentionSeconds?: number };
 
 /** Inserts an event, prunes rows past the retention window and notifies listeners. */
 export async function publishEvent(
-  db: Database,
+  db: Pick<Database, "transaction">,
   event: Event,
   options: PublishOptions = {},
 ): Promise<bigint> {

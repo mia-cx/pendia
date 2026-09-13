@@ -1,6 +1,7 @@
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { Database } from "../db/client.ts";
+import { createDirectPlayHandler } from "../playback/direct.ts";
 import type { ApiContext } from "./context.ts";
 import type { EventBroker } from "./events.ts";
 import { openApiDocument } from "./openapi.ts";
@@ -12,6 +13,7 @@ const eventStreamPaths = new Set(["/api/events", "/rpc/events/stream"]);
 export function createApiHandler(db: Database, events: EventBroker) {
   const rpc = new RPCHandler<ApiContext>(pendiaRouter);
   const openapi = new OpenAPIHandler<ApiContext>(pendiaRouter);
+  const direct = createDirectPlayHandler(db);
   return async (
     request: Request,
     peerAddress: string,
@@ -20,6 +22,8 @@ export function createApiHandler(db: Database, events: EventBroker) {
     const { pathname } = new URL(request.url);
     if (pathname === "/api/openapi.json" && request.method === "GET")
       return Response.json(await openApiDocument());
+    const played = await direct(request, peerAddress);
+    if (played !== undefined) return played;
     // Bun.serve drops connections idle for ten seconds; the event stream must outlive that.
     if (eventStreamPaths.has(pathname)) server.timeout(request, 0);
     const context: ApiContext = { db, request, peerAddress, events };

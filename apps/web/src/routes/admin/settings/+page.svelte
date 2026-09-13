@@ -28,6 +28,14 @@ const proxyValue = $derived(
   proxyInput ?? (settings.data?.trustedProxyAddresses ?? []).join("\n"),
 );
 
+let pending: Promise<unknown> = Promise.resolve();
+
+function serial<T>(run: () => Promise<T>) {
+  const next = pending.then(run, run);
+  pending = next.catch(() => {});
+  return next;
+}
+
 async function saveProxies(event: SubmitEvent) {
   event.preventDefault();
   proxyBusy = true;
@@ -38,7 +46,9 @@ async function saveProxies(event: SubmitEvent) {
       .map((line) => line.trim())
       .filter((line) => line !== "");
     settings.set(
-      await client.settings.update({ trustedProxyAddresses: lines }),
+      await serial(() =>
+        client.settings.update({ trustedProxyAddresses: lines }),
+      ),
     );
     proxyInput = null;
   } catch (error) {
@@ -53,7 +63,9 @@ async function saveArtwork(checked: boolean) {
   artFailure = undefined;
   try {
     settings.set(
-      await client.settings.update({ artworkRequiresAuth: checked }),
+      await serial(() =>
+        client.settings.update({ artworkRequiresAuth: checked }),
+      ),
     );
     artChecked = null;
   } catch (error) {
@@ -70,10 +82,12 @@ async function addKey(event: SubmitEvent) {
   keyFailure = undefined;
   try {
     settings.set(
-      await client.settings.setProviderKey({
-        name: keyName.trim(),
-        value: keyValue,
-      }),
+      await serial(() =>
+        client.settings.setProviderKey({
+          name: keyName.trim(),
+          value: keyValue,
+        }),
+      ),
     );
     keyName = "";
     keyValue = "";
@@ -88,7 +102,9 @@ async function removeKey(name: string) {
   removeBusy[name] = true;
   delete removeFailures[name];
   try {
-    settings.set(await client.settings.deleteProviderKey({ name }));
+    settings.set(
+      await serial(() => client.settings.deleteProviderKey({ name })),
+    );
   } catch (error) {
     removeFailures[name] = readFailure(error);
   } finally {

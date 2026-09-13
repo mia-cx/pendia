@@ -41,14 +41,19 @@ export async function createAdmin(
   };
 }
 
-/** Creates the first library as a movies library. */
+/** The mediums a first library can take. */
+export type LibraryMedium = Parameters<
+  PendiaClient["libraries"]["create"]
+>[0]["medium"];
+
+/** Creates the first library for the chosen medium. */
 export async function createFirstLibrary(
   session: WizardSession,
-  input: { name: string; rootPath: string },
+  input: { name: string; rootPath: string; medium: LibraryMedium },
 ) {
   return session.client.libraries.create({
     name: input.name,
-    medium: "movies",
+    medium: input.medium,
     rootPath: input.rootPath,
   });
 }
@@ -66,6 +71,7 @@ export async function runFirstRunWizard(
     displayName?: string;
     libraryName: string;
     rootPath: string;
+    libraryMedium: LibraryMedium;
   },
   options: WizardOptions & { timeoutMs?: number } = {},
 ) {
@@ -73,6 +79,7 @@ export async function runFirstRunWizard(
   const library = await createFirstLibrary(session, {
     name: input.libraryName,
     rootPath: input.rootPath,
+    medium: input.libraryMedium,
   });
   const { jobId } = await startScan(session, library.id);
   const status = await waitForScan(session.client, library.id, {

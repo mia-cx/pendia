@@ -263,12 +263,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             libraryId: library.id,
             path: "B Show",
             reconcileMissing: true,
+            runId: rootJob.id,
           },
           {
             type: "scan",
             libraryId: library.id,
             path: "A Show (2020)",
             reconcileMissing: true,
+            runId: rootJob.id,
           },
         ]);
         for (const job of fanned) {

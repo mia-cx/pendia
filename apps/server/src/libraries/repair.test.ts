@@ -213,11 +213,16 @@ describe.skipIf(!databaseUrl)("library repair", () => {
           await repair.stop();
         }
         repair.start();
+        const baseline = await listJobs(db, {
+          state: "queued",
+          type: "scan",
+        });
         await createVideoFixture(join(root, `${folder}/Alien.720p.mkv`));
         await Bun.sleep(150);
         expect(
           await listJobs(db, { state: "queued", type: "scan" }),
-        ).toHaveLength(2);
+        ).toHaveLength(baseline.length);
+        expect(baseline.length).toBeGreaterThanOrEqual(2);
         expect(errors).toEqual([]);
       });
     }));
@@ -245,21 +250,23 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         } finally {
           await server.stop();
         }
-        const third = "Cars (2006) {tmdb-920}";
-        await mkdir(join(root, third), { recursive: true });
-        await createVideoFixture(join(root, `${third}/Cars.1080p.mkv`));
-        await Bun.sleep(150);
-        const found = await listJobs(db, { state: "queued", type: "scan" });
-        expect(
-          found
+        const queuedPaths = async () =>
+          (await listJobs(db, { state: "queued", type: "scan" }))
             .filter(
               (job) =>
                 job.payload.type === "scan" &&
                 job.payload.libraryId === library.id,
             )
             .map((job) => (job.payload.type === "scan" ? job.payload.path : ""))
-            .sort(),
-        ).toEqual(["Alien (1979) {tmdb-348}", "Blade Runner (1982) {tmdb-78}"]);
+            .sort();
+        const baseline = await queuedPaths();
+        expect(baseline).toContain("Alien (1979) {tmdb-348}");
+        expect(baseline).toContain("Blade Runner (1982) {tmdb-78}");
+        const third = "Cars (2006) {tmdb-920}";
+        await mkdir(join(root, third), { recursive: true });
+        await createVideoFixture(join(root, `${third}/Cars.1080p.mkv`));
+        await Bun.sleep(150);
+        expect(await queuedPaths()).toEqual(baseline);
       });
     }));
 

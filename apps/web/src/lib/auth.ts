@@ -67,12 +67,21 @@ async function postJson<T>(
   return (await response.json()) as T;
 }
 
+// crypto.randomUUID needs a secure context; getRandomValues works on plain HTTP.
+function newDeviceId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
 /** The device identity this browser keeps across reloads. */
 export function deviceInfo() {
   const store = typeof localStorage === "undefined" ? null : localStorage;
   let deviceId = store?.getItem("pendia.deviceId") ?? null;
   if (deviceId === null) {
-    deviceId = crypto.randomUUID();
+    deviceId = newDeviceId();
     store?.setItem("pendia.deviceId", deviceId);
   }
   const agent = (typeof navigator === "undefined" ? "" : navigator.userAgent)

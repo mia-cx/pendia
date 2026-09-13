@@ -37,6 +37,13 @@ export function resource<T>(load: () => Promise<T>) {
     get loading() {
       return loading;
     },
+    /** Replaces the loaded value, for a mutation that already answered with it. */
+    set(value: T) {
+      generation += 1;
+      data = value;
+      failure = undefined;
+      loading = false;
+    },
     reload: run,
   };
 }

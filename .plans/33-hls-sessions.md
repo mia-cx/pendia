@@ -8,12 +8,12 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, topology.md, ADR 0003 a
 
 ## Acceptance criteria
 
-- [ ] A 1080p fixture plays over HLS in hls.js, and the generated playlists validate with an HLS parser.
-- [ ] Time to the first playable segment on remux is under 500 ms on the fixture.
-- [ ] A seek to an unproduced segment restarts ffmpeg and serves within 2 s; segments already in scratch are served without a restart.
-- [ ] An idle session stops and its scratch is gone after 60 s.
-- [ ] With the api and transcoder as two processes, a session is served through the proxy.
-- [ ] The session state machine and playlist generation have tests.
+- [x] A 1080p fixture plays over HLS in hls.js, and the generated playlists validate with an HLS parser.
+- [x] Time to the first playable segment on remux is under 500 ms on the fixture.
+- [x] A seek to an unproduced segment restarts ffmpeg and serves within 2 s; segments already in scratch are served without a restart.
+- [x] An idle session stops and its scratch is gone after 60 s.
+- [x] With the api and transcoder as two processes, a session is served through the proxy.
+- [x] The session state machine and playlist generation have tests.
 
 ## TODOs
 
@@ -23,7 +23,7 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, topology.md, ADR 0003 a
 - [x] 4. Transcoder role. `transcoder/index.ts` registers the node in `transcoder_capabilities` with its reachable address, serves the internal HLS route with token verification and owner check, and removes its row on stop. `startPendia` starts it for `transcoder` and `all`; env `PENDIA_SCRATCH_DIR`, `PENDIA_TRANSCODER_PORT`, `PENDIA_TRANSCODER_URL`. Validation: role tests show the node row appears and disappears and the internal route rejects a bad token.
 - [x] 5. Play plan and api route. `planPlayback` opens a remux session and returns the master URL with token; `refreshPlayback` re-issues it. `api/hls.ts` authenticates the request, resolves or assigns the owner in the registry, serves in-process when local, proxies to the owner's address otherwise, and answers 503 when no transcoder exists. Validation: planning tests and an end-to-end HLS test on the 1080p fixture: playlists validate, first segment under 500 ms, seek restart under 2 s, concatenated init plus segments decode with ffprobe.
 - [x] 6. Two processes and docs. A test spawns `bun src/index.ts --role transcoder` as a child process and serves a session through the api's proxy; SIGTERM removes the node row and scratch. README documents the transcoder role and its env. Validation: the test passes with Postgres.
-- [ ] 7. Final validation from the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=... bun test`, `bun test` without it. Record results here.
+- [x] 7. Final validation from the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=... bun test`, `bun test` without it. Record results here.
 
 ## Notes
 
@@ -45,3 +45,13 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, topology.md, ADR 0003 a
 - TODO 4 validation: role, hls gate, index and api tests pass (29); the whole server suite with DATABASE_URL passes 649 tests in about 102 s. Tests pass `transcoderOptions: { port: 0 }` so none binds 3001. The transcoder role now needs DATABASE_URL like the worker.
 - TODO 5 validation: `DATABASE_URL=... bun test src/api/hls.test.ts src/api/playback.test.ts src/api/direct-play.test.ts src/playback` passes 318 tests in 22.7 s; the whole server suite passes 656 tests in 108 s. Measured through the api route on the 1080p fixture: first playable segment 84 ms, seek to an unproduced segment served in 73 ms with a second ffmpeg run; the cached segment 0 is served without a third run. init plus all four segments concatenated decode with `ffmpeg -f null` and probe to the Version's duration. Refresh on a remux session now returns the master URL instead of 401.
 - TODO 6 validation: `bun test src/api/hls-proxy.test.ts` passes in 1.7 s. The transcoder runs as a real child process (`bun src/index.ts --role transcoder`); the api in the test process proxies master, media, init and segment 0 to it; SIGTERM exits 0, removes the node row, nulls the session's owner and deletes the scratch. `readPort` rejects 0, so the test probes a free port for the child instead of relying on an ephemeral bind.
+- Final validation on 2026-09-13, Bun 1.4.2, ffmpeg 7.1.5, local Postgres 18:
+  - `bun install --frozen-lockfile`: exit 0. 117 installs across 220 packages, no changes.
+  - `bun run lint`: exit 0. 151 files checked, no fixes.
+  - `bun run check`: exit 0. 6 tasks successful; svelte-check 0 errors.
+  - `bun run build`: exit 0. 4 tasks successful.
+  - `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55433/pendia bun test`: exit 0. 657 pass, 0 fail, 2475 assertions across 51 files in 111 s. Measured: first playable segment 85 ms through the api route (72 ms through the manager); seek to an unproduced segment served in 71 ms (64 ms) with a second ffmpeg run.
+  - `env -u DATABASE_URL -u CI bun test`: exit 0. 440 pass, 223 skip, 0 fail; the skip notice appears once.
+  - `env -u DATABASE_URL CI=true bun test src/api/hls.test.ts`: exit 1 with "DATABASE_URL is required for database tests in CI."
+  - No ffmpeg processes and no session directories remain after the run.
+- hls.js in a browser is not exercised by the automated run (no Media Source Extensions in Bun). The evidence for "plays" is a strict HLS parse of both playlists plus a full decode of init and every segment concatenated.

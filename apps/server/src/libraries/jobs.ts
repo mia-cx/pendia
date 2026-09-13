@@ -26,8 +26,16 @@ export function registerLibraryJobs(
       .where(eq(libraries.id, payload.libraryId));
     if (!library) throw new AuthError("NOT_FOUND");
     if (library.medium !== "movies") throw new AuthError("INVALID_INPUT");
+    if (
+      payload.path === "." &&
+      payload.changes !== undefined &&
+      payload.changes.length > 0
+    )
+      throw new AuthError("INVALID_INPUT");
     if (payload.path !== ".") {
-      await scanDirectory(db, library.id, payload.path);
+      await scanDirectory(db, library.id, payload.path, {
+        changes: payload.changes,
+      });
       await publishEvent(db, {
         kind: "library.changed",
         libraryId: library.id,

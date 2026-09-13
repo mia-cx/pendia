@@ -18,7 +18,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
   - Validation: `bun test apps/server/src/libraries/servarr.test.ts`
 - [x] Accept Sonarr and Radarr webhooks through API-key secrets in the URL and coalesce each directory's events for 10 seconds into one scan job.
   - Validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/webhooks.test.ts`
-- [ ] Apply queued add, move and delete changes during directory scans, persist provider ids, preserve Item progress on rename and remove the last empty Item on delete.
+- [x] Apply queued add, move and delete changes during directory scans, persist provider ids, preserve Item progress on rename and remove the last empty Item on delete.
   - Validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/changes.test.ts apps/server/src/libraries/scan.test.ts`
 - [ ] Add the directory-mtime repair pass and run it after startup and every 24 hours while retaining the manual scan.
   - Validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/repair.test.ts apps/server/src/api/libraries.test.ts`
@@ -31,6 +31,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
 
 - TODO 1 validated: `bun test apps/server/src/libraries/servarr.test.ts` → 11 pass, 0 fail, 24 expect() calls; `bun run --cwd apps/server check` → clean (tsc --noEmit, no errors).
 - TODO 2 validated: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/webhooks.test.ts` → 9 pass, 0 fail, 40 expect() calls; `bun run --cwd apps/server check` → clean; `bunx biome check` on webhooks.ts, webhooks.test.ts, api.ts, index.ts, operations.ts → clean after one format pass.
+- TODO 3 validated: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/changes.test.ts apps/server/src/libraries/scan.test.ts apps/server/src/libraries/jobs.test.ts apps/server/src/libraries/walker.test.ts` → 29 pass, 0 fail, 162 expect() calls; `bun run --cwd apps/server check` → clean; `bunx biome check` on changes.ts, changes.test.ts, scan.ts, scan.test.ts, jobs.ts, walker.ts, walker.test.ts → clean after one format pass.
 - The unattended run cannot confirm test seams. Tests use the public payload translators, HTTP webhook handler, queued scan handler, repair pass and existing library API.
 - Webhook routes are `/api/webhooks/sonarr/<secret>` and `/api/webhooks/radarr/<secret>`. Only a live API-key token is accepted as the secret. Session tokens are rejected.
 - The 10 second debounce is process-local until it writes one durable scan job. Shutdown flushes accepted events before closing the database.

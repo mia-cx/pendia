@@ -1,5 +1,11 @@
 import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
+import {
+  groupProcedures,
+  settingsProcedures,
+  setupProcedures,
+  userProcedures,
+} from "./admin.ts";
 import { authenticated, authenticateRequest } from "./context.ts";
 import { runApi } from "./errors.ts";
 import { getItemDetail, listItemCards } from "./items.ts";
@@ -67,5 +73,9 @@ export const pendiaRouter = {
   playback: playbackProcedures,
   marks: markProcedures,
   shelves: shelfProcedures,
+  setup: setupProcedures,
+  users: userProcedures,
+  groups: groupProcedures,
+  settings: settingsProcedures,
   events: { stream: streamEvents },
 };

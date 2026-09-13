@@ -127,7 +127,7 @@ export async function requireAdmin(
 export async function createGroup(
   db: Database,
   actorId: string,
-  input: { name: string; permissions: Permission[] },
+  input: { name: string; permissions: readonly Permission[] },
 ) {
   await requireAdmin(db, actorId);
   const name = input.name.trim();
@@ -159,7 +159,7 @@ export async function setUserGroups(
   db: Database,
   actorId: string,
   userId: string,
-  groupIds: string[],
+  groupIds: readonly string[],
 ): Promise<void> {
   const unique = [...new Set(groupIds)];
   await db.transaction(async (tx) => {

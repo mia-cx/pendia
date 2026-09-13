@@ -86,6 +86,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         expect(calls).toHaveLength(1);
         expect(calls[0]?.url).toBe(poster.url);
         expect(calls[0]?.init?.headers).toEqual({ accept: "image/*" });
+        expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
         expect(row).toMatchObject({
           itemId: item.id,
           versionId: null,
@@ -321,6 +322,57 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
           expect(await readdir(outside)).toHaveLength(0);
         }),
       );
+    }));
+
+  test("a request timeout leaves no row or file", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const request = (async (
+          _input: string | URL | Request,
+          init?: RequestInit,
+        ) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (signal === null || signal === undefined) {
+              reject(new Error("Missing request signal."));
+              return;
+            }
+            if (signal.aborted) {
+              reject(new Error("The operation timed out."));
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => reject(new Error("The operation timed out.")),
+              { once: true },
+            );
+          })) as typeof fetch;
+        await expect(
+          storeArtworkOriginal(db, item.id, poster, request, 1),
+        ).rejects.toThrow("timed out");
+        expect(await db.select().from(artwork)).toHaveLength(0);
+        await expect(
+          access(join(root, "Alien (1979)", ".pendia")),
+        ).rejects.toThrow();
+      });
+    }));
+
+  test("rejects invalid request timeouts before any request", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { calls, request } = mockRequest(() => new Response(png));
+        for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
+          await expect(
+            storeArtworkOriginal(db, item.id, poster, request, timeoutMs),
+          ).rejects.toThrow("Invalid artwork request timeout.");
+        }
+        expect(calls).toHaveLength(0);
+        expect(await db.select().from(artwork)).toHaveLength(0);
+      });
     }));
 
   test("a missing item throws NOT_FOUND", () =>

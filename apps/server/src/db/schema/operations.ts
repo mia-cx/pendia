@@ -38,8 +38,24 @@ export const pluginLockfile = pgTable("plugin_lockfile", {
   integrity: text("integrity").notNull(),
 });
 
+/** A library-relative change carried by a scan job. */
+export type ScanChange =
+  | { kind: "add"; path: string; providerIds: Record<string, string> }
+  | {
+      kind: "move";
+      path: string;
+      previousPath: string;
+      providerIds: Record<string, string>;
+    }
+  | {
+      kind: "delete";
+      path: string;
+      target: "file" | "item";
+      providerIds: Record<string, string>;
+    };
+
 export type JobPayload =
-  | { type: "scan"; libraryId: string; path: string }
+  | { type: "scan"; libraryId: string; path: string; changes?: ScanChange[] }
   | { type: "probe"; fileId: string }
   | { type: "provider-fetch"; itemId: string; provider: string }
   | { type: "store"; sourceFileId: string; rung: string }

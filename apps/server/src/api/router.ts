@@ -4,6 +4,7 @@ import { authenticated, authenticateRequest } from "./context.ts";
 import { runApi } from "./errors.ts";
 import { getItemDetail, listItemCards } from "./items.ts";
 import { libraryProcedures } from "./libraries.ts";
+import { markProcedures, shelfProcedures } from "./marks.ts";
 import { playbackProcedures } from "./playback.ts";
 import {
   ApiEvent,
@@ -64,5 +65,7 @@ export const pendiaRouter = {
   items: { list: listItems, get: getItem },
   libraries: libraryProcedures,
   playback: playbackProcedures,
+  marks: markProcedures,
+  shelves: shelfProcedures,
   events: { stream: streamEvents },
 };

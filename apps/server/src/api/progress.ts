@@ -14,7 +14,8 @@ const position = Schema.Number.pipe(
   Schema.greaterThanOrEqualTo(0),
 );
 
-const Progress = Schema.Struct({
+/** The stored progress shape returned by progress and shelf reads. */
+export const Progress = Schema.Struct({
   userId: Schema.UUID,
   itemId: Schema.UUID,
   versionId: Schema.NullOr(Schema.UUID),

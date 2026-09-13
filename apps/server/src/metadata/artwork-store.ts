@@ -431,3 +431,35 @@ export async function readArtworkOriginal(
     throw new Error("Invalid artwork storage path.");
   return { bytes: new Uint8Array(await readFile(target)), artwork: row };
 }
+
+/** A stored artwork original: exact bytes plus its artwork row. */
+export interface ArtworkOriginal {
+  bytes: Uint8Array;
+  artwork: typeof artwork.$inferSelect;
+}
+
+/** Reads one colocated artwork original without following symlinks. */
+export async function readArtworkOriginal(
+  db: Database,
+  artworkId: string,
+): Promise<ArtworkOriginal | null> {
+  const [row] = await db
+    .select()
+    .from(artwork)
+    .where(eq(artwork.id, artworkId));
+  if (!row || row.itemId === null || row.backend !== "colocated") return null;
+  const [item] = await db.select().from(items).where(eq(items.id, row.itemId));
+  if (!item) return null;
+  const [library] = await db
+    .select()
+    .from(libraries)
+    .where(eq(libraries.id, item.libraryId));
+  if (!library) return null;
+  const { root, target } = resolveStoragePath(library.rootPath, row.storageKey);
+  await walkStorageDirectory(root, dirname(target), false);
+  const stat = await statOrNull(target);
+  if (stat === null) return null;
+  if (stat.isSymbolicLink() || !stat.isFile())
+    throw new Error("Invalid artwork storage path.");
+  return { bytes: new Uint8Array(await readFile(target)), artwork: row };
+}

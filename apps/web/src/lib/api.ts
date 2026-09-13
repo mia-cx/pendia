@@ -16,3 +16,6 @@ export function createPendiaClient(
   });
   return createORPCClient<PendiaClient>(link);
 }
+
+/** The same-origin client the admin screens use. */
+export const client = createPendiaClient();

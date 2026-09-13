@@ -70,7 +70,6 @@ export async function createLibrary(
   input: CreateLibraryInput,
 ) {
   await requirePermission(db, actorId, "manage-libraries");
-  if (input.medium !== "movies") throw new AuthError("INVALID_INPUT");
   const name = normalizeName(input.name);
   const rootPath = normalizeRoot(input.rootPath);
   const [library] = await db
@@ -118,7 +117,6 @@ export async function scanLibrary(db: Database, actorId: string, id: string) {
     .from(libraries)
     .where(eq(libraries.id, id));
   if (!library) throw new AuthError("NOT_FOUND");
-  if (library.medium !== "movies") throw new AuthError("INVALID_INPUT");
   const job = await createJobQueue(db).enqueue(
     { type: "scan", libraryId: id, path: "." },
     { concurrencyKey: libraryConcurrencyKey(id) },

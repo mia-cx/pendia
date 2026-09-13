@@ -370,6 +370,46 @@ describe.skipIf(!databaseUrl)("library service", () => {
       );
     }));
 
+  test("libraryScanStatus rejects a directory job id as a run id", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      const { jobId } = await scanLibrary(db, admin.id, library.id);
+      const [child] = await db
+        .insert(jobs)
+        .values({
+          type: "scan",
+          payload: {
+            type: "scan",
+            libraryId: library.id,
+            path: "Alien (1979)",
+            runId: jobId,
+          },
+          state: "completed",
+          maxAttempts: 3,
+        })
+        .returning({ id: jobs.id });
+      if (!child) throw new Error("Job insert returned no row.");
+
+      await expectAuthError(
+        libraryScanStatus(db, admin.id, library.id, child.id),
+        "NOT_FOUND",
+      );
+      const status = await libraryScanStatus(db, admin.id, library.id, jobId);
+      expect(status.runId).toBe(jobId);
+      expect(status.counts).toEqual({
+        queued: 1,
+        running: 0,
+        completed: 1,
+        failed: 0,
+      });
+    }));
+
   test("libraryScanStatus rejects unknown ids and non-admin actors", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

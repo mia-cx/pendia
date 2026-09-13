@@ -2,15 +2,13 @@
 import { goto } from "$app/navigation";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
+import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 import {
   createAdmin,
   createFirstLibrary,
   type WizardSession,
-  waitForScan,
 } from "$lib/wizard.ts";
 import "$lib/admin.css";
-
-type ScanStatus = Awaited<ReturnType<typeof waitForScan>>;
 
 const stepTitles = ["Create the admin", "Add the first library", "Scan"];
 
@@ -33,10 +31,10 @@ const scanSettled = $derived(
     status.counts.running === 0,
 );
 const scanFailed = $derived(
-  scanSettled && status !== undefined && status.latest?.state === "failed",
+  scanSettled && status !== undefined && status.counts.failed > 0,
 );
 const scanDone = $derived(
-  scanSettled && status !== undefined && status.latest?.state === "completed",
+  scanSettled && status !== undefined && status.counts.completed > 0,
 );
 
 async function submitAdmin(event: SubmitEvent) {
@@ -59,7 +57,7 @@ async function submitAdmin(event: SubmitEvent) {
 
 async function watchScan() {
   if (!session) return;
-  status = await waitForScan(session, libraryId, {
+  status = await waitForScan(session.client, libraryId, {
     onStatus: (reading) => {
       status = reading;
     },
@@ -190,15 +188,21 @@ async function rescan() {
         {#if scanFailed}
           <div class="failure" role="alert">
             <h3>The scan failed</h3>
-            <p>{status?.latest?.error ?? "The scan job failed."}</p>
+            <p>
+              {status?.counts.failed} scan {status?.counts.failed === 1
+                ? "job"
+                : "jobs"} failed.{#if status?.latest?.state === "failed"}
+                {status.latest.error}{/if}
+            </p>
           </div>
           <button type="button" onclick={rescan} disabled={busy}>
             Scan again
           </button>
-        {:else if scanDone}
+        {/if}
+        {#if scanDone}
           <p>The first scan is done.</p>
           <a class="open" href="/admin">Open the admin</a>
-        {:else}
+        {:else if !scanSettled}
           <p class="muted">Scanning the library.</p>
         {/if}
       {:else}

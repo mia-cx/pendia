@@ -133,12 +133,9 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
       await withTempRoot(async (root) => {
         const { item, row } = await seed(db, root, png);
         const calls: number[] = [];
-        const resize: ArtworkResize = async (_input, width) => {
+        const resize: ArtworkResize = async (input, width) => {
           calls.push(width);
-          return {
-            bytes: new Uint8Array([1, 2, width]),
-            contentType: "image/x-artwork",
-          };
+          return { bytes: input, contentType: "image/x-artwork" };
         };
         await withServer(db, { resize }, async (base) => {
           const url = `${base}/api/artwork/${row.id}?width=4`;
@@ -146,14 +143,12 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           expect(first.status).toBe(200);
           const etag = first.headers.get("etag") ?? "";
           expect(etag.startsWith('"')).toBe(true);
-          await first.arrayBuffer();
+          expect(Buffer.from(await first.arrayBuffer())).toEqual(png);
 
           const second = await fetch(url);
           expect(second.status).toBe(200);
           expect(second.headers.get("etag")).toBe(etag);
-          expect(Buffer.from(await second.arrayBuffer())).toEqual(
-            Buffer.from([1, 2, 4]),
-          );
+          expect(Buffer.from(await second.arrayBuffer())).toEqual(png);
           expect(calls).toEqual([4]);
 
           const matched = await fetch(url, {
@@ -359,6 +354,69 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           await third.arrayBuffer();
           expect(calls).toEqual([4]);
         });
+      });
+    }));
+
+  test("different resized output produces a different etag", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const resizeOne: ArtworkResize = async () => ({
+          bytes: new Uint8Array([1, 2, 4]),
+          contentType: "image/x-artwork",
+        });
+        const resizeTwo: ArtworkResize = async () => ({
+          bytes: new Uint8Array([9, 8, 7]),
+          contentType: "image/x-artwork",
+        });
+        const url = `http://x/api/artwork/${row.id}?width=4`;
+        const first = await createArtworkHandler(db, { resize: resizeOne })(
+          new Request(url),
+        );
+        const second = await createArtworkHandler(db, { resize: resizeTwo })(
+          new Request(url),
+        );
+        expect(first?.status).toBe(200);
+        expect(second?.status).toBe(200);
+        const etagOne = first?.headers.get("etag") ?? "";
+        const etagTwo = second?.headers.get("etag") ?? "";
+        expect(etagOne).toMatch(/^"[0-9a-f]{64}"$/);
+        expect(etagTwo).not.toBe(etagOne);
+        await first?.arrayBuffer();
+        await second?.arrayBuffer();
+      });
+    }));
+
+  test("a cold conditional request resizes once before a 304", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const output = new Uint8Array([1, 2, 4]);
+        const calls: number[] = [];
+        const resize: ArtworkResize = async (_input, width) => {
+          calls.push(width);
+          return { bytes: output, contentType: "image/x-artwork" };
+        };
+        const hasher = new Bun.CryptoHasher("sha256");
+        hasher.update("image/x-artwork");
+        hasher.update(":");
+        hasher.update(output);
+        const etag = `"${hasher.digest("hex")}"`;
+        const handler = createArtworkHandler(db, { resize });
+        const url = `http://x/api/artwork/${row.id}?width=4`;
+        const cold = await handler(
+          new Request(url, { headers: { "if-none-match": etag } }),
+        );
+        expect(cold?.status).toBe(304);
+        expect(cold?.headers.get("etag")).toBe(etag);
+        expect(calls).toEqual([4]);
+        const warm = await handler(
+          new Request(url, { headers: { "if-none-match": etag } }),
+        );
+        expect(warm?.status).toBe(304);
+        expect(calls).toEqual([4]);
       });
     }));
 

@@ -79,10 +79,13 @@ export function createArtworkHandler(
   )
     throw new Error("Invalid artwork cache size.");
   const resize = options.resize ?? sharpResize;
-  const cache = new Map<string, { bytes: Uint8Array; contentType: string }>();
+  const cache = new Map<
+    string,
+    { bytes: Uint8Array; contentType: string; etag: string }
+  >();
   const inFlight = new Map<
     string,
-    Promise<{ bytes: Uint8Array; contentType: string }>
+    Promise<{ bytes: Uint8Array; contentType: string; etag: string }>
   >();
   let cacheBytes = 0;
 
@@ -135,38 +138,37 @@ export function createArtworkHandler(
       const hasher = new Bun.CryptoHasher("sha256");
       hasher.update(original.bytes);
       hasher.update(`;w=${effectiveWidth}`);
-      const etag = `"${hasher.digest("hex")}"`;
-      const headers = {
-        ETag: etag,
-        "Cache-Control": cacheControl,
-        "X-Content-Type-Options": "nosniff",
-      };
-      if (matchesIfNoneMatch(request.headers.get("if-none-match"), etag))
-        return new Response(null, { status: 304, headers });
+      const sourceKey = hasher.digest("hex");
 
-      let result = cache.get(etag);
+      let result = cache.get(sourceKey);
       if (result) {
-        cache.delete(etag);
-        cache.set(etag, result);
+        cache.delete(sourceKey);
+        cache.set(sourceKey, result);
       } else {
-        let pending = inFlight.get(etag);
+        let pending = inFlight.get(sourceKey);
         if (pending === undefined) {
-          pending = resize(original.bytes, effectiveWidth);
-          inFlight.set(etag, pending);
+          pending = resize(original.bytes, effectiveWidth).then((resized) => {
+            const etagHasher = new Bun.CryptoHasher("sha256");
+            etagHasher.update(resized.contentType);
+            etagHasher.update(":");
+            etagHasher.update(resized.bytes);
+            return { ...resized, etag: `"${etagHasher.digest("hex")}"` };
+          });
+          inFlight.set(sourceKey, pending);
           const cleanup = () => {
-            if (inFlight.get(etag) === pending) inFlight.delete(etag);
+            if (inFlight.get(sourceKey) === pending) inFlight.delete(sourceKey);
           };
           pending.then(cleanup, cleanup);
         }
         const resized = await pending;
-        result = cache.get(etag);
+        result = cache.get(sourceKey);
         if (result) {
-          cache.delete(etag);
-          cache.set(etag, result);
+          cache.delete(sourceKey);
+          cache.set(sourceKey, result);
         } else {
           result = resized;
           if (result.bytes.byteLength <= maxCacheBytes) {
-            cache.set(etag, result);
+            cache.set(sourceKey, result);
             cacheBytes += result.bytes.byteLength;
             while (cache.size > maxCacheEntries || cacheBytes > maxCacheBytes) {
               const oldest = cache.keys().next().value;
@@ -178,6 +180,13 @@ export function createArtworkHandler(
           }
         }
       }
+      const headers = {
+        ETag: result.etag,
+        "Cache-Control": cacheControl,
+        "X-Content-Type-Options": "nosniff",
+      };
+      if (matchesIfNoneMatch(request.headers.get("if-none-match"), result.etag))
+        return new Response(null, { status: 304, headers });
       return new Response(Buffer.from(result.bytes), {
         status: 200,
         headers: {

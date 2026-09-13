@@ -96,6 +96,11 @@ export function startApiServer(
         return handlers.auth(request, server.requestIP(request)?.address ?? "");
       }
 
+      if (handlers.artwork) {
+        const response = await handlers.artwork(request);
+        if (response !== undefined) return response;
+      }
+
       if (handlers.api && !isApplicationPath(pathname)) {
         const response = await handlers.api(
           request,

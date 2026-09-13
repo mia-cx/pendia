@@ -16,7 +16,6 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@pendia/plugin-api": "workspace:*",
     "@orpc/client": "1.15.0",
     "@orpc/openapi": "1.15.0",
     "@orpc/server": "1.15.0",

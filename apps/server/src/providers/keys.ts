@@ -10,16 +10,19 @@ const namePattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const maxValueLength = 4096;
 
 function storedKeys(value: unknown): Record<string, string> {
-  if (value === undefined) return {};
+  const stored: Record<string, string> = Object.create(null);
+  if (value === undefined) return stored;
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new Error("Corrupt provider keys settings row.");
   const keys = (value as Record<string, unknown>).keys;
   if (keys === null || typeof keys !== "object" || Array.isArray(keys))
     throw new Error("Corrupt provider keys settings row.");
-  for (const secret of Object.values(keys))
+  for (const [name, secret] of Object.entries(keys)) {
     if (typeof secret !== "string")
       throw new Error("Corrupt provider keys settings row.");
-  return keys as Record<string, string>;
+    stored[name] = secret;
+  }
+  return stored;
 }
 
 function normalizeName(name: string): string {
@@ -95,7 +98,7 @@ export async function removeProviderKey(
   await requirePermission(db, actorId, "manage-server");
   const key = normalizeName(name);
   return writeKeys(db, (keys) => {
-    if (!(key in keys)) throw new AuthError("NOT_FOUND");
+    if (!Object.hasOwn(keys, key)) throw new AuthError("NOT_FOUND");
     delete keys[key];
   });
 }

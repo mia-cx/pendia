@@ -2,15 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { openApiDocument } from "./openapi.ts";
 
 type Parameter = { name: string; in: string };
-type PathItem = {
-  get?: {
-    parameters?: (Parameter | { $ref: string })[];
-    responses?: Record<
-      string,
-      { content?: { "application/json"?: { schema?: unknown } } }
-    >;
-  };
+type Operation = {
+  parameters?: (Parameter | { $ref: string })[];
+  responses?: Record<
+    string,
+    { content?: { "application/json"?: { schema?: unknown } } }
+  >;
 };
+type PathItem = { get?: Operation; post?: Operation; put?: Operation };
 
 function parameterNames(item: PathItem | undefined): Set<string> {
   return new Set(
@@ -38,7 +37,22 @@ describe("openapi document", () => {
     expect(doc.openapi).toStartWith("3.1");
     expect(doc.info?.title).toBe("Pendia");
     expect(Object.keys(doc.paths ?? {})).toEqual(
-      expect.arrayContaining(["/me", "/items", "/items/{id}"]),
+      expect.arrayContaining([
+        "/me",
+        "/items",
+        "/items/{id}",
+        "/playback/plan",
+        "/playback/{sessionId}/{itemId}/refresh",
+        "/playback/{sessionId}/{itemId}/start",
+        "/playback/{sessionId}/{itemId}/progress",
+        "/playback/{sessionId}/{itemId}/stop",
+        "/items/{itemId}/progress",
+        "/items/{itemId}/versions/{versionId}/resume",
+        "/items/{itemId}/marks",
+        "/items/{itemId}/favourite",
+        "/items/{itemId}/rating",
+        "/shelves/continue-watching",
+      ]),
     );
   });
 
@@ -77,6 +91,55 @@ describe("openapi document", () => {
         "year",
         "addedAt",
       ]),
+    );
+  });
+
+  test("publishes the playback, marks and shelf operations with schemas", async () => {
+    const doc = await openApiDocument();
+    const paths = doc.paths as Record<string, PathItem> | undefined;
+    const expected: [string, "get" | "post" | "put"][] = [
+      ["/playback/plan", "post"],
+      ["/playback/{sessionId}/{itemId}/refresh", "post"],
+      ["/playback/{sessionId}/{itemId}/start", "post"],
+      ["/playback/{sessionId}/{itemId}/progress", "post"],
+      ["/playback/{sessionId}/{itemId}/stop", "post"],
+      ["/items/{itemId}/progress", "get"],
+      ["/items/{itemId}/versions/{versionId}/resume", "get"],
+      ["/items/{itemId}/marks", "get"],
+      ["/items/{itemId}/favourite", "put"],
+      ["/items/{itemId}/rating", "put"],
+      ["/shelves/continue-watching", "get"],
+    ];
+    for (const [path, method] of expected) {
+      const operation = paths?.[path]?.[method];
+      expect(operation, `${method.toUpperCase()} ${path}`).toBeDefined();
+      expect(Object.keys(operation?.responses ?? {})).toEqual(
+        expect.arrayContaining(["200"]),
+      );
+    }
+    const shelfParams = parameterNames(paths?.["/shelves/continue-watching"]);
+    expect(shelfParams.has("limit")).toBe(true);
+    expect(shelfParams.has("cursor")).toBe(true);
+    const marksSchema = paths?.["/items/{itemId}/marks"]?.get?.responses?.[
+      "200"
+    ]?.content?.["application/json"]?.schema as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    expect(
+      marksSchema?.properties && Object.keys(marksSchema.properties),
+    ).toEqual(expect.arrayContaining(["favourite", "rating"]));
+    const shelfSchema = paths?.["/shelves/continue-watching"]?.get?.responses?.[
+      "200"
+    ]?.content?.["application/json"]?.schema as
+      | {
+          properties?: {
+            items?: { items?: { properties?: Record<string, unknown> } };
+          };
+        }
+      | undefined;
+    const shelfEntry = shelfSchema?.properties?.items?.items?.properties ?? {};
+    expect(Object.keys(shelfEntry)).toEqual(
+      expect.arrayContaining(["item", "progress", "durationSeconds"]),
     );
   });
 

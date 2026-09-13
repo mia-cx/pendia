@@ -8,11 +8,11 @@ Read contracts: CONTEXT.md; docs/spec/playback.md, auth.md, topology.md, plugin-
 
 ## Acceptance criteria
 
-- [ ] A range request answers 206 with the right bytes and Content-Range; an expired or foreign token answers 401.
-- [ ] Progress is recorded and resumed on another Version of the same cut, and not across cuts.
-- [ ] Favourites and ratings toggle and read back.
-- [ ] A user without access to the library cannot plan or play.
-- [ ] Leave real NFS sendfile verification to the measurement slice. The issue calls this slice 29; its current issue is #47.
+- [x] A range request answers 206 with the right bytes and Content-Range; an expired or foreign token answers 401.
+- [x] Progress is recorded and resumed on another Version of the same cut, and not across cuts.
+- [x] Favourites and ratings toggle and read back.
+- [x] A user without access to the library cannot plan or play.
+- [x] Leave real NFS sendfile verification to the measurement slice. The issue calls this slice 29; its current issue is #47. The measurement itself remains unverified.
 
 ## TODOs
 
@@ -21,7 +21,7 @@ Read contracts: CONTEXT.md; docs/spec/playback.md, auth.md, topology.md, plugin-
 - [x] 3. Serve GET and HEAD /api/playback/{sessionId}/{itemId}/direct through Bun.file responses. Accept scoped query tokens or the owning user's same-origin cookie. Recheck permissions, session state, and library-relative file containment before opening the file. Validation: real HTTP tests cover full, bounded, open-ended, suffix, and unsatisfiable ranges; expired and foreign tokens; cookie ownership; missing files; and escaping paths. Record NFS sendfile as unverified.
 - [x] 4. Add start, progress, stop, and resume procedures. Write the session's Version and Format with per-Item position. Serialize session transitions and make repeated start and stop safe. Resume on the same Version or another Version with the same non-null timeline and Format. Validation: tests cover cross-Version same-cut resume, different cuts, missing timelines, deleted Versions, user isolation, completion, and terminal stopped sessions.
 - [x] 5. Add per-user favourites, ratings, and continue-watching procedures. Set or clear marks idempotently. Ratings accept 0 through 10 with one decimal. Continue watching returns accessible unfinished Items with positive positions, newest played first. Validation: RPC and REST tests cover mark round trips, invalid ratings, per-user isolation, filtering, and stable pagination.
-- [ ] 6. Verify the complete playable path and record final results. Add a scanned-media end-to-end test and confirm OpenAPI describes the new procedures. Run frozen install, lint, check, build, all tests with Postgres, and tests without DATABASE_URL. Validation: every command passes, local database tests skip once without the URL, and CI without the URL fails. Review the complete diff before filing.
+- [x] 6. Verify the complete playable path and record final results. Add a scanned-media end-to-end test and confirm OpenAPI describes the new procedures. Run frozen install, lint, check, build, all tests with Postgres, and tests without DATABASE_URL. Validation: every command passes, local database tests skip once without the URL, and CI without the URL fails. Review the complete diff before filing.
 
 ## Notes
 
@@ -44,4 +44,14 @@ Read contracts: CONTEXT.md; docs/spec/playback.md, auth.md, topology.md, plugin-
 - TODO 3 validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55432/pendia bun test apps/server/src/playback/direct.test.ts` passes 5 tests and 86 assertions. Server typecheck and focused Biome checks pass. Bun 1.4.2 directly handles bounded, suffix, open-ended, clipped, and unsatisfiable ranges. HTTP tests also cover token and cookie rejection, permission changes, and path containment. Real NFS remains unverified.
 - TODO 4 validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55432/pendia bun test apps/server/src/api/progress.test.ts` passes 6 tests and 59 assertions. Server typecheck and focused Biome checks pass. Lifecycle-written progress resumes on another Version of the same cut. Concurrent starts, cancelled sessions, terminal stops, and REST/RPC read parity pass. Events use the existing publisher and decoded payload path without changing its storage format.
 - TODO 5 validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55432/pendia bun test apps/server/src/api/marks.test.ts` passes 5 tests and 46 assertions. Server typecheck and focused Biome checks pass. Marks round-trip independently per user. Continue watching filters before pagination and preserves microsecond ordering.
-- Final results: pending.
+- TODO 6 validation: a real ffmpeg MKV passes scan, planning, full and range delivery, start/progress/stop, same-Version resume, marks, and continue-watching tests. OpenAPI exposes all eleven new procedure routes. Cookie mutation origin guards reject foreign requests. Each implementation diff and test result was reviewed before acceptance.
+- Final validation on 2026-09-13, Bun 1.4.2 and local Postgres 18:
+  - `bun install --frozen-lockfile`: exit 0. Checked 116 installs across 219 packages without changes.
+  - `bun run lint`: exit 0. 126 files checked without fixes.
+  - `bun run check`: exit 0. 6 successful tasks. Svelte reports zero errors and warnings.
+  - `bun run build`: exit 0. 4 successful tasks.
+  - `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55432/pendia bun test`: exit 0. 531 pass, zero failures, 1910 assertions across 40 files.
+  - `env -u DATABASE_URL -u CI bun test`: exit 0. 345 pass, 186 skip, zero failures. The database skip notice appears once.
+  - `env -u DATABASE_URL CI=true bun test apps/server/src/auth/playback-tokens.test.ts`: exit 1 as required. The diagnostic states that DATABASE_URL is required in CI.
+- Pre-filing rebase: `git fetch origin && git rebase origin/main` reports the branch up to date. The test container remains running for review fixes and will be removed after babysitting.
+- Review posture: HTTP inputs are adversarial. The authenticated application and managed library filesystem are cooperative. Review findings must identify a reachable actor and trigger in this diff. NFS performance is the only deferred acceptance handoff.

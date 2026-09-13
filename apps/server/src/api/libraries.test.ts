@@ -8,7 +8,7 @@ import { sessionCookieName } from "../auth/http.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { items, libraries, versions } from "../db/schema/index.ts";
+import { files, items, libraries, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { listJobs } from "../jobs/queue.ts";
@@ -298,14 +298,17 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
             headers: { "content-type": "application/json", ...headers },
             body: JSON.stringify(body),
           });
-        expect(
-          (
-            await post(
-              { name: "Shows", medium: "shows", rootPath: "/srv/shows" },
-              adminHeaders,
-            )
-          ).status,
-        ).toBe(400);
+        const created = await post(
+          { name: "Shows", medium: "shows", rootPath: "/srv/shows" },
+          adminHeaders,
+        );
+        expect(created.status).toBe(200);
+        const showsLibrary = (await created.json()) as { id: string };
+        const deleted = await fetch(
+          `${base}/api/libraries/${showsLibrary.id}`,
+          { method: "DELETE", headers: adminHeaders },
+        );
+        expect(deleted.status).toBe(200);
         expect(
           (
             await post(
@@ -325,6 +328,93 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
       } finally {
         await server.stop();
       }
+    }));
+
+  test("creates and scans a shows library through the default worker", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token } = await seed(db);
+      await withVideoFixture(async (root) => {
+        const specialsDir = join(root, "Show (2020)", "Specials");
+        const seasonDir = join(root, "Show (2020)", "Season 01");
+        await mkdir(specialsDir, { recursive: true });
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(specialsDir, "Show S00E01.mkv"));
+        await createVideoFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
+        await createVideoFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
+        await createVideoFixture(join(seasonDir, "Show S01E02-E03.mkv"));
+        const server = await startPendia("all", {
+          databaseUrl: url,
+          port: 0,
+          workerOptions: { pollIntervalMs: 20 },
+        });
+        try {
+          const base = `http://127.0.0.1:${server.apiServer?.port}`;
+          const client = createPendiaClient({
+            origin: base,
+            headers: { authorization: `Bearer ${token}` },
+          });
+          const library = await client.libraries.create({
+            name: "Shows",
+            medium: "shows",
+            rootPath: root,
+          });
+          expect(library).toMatchObject({
+            name: "Shows",
+            medium: "shows",
+            rootPath: root,
+          });
+
+          await client.libraries.scan({ id: library.id });
+          const jobs = await waitForLibraryJobs(db, library.id);
+          expect(jobs).toHaveLength(2);
+          expect(
+            jobs
+              .map((job) => job.payload)
+              .sort((a, b) =>
+                (a.type === "scan" ? a.path : "").localeCompare(
+                  b.type === "scan" ? b.path : "",
+                ),
+              ),
+          ).toEqual([
+            { type: "scan", libraryId: library.id, path: "." },
+            { type: "scan", libraryId: library.id, path: "Show (2020)" },
+          ]);
+          for (const job of jobs) {
+            expect(job.state).toBe("completed");
+            expect(job.concurrencyKey).toBe(`library:${library.id}`);
+          }
+
+          const scanned = await db
+            .select()
+            .from(items)
+            .where(eq(items.libraryId, library.id));
+          expect(scanned).toHaveLength(6);
+          const kindCounts = new Map<string, number>();
+          for (const item of scanned) {
+            kindCounts.set(item.kind, (kindCounts.get(item.kind) ?? 0) + 1);
+          }
+          expect(Object.fromEntries(kindCounts)).toEqual({
+            show: 1,
+            season: 2,
+            episode: 3,
+          });
+          expect(
+            await db
+              .select()
+              .from(versions)
+              .where(eq(versions.libraryId, library.id)),
+          ).toHaveLength(3);
+          expect(
+            await db
+              .select()
+              .from(files)
+              .where(eq(files.libraryId, library.id)),
+          ).toHaveLength(4);
+        } finally {
+          await server.stop();
+        }
+      });
     }));
 
   test("mutations reject foreign origins and cross-site requests", () =>

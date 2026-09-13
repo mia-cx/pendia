@@ -36,7 +36,7 @@ export const Library = Schema.Struct({
 /** The fields accepted when a library is created. */
 export const LibraryInput = Schema.Struct({
   name: Schema.String,
-  medium: Schema.Literal("movies"),
+  medium: Schema.Literal("movies", "shows"),
   rootPath: Schema.String,
 });
 

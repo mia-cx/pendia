@@ -61,6 +61,14 @@ On SIGTERM, shutdown stops new claim loops and drains active handlers before clo
 Abrupt process loss does not recover running jobs in this slice. Handlers must be safe to retry after a reported failure.
 Plugin cron scheduling belongs to the plugin host, not this queue.
 
+## Transcoder
+
+The transcoder and all roles run live remux sessions. When the playback engine decides remux, `playback.plan` returns `/api/playback/{sessionId}/{itemId}/hls/master.m3u8?token=...`. The api serves `media.m3u8`, `init.mp4` and `N.m4s` under the same path, and every HLS URL carries the playback token.
+One ffmpeg remuxes each session into transcoder-local scratch, cutting segments on the Item's segment timeline. A segment that is not ready yet waits up to twenty seconds, then answers 503. A seek restarts ffmpeg at that segment; segments already in scratch serve without a restart. Sixty seconds idle stops ffmpeg and deletes scratch while the session row stays live; the next request revives it.
+`PENDIA_SCRATCH_DIR` chooses the scratch root, default `pendia-scratch` under the OS temp dir. Use local disk, never NFS. `PENDIA_TRANSCODER_PORT` defaults to 3001. `PENDIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
+The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `PENDIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
+This slice is remux only. Live transcoding, subtitles and the admission cap are #34; stored Versions are #35. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
+
 ## Auth
 
 The api and all roles serve these JSON routes. Setup creates the admin account only. It does not log in.

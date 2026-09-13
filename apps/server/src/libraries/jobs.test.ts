@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -113,6 +114,50 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
           });
         }),
       );
+    }));
+
+  test("rolls back partial fan-out before retrying a root scan", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        for (const folder of ["Alien (1979)", "Blade Runner (1982)"]) {
+          await mkdir(join(root, folder));
+          await writeFile(join(root, folder, "movie.mkv"), "dummy");
+        }
+        const library = await insertLibrary(db, "Movies", root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "." },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim();
+        if (!claimed) throw new Error("Root job was not claimed.");
+        await db.execute(
+          sql`alter table jobs add constraint reject_second_directory check (payload ->> 'path' is distinct from 'Blade Runner (1982)')`,
+        );
+        await expect(registry.run(claimed)).rejects.toThrow();
+        expect(await listJobs(db, { state: "queued" })).toHaveLength(0);
+        await db.execute(
+          sql`alter table jobs drop constraint reject_second_directory`,
+        );
+        await registry.run(claimed);
+        const children = await listJobs(db, { state: "queued" });
+        expect(children.map((job) => job.payload)).toEqual([
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "Blade Runner (1982)",
+          },
+          { type: "scan", libraryId: library.id, path: "Alien (1979)" },
+        ]);
+        expect(
+          children.every(
+            (job) => job.concurrencyKey === libraryConcurrencyKey(library.id),
+          ),
+        ).toBe(true);
+      });
     }));
 
   test("an empty library scan publishes one library.changed event", () =>

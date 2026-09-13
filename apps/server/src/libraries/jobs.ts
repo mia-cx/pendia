@@ -45,12 +45,14 @@ export function registerLibraryJobs(
       });
       return;
     }
-    const queue = createJobQueue(db);
     const concurrencyKey = libraryConcurrencyKey(library.id);
-    for (const group of groups)
-      await queue.enqueue(
-        { type: "scan", libraryId: library.id, path: group.canonicalFolder },
-        { concurrencyKey },
-      );
+    await db.transaction(async (tx) => {
+      const queue = createJobQueue(tx);
+      for (const group of groups)
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: group.canonicalFolder },
+          { concurrencyKey },
+        );
+    });
   });
 }

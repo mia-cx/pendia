@@ -5,6 +5,9 @@ import { type JobPayload, jobs, jobType } from "../db/schema/index.ts";
 /** A persisted queue job. */
 export type Job = typeof jobs.$inferSelect;
 
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+type Connection = Database | Transaction;
+
 type EnqueueOptions = Partial<
   Pick<
     typeof jobs.$inferInsert,
@@ -22,7 +25,7 @@ type QueueOptions = { retryDelayMs?: number; concurrencyLimit?: number };
 
 /** Creates queue operations on the shared Postgres database. */
 export function createJobQueue(
-  db: Database,
+  db: Connection,
   { retryDelayMs = 1_000, concurrencyLimit = 1 }: QueueOptions = {},
 ) {
   if (!Number.isFinite(retryDelayMs) || retryDelayMs <= 0)

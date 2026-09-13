@@ -267,11 +267,13 @@ Library administration requires `manage-libraries` on every procedure. The API e
 
 A Library contains `id`, `name`, `medium` and `rootPath`. Names trim surrounding whitespace and allow 1 to 128 characters. Roots must be absolute. Roots and mediums cannot change through `update`. Deleting a library removes its database records, never its files. Mutations use the auth module's origin checks.
 
-The returned scan job walks the root and enqueues one scan per canonical movie folder. Every root and directory job carries `library:<id>` as its concurrency key. The existing queue key limit applies. Worker and all roles register the built-in handler on startup. An explicit custom scan handler takes precedence.
+The returned scan job walks the root and enqueues one scan per canonical movie folder in one transaction. Every root and directory job carries `library:<id>` as its concurrency key. The existing queue key limit applies. Worker and all roles register the built-in handler on startup. An explicit custom scan handler takes precedence.
 
 Each media file directly inside a movie folder becomes an imported Version of that folder's Item. Nested collection folders work. Loose videos at the library root are skipped. Titles and years come from folder names such as `Alien (1979) {tmdb-348}`. Version labels come from probe dimensions, codecs and HDR. Only explicit filename tags such as `{edition-Director's Cut}` contribute to those labels.
 
-The walker skips symlinks, extras directories, extra filename suffixes, `.pendia` folders and `<source>.pendia` stores. Probe results persist in Postgres by library-relative path, byte size and nanosecond mtime. Changed files get one ffprobe for streams, duration and chapters. Unchanged scans reuse the cache across processes.
+The literal `extras` directory is always reserved, case-insensitively, even for same-name videos. Use a dated folder such as `Extras (2005)` for a movie named Extras. Other extras-category names can identify movies when the filename matches the canonical title, including `Collection/Shorts/Shorts.mkv`.
+
+The walker skips symlinks, excluded extras directories, extra filename suffixes, `.pendia` folders and `<source>.pendia` stores. Probe results persist in Postgres by library-relative path, byte size and nanosecond mtime. Changed files get one ffprobe for streams, duration and chapters. Unchanged scans reuse the cache across processes.
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 

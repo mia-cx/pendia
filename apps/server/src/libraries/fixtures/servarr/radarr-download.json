@@ -1,0 +1,55 @@
+{
+  "eventType": "Download",
+  "instanceName": "Radarr",
+  "applicationUrl": "http://radarr:7878",
+  "movie": {
+    "id": 7,
+    "title": "Alien",
+    "year": 1979,
+    "releaseDate": "1979-05-25",
+    "folderPath": "/media/movies/Alien (1979) {tmdb-348}",
+    "filePath": "/media/movies/Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
+    "tmdbId": 348,
+    "imdbId": "tt0078748",
+    "overview": "The crew of a commercial spacecraft encounters a deadly lifeform.",
+    "genres": ["Horror", "Science Fiction"],
+    "tags": ["favourites"],
+    "originalLanguage": "english",
+    "studio": "20th Century Fox"
+  },
+  "remoteMovie": {
+    "tmdbId": 348,
+    "imdbId": "tt0078748",
+    "title": "Alien",
+    "year": 1979
+  },
+  "movieFile": {
+    "id": 410,
+    "relativePath": "Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
+    "path": "/media/movies/Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
+    "quality": "Bluray-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "FGT",
+    "sceneName": "Alien.1979.1080p.BluRay.x264-FGT",
+    "edition": "Director's Cut",
+    "indexerFlags": "freeleech",
+    "size": 12200000000
+  },
+  "isUpgrade": true,
+  "deletedFiles": [
+    {
+      "id": 399,
+      "relativePath": "Alien (1979) {tmdb-348} [WEBDL-720p].mkv",
+      "path": "/media/movies/Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [WEBDL-720p].mkv",
+      "quality": "WEBDL-720p",
+      "qualityVersion": 1,
+      "releaseGroup": "YTS",
+      "size": 4900000000
+    }
+  ],
+  "downloadClient": "qBittorrent",
+  "downloadClientType": "torrent",
+  "downloadId": "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4",
+  "customFormatScore": 450,
+  "releaseGroup": "FGT"
+}

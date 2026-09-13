@@ -1,0 +1,27 @@
+{
+  "eventType": "MovieFileDelete",
+  "instanceName": "Radarr",
+  "applicationUrl": "http://radarr:7878",
+  "movie": {
+    "id": 7,
+    "title": "Alien",
+    "year": 1979,
+    "releaseDate": "1979-05-25",
+    "folderPath": "/media/movies/Alien (1979) {tmdb-348}",
+    "tmdbId": 348,
+    "imdbId": "tt0078748",
+    "overview": "The crew of a commercial spacecraft encounters a deadly lifeform.",
+    "genres": ["Horror", "Science Fiction"]
+  },
+  "movieFile": {
+    "id": 411,
+    "relativePath": "Alien (1979) {tmdb-348} [WEBDL-1080p].mkv",
+    "path": "/media/movies/Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [WEBDL-1080p].mkv",
+    "quality": "WEBDL-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "NTb",
+    "edition": "",
+    "size": 8100000000
+  },
+  "deleteReason": "Manual"
+}

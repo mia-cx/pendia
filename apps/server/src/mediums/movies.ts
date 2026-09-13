@@ -71,7 +71,7 @@ function identify(
 const providerSuffixSource = "\\{(tmdb|imdb|tvdb)[-=]([^}]*)\\}";
 
 const providerValuePatterns: Record<string, RegExp> = {
-  imdb: /^tt[1-9][0-9]*$/i,
+  imdb: /^tt0*[1-9][0-9]*$/i,
   tmdb: /^[1-9][0-9]*$/,
   tvdb: /^[1-9][0-9]*$/,
 };

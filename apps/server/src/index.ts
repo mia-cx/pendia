@@ -198,7 +198,7 @@ export async function startPendia(
       // path drops the response when the database host stops resolving.
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
-        api: createApiHandler(database.db, eventBroker),
+        api: createApiHandler(database.db, eventBroker, transcoder),
       });
     }
     if (runsJobs && database) {

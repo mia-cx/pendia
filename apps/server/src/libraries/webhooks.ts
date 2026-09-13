@@ -29,6 +29,7 @@ type PendingBatch = {
   path: string;
   changes: ScanChange[];
   timer: ReturnType<typeof setTimeout> | undefined;
+  flushing: Promise<void> | undefined;
 };
 
 const webhookPattern = /^\/api\/webhooks\/(sonarr|radarr)\/([^/]+)$/;
@@ -67,6 +68,8 @@ export function createChangeDebouncer(
   const queue = createJobQueue(db);
   const pending = new Map<string, PendingBatch>();
   const inFlight = new Set<Promise<void>>();
+  const submissions = new Set<Promise<void>>();
+  let closed = false;
   let closePromise: Promise<void> | undefined;
   let flushFailed = false;
   let flushFailure: unknown;
@@ -81,45 +84,60 @@ export function createChangeDebouncer(
   const flushBatch = (key: string): Promise<void> => {
     const batch = pending.get(key);
     if (batch === undefined) return Promise.resolve();
-    pending.delete(key);
+    if (batch.flushing !== undefined) return batch.flushing;
     clearTimeout(batch.timer);
+    batch.timer = undefined;
+    const persisted = batch.changes.slice();
     const flushing = queue
       .enqueue(
         {
           type: "scan",
           libraryId: batch.libraryId,
           path: batch.path,
-          changes: batch.changes,
+          changes: persisted,
         },
         { concurrencyKey: libraryConcurrencyKey(batch.libraryId) },
       )
       .then(() => undefined);
+    batch.flushing = flushing;
     inFlight.add(flushing);
     void flushing.then(
-      () => inFlight.delete(flushing),
-      () => inFlight.delete(flushing),
+      () => {
+        inFlight.delete(flushing);
+        batch.flushing = undefined;
+        batch.changes.splice(0, persisted.length);
+        if (batch.changes.length === 0) {
+          if (pending.get(key) === batch) pending.delete(key);
+        } else {
+          schedule(key, batch);
+        }
+      },
+      () => {
+        inFlight.delete(flushing);
+        batch.flushing = undefined;
+      },
     );
     return flushing;
   };
 
   const schedule = (key: string, batch: PendingBatch) => {
+    if (closed) return;
     clearTimeout(batch.timer);
     batch.timer = setTimeout(() => {
+      batch.timer = undefined;
       void flushBatch(key).catch((error: unknown) => {
-        recordFailure(error);
         try {
           onError(error);
         } catch {}
+        if (!closed && pending.get(key) === batch) schedule(key, batch);
       });
     }, delayMs);
   };
 
-  const submit = async (
+  const submitChanges = async (
     source: "sonarr" | "radarr",
     changes: ChangeEvent[],
   ): Promise<void> => {
-    if (closePromise !== undefined)
-      throw new InvalidWebhookError("Change debouncer is closed.");
     const medium = source === "sonarr" ? "shows" : "movies";
     const roots = await db
       .select({ id: libraries.id, rootPath: libraries.rootPath })
@@ -256,6 +274,7 @@ export function createChangeDebouncer(
           path: entry.path,
           changes: [],
           timer: undefined,
+          flushing: undefined,
         };
         pending.set(entry.key, batch);
       }
@@ -264,14 +283,39 @@ export function createChangeDebouncer(
     }
   };
 
+  const submit = (
+    source: "sonarr" | "radarr",
+    changes: ChangeEvent[],
+  ): Promise<void> => {
+    if (closed) {
+      return Promise.reject(
+        new InvalidWebhookError("Change debouncer is closed."),
+      );
+    }
+    const submission = submitChanges(source, changes);
+    submissions.add(submission);
+    void submission.then(
+      () => submissions.delete(submission),
+      () => submissions.delete(submission),
+    );
+    return submission;
+  };
+
   const close = (): Promise<void> => {
     closePromise ??= (async () => {
+      closed = true;
       for (const batch of pending.values()) clearTimeout(batch.timer);
+      while (submissions.size > 0) {
+        await Promise.allSettled([...submissions]);
+      }
       for (const key of [...pending.keys()]) {
-        try {
-          await flushBatch(key);
-        } catch (error) {
-          recordFailure(error);
+        while (pending.has(key)) {
+          try {
+            await flushBatch(key);
+          } catch (error) {
+            recordFailure(error);
+            break;
+          }
         }
       }
       while (inFlight.size > 0) {

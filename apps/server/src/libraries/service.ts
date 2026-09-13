@@ -1,9 +1,9 @@
 import { isAbsolute, resolve } from "node:path";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
-import { libraries } from "../db/schema/index.ts";
+import { jobs, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 
@@ -124,4 +124,36 @@ export async function scanLibrary(db: Database, actorId: string, id: string) {
     { concurrencyKey: libraryConcurrencyKey(id) },
   );
   return { jobId: job.id };
+}
+
+/** Reports scan job counts and the newest scan job for a caller holding manage-libraries. */
+export async function libraryScanStatus(
+  db: Database,
+  actorId: string,
+  id: string,
+) {
+  await requirePermission(db, actorId, "manage-libraries");
+  const [library] = await db
+    .select({ id: libraries.id })
+    .from(libraries)
+    .where(eq(libraries.id, id));
+  if (!library) throw new AuthError("NOT_FOUND");
+  const where = and(
+    eq(jobs.type, "scan"),
+    sql`${jobs.payload}->>'libraryId' = ${id}`,
+  );
+  const grouped = await db
+    .select({ state: jobs.state, count: sql<number>`count(*)::int` })
+    .from(jobs)
+    .where(where)
+    .groupBy(jobs.state);
+  const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
+  for (const row of grouped) counts[row.state] = row.count;
+  const [latest] = await db
+    .select({ id: jobs.id, state: jobs.state, error: jobs.error })
+    .from(jobs)
+    .where(where)
+    .orderBy(desc(jobs.id))
+    .limit(1);
+  return { libraryId: id, counts, latest: latest ?? null };
 }

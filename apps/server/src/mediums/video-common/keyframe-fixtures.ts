@@ -6,6 +6,7 @@ export interface KeyframeFixtureOptions {
   bFrames?: boolean;
   fragmented?: boolean;
   audioFirst?: boolean;
+  large?: boolean;
   gop?: number;
 }
 
@@ -19,6 +20,7 @@ export async function createKeyframeFixture(
     bFrames = false,
     fragmented = false,
     audioFirst = false,
+    large = false,
     gop = 50,
   } = options;
   const mp4 = extname(path).toLowerCase() === ".mp4";
@@ -30,7 +32,7 @@ export async function createKeyframeFixture(
     "-f",
     "lavfi",
     "-i",
-    "testsrc2=s=160x90:r=25:d=12",
+    `testsrc2=s=${large ? "640x360" : "160x90"}:r=25:d=12`,
     ...(audioFirst
       ? [
           "-f",
@@ -59,6 +61,7 @@ export async function createKeyframeFixture(
     "0",
     "-bf",
     bFrames ? "2" : "0",
+    ...(large ? ["-crf", "0"] : []),
     ...(audioFirst ? ["-c:a", "aac", "-t", "12"] : []),
     ...(mp4
       ? fragmented

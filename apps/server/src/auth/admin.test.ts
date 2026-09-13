@@ -385,6 +385,29 @@ describe.skipIf(!databaseUrl)("auth admin", () => {
       expect(access.libraryAccess).toEqual([]);
     }));
 
+  test("setLibraryAccess keeps both writers when the first row races", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin, viewer } = await seed(db);
+      const library = await createLibrary(db, "movies");
+      await Promise.all([
+        setLibraryAccess(db, admin.id, {
+          libraryId: library.id,
+          userId: viewer.id,
+          allowed: true,
+        }),
+        setLibraryAccess(db, admin.id, {
+          libraryId: library.id,
+          userId: viewer.id,
+          allowed: false,
+        }),
+      ]);
+      const access = await getUserAccess(db, admin.id, viewer.id);
+      const [stored] = access.libraryAccess;
+      if (!stored) throw new Error("Access row missing.");
+      expect([true, false]).toContain(stored.allowed);
+    }));
+
   test("user_groups fixture rows appear as groupIds only", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

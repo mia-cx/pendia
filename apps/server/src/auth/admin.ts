@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   groups,
@@ -197,40 +197,58 @@ export async function setLibraryAccess(
         .from(users)
         .where(eq(users.id, userId));
       if (!target) throw new AuthError("NOT_FOUND");
-      await tx
-        .delete(libraryAccess)
-        .where(
-          and(
-            eq(libraryAccess.libraryId, input.libraryId),
-            eq(libraryAccess.userId, userId),
-          ),
-        );
-      if (input.allowed !== null)
-        await tx.insert(libraryAccess).values({
-          libraryId: input.libraryId,
-          userId,
-          allowed: input.allowed,
-        });
+      if (input.allowed === null) {
+        await tx
+          .delete(libraryAccess)
+          .where(
+            and(
+              eq(libraryAccess.libraryId, input.libraryId),
+              eq(libraryAccess.userId, userId),
+            ),
+          );
+      } else {
+        await tx
+          .insert(libraryAccess)
+          .values({
+            libraryId: input.libraryId,
+            userId,
+            allowed: input.allowed,
+          })
+          .onConflictDoUpdate({
+            target: [libraryAccess.userId, libraryAccess.libraryId],
+            targetWhere: sql`user_id is not null`,
+            set: { allowed: input.allowed },
+          });
+      }
     } else if (groupId !== undefined) {
       const [target] = await tx
         .select({ id: groups.id })
         .from(groups)
         .where(eq(groups.id, groupId));
       if (!target) throw new AuthError("NOT_FOUND");
-      await tx
-        .delete(libraryAccess)
-        .where(
-          and(
-            eq(libraryAccess.libraryId, input.libraryId),
-            eq(libraryAccess.groupId, groupId),
-          ),
-        );
-      if (input.allowed !== null)
-        await tx.insert(libraryAccess).values({
-          libraryId: input.libraryId,
-          groupId,
-          allowed: input.allowed,
-        });
+      if (input.allowed === null) {
+        await tx
+          .delete(libraryAccess)
+          .where(
+            and(
+              eq(libraryAccess.libraryId, input.libraryId),
+              eq(libraryAccess.groupId, groupId),
+            ),
+          );
+      } else {
+        await tx
+          .insert(libraryAccess)
+          .values({
+            libraryId: input.libraryId,
+            groupId,
+            allowed: input.allowed,
+          })
+          .onConflictDoUpdate({
+            target: [libraryAccess.groupId, libraryAccess.libraryId],
+            targetWhere: sql`group_id is not null`,
+            set: { allowed: input.allowed },
+          });
+      }
     }
   });
 }

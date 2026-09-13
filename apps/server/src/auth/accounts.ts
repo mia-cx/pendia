@@ -50,6 +50,11 @@ async function setupClosed(db: Pick<Database, "select">): Promise<boolean> {
   return !!existing;
 }
 
+/** Reports whether the first admin already exists, so the wizard knows setup is closed. */
+export async function isSetupComplete(db: Database) {
+  return setupClosed(db);
+}
+
 async function seedGroup(db: Pick<Database, "select">, name: string) {
   const [group] = await db
     .select({ id: groups.id })

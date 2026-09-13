@@ -13,6 +13,7 @@ import {
   createLibrary,
   deleteLibrary,
   getLibrary,
+  libraryScanStatus,
   listLibraries,
   scanLibrary,
   updateLibrary,
@@ -251,5 +252,65 @@ describe.skipIf(!databaseUrl)("library service", () => {
         concurrencyKey: libraryConcurrencyKey(library.id),
         payload: { type: "scan", libraryId: library.id, path: "." },
       });
+    }));
+
+  test("libraryScanStatus counts scan jobs and reports the newest", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      expect(await libraryScanStatus(db, admin.id, library.id)).toEqual({
+        libraryId: library.id,
+        counts: { queued: 0, running: 0, completed: 0, failed: 0 },
+        latest: null,
+      });
+      const { jobId } = await scanLibrary(db, admin.id, library.id);
+      const status = await libraryScanStatus(db, admin.id, library.id);
+      expect(status.counts).toEqual({
+        queued: 1,
+        running: 0,
+        completed: 0,
+        failed: 0,
+      });
+      expect(status.latest).toMatchObject({
+        id: jobId,
+        state: "queued",
+        error: null,
+      });
+      const other = await createLibrary(db, admin.id, {
+        name: "Other",
+        medium: "movies",
+        rootPath: "/srv/other",
+      });
+      await scanLibrary(db, admin.id, other.id);
+      expect(
+        (await libraryScanStatus(db, admin.id, library.id)).counts.queued,
+      ).toBe(1);
+      expect(
+        (await libraryScanStatus(db, admin.id, other.id)).counts.queued,
+      ).toBe(1);
+    }));
+
+  test("libraryScanStatus rejects unknown ids and non-admin actors", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin, viewer } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      await expectAuthError(
+        libraryScanStatus(db, admin.id, Bun.randomUUIDv7()),
+        "NOT_FOUND",
+      );
+      await expectAuthError(
+        libraryScanStatus(db, viewer.id, library.id),
+        "FORBIDDEN",
+      );
     }));
 });

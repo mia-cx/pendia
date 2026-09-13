@@ -112,7 +112,11 @@ export async function requirePermission(
 
 const builtInNames = ["admins", "users"];
 
-async function requireAdmin(db: Queryable, userId: string): Promise<void> {
+/** Throws FORBIDDEN unless the user is an enabled built-in admin. */
+export async function requireAdmin(
+  db: Queryable,
+  userId: string,
+): Promise<void> {
   if (!(await enabledUser(db, userId))) throw new AuthError("FORBIDDEN");
   const memberGroups = await memberships(db, userId);
   if (!memberGroups.some((group) => group.builtIn && group.name === "admins"))

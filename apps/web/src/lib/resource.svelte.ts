@@ -44,6 +44,13 @@ export function resource<T>(load: () => Promise<T>) {
       failure = undefined;
       loading = false;
     },
+    /** Drops the loaded value while a fresh load is pending, so a stale value cannot be read. */
+    clear() {
+      generation += 1;
+      data = undefined;
+      failure = undefined;
+      loading = true;
+    },
     reload: run,
   };
 }

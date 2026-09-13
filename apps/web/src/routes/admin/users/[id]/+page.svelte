@@ -19,6 +19,8 @@ $effect(() => {
   if (id === loadedId) return;
   loadedId = id;
   resetRouteState();
+  access.clear();
+  sessions.clear();
   void access.reload();
   void sessions.reload();
 });
@@ -47,6 +49,13 @@ let revoking = $state<Record<string, boolean>>({});
 let revokeFailures = $state<Record<string, FailureShape>>({});
 
 let accessTicket = 0;
+let pending: Promise<unknown> = Promise.resolve();
+
+function serial<T>(run: () => Promise<T>) {
+  const next = pending.then(run, run);
+  pending = next.catch(() => {});
+  return next;
+}
 
 function resetRouteState() {
   capInput = null;
@@ -91,11 +100,13 @@ async function saveSettings(event: SubmitEvent) {
       return;
     }
     const rating = ratingValue.trim();
-    const updated = await client.users.setSettings({
-      id: target,
-      bitrateCapBps: capNumber,
-      contentRatingCeiling: rating === "" ? null : rating,
-    });
+    const updated = await serial(() =>
+      client.users.setSettings({
+        id: target,
+        bitrateCapBps: capNumber,
+        contentRatingCeiling: rating === "" ? null : rating,
+      }),
+    );
     if (target !== id || ticket !== accessTicket) return;
     access.set(updated);
     capInput = null;
@@ -121,10 +132,12 @@ async function saveGroups() {
           false,
       )
       .map((group) => group.id);
-    const updated = await client.users.setGroups({
-      id: target,
-      groupIds: checked,
-    });
+    const updated = await serial(() =>
+      client.users.setGroups({
+        id: target,
+        groupIds: checked,
+      }),
+    );
     if (target !== id || ticket !== accessTicket) return;
     access.set(updated);
     groupSel = {};
@@ -149,11 +162,13 @@ async function setOverride(permission: Permission, value: string) {
   overrideBusy[permission] = true;
   delete overrideFailures[permission];
   try {
-    const updated = await client.users.setOverride({
-      id: target,
-      permission,
-      allowed: value === "allow" ? true : value === "deny" ? false : null,
-    });
+    const updated = await serial(() =>
+      client.users.setOverride({
+        id: target,
+        permission,
+        allowed: value === "allow" ? true : value === "deny" ? false : null,
+      }),
+    );
     if (target !== id || ticket !== accessTicket) return;
     access.set(updated);
   } catch (error) {
@@ -177,11 +192,13 @@ async function setAccess(libraryId: string, value: string) {
   libraryBusy[libraryId] = true;
   delete libraryFailures[libraryId];
   try {
-    const updated = await client.users.setLibraryAccess({
-      id: target,
-      libraryId,
-      allowed: value === "allow" ? true : value === "deny" ? false : null,
-    });
+    const updated = await serial(() =>
+      client.users.setLibraryAccess({
+        id: target,
+        libraryId,
+        allowed: value === "allow" ? true : value === "deny" ? false : null,
+      }),
+    );
     if (target !== id || ticket !== accessTicket) return;
     access.set(updated);
   } catch (error) {
@@ -196,7 +213,7 @@ async function revoke(sessionId: string) {
   revoking[sessionId] = true;
   delete revokeFailures[sessionId];
   try {
-    await client.users.revokeSession({ id: sessionId });
+    await serial(() => client.users.revokeSession({ id: sessionId }));
     if (target !== id) return;
     await sessions.reload();
   } catch (error) {
@@ -304,6 +321,7 @@ async function revoke(sessionId: string) {
         inputmode="numeric"
         value={capValue}
         oninput={(event) => (capInput = event.currentTarget.value)}
+        disabled={!access.data}
       />
       <p class="muted">Leave this empty for no cap.</p>
       <label for="ratingCeiling">Content-rating ceiling</label>
@@ -312,9 +330,11 @@ async function revoke(sessionId: string) {
         name="ratingCeiling"
         value={ratingValue}
         oninput={(event) => (ratingInput = event.currentTarget.value)}
+        disabled={!access.data}
       />
       <p class="muted">Leave this empty for no ceiling.</p>
-      <button type="submit" disabled={settingsBusy}>Save</button>
+      <button type="submit" disabled={settingsBusy || !access.data}>Save</button
+      >
     </form>
   {/if}
 </section>
@@ -336,7 +356,7 @@ async function revoke(sessionId: string) {
           false}
           onchange={(event) =>
             (groupSel[group.id] = event.currentTarget.checked)}
-          disabled={groupsBusy}
+          disabled={groupsBusy || !access.data}
         />
         <label for={`group-${group.id}`}
           >{group.name}{#if group.builtIn}
@@ -372,7 +392,7 @@ async function revoke(sessionId: string) {
                 value={overrideValue(permission)}
                 onchange={(event) =>
                   setOverride(permission, event.currentTarget.value)}
-                disabled={overrideBusy[permission] === true}
+                disabled={overrideBusy[permission] === true || !access.data}
               >
                 <option value="inherit">Inherit</option>
                 <option value="allow">Allow</option>
@@ -408,7 +428,7 @@ async function revoke(sessionId: string) {
                 value={accessValue(library.id)}
                 onchange={(event) =>
                   setAccess(library.id, event.currentTarget.value)}
-                disabled={libraryBusy[library.id] === true}
+                disabled={libraryBusy[library.id] === true || !access.data}
               >
                 <option value="inherit">Inherit</option>
                 <option value="allow">Allow</option>

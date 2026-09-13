@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { copyFile, mkdir, rename, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { MetadataProvider } from "@pendia/plugin-api";
 import { asc, eq } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -23,6 +24,7 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
+import { applyMetadata } from "../metadata/service.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
@@ -360,6 +362,40 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
       } finally {
         await db.close();
       }
+    }));
+
+  test("a malformed folder provider id stores nothing and falls back to search", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const badFolder = "Bad Movie (2020) {tmdb-abc}";
+        await mkdir(join(root, badFolder));
+        await createVideoFixture(join(root, badFolder, "Bad Movie.mkv"));
+        await withLibrary(db, root, async (library) => {
+          const result = await scanDirectory(db, library.id, badFolder);
+          expect(result.itemId).not.toBeNull();
+          expect(await db.select().from(providerIds)).toHaveLength(0);
+          const searches: Parameters<MetadataProvider["search"]>[0][] = [];
+          const provider: MetadataProvider = {
+            id: "tmdb",
+            kinds: ["movie"],
+            search: async (query) => {
+              searches.push(query);
+              return [];
+            },
+            fetch: async () => {
+              throw new Error("Unexpected fetch.");
+            },
+          };
+          const application = await applyMetadata(db, result.itemId ?? "", [
+            provider,
+          ]);
+          expect(application.state).toBe("unmatched");
+          expect(searches).toEqual([
+            { title: "Bad Movie", year: 2020, kind: "movie" },
+          ]);
+        });
+      });
     }));
 });
 

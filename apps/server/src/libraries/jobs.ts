@@ -31,10 +31,10 @@ export function registerLibraryJobs(
       if (library.medium === "movies") {
         const result = await scanDirectory(db, library.id, payload.path);
         if (result.itemId !== null) {
-          await createJobQueue(db).enqueue({
-            type: "provider-fetch",
-            itemId: result.itemId,
-          });
+          await createJobQueue(db).enqueue(
+            { type: "provider-fetch", itemId: result.itemId },
+            { concurrencyKey: `provider:${result.itemId}` },
+          );
         }
       } else {
         await scanShowDirectory(db, library.id, payload.path);

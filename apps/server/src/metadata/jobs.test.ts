@@ -8,6 +8,7 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   artwork,
   credits,
+  events,
   items,
   jobs,
   libraries,
@@ -198,6 +199,16 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         expect(await readFile(join(root, rows[0]?.storageKey ?? ""))).toEqual(
           png,
         );
+        expect(await db.select().from(events)).toMatchObject([
+          {
+            kind: "library.changed",
+            payload: { kind: "library.changed", libraryId: library.id },
+          },
+          {
+            kind: "library.changed",
+            payload: { kind: "library.changed", libraryId: library.id },
+          },
+        ]);
       });
     }));
 
@@ -268,6 +279,16 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
             .where(eq(providerIds.itemId, item.id)),
         ).toHaveLength(0);
         expect(await db.select().from(artwork)).toHaveLength(0);
+        expect(await db.select().from(events)).toMatchObject([
+          {
+            kind: "library.changed",
+            payload: { kind: "library.changed", libraryId: library.id },
+          },
+          {
+            kind: "library.changed",
+            payload: { kind: "library.changed", libraryId: library.id },
+          },
+        ]);
       });
     }));
 
@@ -299,6 +320,12 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         expect(calls).toHaveLength(0);
         expect((await storedItem(db, item.id)).metadataState).toBe("unmatched");
         expect(await db.select().from(artwork)).toHaveLength(0);
+        expect(await db.select().from(events)).toMatchObject([
+          {
+            kind: "library.changed",
+            payload: { kind: "library.changed", libraryId: library.id },
+          },
+        ]);
       });
     }));
 
@@ -336,6 +363,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         if (!claimed) throw new Error("Job was not claimed.");
         await expect(registry.run(claimed)).rejects.toThrow("socket hang up");
         await queue.fail(claimed, new Error("socket hang up"));
+        expect(await db.select().from(events)).toHaveLength(0);
         await db
           .update(jobs)
           .set({ runAfter: new Date(0) })
@@ -349,6 +377,9 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const rows = await db.select().from(artwork);
         expect(rows).toHaveLength(1);
         expect(rows[0]?.selected).toBe(true);
+        expect(await db.select().from(events)).toMatchObject([
+          { kind: "library.changed" },
+        ]);
       });
     }));
 

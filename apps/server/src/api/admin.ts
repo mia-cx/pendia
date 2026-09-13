@@ -89,7 +89,11 @@ const settingsOutput = Schema.standardSchemaV1(ServerSettings);
 /** The setup procedures mounted under `setup`. */
 export const setupProcedures = {
   status: base
-    .route({ method: "GET", path: "/setup/status" })
+    .route({
+      method: "GET",
+      path: "/setup/status",
+      spec: (current) => ({ ...current, security: [] }),
+    })
     .output(
       Schema.standardSchemaV1(Schema.Struct({ complete: Schema.Boolean })),
     )

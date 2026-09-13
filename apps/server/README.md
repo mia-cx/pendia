@@ -277,6 +277,18 @@ The walker skips symlinks, excluded extras directories, extra filename suffixes,
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 
-This slice adds and updates records. Missing-file reconciliation, change signals, providers and keyframe indexes belong to later slices. Imported Versions start without a segment timeline and remain unaligned.
+Missing-file reconciliation and change signals are covered below. Metadata providers and keyframe indexes belong to later slices. Imported Versions start without a segment timeline and remain unaligned.
 
 Scan tests generate short MKV fixtures with ffmpeg and compare their stream lists with ffprobe. Both commands must be on PATH. Database-backed scan tests use the disposable database helper described above.
+
+### Change detection
+
+Sonarr and Radarr report file changes through webhook routes so scans stay current between manual runs. Create one API key per integration through the auth service's `createApiKey`. The token is shown once and becomes the secret URL segment. Point Sonarr at `<pendia-origin>/api/webhooks/sonarr/<secret>` and Radarr at `<pendia-origin>/api/webhooks/radarr/<secret>` with POST. Enable Download or import, Rename, Episode File Delete and Series Delete in Sonarr, and Download or import, Rename, Movie File Delete and Movie Delete in Radarr.
+
+The secret must be a live API key owned by a caller with `manage-libraries`. Session tokens in the URL are rejected. Wrong, revoked or expired secrets answer 401. Treat the full webhook URL as a secret and redact it from logs. Accepted payloads answer 202 with the number of translated changes. Unknown Servarr event types are accepted with zero changes. Malformed payloads and paths outside the matching medium's Library answer 400.
+
+Absolute writer paths become library-relative paths and debounce for 10 seconds per Library directory. A burst of events queues one scan job under the Library concurrency key `library:<id>`.
+
+A rename updates the stored File and Item paths before the scan writes, so Item, Version, File and Progress identity survive. A delete removes the missing Version, and the Item goes only when no Version remains. Provider ids from Servarr persist on the Item. Sonarr payloads are accepted now; scanning show folders waits on the shows medium slice.
+
+The `api` and `all` roles run a directory-mtime repair pass after startup and every 24 hours. It walks movie Library directories without statting files, compares each directory mtime with a snapshot kept in process memory, and queues a directory scan for every changed canonical folder and every Item folder missing on disk. An unavailable root is skipped without deleting rows. A restart rebuilds the snapshot, so every reachable directory is checked once after boot. `POST /api/libraries/{id}/scan` remains the manual full scan.

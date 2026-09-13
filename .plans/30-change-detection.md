@@ -22,7 +22,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
   - Validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/changes.test.ts apps/server/src/libraries/scan.test.ts`
 - [x] Add the directory-mtime repair pass and run it after startup and every 24 hours while retaining the manual scan.
   - Validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/repair.test.ts apps/server/src/api/libraries.test.ts`
-- [ ] Document webhook setup, change reconciliation and repair scheduling in the server README.
+- [x] Document webhook setup, change reconciliation and repair scheduling in the server README.
   - Validation: `bun run lint && bun run check`
 - [ ] Run the complete repository validation and record the real results below.
   - Validation: `bun install --frozen-lockfile`; `bun run lint`; `bun run check`; `bun run build`; `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test`; `bun test`
@@ -33,6 +33,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
 - TODO 2 validated: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/webhooks.test.ts` → 9 pass, 0 fail, 40 expect() calls; `bun run --cwd apps/server check` → clean; `bunx biome check` on webhooks.ts, webhooks.test.ts, api.ts, index.ts, operations.ts → clean after one format pass.
 - TODO 3 validated: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/changes.test.ts apps/server/src/libraries/scan.test.ts apps/server/src/libraries/jobs.test.ts apps/server/src/libraries/walker.test.ts` → 29 pass, 0 fail, 162 expect() calls; `bun run --cwd apps/server check` → clean; `bunx biome check` on changes.ts, changes.test.ts, scan.ts, scan.test.ts, jobs.ts, walker.ts, walker.test.ts → clean after one format pass.
 - TODO 4 validated: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/repair.test.ts apps/server/src/libraries/walker.test.ts apps/server/src/api/libraries.test.ts` → 24 pass, 0 fail, 116 expect() calls; `bun run --cwd apps/server check` → clean; `bunx biome check` on repair.ts, repair.test.ts, walker.ts, walker.test.ts, index.ts → clean after one format pass; full `bun test apps/server/src/libraries/` + api libraries run → 74 pass, 0 fail, 384 expect() calls.
+- TODO 5 validated: `bun run lint` → `biome check .` clean, 128 files; `bun run check` → `turbo run check` 6 tasks successful, 0 errors or warnings.
 - The unattended run cannot confirm test seams. Tests use the public payload translators, HTTP webhook handler, queued scan handler, repair pass and existing library API.
 - Webhook routes are `/api/webhooks/sonarr/<secret>` and `/api/webhooks/radarr/<secret>`. Only a live API-key token is accepted as the secret. Session tokens are rejected.
 - The 10 second debounce is process-local until it writes one durable scan job. Shutdown flushes accepted events before closing the database.

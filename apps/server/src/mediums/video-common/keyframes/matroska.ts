@@ -311,26 +311,33 @@ const isRandomAccessCue = async (
     return false;
   }
   let clusterTimestamp: number | null = null;
-  let firstBlock = -1;
+  let targetEl: ElementRange | null = null;
   let cursor = cluster.dataStart;
-  while (cursor < clusterEnd) {
+  while (cursor <= target) {
     const child = await readElementHeader(reader, cursor, clusterEnd);
     if (child.dataEnd === null) {
       throw invalid("unknown-size Cluster child");
     }
+    if (child.start === target) {
+      targetEl = child;
+      break;
+    }
+    if (child.dataEnd > target) {
+      return false;
+    }
     if (child.id === ID_CLUSTER_TIMESTAMP) {
+      const length = child.dataEnd - child.dataStart;
+      if (length > 8) {
+        throw invalid("cluster timestamp too large");
+      }
       const payload = await readElementPayload(reader, child);
       clusterTimestamp = uintAt(payload, 0, payload.length);
-    } else if (child.id === ID_SIMPLE_BLOCK || child.id === ID_BLOCK_GROUP) {
-      firstBlock = child.start;
-      break;
     }
     cursor = child.dataEnd;
   }
-  if (clusterTimestamp === null || firstBlock < 0 || target < firstBlock) {
+  if (clusterTimestamp === null || targetEl === null) {
     return false;
   }
-  const targetEl = await readElementHeader(reader, target, clusterEnd);
   if (targetEl.id === ID_SIMPLE_BLOCK) {
     const prefix = await readBlockPrefix(reader, targetEl);
     if (

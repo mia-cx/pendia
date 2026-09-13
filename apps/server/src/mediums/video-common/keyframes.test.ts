@@ -485,6 +485,24 @@ describe("readKeyframeIndex", () => {
             (clusterAt, childOffset) => cuePositions(clusterAt, childOffset(1)),
           ),
         ],
+        [
+          "payload-offset",
+          (() => {
+            const embedded = simpleBlock(1, 0, 0x80);
+            const outer = element(ID.simpleBlock, [
+              ...blockHeader(1, 0, 0x80),
+              ...embedded,
+            ]);
+            const headerLength = outer.length - 4 - embedded.length;
+            expect(headerLength).toBe(2);
+            return indexedClusterFile(
+              [uintElement(ID.timestamp, 0), outer],
+              0,
+              (clusterAt, childOffset) =>
+                cuePositions(clusterAt, childOffset(1) + headerLength + 4),
+            );
+          })(),
+        ],
       ];
       for (const [name, content] of cases) {
         const file = join(dir, `${name}.mkv`);

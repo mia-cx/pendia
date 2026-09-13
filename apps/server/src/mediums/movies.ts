@@ -9,7 +9,7 @@ export const moviesMedium = {
   kinds: [
     { kind: "movie", parent: null, table: movieTable, hasVersions: true },
   ],
-  scan: { identify, parse, isExtra: isVideoExtra },
+  scan: { identify, parse, isExtra },
   providers: ["metadata", "subtitles", "artwork"],
   formats: ["video"],
   browse: {
@@ -20,6 +20,24 @@ export const moviesMedium = {
   translation: { protocol: "jellyfin" },
 } satisfies Medium;
 
+const normalizeStem = (value: string) =>
+  value.toLowerCase().replace(/[\s._-]+/g, "");
+
+function isExtra(path: string): boolean {
+  if (!isVideoExtra(path)) {
+    return false;
+  }
+  const folder = posix.dirname(path);
+  if (isVideoExtra(`${folder}/placeholder.mkv`)) {
+    return true;
+  }
+  const stem = posix.basename(path, posix.extname(path));
+  const { title, year } = parse(folder);
+  return ![title, year === null ? title : `${title} (${year})`].some(
+    (name) => normalizeStem(name) === normalizeStem(stem),
+  );
+}
+
 function identify(
   path: string,
 ): { kind: string; canonicalFolder: string } | null {
@@ -27,7 +45,7 @@ function identify(
     posix.isAbsolute(path) ||
     path.split("/").includes("..") ||
     !isVideoPath(path) ||
-    isVideoExtra(path)
+    isExtra(path)
   ) {
     return null;
   }

@@ -20,9 +20,16 @@ export function videoVersionLabel(
   path: string,
   probe: Pick<ProbeResult, "streams">,
 ): string {
-  const video = probe.streams.find(
-    (stream) => stream.kind === "video" && !stream.disposition.attached_pic,
-  );
+  const video =
+    probe.streams.find(
+      (stream) =>
+        stream.kind === "video" &&
+        !stream.disposition.attached_pic &&
+        stream.disposition.default,
+    ) ??
+    probe.streams.find(
+      (stream) => stream.kind === "video" && !stream.disposition.attached_pic,
+    );
   const audio =
     probe.streams.find(
       (stream) => stream.kind === "audio" && stream.disposition.default,

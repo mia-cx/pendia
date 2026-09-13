@@ -91,6 +91,54 @@ describe("probeVideo", () => {
     });
   });
 
+  test("reports container mov for a real remuxed MOV file", async () => {
+    await withVideoFixture(async (dir) => {
+      const mkv = join(dir, "Fixture.mkv");
+      await createVideoFixture(mkv);
+      const mov = join(dir, "Fixture.mov");
+      const proc = Bun.spawn(
+        [
+          "ffmpeg",
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-i",
+          mkv,
+          "-map",
+          "0:v:0",
+          "-c",
+          "copy",
+          "-f",
+          "mov",
+          mov,
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      );
+      const [stderr, , exitCode] = await Promise.all([
+        new Response(proc.stderr).text(),
+        new Response(proc.stdout).text(),
+        proc.exited,
+      ]);
+      if (exitCode !== 0) {
+        throw new Error(`ffmpeg failed (${exitCode}): ${stderr.trim()}`);
+      }
+      const result = await probeVideo(mov);
+      expect(result.container).toBe("mov");
+      const independent = await ffprobeStreams(mov);
+      expect(result.streams.map((stream) => stream.index)).toEqual(
+        independent
+          .filter(
+            (stream) =>
+              stream.codec_type === "video" ||
+              stream.codec_type === "audio" ||
+              stream.codec_type === "subtitle",
+          )
+          .map((stream) => stream.index),
+      );
+      expect(result.streams[0]).toMatchObject({ kind: "video", codec: "h264" });
+    });
+  });
+
   test("rejects a nonexistent file", async () => {
     await withVideoFixture(async (dir) => {
       await expect(probeVideo(join(dir, "missing.mkv"))).rejects.toThrow(
@@ -278,6 +326,28 @@ describe("parseProbeOutput", () => {
         ],
       }),
     ).toThrow("Duplicate stream index.");
+  });
+
+  test("distinguishes QuickTime MOV from shared-demuxer mp4 aliases", () => {
+    const streams = [{ index: 0, codec_type: "video", codec_name: "h264" }];
+    expect(
+      parseProbeOutput({
+        streams,
+        format: {
+          format_name: "mov,mp4,m4a,3gp,3g2,mj2",
+          tags: { major_brand: "qt  " },
+        },
+      }).container,
+    ).toBe("mov");
+    expect(
+      parseProbeOutput({
+        streams,
+        format: {
+          format_name: "mov,mp4,m4a,3gp,3g2,mj2",
+          tags: { major_brand: "isom" },
+        },
+      }).container,
+    ).toBe("mp4");
   });
 
   test("throws on a chapter with invalid timing", () => {

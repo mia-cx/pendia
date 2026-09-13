@@ -84,6 +84,25 @@ describe("identify", () => {
     expect(identify("Alien.mkv")).toBeNull();
     expect(identify("Alien (1979)/Alien.srt")).toBeNull();
   });
+
+  test("identifies films whose titles end in extra words", () => {
+    expect(identify("The Interview (2014)/The Interview.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "The Interview (2014)",
+    });
+    expect(identify("The Interview (2014)/The.Interview.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "The Interview (2014)",
+    });
+    expect(identify("The Short (2020)/The.Short.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "The Short (2020)",
+    });
+    expect(identify("Sample (2000)/sample.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Sample (2000)",
+    });
+  });
 });
 
 describe("parse", () => {
@@ -125,6 +144,21 @@ describe("isExtra", () => {
   test("matches the video-common extra rules", () => {
     expect(isExtra("Alien (1979)/Alien-trailer.mkv")).toBe(true);
     expect(isExtra("Alien (1979)/Alien.1979.2160p.mkv")).toBe(false);
+  });
+
+  test("keeps films whose titles end in extra words", () => {
+    expect(isExtra("The Interview (2014)/The Interview.mkv")).toBe(false);
+    expect(isExtra("The Interview (2014)/The.Interview.mkv")).toBe(false);
+    expect(isExtra("The Short (2020)/The.Short.mkv")).toBe(false);
+    expect(isExtra("Sample (2000)/sample.mkv")).toBe(false);
+  });
+
+  test("still flags real extras under an ambiguous title", () => {
+    expect(isExtra("The Interview (2014)/The Interview-trailer.mkv")).toBe(
+      true,
+    );
+    expect(isExtra("The Interview (2014)/The Interview.sample.mkv")).toBe(true);
+    expect(isExtra("The Interview (2014)/extras/The Interview.mkv")).toBe(true);
   });
 });
 
@@ -187,6 +221,22 @@ describe("groupMoviePaths", () => {
         title: "Alien",
         year: 1979,
         paths: ["Alien (1979)/Alien.1979.2160p.mkv"],
+      },
+    ]);
+  });
+
+  test("groups a main film beside its trailer under an ambiguous title", () => {
+    const groups = groupMoviePaths([
+      "The Interview (2014)/The Interview.mkv",
+      "The Interview (2014)/The Interview-trailer.mkv",
+      "The Interview (2014)/The Interview.sample.mkv",
+    ]);
+    expect(groups).toEqual([
+      {
+        canonicalFolder: "The Interview (2014)",
+        title: "The Interview",
+        year: 2014,
+        paths: ["The Interview (2014)/The Interview.mkv"],
       },
     ]);
   });

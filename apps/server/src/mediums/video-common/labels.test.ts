@@ -74,6 +74,36 @@ describe("videoVersionLabel", () => {
     ).toBe("4K · HEVC · HDR10 · AAC");
   });
 
+  test("prefers the default non-picture video stream", () => {
+    const label = videoVersionLabel("Movie.mkv", {
+      streams: [
+        stream({
+          index: 0,
+          kind: "video",
+          codec: "mjpeg",
+          disposition: { attached_pic: true, default: true },
+        }),
+        stream({ index: 1, kind: "video", width: 1280, height: 720 }),
+        stream({
+          index: 2,
+          kind: "video",
+          codec: "hevc",
+          width: 3840,
+          height: 2160,
+          hdr: "hdr10",
+          disposition: { default: true },
+        }),
+        stream({
+          index: 3,
+          kind: "audio",
+          codec: "aac",
+          disposition: { default: true },
+        }),
+      ],
+    });
+    expect(label).toBe("4K · HEVC · HDR10 · AAC");
+  });
+
   test("uses no arbitrary filename pieces and falls back to Video", () => {
     const label = videoVersionLabel(
       "Movie.1999.DVDRip.mkv",

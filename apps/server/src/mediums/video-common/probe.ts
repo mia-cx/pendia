@@ -54,6 +54,9 @@ const RawStream = Schema.Struct({
 const RawFormat = Schema.Struct({
   format_name: Schema.optional(Schema.String),
   duration: Schema.optional(Numberish),
+  tags: Schema.optional(
+    Schema.Struct({ major_brand: Schema.optional(Schema.String) }),
+  ),
 });
 
 const RawChapter = Schema.Struct({
@@ -204,15 +207,21 @@ const mapChapter = (raw: RawChapterDecoded): Chapter => {
 };
 
 const containerOf = (
-  formatName: string | undefined,
-  preferWebm: boolean,
+  format: RawProbe["format"],
+  extension: string,
 ): string | null => {
-  const names = (formatName ?? "")
+  const names = (format?.format_name ?? "")
     .split(",")
     .map((name) => name.trim())
     .filter((name) => name !== "");
   if (names.includes("matroska")) {
-    return preferWebm && names.includes("webm") ? "webm" : "mkv";
+    return extension === ".webm" && names.includes("webm") ? "webm" : "mkv";
+  }
+  if (
+    names.includes("mov") &&
+    (extension === ".mov" || format?.tags?.major_brand?.trim() === "qt")
+  ) {
+    return "mov";
   }
   if (names.includes("mp4")) {
     return "mp4";
@@ -243,7 +252,7 @@ const durationOf = (
   return longest;
 };
 
-const fromRaw = (raw: RawProbe, preferWebm: boolean): ProbeResult => {
+const fromRaw = (raw: RawProbe, extension: string): ProbeResult => {
   const streams = raw.streams
     .map(mapStream)
     .filter((stream) => stream !== null);
@@ -255,7 +264,7 @@ const fromRaw = (raw: RawProbe, preferWebm: boolean): ProbeResult => {
     seen.add(stream.index);
   }
   return {
-    container: containerOf(raw.format?.format_name, preferWebm),
+    container: containerOf(raw.format, extension),
     durationSeconds: durationOf(raw),
     chapters: (raw.chapters ?? []).map(mapChapter),
     streams,
@@ -264,7 +273,7 @@ const fromRaw = (raw: RawProbe, preferWebm: boolean): ProbeResult => {
 
 /** Decode raw ffprobe JSON into a normalized {@link ProbeResult}. */
 export function parseProbeOutput(input: unknown): ProbeResult {
-  return fromRaw(Schema.decodeUnknownSync(RawProbe)(input), false);
+  return fromRaw(Schema.decodeUnknownSync(RawProbe)(input), "");
 }
 
 /** Probe a media file with ffprobe and return normalized JSON-safe output. */
@@ -294,6 +303,6 @@ export async function probeVideo(path: string): Promise<ProbeResult> {
   }
   return fromRaw(
     Schema.decodeUnknownSync(RawProbe)(JSON.parse(output)),
-    extname(path).toLowerCase() === ".webm",
+    extname(path).toLowerCase(),
   );
 }

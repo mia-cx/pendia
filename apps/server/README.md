@@ -120,6 +120,7 @@ The `settings` row with key `auth` holds one JSON object. Missing fields use the
   "loginMaxAttempts": 5,
   "loginWindowSeconds": 900,
   "trustedProxyAddresses": [],
+  "artworkRequiresAuth": false,
   "oidc": null
 }
 ```
@@ -141,6 +142,7 @@ The issuer, clientId and clientSecret fields are required. `openid` must be incl
 
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
 Settings apply on the next request. Invalid stored settings fail closed. Admin settings screens belong to a later slice.
+`artworkRequiresAuth` false keeps artwork anonymous for clients such as Findroid. True requires the existing bearer token or session cookie.
 A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
 
 Login attempts share independent address and normalized-account windows across API replicas. Successful logins consume an attempt too.
@@ -277,6 +279,31 @@ The walker skips symlinks, excluded extras directories, extra filename suffixes,
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 
-This slice adds and updates records. Missing-file reconciliation, change signals, providers and keyframe indexes belong to later slices. Imported Versions start without a segment timeline and remain unaligned.
+This slice adds and updates records. Missing-file reconciliation, change signals and keyframe indexes belong to later slices. Imported Versions start without a segment timeline and remain unaligned.
 
 Scan tests generate short MKV fixtures with ffmpeg and compare their stream lists with ffprobe. Both commands must be on PATH. Database-backed scan tests use the disposable database helper described above.
+
+## Metadata and artwork
+
+The `settings` row with key `metadata` holds one JSON object:
+
+```json
+{
+  "providerOrder": ["tmdb"],
+  "confidenceThreshold": 0.9,
+  "libraries": { "<library-uuid>": ["tmdb"] },
+  "tmdb": { "apiKey": "<tmdb-api-key>" }
+}
+```
+
+A missing provider order defaults to TMDB. A missing library entry inherits that order. An explicit empty list disables providers for that library. TMDB stays unavailable until `tmdb.apiKey` is set. Keep the key out of source, logs and URLs outside the server's own provider request.
+
+Movie folder suffixes `{tmdb-348}`, `{imdb-tt0078748}` and `{tvdb=123}` become provider ids during scan. Each non-empty directory scan queues a `provider-fetch` job.
+
+An existing provider id fetches its record directly. Otherwise providers search by title and optional year in configured order. Only one unique best result at or above the threshold matches. Ties and exhausted providers store `unmatched` for admin work.
+
+A match updates Item metadata, replaces Item provider ids and Credits, and maps credit names to Contributors. Failed TMDB HTTP calls are retried by the existing job queue.
+
+The first poster original is stored at `<canonical-folder>/.pendia/artwork/<artwork-id>`. This slice implements only the colocated backend. Parent and leaf symlinks are not followed.
+
+`GET /api/artwork/{artwork-id}?width={1..4096}` serves resized artwork. Sharp resizes without enlargement and preserves the source format. The response carries a strong ETag and honors `If-None-Match`. Each API process caches up to 128 resized representations. The route is anonymous by default; `auth.artworkRequiresAuth: true` requires the bearer token or session cookie.

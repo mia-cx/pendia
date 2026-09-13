@@ -158,6 +158,8 @@ export const versions = pgTable(
     format: format("format").notNull(),
     bytes: bigint("bytes", { mode: "bigint" }).notNull(),
     durationSeconds: doublePrecision("duration_seconds"),
+    keyframesSeconds: doublePrecision("keyframes_seconds").array(),
+    lazyIndexPending: boolean("lazy_index_pending").notNull().default(true),
     // Migration triggers preserve timeline agreement across stored and source writes.
     segmentTimelineId: uuid("segment_timeline_id"),
     timelineAligned: boolean("timeline_aligned").notNull().default(false),

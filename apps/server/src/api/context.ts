@@ -1,7 +1,9 @@
 import type { ErrorMap } from "@orpc/server";
 import { os } from "@orpc/server";
-import { readSessionToken } from "../auth/http.ts";
+import { checkOrigin, readSessionToken } from "../auth/http.ts";
 import { authenticate } from "../auth/sessions.ts";
+import { readAuthSettings } from "../auth/settings.ts";
+import { requestIdentity } from "../auth/transport.ts";
 import type { Database } from "../db/client.ts";
 import { fromHost, runApi } from "./errors.ts";
 import type { EventBroker } from "./events.ts";
@@ -19,6 +21,7 @@ export const apiErrors = {
   UNAUTHORIZED: {},
   FORBIDDEN: {},
   NOT_FOUND: {},
+  CONFLICT: {},
   BAD_REQUEST: {},
 } satisfies ErrorMap;
 
@@ -35,3 +38,21 @@ export const authenticated = base.use(async ({ context, next }) => {
   const caller = await runApi(authenticateRequest(context.db, context.request));
   return next({ context: { caller } });
 });
+
+/** The builder for mutations; adds the session-cookie origin guard. */
+export const authenticatedMutation = authenticated.use(
+  async ({ context, next }) => {
+    await runApi(
+      fromHost(async () => {
+        const config = await readAuthSettings(context.db);
+        const identity = requestIdentity(
+          context.request,
+          context.peerAddress,
+          config.trustedProxyAddresses,
+        );
+        checkOrigin(context.request, identity.secure);
+      }),
+    );
+    return next();
+  },
+);

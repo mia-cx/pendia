@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { deviceInfo } from "../../../web/src/lib/auth.ts";
 import { AuthRouteError, readFailure } from "../../../web/src/lib/errors.ts";
 import {
   createAdmin,
@@ -92,4 +93,27 @@ describe.skipIf(!databaseUrl)("first-run wizard", () => {
         }
       });
     }));
+});
+
+describe("device identity on plain HTTP", () => {
+  test("deviceInfo works when crypto.randomUUID is unavailable", () => {
+    const original = globalThis.crypto;
+    const insecure = {
+      getRandomValues: original.getRandomValues.bind(original),
+    };
+    try {
+      Object.defineProperty(globalThis, "crypto", {
+        value: insecure,
+        configurable: true,
+        writable: true,
+      });
+      expect(deviceInfo().deviceId).toMatch(/^[0-9a-f]{32}$/);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", {
+        value: original,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
 });

@@ -66,7 +66,11 @@ async function seed(db: Database, root: string, bytes: Uint8Array) {
 
 async function withServer<T>(
   db: Database,
-  options: { resize?: ArtworkResize; maxCacheEntries?: number },
+  options: {
+    resize?: ArtworkResize;
+    maxCacheEntries?: number;
+    maxCacheBytes?: number;
+  },
   run: (base: string) => Promise<T>,
 ): Promise<T> {
   const server = startApiServer(alwaysReady, 0, {
@@ -220,6 +224,97 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           expect(calls).toEqual([3, 4, 3]);
         });
       });
+    }));
+
+  test("requests above the original width share one representation", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        const resize: ArtworkResize = async (_input, width) => {
+          calls.push(width);
+          return {
+            bytes: new Uint8Array([width]),
+            contentType: "image/x-artwork",
+          };
+        };
+        await withServer(db, { resize }, async (base) => {
+          const first = await fetch(`${base}/api/artwork/${row.id}?width=20`);
+          expect(first.status).toBe(200);
+          const etag = first.headers.get("etag") ?? "";
+          expect(etag).not.toBe("");
+          expect(Buffer.from(await first.arrayBuffer())).toEqual(
+            Buffer.from([8]),
+          );
+          const second = await fetch(`${base}/api/artwork/${row.id}?width=30`);
+          expect(second.status).toBe(200);
+          expect(second.headers.get("etag")).toBe(etag);
+          await second.arrayBuffer();
+          expect(calls).toEqual([8]);
+        });
+      });
+    }));
+
+  test("evicts the oldest entry when retained bytes exceed the budget", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        const resize: ArtworkResize = async (_input, width) => {
+          calls.push(width);
+          return {
+            bytes: new Uint8Array(6),
+            contentType: "image/x-artwork",
+          };
+        };
+        await withServer(db, { resize, maxCacheBytes: 10 }, async (base) => {
+          for (const width of [3, 4, 3]) {
+            const response = await fetch(
+              `${base}/api/artwork/${row.id}?width=${width}`,
+            );
+            expect(response.status).toBe(200);
+            await response.arrayBuffer();
+          }
+          expect(calls).toEqual([3, 4, 3]);
+        });
+      });
+    }));
+
+  test("never retains an entry larger than the byte budget", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        const resize: ArtworkResize = async (_input, width) => {
+          calls.push(width);
+          return {
+            bytes: new Uint8Array(6),
+            contentType: "image/x-artwork",
+          };
+        };
+        await withServer(db, { resize, maxCacheBytes: 5 }, async (base) => {
+          for (const width of [4, 4]) {
+            const response = await fetch(
+              `${base}/api/artwork/${row.id}?width=${width}`,
+            );
+            expect(response.status).toBe(200);
+            await response.arrayBuffer();
+          }
+          expect(calls).toEqual([4, 4]);
+        });
+      });
+    }));
+
+  test("rejects invalid cache bounds", () =>
+    withDatabase(async (db) => {
+      for (const maxCacheBytes of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
+        expect(() => createArtworkHandler(db, { maxCacheBytes })).toThrow(
+          "Invalid artwork cache size.",
+        );
+      }
     }));
 
   test("enforces artworkRequiresAuth with a real credential", () =>

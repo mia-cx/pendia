@@ -7,6 +7,11 @@ import { migrateDatabase } from "./db/migrate.ts";
 import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
 import { registerLibraryJobs } from "./libraries/jobs.ts";
+import {
+  type ChangeDebouncerOptions,
+  createChangeDebouncer,
+  createServarrWebhookHandler,
+} from "./libraries/webhooks.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -119,6 +124,7 @@ type StartOptions = {
   registry?: typeof jobRegistry;
   workerOptions?: Parameters<typeof startJobWorker>[2];
   brokerOptions?: Parameters<typeof startEventBroker>[1];
+  changeOptions?: ChangeDebouncerOptions;
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -130,6 +136,7 @@ export async function startPendia(
     registry = jobRegistry,
     workerOptions,
     brokerOptions,
+    changeOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
@@ -139,20 +146,25 @@ export async function startPendia(
   let apiServer: Bun.Server<undefined> | undefined;
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
   let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
+  let changeDebouncer: ReturnType<typeof createChangeDebouncer> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops the worker, event broker, API server and database pool once, in that order. */
+  /** Stops the API server, change debouncer, worker, event broker and database pool once, in that order. */
   function stop() {
     stopping ??= (async () => {
       try {
-        await worker?.stop();
+        await apiServer?.stop();
       } finally {
         try {
-          await eventBroker?.stop();
+          await changeDebouncer?.close();
         } finally {
           try {
-            await apiServer?.stop();
+            await worker?.stop();
           } finally {
-            await database?.close();
+            try {
+              await eventBroker?.stop();
+            } finally {
+              await database?.close();
+            }
           }
         }
       }
@@ -164,11 +176,26 @@ export async function startPendia(
       await migrateDatabase(database.db);
       log(role, "database.migrated");
       eventBroker = await startEventBroker(database.db, brokerOptions);
+      changeDebouncer = createChangeDebouncer(database.db, {
+        ...changeOptions,
+        onError:
+          changeOptions?.onError ??
+          ((error: unknown) =>
+            console.error(
+              JSON.stringify({
+                level: "error",
+                role: "api",
+                message: "changes.error",
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            )),
+      });
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
         api: createApiHandler(database.db, eventBroker),
+        webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
       });
     }
     if (runsJobs && database) {

@@ -12,7 +12,7 @@ Read `CONTEXT.md`, ADRs 0008 and 0012, the medium contract and declarations, and
 - [x] A second scan with no changes probes nothing; touching one file re-probes only that file.
 - [x] The scan runs through the job queue with the library's concurrency key and the client sees a library-changed event.
 - [x] Scan rules and grouping have tests on Radarr-style layouts, including an edition tag.
-- [ ] Probe output for a fixture matches ffprobe's stream list.
+- [x] Probe output for a fixture matches ffprobe's stream list.
 
 ## TODOs
 
@@ -40,7 +40,7 @@ Read `CONTEXT.md`, ADRs 0008 and 0012, the medium contract and declarations, and
   - A full scan job walks the root and enqueues canonical-directory scan jobs. Every scan job uses `library:<id>` as its concurrency key. Register the built-in handler for worker and all startup without sharing database-bound handlers between server instances.
   - Publish `library.changed` after directory writes commit. Keep the existing SSE audience rules.
   - Validation: real Postgres and real HTTP tests cover permissions, input errors, both transports, job claims and concurrency keys, default runtime dispatch and a client receiving the event. Run focused tests, server typecheck and build.
-- [ ] 6. Complete acceptance coverage and run the final repository checks.
+- [x] 6. Complete acceptance coverage and run the final repository checks.
   - Review every acceptance criterion against its test. Record actual results below and document the library procedures in the existing server README.
   - Run from the repository root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55425/pendia bun test`, and `env -u DATABASE_URL bun test`.
   - Confirm database tests fail in CI without DATABASE_URL. Remove only the task's disposable Postgres container after review validation ends.
@@ -53,6 +53,19 @@ Read `CONTEXT.md`, ADRs 0008 and 0012, the medium contract and declarations, and
 - TODO3 done: `libraries/walker.ts` (`walkLibrary`, `readLibraryFile`; symlink-free lstat traversal, extras/store pruning, identify-gated yields), `libraries/probe-cache.ts` (`probeLibraryFile` with per-file `pg_advisory_xact_lock`, bytes+modifiedNs cache key, change-during-probe rejection), `db/schema/scan.ts` (`probe_cache` table) and generated `drizzle/0002_wild_agent_brand.sql` + snapshot/journal. `db.test.ts` migration counts bumped 2/33 to 3/34 since the new table changes them. Checks: `DATABASE_URL=... bun test` on both new files (14 pass on disposable Postgres `pendia-test-pg-25`), `db.test.ts` migration tests pass with the new counts, `bun run --cwd apps/server check`, `bun run --cwd apps/server build`, `biome check` on changed files including the generated snapshot/journal; evidence in `.devin/todo3-validation.log`. Review fixes applied: supplied extras/store subtrees prune before descent, directory entries are revalidated through resolveEntry before readdir, and the byte-change test stamps a whole-second mtime so `modifiedNs` provably survives while bytes change.
 - TODO4 done: `libraries/scan.ts` (`scanDirectory`: non-recursive walk + `groupMoviePaths`, sequential `probeLibraryFile` outside the writer transaction, library `for update` lock, re-stat guard, `insertItem` for new Items, identity-preserving Version/File updates, per-stream `(fileId, index)` upsert and stale-stream pruning) plus `scan.test.ts`. Checks: `DATABASE_URL=... bun test` on `scan.test.ts` (5 pass on disposable Postgres: reversed filename/probe labels, idempotent repeat with curated metadata retained, single-file touch re-probe, stream-inventory replacement preserving ids, no-video abort, concurrent scans), `bun run --cwd apps/server check`, `bun run --cwd apps/server build`, `biome check` on both files; evidence in `.devin/todo4-validation.log`.
 - TODO5 done: `libraries/service.ts` (manage-libraries CRUD + `scanLibrary` enqueue), `libraries/jobs.ts` (`libraryConcurrencyKey`, `registerLibraryJobs`: root jobs fan out canonical folders, directory jobs scan then publish `library.changed`), `api/libraries.ts` (six procedures over `authenticated`/`authenticatedMutation`), `authenticatedMutation` in `api/context.ts` (exported `checkOrigin` guard), `Library`/`LibraryInput` schemas, `CONFLICT` added to `apiErrors`, and `index.ts` builds a fresh `createJobRegistry` per start, forwards supplied handlers and registers built-in scan jobs. Checks: `DATABASE_URL=... bun test` on service/jobs/api libraries tests plus `roles.test.ts` (19 pass: permissions, input errors, both transports, deterministic queue claims and per-library keys, SSE delivery, repeated runtimes on separate databases), `bun test apps/server/src/api/openapi.test.ts` (6 pass), `bun run --cwd apps/server check`, `bun run --cwd apps/server build`, `biome check` on the 11 changed files; evidence in `.devin/todo5-validation.log`. Deviation: the original tests were written before the implementation but not executed in between, so first-run green was never observed red; the review's new cases (shows-medium `scanLibrary` rejection, NUL names) were run red first and confirmed failing before the fixes. Review fixes applied: `scanLibrary` rejects non-movies mediums before enqueueing, `normalizeName` rejects NUL, the origin test covers `sec-fetch-site:cross-site`, and newly added inline comments were removed. The probe-output acceptance criterion remains unchecked for TODO6's final review even though TODO2's independent-ffprobe comparison already covers it.
+- TODO6 done: `apps/server/README.md` documents the library procedures, scan job behavior, walker/cache guarantees and fixture requirements; acceptance criterion 5 checked (probe.test.ts compares a real fixture's streams against an independent ffprobe stream list and literal codecs). Final gate from the repo root, evidence in `.devin/todo6-validation.log` (Bun 1.4.2, ffmpeg 7.1.5-0+deb13u1):
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `bun install --frozen-lockfile` | 0 | 116 installs, no changes |
+| `bun run lint` | 0 | clean |
+| `bun run check` | 0 | clean |
+| `bun run build` | 0 | 4 tasks, web + server bundles written |
+| `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55425/pendia bun test` | 0 | 468 pass, 0 fail, 1504 expects |
+| `env -u DATABASE_URL bun test` | 0 | 327 pass, 141 skip, 0 fail; skip banner printed once |
+| `env -u DATABASE_URL CI=true bun test apps/server/src/libraries/probe-cache.test.ts` | 1 (expected) | `DATABASE_URL is required for database tests in CI.` |
+
+  Caveat: three test commands were first captured through a `tr` pipe that reported the pipe's status; all three were re-run to record the real bun exit statuses shown above. No test was changed for TODO6.
 - This run is unattended. The lead owns design, reviews, commits, pushes, comments and the PR. The built-in implementation worker handles each TODO and its focused checks. No independent workers run.
 - Work stays in `/home/mia/mia-cx/pendia/.worktrees/scan` on `feat/25-libraries-scan`. Each TODO has one buildable commit with `Refs #25`. Never commit `.devin`.
 - No exact canonical-folder algorithm is specified beyond grouping files in a folder. Use the immediate parent and reject loose files at the library root, which have no movie folder. Nested collection folders remain supported.

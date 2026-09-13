@@ -8,11 +8,18 @@ export type PendiaClient = RouterClient<typeof pendiaRouter>;
 
 /** Creates a client that talks to the api role, same origin by default. */
 export function createPendiaClient(
-  options: { origin?: string; headers?: Record<string, string> } = {},
+  options: {
+    origin?: string;
+    headers?: Record<string, string>;
+    fetch?: typeof globalThis.fetch;
+  } = {},
 ): PendiaClient {
+  const transport = options.fetch;
   const link = new RPCLink({
     url: `${options.origin ?? ""}/rpc`,
     headers: options.headers ?? {},
+    fetch:
+      transport === undefined ? undefined : (request) => transport(request),
   });
   return createORPCClient<PendiaClient>(link);
 }

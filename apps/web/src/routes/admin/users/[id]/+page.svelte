@@ -1,5 +1,6 @@
 <script lang="ts">
 import { untrack } from "svelte";
+import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
@@ -48,6 +49,7 @@ let libraryFailures = $state<Record<string, FailureShape>>({});
 let revoking = $state<Record<string, boolean>>({});
 let revokeFailures = $state<Record<string, FailureShape>>({});
 
+let routeGeneration = 0;
 let pending: Promise<unknown> = Promise.resolve();
 
 function serial<T>(run: () => Promise<T>) {
@@ -57,6 +59,7 @@ function serial<T>(run: () => Promise<T>) {
 }
 
 function resetRouteState() {
+  routeGeneration += 1;
   capInput = null;
   ratingInput = null;
   settingsFailure = undefined;
@@ -81,6 +84,7 @@ const ratingValue = $derived(
 
 async function saveSettings(event: SubmitEvent) {
   const target = id;
+  const generation = routeGeneration;
   event.preventDefault();
   settingsBusy = true;
   settingsFailure = undefined;
@@ -105,7 +109,7 @@ async function saveSettings(event: SubmitEvent) {
         contentRatingCeiling: rating === "" ? null : rating,
       }),
     );
-    if (target !== id) return;
+    if (target !== id || generation !== routeGeneration) return;
     access.set(updated);
     capInput = null;
     ratingInput = null;
@@ -118,6 +122,7 @@ async function saveSettings(event: SubmitEvent) {
 
 async function saveGroups() {
   const target = id;
+  const generation = routeGeneration;
   groupsBusy = true;
   groupsFailure = undefined;
   try {
@@ -135,7 +140,7 @@ async function saveGroups() {
         groupIds: checked,
       }),
     );
-    if (target !== id) return;
+    if (target !== id || generation !== routeGeneration) return;
     access.set(updated);
     groupSel = {};
   } catch (error) {
@@ -155,6 +160,7 @@ function overrideValue(permission: string): string {
 
 async function setOverride(permission: Permission, value: string) {
   const target = id;
+  const generation = routeGeneration;
   overrideBusy[permission] = true;
   delete overrideFailures[permission];
   try {
@@ -165,7 +171,7 @@ async function setOverride(permission: Permission, value: string) {
         allowed: value === "allow" ? true : value === "deny" ? false : null,
       }),
     );
-    if (target !== id) return;
+    if (target !== id || generation !== routeGeneration) return;
     access.set(updated);
   } catch (error) {
     if (target === id) overrideFailures[permission] = readFailure(error);
@@ -184,6 +190,7 @@ function accessValue(libraryId: string): string {
 
 async function setAccess(libraryId: string, value: string) {
   const target = id;
+  const generation = routeGeneration;
   libraryBusy[libraryId] = true;
   delete libraryFailures[libraryId];
   try {
@@ -194,7 +201,7 @@ async function setAccess(libraryId: string, value: string) {
         allowed: value === "allow" ? true : value === "deny" ? false : null,
       }),
     );
-    if (target !== id) return;
+    if (target !== id || generation !== routeGeneration) return;
     access.set(updated);
   } catch (error) {
     if (target === id) libraryFailures[libraryId] = readFailure(error);
@@ -205,12 +212,14 @@ async function setAccess(libraryId: string, value: string) {
 
 async function revoke(sessionId: string) {
   const target = id;
+  const generation = routeGeneration;
   revoking[sessionId] = true;
   delete revokeFailures[sessionId];
   try {
     await serial(() => client.users.revokeSession({ id: sessionId }));
-    if (target !== id) return;
+    if (target !== id || generation !== routeGeneration) return;
     await sessions.reload();
+    if (sessions.failure?.code === "UNAUTHORIZED") await goto("/login");
   } catch (error) {
     if (target === id) revokeFailures[sessionId] = readFailure(error);
   } finally {

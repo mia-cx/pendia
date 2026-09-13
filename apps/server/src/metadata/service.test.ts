@@ -389,7 +389,7 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       if (!existingContributor) throw new Error("Contributor fixture missing.");
       await db
         .insert(providerIds)
-        .values({ provider: "old", value: "zzz", itemId: item.id });
+        .values({ provider: "tvdb", value: "123", itemId: item.id });
       const results = [
         fetchedResult({
           providerIds: { tmdb: "550", imdb: "tt1375666" },
@@ -428,6 +428,7 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       expect(await itemProviderIds(db, item.id)).toEqual([
         { provider: "imdb", value: "tt1375666" },
         { provider: "tmdb", value: "550" },
+        { provider: "tvdb", value: "123" },
       ]);
       const firstCredits = await db
         .select()
@@ -469,6 +470,7 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       expect(await itemProviderIds(db, item.id)).toEqual([
         { provider: "imdb", value: "tt9999999" },
         { provider: "tmdb", value: "550" },
+        { provider: "tvdb", value: "123" },
       ]);
       expect(
         await db.select().from(credits).where(eq(credits.itemId, item.id)),
@@ -480,6 +482,66 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         }),
       ]);
       expect(await db.select().from(contributors)).toHaveLength(2);
+    }));
+
+  test("concurrent matches share one contributor per exact name", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      const other = await insertItem(db, {
+        libraryId: item.libraryId,
+        title: "Sequel",
+        kind: "movie",
+        canonicalFolder: "/movies/sequel",
+        extension: {},
+      });
+      await db.insert(providerIds).values([
+        { provider: "tmdb", value: "1", itemId: item.id },
+        { provider: "tmdb", value: "2", itemId: other.id },
+      ]);
+      let release = () => {};
+      let allArrived = () => {};
+      const releaseGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const arrivedGate = new Promise<void>((resolve) => {
+        allArrived = resolve;
+      });
+      let arrived = 0;
+      const provider: MetadataProvider = {
+        id: "tmdb",
+        kinds: ["movie"],
+        search: async () => [],
+        fetch: async (match) => {
+          arrived += 1;
+          if (arrived === 2) allArrived();
+          await releaseGate;
+          return fetchedResult({
+            title: `Title ${match.providerId}`,
+            credits: [{ name: "Shared Name", role: "director", order: 0 }],
+            providerIds: { tmdb: match.providerId },
+          });
+        },
+      };
+      const first = applyMetadata(db, item.id, [provider]);
+      const second = applyMetadata(db, other.id, [provider]);
+      await arrivedGate;
+      release();
+      const [a, b] = await Promise.all([first, second]);
+      expect(a).toMatchObject({ state: "matched" });
+      expect(b).toMatchObject({ state: "matched" });
+      const shared = await db
+        .select()
+        .from(contributors)
+        .where(eq(contributors.name, "Shared Name"));
+      expect(shared).toHaveLength(1);
+      const contributor = shared[0];
+      if (!contributor) throw new Error("Expected one Contributor row.");
+      const rows = await db.select().from(credits).orderBy(credits.itemId);
+      expect(rows.map((row) => row.contributorId)).toEqual([
+        contributor.id,
+        contributor.id,
+      ]);
     }));
 
   test("invalid provider id entries reject before touching stored metadata", () =>

@@ -1,5 +1,5 @@
 import type { MetadataProvider, MetadataResult } from "@pendia/plugin-api";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -76,16 +76,35 @@ async function persistMatch(
         updatedAt: new Date(),
       })
       .where(eq(items.id, itemId));
-    await tx.delete(providerIds).where(eq(providerIds.itemId, itemId));
-    const idRows = [...idEntries].map(([provider, value]) => ({
-      itemId,
-      provider,
-      value,
-    }));
-    if (idRows.length > 0) await tx.insert(providerIds).values(idRows);
+    for (const [provider, value] of idEntries) {
+      const [existing] = await tx
+        .select()
+        .from(providerIds)
+        .where(
+          and(
+            eq(providerIds.itemId, itemId),
+            eq(providerIds.provider, provider),
+          ),
+        );
+      if (existing) {
+        if (existing.value !== value)
+          await tx
+            .update(providerIds)
+            .set({ value })
+            .where(eq(providerIds.id, existing.id));
+      } else {
+        await tx.insert(providerIds).values({ itemId, provider, value });
+      }
+    }
     await tx.delete(credits).where(eq(credits.itemId, itemId));
     const contributorIds = new Map<string, string>();
-    const names = [...new Set(result.credits.map((credit) => credit.name))];
+    const names = [
+      ...new Set(result.credits.map((credit) => credit.name)),
+    ].sort();
+    for (const name of names)
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${name}, 0))`,
+      );
     if (names.length > 0) {
       const existing = await tx
         .select()

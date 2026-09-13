@@ -4,6 +4,7 @@ import {
   getUserAccess,
   listGroups,
   listUsers,
+  readUserAccess,
   setGroupPermissions,
   setLibraryAccess,
   writeUserSettings,
@@ -192,9 +193,7 @@ export const userProcedures = {
             input.id,
             input.groupIds,
           );
-          return toUserAccess(
-            await getUserAccess(context.db, context.caller.user.id, input.id),
-          );
+          return toUserAccess(await readUserAccess(context.db, input.id));
         }),
       ),
     ),
@@ -220,9 +219,7 @@ export const userProcedures = {
             input.permission,
             input.allowed,
           );
-          return toUserAccess(
-            await getUserAccess(context.db, context.caller.user.id, input.id),
-          );
+          return toUserAccess(await readUserAccess(context.db, input.id));
         }),
       ),
     ),
@@ -253,9 +250,7 @@ export const userProcedures = {
               contentRatingCeiling: input.contentRatingCeiling,
             },
           );
-          return toUserAccess(
-            await getUserAccess(context.db, context.caller.user.id, input.id),
-          );
+          return toUserAccess(await readUserAccess(context.db, input.id));
         }),
       ),
     ),
@@ -279,9 +274,7 @@ export const userProcedures = {
             userId: input.id,
             allowed: input.allowed,
           });
-          return toUserAccess(
-            await getUserAccess(context.db, context.caller.user.id, input.id),
-          );
+          return toUserAccess(await readUserAccess(context.db, input.id));
         }),
       ),
     ),

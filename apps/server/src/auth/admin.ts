@@ -42,13 +42,8 @@ export async function listGroups(db: Database, actorId: string) {
   return db.select(groupFields).from(groups).orderBy(asc(groups.name));
 }
 
-/** Loads one user's groups, overrides, library access and settings for a caller holding manage-users. */
-export async function getUserAccess(
-  db: Database,
-  actorId: string,
-  userId: string,
-) {
-  await requirePermission(db, actorId, "manage-users");
+/** Loads one user's groups, overrides, library access and settings without a caller check. */
+export async function readUserAccess(db: Database, userId: string) {
   const [user] = await db
     .select(userFields)
     .from(users)
@@ -89,6 +84,16 @@ export async function getUserAccess(
     libraryAccess: access,
     settings: stored ?? { bitrateCapBps: null, contentRatingCeiling: null },
   };
+}
+
+/** Loads one user's full access shape for a caller holding manage-users. */
+export async function getUserAccess(
+  db: Database,
+  actorId: string,
+  userId: string,
+) {
+  await requirePermission(db, actorId, "manage-users");
+  return readUserAccess(db, userId);
 }
 
 /** Replaces a custom group's permissions; the actor must be a built-in admin. */

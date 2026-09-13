@@ -3,7 +3,11 @@ import { ORPCError } from "@orpc/client";
 import { eq } from "drizzle-orm";
 import { createPendiaClient } from "../../../web/src/lib/api.ts";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
-import { checkPermission, createGroup } from "../auth/permissions.ts";
+import {
+  checkPermission,
+  createGroup,
+  setUserGroups,
+} from "../auth/permissions.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -508,6 +512,45 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           latest: { id: jobId, state: "queued", error: null },
           runId: jobId,
         });
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("the second admin can remove their own admins membership", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const other = await createLocalUser(db, admin.id, {
+        username: "other",
+        password: "other-pass",
+      });
+      const [admins] = await db
+        .select({ id: groups.id })
+        .from(groups)
+        .where(eq(groups.name, "admins"));
+      const [usersGroup] = await db
+        .select({ id: groups.id })
+        .from(groups)
+        .where(eq(groups.name, "users"));
+      if (!admins || !usersGroup)
+        throw new Error("Seeded groups missing; run migrations first.");
+      await setUserGroups(db, admin.id, other.id, [admins.id, usersGroup.id]);
+      const { token: otherToken } = await createApiKey(db, other.id, "other");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = createPendiaClient({
+          origin: base,
+          headers: { authorization: `Bearer ${otherToken}` },
+        });
+        const updated = await client.users.setGroups({
+          id: other.id,
+          groupIds: [usersGroup.id],
+        });
+        expect(updated.groupIds).toEqual([usersGroup.id]);
+        const denied = await capture(client.users.list());
+        expect(denied.code).toBe("FORBIDDEN");
       } finally {
         await server.stop();
       }

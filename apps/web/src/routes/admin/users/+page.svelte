@@ -50,6 +50,7 @@ async function sendInvite(event: SubmitEvent) {
   event.preventDefault();
   inviteBusy = true;
   inviteFailure = undefined;
+  inviteResult = undefined;
   try {
     inviteResult = await createInvite({
       email: inviteEmail,

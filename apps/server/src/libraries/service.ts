@@ -126,7 +126,7 @@ export async function scanLibrary(db: Database, actorId: string, id: string) {
   return { jobId: job.id };
 }
 
-/** Reports scan job counts and the newest scan job for a caller holding manage-libraries. */
+/** Reports the newest scan run's counts and newest job for a caller holding manage-libraries. */
 export async function libraryScanStatus(
   db: Database,
   actorId: string,
@@ -142,18 +142,27 @@ export async function libraryScanStatus(
     eq(jobs.type, "scan"),
     sql`${jobs.payload}->>'libraryId' = ${id}`,
   );
+  const [root] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(where, sql`${jobs.payload}->>'path' = '.'`))
+    .orderBy(desc(jobs.id))
+    .limit(1);
+  const runId = root?.id ?? null;
+  const runWhere =
+    runId === null ? where : and(where, sql`${jobs.id} >= ${runId}::uuid`);
   const grouped = await db
     .select({ state: jobs.state, count: sql<number>`count(*)::int` })
     .from(jobs)
-    .where(where)
+    .where(runWhere)
     .groupBy(jobs.state);
   const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
   for (const row of grouped) counts[row.state] = row.count;
   const [latest] = await db
     .select({ id: jobs.id, state: jobs.state, error: jobs.error })
     .from(jobs)
-    .where(where)
+    .where(runWhere)
     .orderBy(desc(jobs.id))
     .limit(1);
-  return { libraryId: id, counts, latest: latest ?? null };
+  return { libraryId: id, counts, latest: latest ?? null, runId };
 }

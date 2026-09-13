@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries } from "../db/schema/index.ts";
+import { jobs, libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { listJobs } from "../jobs/queue.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
@@ -256,6 +257,7 @@ describe.skipIf(!databaseUrl)("library service", () => {
         libraryId: library.id,
         counts: { queued: 0, running: 0, completed: 0, failed: 0 },
         latest: null,
+        runId: null,
       });
       const { jobId } = await scanLibrary(db, admin.id, library.id);
       const status = await libraryScanStatus(db, admin.id, library.id);
@@ -270,6 +272,21 @@ describe.skipIf(!databaseUrl)("library service", () => {
         state: "queued",
         error: null,
       });
+      expect(status.runId).toBe(jobId);
+      await db
+        .update(jobs)
+        .set({ state: "completed" })
+        .where(eq(jobs.id, jobId));
+      const second = await scanLibrary(db, admin.id, library.id);
+      const rerun = await libraryScanStatus(db, admin.id, library.id);
+      expect(rerun.counts).toEqual({
+        queued: 1,
+        running: 0,
+        completed: 0,
+        failed: 0,
+      });
+      expect(rerun.runId).toBe(second.jobId);
+      expect(rerun.latest?.id).toBe(second.jobId);
       const other = await createLibrary(db, admin.id, {
         name: "Other",
         medium: "movies",

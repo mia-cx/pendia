@@ -19,7 +19,7 @@ export async function waitForScan(
 ) {
   const deadline =
     options.timeoutMs === undefined ? null : Date.now() + options.timeoutMs;
-  const intervalMs = options.intervalMs ?? 250;
+  const intervalMs = options.intervalMs ?? 1000;
   for (;;) {
     const status = await client.libraries.scanStatus({
       id: libraryId,

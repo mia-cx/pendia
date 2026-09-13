@@ -29,6 +29,9 @@ export const settings = pgTable("settings", {
   updatedAt: instant("updated_at").notNull().defaultNow(),
 });
 
+/** The advisory lock class serialising read-modify-write of one settings row. */
+export const settingsLockClass = 0x70656e64;
+
 // Plugin approval and enabled state belong to settings keyed by plugin name.
 export const pluginLockfile = pgTable("plugin_lockfile", {
   id: id(),

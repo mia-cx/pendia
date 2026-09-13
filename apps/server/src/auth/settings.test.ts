@@ -193,6 +193,24 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
       expect((await readAuthSettings(db)).artworkRequiresAuth).toBe(false);
     }));
 
+  test("concurrent patches to a missing row keep both writes", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const admin = await setupAdmin(db, {
+        username: "admin",
+        password: "secret",
+      });
+      await Promise.all([
+        writeAuthSettings(db, admin.id, {
+          trustedProxyAddresses: ["10.0.0.2"],
+        }),
+        writeAuthSettings(db, admin.id, { artworkRequiresAuth: true }),
+      ]);
+      const stored = await readAuthSettings(db);
+      expect(stored.trustedProxyAddresses).toEqual(["10.0.0.2"]);
+      expect(stored.artworkRequiresAuth).toBe(true);
+    }));
+
   test("a patch merge keeps the stored OIDC configuration readable", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

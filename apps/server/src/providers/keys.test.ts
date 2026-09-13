@@ -43,6 +43,17 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       expect(await listProviderKeys(db, admin.id)).toEqual(["opensubtitles"]);
     }));
 
+  test("concurrent sets on a missing row keep both keys", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      await Promise.all([
+        setProviderKey(db, admin.id, "tmdb", "secret-one"),
+        setProviderKey(db, admin.id, "tvdb", "secret-two"),
+      ]);
+      expect(await listProviderKeys(db, admin.id)).toEqual(["tmdb", "tvdb"]);
+    }));
+
   test("removing an unknown key is NOT_FOUND", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

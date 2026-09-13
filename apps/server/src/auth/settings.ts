@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { settings } from "../db/schema/index.ts";
+import { settings, settingsLockClass } from "../db/schema/index.ts";
 import { AuthError } from "./errors.ts";
 import { requirePermission } from "./permissions.ts";
 import { normalizeAddress } from "./transport.ts";
@@ -176,6 +176,9 @@ export async function writeAuthSettings(
   await requirePermission(db, actorId, "manage-server");
   const values = validatedPatch(patch);
   return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(${settingsLockClass}, hashtext(${authSettingsKey}))`,
+    );
     const [row] = await tx
       .select({ value: settings.value })
       .from(settings)

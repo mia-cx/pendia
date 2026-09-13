@@ -21,6 +21,7 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
         loginMaxAttempts: 5,
         loginWindowSeconds: 900,
         trustedProxyAddresses: [],
+        artworkRequiresAuth: false,
         oidc: null,
       });
     }));
@@ -54,6 +55,29 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
         .set({ value: { oidc: null } })
         .where(eq(settings.key, "auth"));
       expect((await readAuthSettings(db)).oidc).toBeNull();
+    }));
+
+  test("artworkRequiresAuth accepts booleans and rejects other values", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await db
+        .insert(settings)
+        .values({ key: "auth", value: { artworkRequiresAuth: true } });
+      expect((await readAuthSettings(db)).artworkRequiresAuth).toBe(true);
+      await db
+        .update(settings)
+        .set({ value: { artworkRequiresAuth: false } })
+        .where(eq(settings.key, "auth"));
+      expect((await readAuthSettings(db)).artworkRequiresAuth).toBe(false);
+      for (const artworkRequiresAuth of ["yes", 1, null, {}]) {
+        await db
+          .update(settings)
+          .set({ value: { artworkRequiresAuth } })
+          .where(eq(settings.key, "auth"));
+        await expect(readAuthSettings(db)).rejects.toThrow(
+          "Invalid auth settings.",
+        );
+      }
     }));
 
   test("malformed config rejects with the shared settings error", () =>

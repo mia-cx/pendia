@@ -489,6 +489,17 @@ export async function scanShowDirectory(
           throw new AuthError("CONFLICT");
         }
         seasonId = existingSeason.item.id;
+        if (
+          existingSeason.item.canonicalFolder !== seasonGroup.canonicalFolder
+        ) {
+          await tx
+            .update(items)
+            .set({
+              canonicalFolder: seasonGroup.canonicalFolder,
+              updatedAt: new Date(),
+            })
+            .where(eq(items.id, seasonId));
+        }
       } else {
         const created = await insertItem(tx, {
           libraryId,
@@ -553,6 +564,17 @@ export async function scanShowDirectory(
             throw new AuthError("CONFLICT");
           }
           episodeId = existingEpisode.item.id;
+          if (
+            existingEpisode.item.canonicalFolder !== seasonGroup.canonicalFolder
+          ) {
+            await tx
+              .update(items)
+              .set({
+                canonicalFolder: seasonGroup.canonicalFolder,
+                updatedAt: new Date(),
+              })
+              .where(eq(items.id, episodeId));
+          }
           const existingEnd =
             existingEpisode.episode.episodeEndNumber ??
             existingEpisode.episode.episodeNumber;

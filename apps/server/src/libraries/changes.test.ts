@@ -776,4 +776,167 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         ]);
       });
     }));
+
+  test("a show file-delete on a split Version removes only that File", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const seasonDir = join(root, "Foundation", "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const keptPath = "Foundation/Season 01/Foundation S01E01 - part1.mkv";
+        const deletedPath =
+          "Foundation/Season 01/Foundation S01E01 - part2.mkv";
+        await createVideoFixture(join(root, keptPath));
+        await createVideoFixture(join(root, deletedPath));
+        const library = await insertLibrary(db, root, "shows");
+        const scanned = await scanShowDirectory(db, library.id, "Foundation");
+        const showId = scanned.itemId;
+        if (!showId) throw new Error("Initial scan produced no Show.");
+        const [keptFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, keptPath));
+        const [deletedFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, deletedPath));
+        if (
+          !keptFile ||
+          !deletedFile ||
+          keptFile.versionId !== deletedFile.versionId
+        ) {
+          throw new Error("Initial scan produced no split Episode Files.");
+        }
+        const episodeId = keptFile.itemId;
+        const versionId = keptFile.versionId;
+        const seasonId = (await db.select().from(items)).find(
+          (row) => row.kind === "season",
+        )?.id;
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: episodeId,
+          versionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        const progressBefore = await db.select().from(progress);
+
+        await rm(join(root, deletedPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "delete",
+            path: deletedPath,
+            target: "file",
+            providerIds: { tvdb: "366972" },
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
+        expect(itemRows.find((row) => row.kind === "show")?.id).toBe(showId);
+        expect(itemRows.find((row) => row.kind === "season")?.id).toBe(
+          seasonId,
+        );
+        expect(itemRows.find((row) => row.kind === "episode")?.id).toBe(
+          episodeId,
+        );
+        const versionRows = await db.select().from(versions);
+        expect(versionRows.map((row) => row.id)).toEqual([versionId]);
+        expect(versionRows[0]?.bytes).toBe(keptFile.bytes);
+        const fileRows = await db.select().from(files);
+        expect(fileRows.map((row) => row.id)).toEqual([keptFile.id]);
+        expect(fileRows[0]?.path).toBe(keptPath);
+        expect(fileRows[0]?.order).toBe(0);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+      });
+    }));
+
+  test("a show folder rename keeps hierarchy identity and canonical folders", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const oldShow = "Old Show";
+        const newShow = "New Show";
+        const seasonDir = join(root, oldShow, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const oldPath = `${oldShow}/Season 01/Show S01E01.mkv`;
+        const newPath = `${newShow}/Season 01/Show S01E01.mkv`;
+        await createVideoFixture(join(root, oldPath));
+        const library = await insertLibrary(db, root, "shows");
+        const scanned = await scanShowDirectory(db, library.id, oldShow);
+        const showId = scanned.itemId;
+        if (!showId) throw new Error("Initial scan produced no Show.");
+        const itemBefore = await db.select().from(items);
+        const seasonId = itemBefore.find((row) => row.kind === "season")?.id;
+        const episodeId = itemBefore.find((row) => row.kind === "episode")?.id;
+        const [file] = await db.select().from(files);
+        if (!seasonId || !episodeId || !file) {
+          throw new Error("Initial scan produced no hierarchy.");
+        }
+        const versionId = file.versionId;
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: episodeId,
+          versionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        const showProviderIds = {
+          tvdb: "366972",
+          tmdb: "106379",
+          imdb: "tt0804484",
+        };
+        await setItemProviderIds(db, showId, showProviderIds);
+        const progressBefore = await db.select().from(progress);
+
+        await rename(join(root, oldShow), join(root, newShow));
+        await runScanJob(db, library.id, newShow, [
+          {
+            kind: "move",
+            path: newPath,
+            previousPath: oldPath,
+            providerIds: showProviderIds,
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows).toHaveLength(3);
+        const show = itemRows.find((row) => row.kind === "show");
+        const season = itemRows.find((row) => row.kind === "season");
+        const episode = itemRows.find((row) => row.kind === "episode");
+        expect(show?.id).toBe(showId);
+        expect(show?.canonicalFolder).toBe(newShow);
+        expect(season?.id).toBe(seasonId);
+        expect(season?.canonicalFolder).toBe(`${newShow}/Season 01`);
+        expect(episode?.id).toBe(episodeId);
+        expect(episode?.canonicalFolder).toBe(`${newShow}/Season 01`);
+        const versionRows = await db.select().from(versions);
+        expect(versionRows.map((row) => row.id)).toEqual([versionId]);
+        const fileRows = await db.select().from(files);
+        expect(fileRows.map((row) => row.id)).toEqual([file.id]);
+        expect(fileRows[0]?.path).toBe(newPath);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+        const idRows = await db
+          .select()
+          .from(providerIds)
+          .orderBy(asc(providerIds.provider));
+        expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
+          ["imdb", showId],
+          ["tmdb", showId],
+          ["tvdb", showId],
+        ]);
+      });
+    }));
 });

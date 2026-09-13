@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -158,8 +158,17 @@ export async function applyScanChanges(
         .from(files)
         .where(and(eq(files.libraryId, libraryId), eq(files.path, path)));
       if (!file) continue;
-      emptiedItemIds.push(file.itemId);
-      await db.delete(versions).where(eq(versions.id, file.versionId));
+      const [sibling] = await db
+        .select({ id: files.id })
+        .from(files)
+        .where(and(eq(files.versionId, file.versionId), ne(files.id, file.id)))
+        .limit(1);
+      if (sibling === undefined) {
+        emptiedItemIds.push(file.itemId);
+        await db.delete(versions).where(eq(versions.id, file.versionId));
+      } else {
+        await db.delete(files).where(eq(files.id, file.id));
+      }
       continue;
     }
     let item = await findItemByProviderIds(db, libraryId, change.providerIds);

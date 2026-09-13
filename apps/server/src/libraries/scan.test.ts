@@ -115,9 +115,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
               libraryId: library.id,
               format: "video",
               origin: "imported",
-              segmentTimelineId: null,
-              timelineAligned: false,
+              timelineAligned: true,
             });
+            expect(version.segmentTimelineId).not.toBeNull();
           }
 
           const fileRows = await db

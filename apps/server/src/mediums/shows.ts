@@ -269,8 +269,9 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
   const groups = new Map<
     string,
     Map<
-      string,
+      number,
       {
+        seasonFolder: string;
         seasonNumber: number;
         episodes: Map<
           number,
@@ -297,13 +298,16 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
       seasons = new Map();
       groups.set(accepted.canonicalFolder, seasons);
     }
-    let season = seasons.get(accepted.seasonFolder);
+    let season = seasons.get(accepted.seasonNumber);
     if (!season) {
       season = {
+        seasonFolder: accepted.seasonFolder,
         seasonNumber: accepted.seasonNumber,
         episodes: new Map(),
       };
-      seasons.set(accepted.seasonFolder, season);
+      seasons.set(accepted.seasonNumber, season);
+    } else if (accepted.seasonFolder.localeCompare(season.seasonFolder) < 0) {
+      season.seasonFolder = accepted.seasonFolder;
     }
     let episode = season.episodes.get(accepted.episodeNumber);
     if (!episode) {
@@ -326,9 +330,9 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
     .map(([canonicalFolder, seasons]) => ({
       canonicalFolder,
       ...parse(canonicalFolder),
-      seasons: [...seasons.entries()]
-        .map(([seasonFolder, season]) => ({
-          canonicalFolder: `${canonicalFolder}/${seasonFolder}`,
+      seasons: [...seasons.values()]
+        .map((season) => ({
+          canonicalFolder: `${canonicalFolder}/${season.seasonFolder}`,
           seasonNumber: season.seasonNumber,
           title:
             season.seasonNumber === 0

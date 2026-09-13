@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { viewableLibraryIds } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import {
   episodes as episodeTable,
@@ -54,7 +55,9 @@ export function createShowsMedium(db: Database): Medium {
 
 /** Return the first unwatched Episode after each user's last completed Episode per Show. */
 export async function nextUp(db: Database, userId: string): Promise<string[]> {
-  const rows = await db.$client<{ id: string }[]>`
+  const viewable = new Set(await viewableLibraryIds(db, userId));
+  if (viewable.size === 0) return [];
+  const rows = await db.$client<{ id: string; libraryId: string }[]>`
     with last_watched as (
       select distinct on (season.show_id)
         season.show_id,
@@ -71,10 +74,10 @@ export async function nextUp(db: Database, userId: string): Promise<string[]> {
         season.season_number desc,
         episode.episode_number desc
     )
-    select candidate.id
+    select candidate.id, candidate.library_id as "libraryId"
     from last_watched
     cross join lateral (
-      select episode_item.id
+      select episode_item.id, episode_item.library_id
       from seasons as candidate_season
       inner join episodes as candidate_episode
         on candidate_episode.season_id = candidate_season.item_id
@@ -103,7 +106,7 @@ export async function nextUp(db: Database, userId: string): Promise<string[]> {
       last_watched.show_id,
       candidate.id
   `;
-  return Array.from(rows, (row) => row.id);
+  return rows.filter((row) => viewable.has(row.libraryId)).map((row) => row.id);
 }
 
 const seasonFolderPattern = /^season[\s._-]*(\d+)$/i;

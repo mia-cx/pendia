@@ -482,6 +482,22 @@ export async function scanShowDirectory(
           }
           versionIds.push(versionId);
 
+          const versionFiles = await tx
+            .select({ order: files.order })
+            .from(files)
+            .where(eq(files.versionId, versionId));
+          const maxOrder = versionFiles.reduce(
+            (maximum, file) => Math.max(maximum, file.order),
+            -1,
+          );
+          if (maxOrder >= 0) {
+            const offset = maxOrder + members.length + 1;
+            await tx
+              .update(files)
+              .set({ order: sql`${files.order} + ${offset}` })
+              .where(eq(files.versionId, versionId));
+          }
+
           for (const [order, member] of members.entries()) {
             const file = existingFiles.find(
               (candidate) => candidate.path === member.path,

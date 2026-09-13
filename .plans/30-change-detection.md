@@ -6,11 +6,11 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
 
 ## Acceptance criteria
 
-- [ ] Recorded Sonarr and Radarr payloads produce the right add, move and delete events, tested from fixtures.
-- [ ] A rename keeps the Item's progress; a delete removes the Version and the Item when it was the last one.
-- [ ] A burst of events for one directory becomes one scan job.
-- [ ] The walk finds a file added out of band on a fixture tree.
-- [ ] A wrong secret answers 401.
+- [x] Recorded Sonarr and Radarr payloads produce the right add, move and delete events, tested from fixtures.
+- [x] A rename keeps the Item's progress; a delete removes the Version and the Item when it was the last one.
+- [x] A burst of events for one directory becomes one scan job.
+- [x] The walk finds a file added out of band on a fixture tree.
+- [x] A wrong secret answers 401.
 
 ## TODOs
 
@@ -24,7 +24,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
   - Validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/repair.test.ts apps/server/src/api/libraries.test.ts`
 - [x] Document webhook setup, change reconciliation and repair scheduling in the server README.
   - Validation: `bun run lint && bun run check`
-- [ ] Run the complete repository validation and record the real results below.
+- [x] Run the complete repository validation and record the real results below.
   - Validation: `bun install --frozen-lockfile`; `bun run lint`; `bun run check`; `bun run build`; `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test`; `bun test`
 
 ## Notes
@@ -34,6 +34,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
 - TODO 3 validated: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/changes.test.ts apps/server/src/libraries/scan.test.ts apps/server/src/libraries/jobs.test.ts apps/server/src/libraries/walker.test.ts` → 29 pass, 0 fail, 162 expect() calls; `bun run --cwd apps/server check` → clean; `bunx biome check` on changes.ts, changes.test.ts, scan.ts, scan.test.ts, jobs.ts, walker.ts, walker.test.ts → clean after one format pass.
 - TODO 4 validated: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/repair.test.ts apps/server/src/libraries/walker.test.ts apps/server/src/api/libraries.test.ts` → 24 pass, 0 fail, 116 expect() calls; `bun run --cwd apps/server check` → clean; `bunx biome check` on repair.ts, repair.test.ts, walker.ts, walker.test.ts, index.ts → clean after one format pass; full `bun test apps/server/src/libraries/` + api libraries run → 74 pass, 0 fail, 384 expect() calls.
 - TODO 5 validated: `bun run lint` → `biome check .` clean, 128 files; `bun run check` → `turbo run check` 6 tasks successful, 0 errors or warnings.
+- TODO 6 validated: `bun install --frozen-lockfile` → 116 installs across 219 packages, no changes; `bun run lint` → `biome check .` clean, 128 files, no fixes; `bun run check` → `turbo run check` 6 tasks successful, svelte-check 0 errors and 0 warnings; `bun run build` → `turbo run build` 4 tasks successful; `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test` → 525 pass, 0 fail, 1744 expect() calls across 38 files in 66.60s; `env -u DATABASE_URL bun test` → 358 pass, 167 skip, 0 fail, 704 expect() calls, with the one skip message "Skipping database tests: set DATABASE_URL to a test Postgres server." No warnings beyond expected role lifecycle logs. The first database run exposed two branch-caused failures fixed here: shutdown now stops the API listener first but awaits its drain after the event broker so an open event stream cannot deadlock stop, and two repair tests now snapshot the queue after stop before asserting no growth.
 - The unattended run cannot confirm test seams. Tests use the public payload translators, HTTP webhook handler, queued scan handler, repair pass and existing library API.
 - Webhook routes are `/api/webhooks/sonarr/<secret>` and `/api/webhooks/radarr/<secret>`. Only a live API-key token is accepted as the secret. Session tokens are rejected.
 - The 10 second debounce is process-local until it writes one durable scan job. Shutdown flushes accepted events before closing the database.

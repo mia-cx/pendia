@@ -152,23 +152,25 @@ export async function startPendia(
   let changeDebouncer: ReturnType<typeof createChangeDebouncer> | undefined;
   let repair: ReturnType<typeof createLibraryRepair> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops the API server, change debouncer, repair controller, worker, event broker and database pool once, in that order. */
+  /** Stops accepting API work, then stops the debouncer, repair, worker, broker, API drain and database pool once. */
   function stop() {
     stopping ??= (async () => {
+      const apiStopped = Promise.resolve(apiServer?.stop());
+      apiStopped.catch(() => {});
       try {
-        await apiServer?.stop();
+        await changeDebouncer?.close();
       } finally {
         try {
-          await changeDebouncer?.close();
+          await repair?.stop();
         } finally {
           try {
-            await repair?.stop();
+            await worker?.stop();
           } finally {
             try {
-              await worker?.stop();
+              await eventBroker?.stop();
             } finally {
               try {
-                await eventBroker?.stop();
+                await apiStopped;
               } finally {
                 await database?.close();
               }

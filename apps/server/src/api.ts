@@ -2,6 +2,7 @@ import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
+import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 
 const defaultPort = 3000;
 const defaultWebRoot = fileURLToPath(
@@ -60,6 +61,7 @@ export function startApiServer(
   handlers: {
     auth?: ReturnType<typeof createAuthHandler>;
     api?: ReturnType<typeof createApiHandler>;
+    webhooks?: ReturnType<typeof createServarrWebhookHandler>;
   } = {},
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
@@ -77,6 +79,14 @@ export function startApiServer(
         return (await ready())
           ? Response.json({ status: "ready" })
           : Response.json({ status: "database unavailable" }, { status: 503 });
+      }
+
+      if (
+        handlers.webhooks &&
+        (pathname === "/api/webhooks" || pathname.startsWith("/api/webhooks/"))
+      ) {
+        const response = await handlers.webhooks(request);
+        if (response !== undefined) return response;
       }
 
       if (

@@ -13,7 +13,7 @@ Add the in-tree TMDB provider for movies and connect it to scans through the pro
 
 ## TODOs
 
-- [ ] 1. Add metadata and artwork settings plus persisted match state.
+- [x] 1. Add metadata and artwork settings plus persisted match state.
   - Add an Item metadata state with `pending`, `matched` and `unmatched` values. Generate and review the Drizzle migration.
   - Read the `metadata` settings row as `{ providerOrder, confidenceThreshold, libraries, tmdb }`. Missing library entries enable the ordered providers. An empty library list disables metadata for that library.
   - Add `artworkRequiresAuth`, defaulting to false, to the existing `auth` settings object.
@@ -55,3 +55,4 @@ Add the in-tree TMDB provider for movies and connect it to scans through the pro
 - Local Postgres uses the requested `pendia-test-pg-28` container and port 55428. Tests create disposable databases and leave the named database untouched.
 - Before filing and before every review push, rebase on `origin/main`. Resolve conflicts in favor of merged code. Never force-push.
 - Initial repository state is clean at `0e8ac31`, equal to `origin/main`. Issue #25 is closed and its scan pipeline is present.
+- TODO 1 done. Added `metadata_state` enum and `items.metadata_state` default `pending` in `src/db/schema/core.ts` with migration `0003_nifty_mad_thinker` (creates the enum, adds the column with `DEFAULT 'pending' NOT NULL`, backfilling existing rows). New `src/metadata/settings.ts` reads the `metadata` row with the documented defaults and validates every malformed value as `Invalid metadata settings.`; `providersForLibrary` returns fresh arrays in configured order. `readAuthSettings` in `src/auth/settings.ts` now returns `artworkRequiresAuth`, default false, non-booleans rejected. Tests in `src/metadata/settings.test.ts`, `src/auth/settings.test.ts`, `src/auth/rate-limit.test.ts` and `src/db/db.test.ts` (journal count 4, `metadata_state` column default proven). Red observed first: missing module, missing `artworkRequiresAuth`, missing default. `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55428/pendia bun test apps/server/src/metadata/settings.test.ts apps/server/src/auth/settings.test.ts apps/server/src/auth/rate-limit.test.ts apps/server/src/db/db.test.ts` passed 26 of 26; `bun run --cwd apps/server check` and `bun run --cwd apps/server build` clean; `bunx biome check` clean after formatting two files. Review fixes: `libraries: null` now rejects instead of defaulting, rate-limit assertions gained `artworkRequiresAuth`, malformed-case array typed `JsonValue[]`, preserved unknown fields asserted with `toMatchObject`.

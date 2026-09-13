@@ -110,6 +110,12 @@ export async function readAuthSettings(db: Database) {
     return normalized;
   });
 
+  const artworkRequiresAuth =
+    config.artworkRequiresAuth === undefined
+      ? false
+      : config.artworkRequiresAuth;
+  if (typeof artworkRequiresAuth !== "boolean") invalid();
+
   const oidc = readOidc(config.oidc);
 
   return {
@@ -117,6 +123,7 @@ export async function readAuthSettings(db: Database) {
     loginMaxAttempts,
     loginWindowSeconds,
     trustedProxyAddresses,
+    artworkRequiresAuth,
     oidc,
   };
 }

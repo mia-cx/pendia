@@ -81,6 +81,11 @@ export async function readLibraryFile(
   return toLibraryFile(relative, stat);
 }
 
+const prunesDirectory = (rules: ScanRules, relative: string): boolean =>
+  relative.split("/").some((part) => part.toLowerCase().endsWith(".pendia")) ||
+  (rules.isExtra(`${relative}/placeholder.mkv`) &&
+    !rules.identify(`${relative}/${posix.basename(relative)}.mkv`));
+
 /** Walk a library subtree, yielding the files the medium's scan rules accept. */
 export async function* walkLibrary(
   rootPath: string,
@@ -88,12 +93,6 @@ export async function* walkLibrary(
   options: { path?: string; recursive?: boolean } = {},
 ): AsyncGenerator<LibraryFile> {
   const recursive = options.recursive ?? true;
-  const prunesDirectory = (relative: string) =>
-    relative
-      .split("/")
-      .some((part) => part.toLowerCase().endsWith(".pendia")) ||
-    (rules.isExtra(`${relative}/placeholder.mkv`) &&
-      !rules.identify(`${relative}/${posix.basename(relative)}.mkv`));
   let start: Awaited<ReturnType<typeof resolveEntry>>;
   try {
     start = await resolveEntry(rootPath, options.path ?? ".");
@@ -114,7 +113,7 @@ export async function* walkLibrary(
   if (!start.stat.isDirectory()) {
     return;
   }
-  if (prunesDirectory(start.relative)) {
+  if (prunesDirectory(rules, start.relative)) {
     return;
   }
   const visit = async function* (
@@ -129,7 +128,7 @@ export async function* walkLibrary(
         continue;
       }
       if (entry.isDirectory()) {
-        if (recursive && !prunesDirectory(child)) {
+        if (recursive && !prunesDirectory(rules, child)) {
           const validated = await resolveEntry(rootPath, child);
           if (validated.stat.isDirectory()) {
             yield* visit(validated.absolute, validated.relative);
@@ -147,4 +146,66 @@ export async function* walkLibrary(
     }
   };
   yield* visit(start.absolute, start.relative);
+}
+
+/** A library directory with its exact mtime and accepted direct files. */
+export interface LibraryDirectory {
+  path: string;
+  modifiedNs: bigint;
+  files: string[];
+}
+
+/** Walks directory mtimes without statting every file. */
+export async function* walkLibraryDirectories(
+  rootPath: string,
+  rules: ScanRules,
+): AsyncGenerator<LibraryDirectory> {
+  let start: Awaited<ReturnType<typeof resolveEntry>>;
+  try {
+    start = await resolveEntry(rootPath, ".");
+  } catch (error) {
+    if (isEnoent(error)) {
+      throw new MissingLibraryPathError("Library subtree does not exist: .");
+    }
+    throw error;
+  }
+  if (!start.stat.isDirectory() || prunesDirectory(rules, start.relative)) {
+    return;
+  }
+  const visit = async function* (
+    absolute: string,
+    relative: string,
+    stat: BigIntStats,
+  ): AsyncGenerator<LibraryDirectory> {
+    const entries = await readdir(absolute, { withFileTypes: true });
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const files: string[] = [];
+    const directories: string[] = [];
+    for (const entry of entries) {
+      const child = relative === "." ? entry.name : `${relative}/${entry.name}`;
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (!prunesDirectory(rules, child)) {
+          directories.push(child);
+        }
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (rules.identify(child) && !rules.isExtra(child)) {
+        files.push(child);
+      }
+    }
+    yield { path: relative, modifiedNs: stat.mtimeNs, files };
+    for (const child of directories) {
+      const validated = await resolveEntry(rootPath, child);
+      if (validated.stat.isDirectory()) {
+        yield* visit(validated.absolute, validated.relative, validated.stat);
+      }
+    }
+  };
+  yield* visit(start.absolute, start.relative, start.stat);
 }

@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
 import {
+  type LibraryDirectory,
   type LibraryFile,
   MissingLibraryPathError,
   readLibraryFile,
   walkLibrary,
+  walkLibraryDirectories,
 } from "./walker.ts";
 
 async function collect(
@@ -217,6 +219,58 @@ describe("walkLibrary", () => {
         "Alien (1979)/Alien.1979.1080p.mkv",
         "Alien (1979)/Alien.1979.2160p.mkv",
       ]);
+    }));
+});
+
+describe("walkLibraryDirectories", () => {
+  async function collectDirectories(root: string) {
+    const directories: LibraryDirectory[] = [];
+    for await (const directory of walkLibraryDirectories(
+      root,
+      moviesMedium.scan,
+    )) {
+      directories.push(directory);
+    }
+    return directories;
+  }
+
+  test("yields each directory's mtime and accepted direct files", () =>
+    withVideoFixture(async (root) => {
+      await populate(root);
+      const directories = await collectDirectories(root);
+      expect(directories.map((directory) => directory.path)).toEqual([
+        ".",
+        "Alien (1979)",
+        "Alien (1979)/Behind.The.Scenes",
+        "Alien (1979)/Deleted.Scenes",
+        "Collection",
+        "Collection/Alien (1979)",
+      ]);
+      for (const directory of directories) {
+        expect(typeof directory.modifiedNs).toBe("bigint");
+      }
+      const byPath = new Map(
+        directories.map((directory) => [directory.path, directory.files]),
+      );
+      expect(byPath.get(".")).toEqual([]);
+      expect(byPath.get("Alien (1979)")).toEqual([
+        "Alien (1979)/Alien.1979.1080p.mkv",
+        "Alien (1979)/Alien.1979.2160p.mkv",
+      ]);
+      expect(byPath.get("Alien (1979)/Behind.The.Scenes")).toEqual([]);
+      expect(byPath.get("Alien (1979)/Deleted.Scenes")).toEqual([]);
+      expect(byPath.get("Collection")).toEqual([]);
+      expect(byPath.get("Collection/Alien (1979)")).toEqual([
+        "Collection/Alien (1979)/copy.mkv",
+      ]);
+    }));
+
+  test("throws MissingLibraryPathError for a missing root", () =>
+    withVideoFixture(async (root) => {
+      await populate(root);
+      await expect(collectDirectories(join(root, "missing"))).rejects.toThrow(
+        MissingLibraryPathError,
+      );
     }));
 });
 

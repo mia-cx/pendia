@@ -85,6 +85,24 @@ describe("identify", () => {
     expect(identify("Alien (1979)/Alien.srt")).toBeNull();
   });
 
+  test("identifies a title-matching file in an extras-named top folder", () => {
+    expect(identify("Shorts/Shorts.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Shorts",
+    });
+    expect(identify("Interviews/Interviews.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Interviews",
+    });
+    expect(identify("Shorts/other.mkv")).toBeNull();
+    expect(identify("Alien (1979)/shorts/clip.mkv")).toBeNull();
+  });
+
+  test("never identifies Pendia store paths even under matching names", () => {
+    expect(identify(".pendia/.pendia.mkv")).toBeNull();
+    expect(identify("film.mkv.pendia/film.mkv.pendia.mkv")).toBeNull();
+  });
+
   test("identifies films whose titles end in extra words", () => {
     expect(identify("The Interview (2014)/The Interview.mkv")).toEqual({
       kind: "movie",
@@ -151,6 +169,13 @@ describe("isExtra", () => {
     expect(isExtra("The Interview (2014)/The.Interview.mkv")).toBe(false);
     expect(isExtra("The Short (2020)/The.Short.mkv")).toBe(false);
     expect(isExtra("Sample (2000)/sample.mkv")).toBe(false);
+  });
+
+  test("a title match disambiguates only top-level extras-named folders", () => {
+    expect(isExtra("Shorts/Shorts.mkv")).toBe(false);
+    expect(isExtra("Shorts/other.mkv")).toBe(true);
+    expect(isExtra("Shorts/extras/clip.mkv")).toBe(true);
+    expect(isExtra("Alien (1979)/shorts/clip.mkv")).toBe(true);
   });
 
   test("still flags real extras under an ambiguous title", () => {
@@ -237,6 +262,22 @@ describe("groupMoviePaths", () => {
         title: "The Interview",
         year: 2014,
         paths: ["The Interview (2014)/The Interview.mkv"],
+      },
+    ]);
+  });
+
+  test("keeps an extras-named top folder beside real nested extras", () => {
+    const groups = groupMoviePaths([
+      "Shorts/Shorts.mkv",
+      "Shorts/extras/making-of.mkv",
+      "Alien (1979)/shorts/clip.mkv",
+    ]);
+    expect(groups).toEqual([
+      {
+        canonicalFolder: "Shorts",
+        title: "Shorts",
+        year: null,
+        paths: ["Shorts/Shorts.mkv"],
       },
     ]);
   });

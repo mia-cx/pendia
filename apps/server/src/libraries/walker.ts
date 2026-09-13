@@ -79,6 +79,12 @@ export async function* walkLibrary(
   options: { path?: string; recursive?: boolean } = {},
 ): AsyncGenerator<LibraryFile> {
   const recursive = options.recursive ?? true;
+  const prunesDirectory = (relative: string) =>
+    relative
+      .split("/")
+      .some((part) => part.toLowerCase().endsWith(".pendia")) ||
+    (posix.dirname(relative) !== "." &&
+      rules.isExtra(`${relative}/placeholder.mkv`));
   const start = await resolveEntry(rootPath, options.path ?? ".");
   if (start.stat.isFile()) {
     if (rules.identify(start.relative) && !rules.isExtra(start.relative)) {
@@ -89,7 +95,7 @@ export async function* walkLibrary(
   if (!start.stat.isDirectory()) {
     return;
   }
-  if (rules.isExtra(`${start.relative}/placeholder.mkv`)) {
+  if (prunesDirectory(start.relative)) {
     return;
   }
   const visit = async function* (
@@ -104,7 +110,7 @@ export async function* walkLibrary(
         continue;
       }
       if (entry.isDirectory()) {
-        if (recursive && !rules.isExtra(`${child}/placeholder.mkv`)) {
+        if (recursive && !prunesDirectory(child)) {
           const validated = await resolveEntry(rootPath, child);
           if (validated.stat.isDirectory()) {
             yield* visit(validated.absolute, validated.relative);

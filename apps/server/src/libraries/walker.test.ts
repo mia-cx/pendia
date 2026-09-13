@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { moviesMedium } from "../mediums/movies.ts";
+import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { type LibraryFile, readLibraryFile, walkLibrary } from "./walker.ts";
 
@@ -73,6 +73,23 @@ describe("walkLibrary", () => {
           })
         ).map((file) => file.path),
       ).toEqual(["Collection/Alien (1979)/copy.mkv"]);
+    }));
+
+  test("yields a title-matching file in a top-level extras-named folder", () =>
+    withVideoFixture(async (root) => {
+      await mkdir(join(root, "Shorts", "extras"), { recursive: true });
+      await writeFile(join(root, "Shorts", "Shorts.mkv"), "movie");
+      await writeFile(join(root, "Shorts", "extras", "making-of.mkv"), "extra");
+      await mkdir(join(root, "extras"));
+      await writeFile(join(root, "extras", "clip.mkv"), "extra");
+      await mkdir(join(root, ".pendia"));
+      await writeFile(join(root, ".pendia", ".pendia.mkv"), "store");
+      const files = await collect(root);
+      expect(files.map((file) => file.path)).toEqual(["Shorts/Shorts.mkv"]);
+      expect(groupMoviePaths(files.map((file) => file.path))).toHaveLength(1);
+      expect(
+        (await collect(root, { path: "Shorts" })).map((file) => file.path),
+      ).toEqual(["Shorts/Shorts.mkv"]);
     }));
 
   test("yields nothing inside a supplied extras or store subtree", () =>

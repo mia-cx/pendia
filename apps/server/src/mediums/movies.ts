@@ -28,14 +28,21 @@ function isExtra(path: string): boolean {
     return false;
   }
   const folder = posix.dirname(path);
-  if (isVideoExtra(`${folder}/placeholder.mkv`)) {
+  if (
+    folder.split("/").some((part) => part.toLowerCase().endsWith(".pendia"))
+  ) {
     return true;
   }
   const stem = posix.basename(path, posix.extname(path));
   const { title, year } = parse(folder);
-  return ![title, year === null ? title : `${title} (${year})`].some(
-    (name) => normalizeStem(name) === normalizeStem(stem),
-  );
+  const matchesTitle = [
+    title,
+    year === null ? title : `${title} (${year})`,
+  ].some((name) => normalizeStem(name) === normalizeStem(stem));
+  if (posix.dirname(folder) === "." && matchesTitle) {
+    return false;
+  }
+  return isVideoExtra(`${folder}/placeholder.mkv`) || !matchesTitle;
 }
 
 function identify(

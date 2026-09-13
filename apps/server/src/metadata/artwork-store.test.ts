@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
+import sharp from "sharp";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -92,8 +93,8 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
           sourceUrl: poster.url,
           backend: "colocated",
           storageKey: `Alien (1979)/.pendia/artwork/${row.id}`,
-          width: null,
-          height: null,
+          width: 8,
+          height: 8,
           selected: true,
         });
         const stored = await readFile(join(root, row.storageKey));
@@ -107,7 +108,16 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
         const { item } = await fixture(db, root);
-        const replacement = Buffer.from([1, 2, 3, 4]);
+        const replacement = await sharp({
+          create: {
+            width: 4,
+            height: 4,
+            channels: 3,
+            background: { r: 255, g: 0, b: 0 },
+          },
+        })
+          .png()
+          .toBuffer();
         const { calls, request } = mockRequest((url) =>
           url.endsWith("new.jpg")
             ? new Response(replacement)
@@ -123,11 +133,86 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         expect(second.id).toBe(first.id);
         expect(second.storageKey).toBe(first.storageKey);
         expect(second.sourceUrl).toBe("https://image.example/new.jpg");
+        expect(second).toMatchObject({ width: 4, height: 4 });
         expect(calls).toHaveLength(2);
         expect(await db.select().from(artwork)).toHaveLength(1);
         expect(await readFile(join(root, first.storageKey))).toEqual(
           replacement,
         );
+      });
+    }));
+
+  test("concurrent stores for one item serialize on the item lock", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        let release = () => {};
+        let allArrived = () => {};
+        const releaseGate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const arrivedGate = new Promise<void>((resolve) => {
+          allArrived = resolve;
+        });
+        let arrived = 0;
+        const request = (async (
+          _input: string | URL | Request,
+          _init?: RequestInit,
+        ) => {
+          arrived += 1;
+          if (arrived === 2) allArrived();
+          await releaseGate;
+          return new Response(png);
+        }) as typeof fetch;
+        const first = storeArtworkOriginal(db, item.id, poster, request);
+        const second = storeArtworkOriginal(db, item.id, poster, request);
+        await arrivedGate;
+        release();
+        const [rowA, rowB] = await Promise.all([first, second]);
+        expect(rowB.id).toBe(rowA.id);
+        expect(rowB.storageKey).toBe(rowA.storageKey);
+        expect(await db.select().from(artwork)).toHaveLength(1);
+        const names = await readdir(
+          join(root, item.canonicalFolder, ".pendia", "artwork"),
+        );
+        expect(names).toEqual([rowA.id]);
+      });
+    }));
+
+  test("an invalid image response changes neither file nor row", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const first = await storeArtworkOriginal(db, item.id, poster, request);
+        const corrupt = mockRequest(
+          () => new Response("<html>not an image</html>"),
+        );
+        await expect(
+          storeArtworkOriginal(
+            db,
+            item.id,
+            { type: "poster", url: "https://image.example/bad.jpg" },
+            corrupt.request,
+          ),
+        ).rejects.toThrow("Invalid artwork response.");
+        const [row] = await db
+          .select()
+          .from(artwork)
+          .where(eq(artwork.id, first.id));
+        expect(row).toMatchObject({
+          sourceUrl: poster.url,
+          width: 8,
+          height: 8,
+          selected: true,
+        });
+        expect(await readFile(join(root, first.storageKey))).toEqual(png);
+        const names = await readdir(
+          join(root, item.canonicalFolder, ".pendia", "artwork"),
+        );
+        expect(names).toEqual([first.id]);
       });
     }));
 
@@ -277,6 +362,21 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
         const { request } = mockRequest(() => new Response(png));
         const row = await storeArtworkOriginal(db, item.id, poster, request);
         await rm(join(root, row.storageKey));
+        expect(await readArtworkOriginal(db, row.id)).toBeNull();
+      });
+    }));
+
+  test("returns null for a deselected artwork row", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        await db
+          .update(artwork)
+          .set({ selected: false })
+          .where(eq(artwork.id, row.id));
         expect(await readArtworkOriginal(db, row.id)).toBeNull();
       });
     }));

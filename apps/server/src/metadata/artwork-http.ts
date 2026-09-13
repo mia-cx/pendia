@@ -17,7 +17,6 @@ const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const widthPattern = /^[0-9]+$/;
 const maxWidth = 4096;
-const cacheControl = "public, max-age=86400";
 
 const imageTypes: Record<string, string> = {
   avif: "image/avif",
@@ -80,6 +79,9 @@ export function createArtworkHandler(
       if (id.length === 0 || id.includes("/") || !uuidPattern.test(id))
         return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
       const config = await readAuthSettings(db);
+      const cacheControl = config.artworkRequiresAuth
+        ? "private, max-age=0, must-revalidate"
+        : "public, max-age=0, must-revalidate";
       if (request.method !== "GET")
         return Response.json(
           {

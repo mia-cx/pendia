@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -25,17 +25,21 @@ import {
 } from "../mediums/video-common/fixtures.ts";
 import { setItemProviderIds } from "./changes.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
-import { scanDirectory } from "./scan.ts";
+import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { MissingLibraryPathError } from "./walker.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
 const file2160 = `${folder}/Alien.2160p {edition-Director's Cut}.mkv`;
 
-async function insertLibrary(db: Database, rootPath: string) {
+async function insertLibrary(
+  db: Database,
+  rootPath: string,
+  medium: "movies" | "shows" = "movies",
+) {
   const [library] = await db
     .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath })
+    .values({ name: "Movies", medium, rootPath })
     .returning();
   if (!library) throw new Error("Library insert returned no row.");
   return library;
@@ -687,6 +691,84 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(await db.select().from(items)).toHaveLength(1);
         expect(await db.select().from(versions)).toHaveLength(1);
         expect(await db.select().from(files)).toHaveLength(1);
+      });
+    }));
+
+  test("a show file-delete removes the Episode and keeps its containers", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const seasonDir = join(root, "Foundation", "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const deletedPath = "Foundation/Season 01/Foundation S01E01.mkv";
+        const keptPath = "Foundation/Season 01/Foundation S01E02.mkv";
+        await createVideoFixture(join(root, deletedPath));
+        await createVideoFixture(join(root, keptPath));
+        const library = await insertLibrary(db, root, "shows");
+        const scanned = await scanShowDirectory(db, library.id, "Foundation");
+        const showId = scanned.itemId;
+        if (!showId) throw new Error("Initial scan produced no Show.");
+        const [deletedFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, deletedPath));
+        if (!deletedFile) {
+          throw new Error("Initial scan produced no Episode File.");
+        }
+        const episodeId = deletedFile.itemId;
+        const deletedVersionId = deletedFile.versionId;
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: episodeId,
+          versionId: deletedVersionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        await setItemProviderIds(db, showId, {
+          tvdb: "366972",
+          tmdb: "106379",
+          imdb: "tt0804484",
+        });
+
+        await rm(join(root, deletedPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "delete",
+            path: deletedPath,
+            target: "file",
+            providerIds: { tvdb: "366972" },
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
+        expect(itemRows.find((row) => row.kind === "show")?.id).toBe(showId);
+        expect(itemRows.find((row) => row.id === episodeId)).toBeUndefined();
+        const versionRows = await db.select().from(versions);
+        expect(versionRows.map((row) => row.id)).not.toContain(
+          deletedVersionId,
+        );
+        expect(versionRows).toHaveLength(1);
+        const fileRows = await db.select().from(files);
+        expect(fileRows.map((row) => row.path)).toEqual([keptPath]);
+        expect(await db.select().from(progress)).toEqual([]);
+        const idRows = await db
+          .select()
+          .from(providerIds)
+          .orderBy(asc(providerIds.provider));
+        expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
+          ["imdb", showId],
+          ["tmdb", showId],
+          ["tvdb", showId],
+        ]);
       });
     }));
 });

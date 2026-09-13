@@ -352,7 +352,11 @@ export async function scanShowDirectory(
       walked.push(file.path);
     }
   } catch (error) {
-    if (!(error instanceof MissingLibraryPathError)) throw error;
+    if (
+      !(error instanceof MissingLibraryPathError) ||
+      error.scope !== "requested"
+    )
+      throw error;
   }
   const group = groupShowPaths(walked).find(
     (candidate) => candidate.canonicalFolder === path,

@@ -1,16 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { sql } from "drizzle-orm";
+import { asc, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries } from "../db/schema/index.ts";
+import {
+  files,
+  items,
+  libraries,
+  providerIds,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
-import { listJobs } from "../jobs/queue.ts";
-import { libraryConcurrencyKey } from "./jobs.ts";
+import { createJobQueue, listJobs } from "../jobs/queue.ts";
+import { createJobRegistry } from "../jobs/registry.ts";
+import {
+  createVideoFixture,
+  withVideoFixture,
+} from "../mediums/video-common/fixtures.ts";
+import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import type { ChangeEvent } from "./servarr.ts";
 import {
   createChangeDebouncer,
@@ -589,7 +600,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             (job) =>
               job.payload.type === "scan" &&
               job.payload.libraryId === shows.id &&
-              job.payload.path === "Foundation/Season 1",
+              job.payload.path === "Foundation",
           ),
         ).toBe(true);
 
@@ -633,5 +644,98 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       } finally {
         await server.stop();
       }
+    }));
+
+  test("a Sonarr download queues a show scan that runs end to end", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const seasonDir = join(root, "Foundation", "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const episodePath = join(seasonDir, "Foundation S01E01.mkv");
+        await createVideoFixture(episodePath);
+        const shows = await insertLibrary(db, "Shows", root, "shows");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const { token } = await createApiKey(db, admin.id, "Sonarr");
+        const server = await startPendia("api", {
+          databaseUrl: url,
+          port: 0,
+          changeOptions: { delayMs: 10 },
+        });
+        try {
+          const response = await fetch(
+            `http://127.0.0.1:${server.apiServer?.port}/api/webhooks/sonarr/${token}`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                eventType: "Download",
+                series: {
+                  path: join(root, "Foundation"),
+                  tvdbId: 366972,
+                  tmdbId: 106379,
+                  imdbId: "tt0804484",
+                },
+                episodeFile: { path: episodePath },
+              }),
+            },
+          );
+          expect(response.status).toBe(202);
+          expect(await response.json()).toEqual({ accepted: 1 });
+          const [job] = await waitForScanJobs(db, 1);
+          expect(job?.payload).toEqual({
+            type: "scan",
+            libraryId: shows.id,
+            path: "Foundation",
+            changes: [
+              {
+                kind: "add",
+                path: "Foundation/Season 01/Foundation S01E01.mkv",
+                providerIds: {
+                  imdb: "tt0804484",
+                  tmdb: "106379",
+                  tvdb: "366972",
+                },
+              },
+            ],
+          });
+          expect(job?.concurrencyKey).toBe(libraryConcurrencyKey(shows.id));
+        } finally {
+          await server.stop();
+        }
+
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        const claimed = await queue.claim();
+        if (!claimed) throw new Error("Scan job was not claimed.");
+        expect(claimed.payload).toMatchObject({ path: "Foundation" });
+        await registry.run(claimed);
+        await queue.complete(claimed);
+
+        const itemRows = await db.select().from(items);
+        const show = itemRows.find((row) => row.kind === "show");
+        const season = itemRows.find((row) => row.kind === "season");
+        const episode = itemRows.find((row) => row.kind === "episode");
+        expect(show?.canonicalFolder).toBe("Foundation");
+        expect(season?.parentId).toBe(show?.id);
+        expect(episode?.parentId).toBe(season?.id);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+        const idRows = await db
+          .select()
+          .from(providerIds)
+          .orderBy(asc(providerIds.provider));
+        expect(
+          idRows.map((row) => [row.provider, row.value, row.itemId]),
+        ).toEqual([
+          ["imdb", "tt0804484", show?.id],
+          ["tmdb", "106379", show?.id],
+          ["tvdb", "366972", show?.id],
+        ]);
+      });
     }));
 });

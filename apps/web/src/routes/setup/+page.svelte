@@ -38,7 +38,10 @@ const scanFailed = $derived(
   scanSettled && status !== undefined && status.counts.failed > 0,
 );
 const scanDone = $derived(
-  scanSettled && status !== undefined && status.counts.completed > 0,
+  scanSettled &&
+    status !== undefined &&
+    status.counts.failed === 0 &&
+    status.counts.completed > 0,
 );
 
 const controller = new AbortController();

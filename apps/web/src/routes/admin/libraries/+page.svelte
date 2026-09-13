@@ -82,14 +82,13 @@ async function addLibrary(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  const name = addName;
+  const medium = addMedium;
+  const root = addRoot;
   try {
-    await client.libraries.create({
-      name: addName,
-      medium: addMedium,
-      rootPath: addRoot,
-    });
-    addName = "";
-    addRoot = "";
+    await client.libraries.create({ name, medium, rootPath: root });
+    if (addName === name) addName = "";
+    if (addRoot === root) addRoot = "";
     await list.reload();
   } catch (error) {
     addFailure = readFailure(error);
@@ -107,9 +106,10 @@ function startRename(row: LibraryRow) {
 async function saveRename(row: LibraryRow) {
   editBusy = true;
   editFailure = undefined;
+  const name = editName;
   try {
-    await client.libraries.update({ id: row.id, name: editName });
-    editingId = null;
+    await client.libraries.update({ id: row.id, name });
+    if (editName === name) editingId = null;
     await list.reload();
   } catch (error) {
     editFailure = readFailure(error);
@@ -177,16 +177,16 @@ function scanCell(row: LibraryRow): string {
 
 <h2>Libraries</h2>
 
+<p>
+  <button
+    type="button"
+    onclick={() => list.reload()}
+    disabled={list.loading}>Refresh</button
+  >
+</p>
 {#if list.failure}
   <Failure failure={list.failure} />
 {:else}
-  <p>
-    <button
-      type="button"
-      onclick={() => list.reload()}
-      disabled={list.loading}>Refresh</button
-    >
-  </p>
   <table>
     <thead>
       <tr>

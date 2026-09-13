@@ -24,14 +24,20 @@ function ordered(row: GroupRow): Permission[] {
   return permissionNames.filter((name) => row.permissions.includes(name));
 }
 
+function samePermissions(a: readonly Permission[], b: readonly Permission[]) {
+  return a.length === b.length && a.every((perm) => b.includes(perm));
+}
+
 async function addGroup(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  const name = addName;
+  const perms = [...addPerms];
   try {
-    await client.groups.create({ name: addName, permissions: addPerms });
-    addName = "";
-    addPerms = [];
+    await client.groups.create({ name, permissions: perms });
+    if (addName === name) addName = "";
+    if (samePermissions(addPerms, perms)) addPerms = [];
     await list.reload();
   } catch (error) {
     addFailure = readFailure(error);
@@ -49,9 +55,10 @@ function startEdit(row: GroupRow) {
 async function saveEdit(row: GroupRow) {
   editBusy = true;
   editFailure = undefined;
+  const perms = [...editPerms];
   try {
-    await client.groups.setPermissions({ id: row.id, permissions: editPerms });
-    editingId = null;
+    await client.groups.setPermissions({ id: row.id, permissions: perms });
+    if (samePermissions(editPerms, perms)) editingId = null;
     await list.reload();
   } catch (error) {
     editFailure = readFailure(error);
@@ -71,16 +78,16 @@ async function saveEdit(row: GroupRow) {
   every permission check and users is the default group.
 </p>
 
+<p>
+  <button
+    type="button"
+    onclick={() => list.reload()}
+    disabled={list.loading}>Refresh</button
+  >
+</p>
 {#if list.failure}
   <Failure failure={list.failure} />
 {:else}
-  <p>
-    <button
-      type="button"
-      onclick={() => list.reload()}
-      disabled={list.loading}>Refresh</button
-    >
-  </p>
   <table>
     <thead>
       <tr>

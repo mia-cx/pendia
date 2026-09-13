@@ -277,6 +277,6 @@ The walker skips symlinks, excluded extras directories, extra filename suffixes,
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 
-This slice adds and updates records. Missing-file reconciliation, change signals, providers and keyframe indexes belong to later slices. Imported Versions start without a segment timeline and remain unaligned.
+Scans persist container keyframe indexes on Versions. The first imported Version establishes each cut's immutable segment timeline through the playback module. Later Versions reuse it and record their own alignment. Missing or unsupported indexes set lazyIndexPending for first-play indexing. Nonzero-start indexes remain stored but cannot establish a timeline under the current playback contract. Missing-file reconciliation, change signals and providers belong to later slices.
 
 Scan tests generate short MKV fixtures with ffmpeg and compare their stream lists with ffprobe. Both commands must be on PATH. Database-backed scan tests use the disposable database helper described above.

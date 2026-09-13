@@ -197,6 +197,22 @@ describe("readKeyframeIndex", () => {
     });
   });
 
+  test("matches ffprobe packet keyframes with Matroska B-frames", async () => {
+    await withVideoFixture(async (dir) => {
+      const file = join(dir, "bframes.mkv");
+      await createKeyframeFixture(file, { bFrames: true });
+      await expectKeyframeMatch(file);
+    });
+  });
+
+  test("matches ffprobe packet keyframes with an audio-first Matroska track", async () => {
+    await withVideoFixture(async (dir) => {
+      const file = join(dir, "audio-first.mkv");
+      await createKeyframeFixture(file, { audioFirst: true });
+      await expectKeyframeMatch(file);
+    });
+  });
+
   test("reads keyframes from a synthetic SeekHead and Cues file", async () => {
     await withVideoFixture(async (dir) => {
       const file = join(dir, "synthetic.mkv");
@@ -231,7 +247,14 @@ describe("readKeyframeIndex", () => {
   test("returns null for front Cues that no SeekHead reaches", async () => {
     await withVideoFixture(async (dir) => {
       const file = join(dir, "unreachable-cues.mkv");
-      await writeFile(file, segmentFile(element(ID.cues, cuePoint(0, 1))));
+      await writeFile(
+        file,
+        segmentFile(
+          element(ID.info, uintElement(ID.timestampScale, 1_000_000)),
+          videoTracks(),
+          element(ID.cues, cuePoint(0, 1)),
+        ),
+      );
       await expectLazy(file);
     });
   });

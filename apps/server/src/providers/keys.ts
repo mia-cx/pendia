@@ -3,7 +3,7 @@ import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { settings } from "../db/schema/index.ts";
+import { settings, settingsLockClass } from "../db/schema/index.ts";
 
 const providersKey = "providers";
 const namePattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -33,6 +33,9 @@ async function writeKeys(
   update: (keys: Record<string, string>) => void,
 ) {
   return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(${settingsLockClass}, hashtext(${providersKey}))`,
+    );
     const [row] = await tx
       .select({ value: settings.value })
       .from(settings)

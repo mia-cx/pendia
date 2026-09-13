@@ -83,8 +83,8 @@ export async function* walkLibrary(
     relative
       .split("/")
       .some((part) => part.toLowerCase().endsWith(".pendia")) ||
-    (posix.dirname(relative) !== "." &&
-      rules.isExtra(`${relative}/placeholder.mkv`));
+    (rules.isExtra(`${relative}/placeholder.mkv`) &&
+      !rules.identify(`${relative}/${posix.basename(relative)}.mkv`));
   const start = await resolveEntry(rootPath, options.path ?? ".");
   if (start.stat.isFile()) {
     if (rules.identify(start.relative) && !rules.isExtra(start.relative)) {

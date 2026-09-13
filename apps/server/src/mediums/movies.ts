@@ -39,10 +39,9 @@ function isExtra(path: string): boolean {
     title,
     year === null ? title : `${title} (${year})`,
   ].some((name) => normalizeStem(name) === normalizeStem(stem));
-  if (posix.dirname(folder) === "." && matchesTitle) {
-    return false;
-  }
-  return isVideoExtra(`${folder}/placeholder.mkv`) || !matchesTitle;
+  return (
+    isVideoExtra(`${posix.dirname(folder)}/placeholder.mkv`) || !matchesTitle
+  );
 }
 
 function identify(

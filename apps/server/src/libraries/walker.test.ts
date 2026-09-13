@@ -92,6 +92,60 @@ describe("walkLibrary", () => {
       ).toEqual(["Shorts/Shorts.mkv"]);
     }));
 
+  test("groups extras-named movies inside nested collections", () =>
+    withVideoFixture(async (root) => {
+      await mkdir(join(root, "Collection", "Shorts", "extras"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(root, "Collection", "Shorts", "Shorts.mkv"),
+        "movie",
+      );
+      await writeFile(
+        join(root, "Collection", "Shorts", "extras", "clip.mkv"),
+        "extra",
+      );
+      await mkdir(join(root, "Alien (1979)", "shorts"), { recursive: true });
+      await writeFile(
+        join(root, "Alien (1979)", "shorts", "clip.mkv"),
+        "extra",
+      );
+      await mkdir(join(root, "Alien (1979)", "extras", "Shorts"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(root, "Alien (1979)", "extras", "Shorts", "Shorts.mkv"),
+        "extra",
+      );
+      await mkdir(join(root, "Collection", ".pendia", "Shorts"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(root, "Collection", ".pendia", "Shorts", "Shorts.mkv"),
+        "store",
+      );
+      const files = await collect(root);
+      expect(files.map((file) => file.path)).toEqual([
+        "Collection/Shorts/Shorts.mkv",
+      ]);
+      expect(groupMoviePaths(files.map((file) => file.path))).toEqual([
+        {
+          canonicalFolder: "Collection/Shorts",
+          title: "Shorts",
+          year: null,
+          paths: ["Collection/Shorts/Shorts.mkv"],
+        },
+      ]);
+      expect(
+        (
+          await collect(root, {
+            path: "Collection/Shorts",
+            recursive: false,
+          })
+        ).map((file) => file.path),
+      ).toEqual(["Collection/Shorts/Shorts.mkv"]);
+    }));
+
   test("yields nothing inside a supplied extras or store subtree", () =>
     withVideoFixture(async (root) => {
       await populate(root);

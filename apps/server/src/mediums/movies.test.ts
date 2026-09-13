@@ -98,6 +98,20 @@ describe("identify", () => {
     expect(identify("Alien (1979)/shorts/clip.mkv")).toBeNull();
   });
 
+  test("identifies extras-named movies inside nested collections", () => {
+    expect(identify("Collection/Shorts/Shorts.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Collection/Shorts",
+    });
+    expect(identify("Collection/Set/Interviews/Interviews.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: "Collection/Set/Interviews",
+    });
+    expect(identify("Alien (1979)/shorts/clip.mkv")).toBeNull();
+    expect(identify("Alien (1979)/extras/Shorts/Shorts.mkv")).toBeNull();
+    expect(identify("Collection/.pendia/Shorts/Shorts.mkv")).toBeNull();
+  });
+
   test("never identifies Pendia store paths even under matching names", () => {
     expect(identify(".pendia/.pendia.mkv")).toBeNull();
     expect(identify("film.mkv.pendia/film.mkv.pendia.mkv")).toBeNull();
@@ -171,7 +185,7 @@ describe("isExtra", () => {
     expect(isExtra("Sample (2000)/sample.mkv")).toBe(false);
   });
 
-  test("a title match disambiguates only top-level extras-named folders", () => {
+  test("a title match disambiguates the canonical folder", () => {
     expect(isExtra("Shorts/Shorts.mkv")).toBe(false);
     expect(isExtra("Shorts/other.mkv")).toBe(true);
     expect(isExtra("Shorts/extras/clip.mkv")).toBe(true);

@@ -27,9 +27,18 @@ $effect(() => {
 });
 
 type FailureShape = ReturnType<typeof readFailure>;
+type SessionRow = NonNullable<typeof sessions.data>[number];
 
 const instant = (value: string | null) =>
   value === null ? "Never" : new Date(value).toLocaleString();
+
+function sessionState(session: SessionRow): string {
+  if (session.revokedAt !== null) return "Revoked";
+  const expires = session.expiresAt;
+  if (expires !== null && new Date(expires).getTime() <= Date.now())
+    return "Expired";
+  return "Live";
+}
 
 let capInput = $state<string | null>(null);
 let ratingInput = $state<string | null>(null);
@@ -40,9 +49,11 @@ let groupSel = $state<Record<string, boolean>>({});
 let groupsBusy = $state(false);
 let groupsFailure = $state<FailureShape | undefined>(undefined);
 
+let overrideSel = $state<Record<string, string>>({});
 let overrideBusy = $state<Record<string, boolean>>({});
 let overrideFailures = $state<Record<string, FailureShape>>({});
 
+let accessSel = $state<Record<string, string>>({});
 let libraryBusy = $state<Record<string, boolean>>({});
 let libraryFailures = $state<Record<string, FailureShape>>({});
 
@@ -71,8 +82,10 @@ function resetRouteState() {
   groupSel = {};
   groupsFailure = undefined;
   groupsBusy = false;
+  overrideSel = {};
   overrideBusy = {};
   overrideFailures = {};
+  accessSel = {};
   libraryBusy = {};
   libraryFailures = {};
   revoking = {};
@@ -167,6 +180,7 @@ function overrideValue(permission: string): string {
 async function setOverride(permission: Permission, value: string) {
   const target = id;
   const generation = routeGeneration;
+  overrideSel[permission] = value;
   overrideBusy[permission] = true;
   delete overrideFailures[permission];
   try {
@@ -179,9 +193,12 @@ async function setOverride(permission: Permission, value: string) {
     );
     if (!currentVisit(target, generation)) return;
     access.set(updated);
+    delete overrideSel[permission];
   } catch (error) {
-    if (currentVisit(target, generation))
+    if (currentVisit(target, generation)) {
       overrideFailures[permission] = readFailure(error);
+      delete overrideSel[permission];
+    }
   } finally {
     if (currentVisit(target, generation)) overrideBusy[permission] = false;
   }
@@ -198,6 +215,7 @@ function accessValue(libraryId: string): string {
 async function setAccess(libraryId: string, value: string) {
   const target = id;
   const generation = routeGeneration;
+  accessSel[libraryId] = value;
   libraryBusy[libraryId] = true;
   delete libraryFailures[libraryId];
   try {
@@ -210,9 +228,12 @@ async function setAccess(libraryId: string, value: string) {
     );
     if (!currentVisit(target, generation)) return;
     access.set(updated);
+    delete accessSel[libraryId];
   } catch (error) {
-    if (currentVisit(target, generation))
+    if (currentVisit(target, generation)) {
       libraryFailures[libraryId] = readFailure(error);
+      delete accessSel[libraryId];
+    }
   } finally {
     if (currentVisit(target, generation)) libraryBusy[libraryId] = false;
   }
@@ -307,9 +328,9 @@ async function revoke(sessionId: string) {
             <td>{instant(session.createdAt)}</td>
             <td>{instant(session.lastSeenAt)}</td>
             <td>{instant(session.expiresAt)}</td>
-            <td>{session.revokedAt === null ? "Live" : "Revoked"}</td>
+            <td>{sessionState(session)}</td>
             <td>
-              {#if session.revokedAt === null}
+              {#if sessionState(session) === "Live"}
                 <button
                   type="button"
                   onclick={() => revoke(session.id)}
@@ -433,7 +454,7 @@ async function revoke(sessionId: string) {
             <td>
               <select
                 aria-label={`Override for ${permission}`}
-                value={overrideValue(permission)}
+                value={overrideSel[permission] ?? overrideValue(permission)}
                 onchange={(event) =>
                   setOverride(permission, event.currentTarget.value)}
                 disabled={overrideBusy[permission] === true || !access.data}
@@ -479,7 +500,7 @@ async function revoke(sessionId: string) {
             <td>
               <select
                 aria-label={`Access for ${library.name}`}
-                value={accessValue(library.id)}
+                value={accessSel[library.id] ?? accessValue(library.id)}
                 onchange={(event) =>
                   setAccess(library.id, event.currentTarget.value)}
                 disabled={libraryBusy[library.id] === true || !access.data}

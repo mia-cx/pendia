@@ -18,6 +18,7 @@ let loadedId = untrack(() => id);
 $effect(() => {
   if (id === loadedId) return;
   loadedId = id;
+  resetRouteState();
   void access.reload();
   void sessions.reload();
 });
@@ -45,6 +46,22 @@ let libraryFailures = $state<Record<string, FailureShape>>({});
 let revoking = $state<Record<string, boolean>>({});
 let revokeFailures = $state<Record<string, FailureShape>>({});
 
+function resetRouteState() {
+  capInput = null;
+  ratingInput = null;
+  settingsFailure = undefined;
+  settingsBusy = false;
+  groupSel = {};
+  groupsFailure = undefined;
+  groupsBusy = false;
+  overrideBusy = {};
+  overrideFailures = {};
+  libraryBusy = {};
+  libraryFailures = {};
+  revoking = {};
+  revokeFailures = {};
+}
+
 const capValue = $derived(
   capInput ?? String(access.data?.settings.bitrateCapBps ?? ""),
 );
@@ -53,6 +70,7 @@ const ratingValue = $derived(
 );
 
 async function saveSettings(event: SubmitEvent) {
+  const target = id;
   event.preventDefault();
   settingsBusy = true;
   settingsFailure = undefined;
@@ -70,23 +88,24 @@ async function saveSettings(event: SubmitEvent) {
       return;
     }
     const rating = ratingValue.trim();
-    access.set(
-      await client.users.setSettings({
-        id,
-        bitrateCapBps: capNumber,
-        contentRatingCeiling: rating === "" ? null : rating,
-      }),
-    );
+    const updated = await client.users.setSettings({
+      id: target,
+      bitrateCapBps: capNumber,
+      contentRatingCeiling: rating === "" ? null : rating,
+    });
+    if (target !== id) return;
+    access.set(updated);
     capInput = null;
     ratingInput = null;
   } catch (error) {
-    settingsFailure = readFailure(error);
+    if (target === id) settingsFailure = readFailure(error);
   } finally {
-    settingsBusy = false;
+    if (target === id) settingsBusy = false;
   }
 }
 
 async function saveGroups() {
+  const target = id;
   groupsBusy = true;
   groupsFailure = undefined;
   try {
@@ -98,12 +117,17 @@ async function saveGroups() {
           false,
       )
       .map((group) => group.id);
-    access.set(await client.users.setGroups({ id, groupIds: checked }));
+    const updated = await client.users.setGroups({
+      id: target,
+      groupIds: checked,
+    });
+    if (target !== id) return;
+    access.set(updated);
     groupSel = {};
   } catch (error) {
-    groupsFailure = readFailure(error);
+    if (target === id) groupsFailure = readFailure(error);
   } finally {
-    groupsBusy = false;
+    if (target === id) groupsBusy = false;
   }
 }
 
@@ -116,20 +140,21 @@ function overrideValue(permission: string): string {
 }
 
 async function setOverride(permission: Permission, value: string) {
+  const target = id;
   overrideBusy[permission] = true;
   delete overrideFailures[permission];
   try {
-    access.set(
-      await client.users.setOverride({
-        id,
-        permission,
-        allowed: value === "allow" ? true : value === "deny" ? false : null,
-      }),
-    );
+    const updated = await client.users.setOverride({
+      id: target,
+      permission,
+      allowed: value === "allow" ? true : value === "deny" ? false : null,
+    });
+    if (target !== id) return;
+    access.set(updated);
   } catch (error) {
-    overrideFailures[permission] = readFailure(error);
+    if (target === id) overrideFailures[permission] = readFailure(error);
   } finally {
-    overrideBusy[permission] = false;
+    if (target === id) overrideBusy[permission] = false;
   }
 }
 
@@ -142,33 +167,36 @@ function accessValue(libraryId: string): string {
 }
 
 async function setAccess(libraryId: string, value: string) {
+  const target = id;
   libraryBusy[libraryId] = true;
   delete libraryFailures[libraryId];
   try {
-    access.set(
-      await client.users.setLibraryAccess({
-        id,
-        libraryId,
-        allowed: value === "allow" ? true : value === "deny" ? false : null,
-      }),
-    );
+    const updated = await client.users.setLibraryAccess({
+      id: target,
+      libraryId,
+      allowed: value === "allow" ? true : value === "deny" ? false : null,
+    });
+    if (target !== id) return;
+    access.set(updated);
   } catch (error) {
-    libraryFailures[libraryId] = readFailure(error);
+    if (target === id) libraryFailures[libraryId] = readFailure(error);
   } finally {
-    libraryBusy[libraryId] = false;
+    if (target === id) libraryBusy[libraryId] = false;
   }
 }
 
 async function revoke(sessionId: string) {
+  const target = id;
   revoking[sessionId] = true;
   delete revokeFailures[sessionId];
   try {
     await client.users.revokeSession({ id: sessionId });
+    if (target !== id) return;
     await sessions.reload();
   } catch (error) {
-    revokeFailures[sessionId] = readFailure(error);
+    if (target === id) revokeFailures[sessionId] = readFailure(error);
   } finally {
-    revoking[sessionId] = false;
+    if (target === id) revoking[sessionId] = false;
   }
 }
 </script>

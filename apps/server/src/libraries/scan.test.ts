@@ -1003,4 +1003,96 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         ).toEqual(versionRows.map((version) => version.id).sort());
       });
     }));
+
+  test("releases a retained range before inserting its replacement Episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const rangedPath = join(seasonDir, "Show S01E01-E02.mkv");
+        await createVideoFixture(rangedPath);
+
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(1);
+        const firstEpisodes = await db
+          .select()
+          .from(episodes)
+          .orderBy(asc(episodes.episodeNumber));
+        expect(firstEpisodes).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: 2 },
+        ]);
+        const rangedEpisodeId = firstEpisodes[0]?.itemId;
+        if (!rangedEpisodeId) throw new Error("Fixture Episode missing.");
+        const firstFileIds = (await db.select().from(files))
+          .map((file) => file.id)
+          .sort();
+        expect(firstFileIds).toHaveLength(1);
+
+        await copyFile(rangedPath, join(seasonDir, "Show S01E02.mkv"));
+        await rename(rangedPath, join(seasonDir, "Show S01E01-E02.removed"));
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(1);
+        const secondEpisodes = await db
+          .select()
+          .from(episodes)
+          .orderBy(asc(episodes.episodeNumber));
+        expect(secondEpisodes).toMatchObject([
+          {
+            itemId: rangedEpisodeId,
+            episodeNumber: 1,
+            episodeEndNumber: null,
+          },
+          { episodeNumber: 2, episodeEndNumber: null },
+        ]);
+        const versionRows = await db.select().from(versions);
+        expect(versionRows).toHaveLength(2);
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(2);
+        const standaloneFile = fileRows.find(
+          (file) => file.path === "Show/Season 01/Show S01E02.mkv",
+        );
+        const secondEpisode = secondEpisodes[1];
+        if (!standaloneFile || !secondEpisode) {
+          throw new Error("Fixture File missing.");
+        }
+        expect(standaloneFile.itemId).toBe(secondEpisode.itemId);
+        expect(second.versionIds).toEqual([standaloneFile.versionId]);
+        expect(
+          versionRows.find((version) => version.id === standaloneFile.versionId)
+            ?.itemId,
+        ).toBe(secondEpisode.itemId);
+        expect(fileRows.map((file) => file.id).sort()).toEqual(
+          expect.arrayContaining(firstFileIds),
+        );
+        expect(versionRows.map((version) => version.id).sort()).toEqual(
+          expect.arrayContaining(first.versionIds),
+        );
+
+        const third = await scanShowDirectory(db, library.id, show);
+        expect(third.versionIds).toEqual(second.versionIds);
+        expect(
+          await db.select().from(episodes).orderBy(asc(episodes.episodeNumber)),
+        ).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: null },
+          { episodeNumber: 2, episodeEndNumber: null },
+        ]);
+        expect(
+          (await db.select().from(files)).map((file) => file.id).sort(),
+        ).toEqual(fileRows.map((file) => file.id).sort());
+        expect(
+          (await db.select().from(versions))
+            .map((version) => version.id)
+            .sort(),
+        ).toEqual(versionRows.map((version) => version.id).sort());
+      });
+    }));
 });

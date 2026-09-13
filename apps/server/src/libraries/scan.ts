@@ -368,9 +368,32 @@ export async function scanShowDirectory(
         .select({
           itemId: episodes.itemId,
           episodeNumber: episodes.episodeNumber,
+          episodeEndNumber: episodes.episodeEndNumber,
         })
         .from(episodes)
         .where(eq(episodes.seasonId, seasonId));
+
+      const discoveredStarts = seasonGroup.episodes.map(
+        (episode) => episode.episodeNumber,
+      );
+      for (const persisted of persistedEpisodes) {
+        const persistedEnd =
+          persisted.episodeEndNumber ?? persisted.episodeNumber;
+        const blockingStart = discoveredStarts.find(
+          (start) => start > persisted.episodeNumber && start <= persistedEnd,
+        );
+        if (blockingStart === undefined) continue;
+        const normalizedEnd = blockingStart - 1;
+        await tx
+          .update(episodes)
+          .set({
+            episodeEndNumber:
+              normalizedEnd === persisted.episodeNumber ? null : normalizedEnd,
+          })
+          .where(eq(episodes.itemId, persisted.itemId));
+        persisted.episodeEndNumber =
+          normalizedEnd === persisted.episodeNumber ? null : normalizedEnd;
+      }
 
       for (const episodeGroup of seasonGroup.episodes) {
         const [existingEpisode] = await tx

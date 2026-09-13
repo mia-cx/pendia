@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { createShowsMedium } from "../mediums/shows.ts";
 import {
   continueWatching as continueWatchingItems,
   getItemMarks,
@@ -111,8 +112,21 @@ const continueWatching = authenticated
     ),
   );
 
+const nextUp = authenticated
+  .route({ method: "GET", path: "/shelves/next-up" })
+  .output(Schema.standardSchemaV1(Schema.Array(Schema.UUID)))
+  .handler(async ({ context }) => {
+    const shelf = createShowsMedium(context.db).browse.shelves.find(
+      (candidate) => candidate.id === "next-up",
+    );
+    if (!shelf) throw new Error("Shows medium did not register next up.");
+    return runApi(
+      fromHost(() => shelf.items({ userId: context.caller.user.id })),
+    );
+  });
+
 /** The per-user favourite and rating procedures mounted under `marks`. */
 export const markProcedures = { get, setFavourite, setRating };
 
 /** The shelf read procedures mounted under `shelves`. */
-export const shelfProcedures = { continueWatching };
+export const shelfProcedures = { continueWatching, nextUp };

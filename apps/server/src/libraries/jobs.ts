@@ -6,7 +6,8 @@ import { libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
-import { scanDirectory } from "./scan.ts";
+import { groupShowPaths, showsScan } from "../mediums/shows.ts";
+import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { walkLibrary } from "./walker.ts";
 
 /** The concurrency key that serializes every job for one library. */
@@ -25,9 +26,13 @@ export function registerLibraryJobs(
       .from(libraries)
       .where(eq(libraries.id, payload.libraryId));
     if (!library) throw new AuthError("NOT_FOUND");
-    if (library.medium !== "movies") throw new AuthError("INVALID_INPUT");
+    const rules = library.medium === "movies" ? moviesMedium.scan : showsScan;
     if (payload.path !== ".") {
-      await scanDirectory(db, library.id, payload.path);
+      if (library.medium === "movies") {
+        await scanDirectory(db, library.id, payload.path);
+      } else {
+        await scanShowDirectory(db, library.id, payload.path);
+      }
       await publishEvent(db, {
         kind: "library.changed",
         libraryId: library.id,
@@ -35,9 +40,12 @@ export function registerLibraryJobs(
       return;
     }
     const paths: string[] = [];
-    for await (const file of walkLibrary(library.rootPath, moviesMedium.scan))
+    for await (const file of walkLibrary(library.rootPath, rules))
       paths.push(file.path);
-    const groups = groupMoviePaths(paths);
+    const groups =
+      library.medium === "movies"
+        ? groupMoviePaths(paths)
+        : groupShowPaths(paths);
     if (groups.length === 0) {
       await publishEvent(db, {
         kind: "library.changed",

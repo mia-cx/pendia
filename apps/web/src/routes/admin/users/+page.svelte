@@ -29,15 +29,18 @@ async function addUser(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  const username = addUsername;
+  const password = addPassword;
+  const displayName = addDisplayName;
   try {
     await client.users.create({
-      username: addUsername,
-      password: addPassword,
-      displayName: addDisplayName.trim() === "" ? undefined : addDisplayName,
+      username,
+      password,
+      displayName: displayName.trim() === "" ? undefined : displayName,
     });
-    addUsername = "";
-    addPassword = "";
-    addDisplayName = "";
+    if (addUsername === username) addUsername = "";
+    if (addPassword === password) addPassword = "";
+    if (addDisplayName === displayName) addDisplayName = "";
     await list.reload();
   } catch (error) {
     addFailure = readFailure(error);
@@ -51,12 +54,13 @@ async function sendInvite(event: SubmitEvent) {
   inviteBusy = true;
   inviteFailure = undefined;
   inviteResult = undefined;
+  const email = inviteEmail;
   try {
     inviteResult = await createInvite({
-      email: inviteEmail,
+      email,
       expiresInSeconds: Number(inviteDays) * 86_400,
     });
-    inviteEmail = "";
+    if (inviteEmail === email) inviteEmail = "";
   } catch (error) {
     inviteFailure = readFailure(error);
   } finally {
@@ -73,6 +77,11 @@ async function sendInvite(event: SubmitEvent) {
 
 {#if list.failure}
   <Failure failure={list.failure} />
+  <button
+    type="button"
+    onclick={() => list.reload()}
+    disabled={list.loading}>Retry</button
+  >
 {:else}
   <table>
     <thead>

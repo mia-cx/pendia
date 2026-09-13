@@ -93,7 +93,9 @@ async function saveSettings(event: SubmitEvent) {
   settingsBusy = true;
   settingsFailure = undefined;
   try {
-    const cap = capValue.trim();
+    const submittedCap = capValue;
+    const submittedRating = ratingValue;
+    const cap = submittedCap.trim();
     const capNumber = cap === "" ? null : Number(cap);
     if (
       capNumber !== null &&
@@ -105,7 +107,7 @@ async function saveSettings(event: SubmitEvent) {
       };
       return;
     }
-    const rating = ratingValue.trim();
+    const rating = submittedRating.trim();
     const updated = await serial(() =>
       client.users.setSettings({
         id: target,
@@ -115,8 +117,8 @@ async function saveSettings(event: SubmitEvent) {
     );
     if (!currentVisit(target, generation)) return;
     access.set(updated);
-    capInput = null;
-    ratingInput = null;
+    if (capInput === submittedCap) capInput = null;
+    if (ratingInput === submittedRating) ratingInput = null;
   } catch (error) {
     if (currentVisit(target, generation)) settingsFailure = readFailure(error);
   } finally {
@@ -247,6 +249,11 @@ async function revoke(sessionId: string) {
   <h3>Account</h3>
   {#if access.failure}
     <Failure failure={access.failure} />
+    <button
+      type="button"
+      onclick={() => access.reload()}
+      disabled={access.loading}>Retry</button
+    >
   {:else if access.data}
     <dl class="facts">
       <div><dt>Username</dt><dd>{access.data.user.username}</dd></div>
@@ -274,6 +281,11 @@ async function revoke(sessionId: string) {
   <h3>Sessions</h3>
   {#if sessions.failure}
     <Failure failure={sessions.failure} />
+    <button
+      type="button"
+      onclick={() => sessions.reload()}
+      disabled={sessions.loading}>Retry</button
+    >
   {:else}
     <table>
       <thead>
@@ -319,6 +331,11 @@ async function revoke(sessionId: string) {
   <h3>Playback caps</h3>
   {#if access.failure}
     <Failure failure={access.failure} />
+    <button
+      type="button"
+      onclick={() => access.reload()}
+      disabled={access.loading}>Retry</button
+    >
   {:else}
     <form onsubmit={saveSettings} class="settings">
       {#if settingsFailure}
@@ -355,8 +372,18 @@ async function revoke(sessionId: string) {
   <h3>Groups</h3>
   {#if groups.failure}
     <Failure failure={groups.failure} />
+    <button
+      type="button"
+      onclick={() => groups.reload()}
+      disabled={groups.loading}>Retry</button
+    >
   {:else if access.failure}
     <Failure failure={access.failure} />
+    <button
+      type="button"
+      onclick={() => access.reload()}
+      disabled={access.loading}>Retry</button
+    >
   {:else}
     {#each groups.data ?? [] as group (group.id)}
       <div class="check">
@@ -392,6 +419,11 @@ async function revoke(sessionId: string) {
   <p class="muted">A group grant applies when the override is Inherit.</p>
   {#if access.failure}
     <Failure failure={access.failure} />
+    <button
+      type="button"
+      onclick={() => access.reload()}
+      disabled={access.loading}>Retry</button
+    >
   {:else}
     <table>
       <tbody>
@@ -426,8 +458,18 @@ async function revoke(sessionId: string) {
   <p class="muted">An explicit Deny wins over a group grant.</p>
   {#if libs.failure}
     <Failure failure={libs.failure} />
+    <button
+      type="button"
+      onclick={() => libs.reload()}
+      disabled={libs.loading}>Retry</button
+    >
   {:else if access.failure}
     <Failure failure={access.failure} />
+    <button
+      type="button"
+      onclick={() => access.reload()}
+      disabled={access.loading}>Retry</button
+    >
   {:else}
     <table>
       <tbody>

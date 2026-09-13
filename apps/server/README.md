@@ -299,7 +299,7 @@ Library administration requires `manage-libraries` on every procedure. The API e
 | `libraries.scan` | POST `/api/libraries/{id}/scan` | `id` | `{ jobId }` |
 | `libraries.scanStatus` | GET `/api/libraries/{id}/scan-status` | `id` | `ScanStatus` |
 
-A ScanStatus contains the library id, scan job counts for the four job states, and the newest scan job's id, state and error, or null when the library never scanned.
+A ScanStatus contains the library id, scan job counts for the four job states covering only the newest scan run, the newest scan job's id, state and error, or null when the library never scanned, and `runId`, the id of the root job whose run the counts describe (null when no root scan job exists, in which case the counts cover every scan job). A run is the newest root job (`path` of `.`) plus every scan job enqueued at or after it.
 A Library contains `id`, `name`, `medium` and `rootPath`. Names trim surrounding whitespace and allow 1 to 128 characters. Roots must be absolute. Roots and mediums cannot change through `update`. Deleting a library removes its database records, never its files. Mutations use the auth module's origin checks.
 
 The returned scan job walks the root and enqueues one scan per canonical movie or show folder in one transaction. Every root and directory job carries `library:<id>` as its concurrency key. The existing queue key limit applies. Worker and all roles register the built-in handler on startup. An explicit custom scan handler takes precedence.

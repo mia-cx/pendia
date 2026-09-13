@@ -29,7 +29,13 @@ export function registerLibraryJobs(
     const rules = library.medium === "movies" ? moviesMedium.scan : showsScan;
     if (payload.path !== ".") {
       if (library.medium === "movies") {
-        await scanDirectory(db, library.id, payload.path);
+        const result = await scanDirectory(db, library.id, payload.path);
+        if (result.itemId !== null) {
+          await createJobQueue(db).enqueue({
+            type: "provider-fetch",
+            itemId: result.itemId,
+          });
+        }
       } else {
         await scanShowDirectory(db, library.id, payload.path);
       }

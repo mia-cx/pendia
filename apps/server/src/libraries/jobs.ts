@@ -37,10 +37,12 @@ export function registerLibraryJobs(
       if (library.medium === "movies") {
         await scanDirectory(db, library.id, payload.path, {
           changes: payload.changes,
+          reconcileMissing: payload.reconcileMissing,
         });
       } else {
         await scanShowDirectory(db, library.id, payload.path, {
           changes: payload.changes,
+          reconcileMissing: payload.reconcileMissing,
         });
       }
       await publishEvent(db, {
@@ -79,7 +81,12 @@ export function registerLibraryJobs(
       const queue = createJobQueue(tx);
       for (const path of paths)
         await queue.enqueue(
-          { type: "scan", libraryId: library.id, path },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path,
+            reconcileMissing: true,
+          },
           { concurrencyKey },
         );
     });

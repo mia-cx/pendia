@@ -313,7 +313,12 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
 
         const fanned = await listJobs(db, { state: "queued", type: "scan" });
         expect(fanned.map((job) => job.payload)).toEqual([
-          { type: "scan", libraryId: library.id, path: folder },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+          },
         ]);
         const claimedChild = await queue.claim();
         if (!claimedChild) throw new Error("Child job was not claimed.");

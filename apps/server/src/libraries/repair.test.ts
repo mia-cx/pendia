@@ -22,16 +22,20 @@ import {
 } from "../mediums/video-common/fixtures.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { createLibraryRepair } from "./repair.ts";
-import { scanDirectory } from "./scan.ts";
+import { scanDirectory, scanShowDirectory } from "./scan.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
 const file2160 = `${folder}/Alien.2160p {edition-Director's Cut}.mkv`;
 
-async function insertLibrary(db: Database, rootPath: string) {
+async function insertLibrary(
+  db: Database,
+  rootPath: string,
+  medium: "movies" | "shows" = "movies",
+) {
   const [library] = await db
     .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath })
+    .values({ name: "Movies", medium, rootPath })
     .returning();
   if (!library) throw new Error("Library insert returned no row.");
   return library;
@@ -109,6 +113,7 @@ describe.skipIf(!databaseUrl)("library repair", () => {
           type: "scan",
           libraryId: library.id,
           path: folder,
+          reconcileMissing: true,
         });
         expect(jobs[0]?.concurrencyKey).toBe(libraryConcurrencyKey(library.id));
         await drainScanJobs(db);
@@ -215,6 +220,7 @@ describe.skipIf(!databaseUrl)("library repair", () => {
           type: "scan",
           libraryId: library.id,
           path: folder,
+          reconcileMissing: true,
         });
       });
     }));
@@ -325,6 +331,184 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         await createVideoFixture(join(root, `${third}/Cars.1080p.mkv`));
         await Bun.sleep(150);
         expect(await queuedPaths()).toEqual(baseline);
+      });
+    }));
+
+  test("a show directory change queues a show scan that imports the episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const library = await insertLibrary(db, root, "shows");
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(0);
+
+        const seasonDir = join(root, "Foundation", "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(seasonDir, "Foundation S01E01.mkv"));
+        expect(await repair.run()).toBe(1);
+
+        const jobRows = await listJobs(db, { type: "scan" });
+        expect(jobRows).toHaveLength(1);
+        expect(jobRows[0]?.payload).toEqual({
+          type: "scan",
+          libraryId: library.id,
+          path: "Foundation",
+          reconcileMissing: true,
+        });
+        await drainScanJobs(db);
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+      });
+    }));
+
+  test("a removed season queues the top-level show scan", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, "Foundation", "Season 01"), {
+          recursive: true,
+        });
+        await mkdir(join(root, "Foundation", "Season 02"), {
+          recursive: true,
+        });
+        await createVideoFixture(
+          join(root, "Foundation/Season 01/Foundation S01E01.mkv"),
+        );
+        await createVideoFixture(
+          join(root, "Foundation/Season 02/Foundation S02E01.mkv"),
+        );
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        expect(await db.select().from(items)).toHaveLength(5);
+
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(1);
+        await drainScanJobs(db);
+        expect(await repair.run()).toBe(0);
+
+        await rm(join(root, "Foundation", "Season 02"), { recursive: true });
+        expect(await repair.run()).toBe(1);
+        const jobRows = await listJobs(db, { state: "queued", type: "scan" });
+        expect(jobRows.map((job) => job.payload)).toEqual([
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "Foundation",
+            reconcileMissing: true,
+          },
+        ]);
+        await drainScanJobs(db);
+
+        const itemRows = await db.select().from(items);
+        const seasonRows = itemRows.filter((row) => row.kind === "season");
+        expect(
+          itemRows.find((row) => row.kind === "show")?.canonicalFolder,
+        ).toBe("Foundation");
+        expect(seasonRows.map((row) => row.canonicalFolder)).toEqual([
+          "Foundation/Season 01",
+        ]);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+        expect(await repair.run()).toBe(0);
+      });
+    }));
+
+  test("a failed show repair retry acknowledges the removed season", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, "Foundation", "Season 01"), {
+          recursive: true,
+        });
+        await mkdir(join(root, "Foundation", "Season 02"), {
+          recursive: true,
+        });
+        await createVideoFixture(
+          join(root, "Foundation/Season 01/Foundation S01E01.mkv"),
+        );
+        await createVideoFixture(
+          join(root, "Foundation/Season 02/Foundation S02E01.mkv"),
+        );
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(1);
+        await drainScanJobs(db);
+        expect(await repair.run()).toBe(0);
+
+        await createVideoFixture(
+          join(root, "Foundation/Season 02/Foundation S02E02.mkv"),
+        );
+        expect(await repair.run()).toBe(1);
+        const queue = createJobQueue(db);
+        const claimed = await queue.claim();
+        if (!claimed) throw new Error("Repair scan was not claimed.");
+        await db
+          .update(jobs)
+          .set({ state: "failed" })
+          .where(eq(jobs.id, claimed.id));
+
+        await rm(join(root, "Foundation", "Season 02"), { recursive: true });
+        expect(await repair.run()).toBe(1);
+        const queued = await listJobs(db, { state: "queued", type: "scan" });
+        expect(queued.map((job) => job.payload)).toEqual([
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "Foundation",
+            reconcileMissing: true,
+          },
+        ]);
+        await drainScanJobs(db);
+        expect(await repair.run()).toBe(0);
+      });
+    }));
+
+  test("changed season directories share one show scan acknowledgement", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, "Foundation", "Season 01"), {
+          recursive: true,
+        });
+        await mkdir(join(root, "Foundation", "Season 02"), {
+          recursive: true,
+        });
+        await createVideoFixture(
+          join(root, "Foundation/Season 01/Foundation S01E01.mkv"),
+        );
+        await createVideoFixture(
+          join(root, "Foundation/Season 02/Foundation S02E01.mkv"),
+        );
+        const library = await insertLibrary(db, root, "shows");
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(1);
+        await drainScanJobs(db);
+        expect(await repair.run()).toBe(0);
+
+        await createVideoFixture(
+          join(root, "Foundation/Season 01/Foundation S01E02.mkv"),
+        );
+        await createVideoFixture(
+          join(root, "Foundation/Season 02/Foundation S02E02.mkv"),
+        );
+        expect(await repair.run()).toBe(1);
+        const jobRows = await listJobs(db, { state: "queued", type: "scan" });
+        expect(jobRows).toHaveLength(1);
+        expect(jobRows[0]?.payload).toEqual({
+          type: "scan",
+          libraryId: library.id,
+          path: "Foundation",
+          reconcileMissing: true,
+        });
+        await drainScanJobs(db);
+        expect(await repair.run()).toBe(0);
       });
     }));
 

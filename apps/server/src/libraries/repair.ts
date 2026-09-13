@@ -3,6 +3,7 @@ import type { Database } from "../db/client.ts";
 import { items, jobs, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
+import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import {
   type LibraryDirectory,
@@ -16,7 +17,8 @@ export type RepairOptions = {
   onError?: (error: unknown) => void;
 };
 
-type TrackedJob = { jobId: string; modifiedNs: bigint | undefined };
+type SnapshotUpdate = { path: string; modifiedNs: bigint | undefined };
+type TrackedJob = { jobId: string; updates: SnapshotUpdate[] };
 
 /** Creates the startup and nightly library repair pass. */
 export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
@@ -47,18 +49,30 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
     const rows = await db
       .select()
       .from(libraries)
-      .where(eq(libraries.medium, "movies"));
+      .where(inArray(libraries.medium, ["movies", "shows"]));
     const planned: {
       libraryId: string;
       next: Map<string, bigint>;
-      scans: Map<string, bigint | undefined>;
+      scans: Map<string, Map<string, bigint | undefined>>;
     }[] = [];
     for (const library of rows) {
+      const medium =
+        library.medium === "movies"
+          ? {
+              rules: moviesMedium.scan,
+              group: groupMoviePaths,
+              itemKind: "movie" as const,
+            }
+          : {
+              rules: showsScan,
+              group: groupShowPaths,
+              itemKind: "show" as const,
+            };
       const walked = new Map<string, LibraryDirectory>();
       try {
         for await (const directory of walkLibraryDirectories(
           library.rootPath,
-          moviesMedium.scan,
+          medium.rules,
         )) {
           walked.set(directory.path, directory);
         }
@@ -75,7 +89,7 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
       const perLibrary =
         trackedJobs.get(library.id) ?? new Map<string, TrackedJob>();
       const live = new Set<string>();
-      const retry = new Set<string>();
+      const retry = new Map<string, SnapshotUpdate[]>();
       if (perLibrary.size > 0) {
         const jobRows = await db
           .select({ id: jobs.id, state: jobs.state })
@@ -87,62 +101,97 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
             ),
           );
         const stateById = new Map(jobRows.map((row) => [row.id, row.state]));
-        for (const [path, entry] of perLibrary) {
+        for (const [scanPath, entry] of perLibrary) {
           const state = stateById.get(entry.jobId);
           if (state === "completed") {
-            if (entry.modifiedNs === undefined) previous.delete(path);
-            else previous.set(path, entry.modifiedNs);
-            perLibrary.delete(path);
+            for (const update of entry.updates) {
+              if (update.modifiedNs === undefined) previous.delete(update.path);
+              else previous.set(update.path, update.modifiedNs);
+            }
+            perLibrary.delete(scanPath);
           } else if (state === "queued" || state === "running") {
-            live.add(path);
+            live.add(scanPath);
           } else {
-            retry.add(path);
+            retry.set(scanPath, entry.updates);
           }
-        }
-      }
-      const next = new Map<string, bigint>();
-      const changed = new Map<string, string[]>();
-      for (const [path, directory] of walked) {
-        if (previous.get(path) === directory.modifiedNs) {
-          next.set(path, directory.modifiedNs);
-        } else {
-          changed.set(
-            path,
-            groupMoviePaths(directory.files).map(
-              (group) => group.canonicalFolder,
-            ),
-          );
         }
       }
       const existing = await db
         .select({ canonicalFolder: items.canonicalFolder })
         .from(items)
-        .where(and(eq(items.libraryId, library.id), eq(items.kind, "movie")));
+        .where(
+          and(eq(items.libraryId, library.id), eq(items.kind, medium.itemKind)),
+        );
       const itemFolders = new Set(existing.map((item) => item.canonicalFolder));
-      const scans = new Map<string, bigint | undefined>();
-      for (const [path, folders] of changed) {
-        const directory = walked.get(path);
-        if (!directory) continue;
-        const needsScan = folders.length > 0 || itemFolders.has(path);
+      const topLevel = (path: string) =>
+        path === "." ? undefined : path.split("/")[0];
+      const next = new Map<string, bigint>();
+      const scans = new Map<string, Map<string, bigint | undefined>>();
+      const addUpdate = (
+        scanPath: string,
+        snapshotPath: string,
+        modifiedNs: bigint | undefined,
+      ) => {
+        let updates = scans.get(scanPath);
+        if (updates === undefined) {
+          updates = new Map();
+          scans.set(scanPath, updates);
+        }
+        updates.set(snapshotPath, modifiedNs);
+      };
+      for (const [path, directory] of walked) {
+        if (previous.get(path) === directory.modifiedNs) {
+          next.set(path, directory.modifiedNs);
+          continue;
+        }
+        const folders = medium
+          .group(directory.files)
+          .map((group) => group.canonicalFolder);
+        for (const folder of folders) {
+          addUpdate(folder, path, directory.modifiedNs);
+        }
+        const top = topLevel(path);
+        let needsScan = folders.length > 0;
+        if (medium.itemKind === "movie" && itemFolders.has(path)) {
+          addUpdate(path, path, directory.modifiedNs);
+          needsScan = true;
+        }
+        if (
+          medium.itemKind === "show" &&
+          top !== undefined &&
+          itemFolders.has(top)
+        ) {
+          addUpdate(top, path, directory.modifiedNs);
+          needsScan = true;
+        }
         if (!needsScan) {
           next.set(path, directory.modifiedNs);
           continue;
         }
         const acknowledged = previous.get(path);
         if (acknowledged !== undefined) next.set(path, acknowledged);
-        for (const folder of folders) {
-          scans.set(folder, directory.modifiedNs);
+      }
+      for (const path of previous.keys()) {
+        if (walked.has(path)) continue;
+        if (medium.itemKind === "movie") {
+          if (itemFolders.has(path)) addUpdate(path, path, undefined);
+        } else {
+          const top = topLevel(path);
+          if (top !== undefined && itemFolders.has(top)) {
+            addUpdate(top, path, undefined);
+          }
         }
-        if (itemFolders.has(path)) scans.set(path, directory.modifiedNs);
       }
-      for (const path of itemFolders) {
-        if (!walked.has(path) && !scans.has(path)) scans.set(path, undefined);
+      for (const folder of itemFolders) {
+        if (!walked.has(folder)) addUpdate(folder, folder, undefined);
       }
-      for (const path of retry) {
-        scans.set(path, walked.get(path)?.modifiedNs);
+      for (const [scanPath, priorUpdates] of retry) {
+        for (const update of priorUpdates) {
+          addUpdate(scanPath, update.path, walked.get(update.path)?.modifiedNs);
+        }
       }
-      for (const path of live) {
-        scans.delete(path);
+      for (const scanPath of live) {
+        scans.delete(scanPath);
       }
       planned.push({ libraryId: library.id, next, scans });
     }
@@ -155,15 +204,28 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
     await db.transaction(async (tx) => {
       const queue = createJobQueue(tx);
       for (const plan of planned) {
-        for (const [path, modifiedNs] of plan.scans) {
+        for (const [path, updates] of plan.scans) {
           const job = await queue.enqueue(
-            { type: "scan", libraryId: plan.libraryId, path },
+            {
+              type: "scan",
+              libraryId: plan.libraryId,
+              path,
+              reconcileMissing: true,
+            },
             { concurrencyKey: libraryConcurrencyKey(plan.libraryId) },
           );
           recorded.push({
             libraryId: plan.libraryId,
             path,
-            entry: { jobId: job.id, modifiedNs },
+            entry: {
+              jobId: job.id,
+              updates: [...updates.entries()].map(
+                ([updatePath, modifiedNs]) => ({
+                  path: updatePath,
+                  modifiedNs,
+                }),
+              ),
+            },
           });
           enqueued += 1;
         }

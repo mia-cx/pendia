@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { copyFile, mkdir, rename, utimes, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  rename,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
@@ -1093,6 +1100,115 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
             .map((version) => version.id)
             .sort(),
         ).toEqual(versionRows.map((version) => version.id).sort());
+      });
+    }));
+
+  test("reconcileMissing removes a missing Season while the default retains it", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Foundation";
+        const seasonOneDir = join(root, show, "Season 01");
+        const seasonTwoDir = join(root, show, "Season 02");
+        await mkdir(seasonOneDir, { recursive: true });
+        await mkdir(seasonTwoDir, { recursive: true });
+        await createVideoFixture(join(seasonOneDir, "Foundation S01E01.mkv"));
+        await createVideoFixture(join(seasonTwoDir, "Foundation S02E01.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(2);
+        expect(await db.select().from(items)).toHaveLength(5);
+        expect(await db.select().from(seasons)).toHaveLength(2);
+
+        await rm(seasonTwoDir, { recursive: true });
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(1);
+        expect(await db.select().from(items)).toHaveLength(5);
+        expect(await db.select().from(seasons)).toHaveLength(2);
+        expect(await db.select().from(versions)).toHaveLength(2);
+        expect(await db.select().from(files)).toHaveLength(2);
+
+        const third = await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+        });
+        expect(third.versionIds).toHaveLength(1);
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
+        expect(
+          itemRows.find((row) => row.kind === "show")?.canonicalFolder,
+        ).toBe(show);
+        const seasonRows = await db.select().from(seasons);
+        expect(seasonRows).toHaveLength(1);
+        expect(seasonRows[0]?.seasonNumber).toBe(1);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+      });
+    }));
+
+  test("reconcileMissing removes only the missing File of a split Version", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const part1 = join(seasonDir, "Show S01E01 - part1.mkv");
+        const part2 = join(seasonDir, "Show S01E01 - part2.mkv");
+        await createVideoFixture(part1);
+        await createVideoFixture(part2);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(1);
+        const firstFiles = await db.select().from(files);
+        expect(firstFiles).toHaveLength(2);
+        const part1File = firstFiles.find((file) =>
+          file.path.endsWith("part1.mkv"),
+        );
+        if (!part1File) throw new Error("Fixture File missing.");
+        const [firstVersion] = await db.select().from(versions);
+        if (!firstVersion) throw new Error("Fixture Version missing.");
+
+        await rm(part2);
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toEqual([firstVersion.id]);
+        expect(await db.select().from(files)).toHaveLength(2);
+
+        const third = await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+        });
+        expect(third.versionIds).toEqual([firstVersion.id]);
+        const keptFiles = await db.select().from(files);
+        expect(keptFiles).toHaveLength(1);
+        expect(keptFiles[0]).toMatchObject({
+          id: part1File.id,
+          order: 0,
+          path: "Show/Season 01/Show S01E01 - part1.mkv",
+        });
+        const [keptVersion] = await db.select().from(versions);
+        expect(keptVersion?.id).toBe(firstVersion.id);
+        expect(keptVersion?.bytes).toBe(part1File.bytes);
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
       });
     }));
 });

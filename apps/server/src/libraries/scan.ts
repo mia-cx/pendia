@@ -4,6 +4,7 @@ import type { Database } from "../db/client.ts";
 import {
   episodes,
   files,
+  itemAncestors,
   items,
   libraries,
   type ScanChange,
@@ -33,6 +34,7 @@ import {
 export type ScanDirectoryOptions = {
   probe?: typeof probeVideo;
   changes?: readonly ScanChange[];
+  reconcileMissing?: boolean;
 };
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -748,6 +750,75 @@ export async function scanShowDirectory(
     }
 
     await deleteEmptiedItems(tx, emptiedItemIds);
+
+    if (options.reconcileMissing === true) {
+      const showFiles = await tx
+        .select({
+          id: files.id,
+          versionId: files.versionId,
+          path: files.path,
+        })
+        .from(files)
+        .innerJoin(
+          itemAncestors,
+          and(
+            eq(itemAncestors.descendantId, files.itemId),
+            eq(itemAncestors.ancestorId, showId),
+          ),
+        );
+      const stale = showFiles.filter((file) => !memberByPath.has(file.path));
+      const staleFileIds = stale.map((file) => file.id);
+      if (staleFileIds.length > 0) {
+        await tx.delete(files).where(inArray(files.id, staleFileIds));
+      }
+      const affectedVersionIds = [
+        ...new Set(stale.map((file) => file.versionId)),
+      ];
+      for (const versionId of affectedVersionIds) {
+        const [version] = await tx
+          .select({ origin: versions.origin })
+          .from(versions)
+          .where(eq(versions.id, versionId));
+        if (version?.origin !== "imported") continue;
+        const [remaining] = await tx
+          .select({ id: files.id })
+          .from(files)
+          .where(eq(files.versionId, versionId))
+          .limit(1);
+        if (remaining === undefined) {
+          await tx.delete(versions).where(eq(versions.id, versionId));
+        }
+      }
+      const descendants = await tx
+        .select({ id: items.id, kind: items.kind })
+        .from(items)
+        .innerJoin(
+          itemAncestors,
+          and(
+            eq(itemAncestors.descendantId, items.id),
+            eq(itemAncestors.ancestorId, showId),
+          ),
+        );
+      for (const item of descendants) {
+        if (item.kind !== "episode") continue;
+        const [version] = await tx
+          .select({ id: versions.id })
+          .from(versions)
+          .where(eq(versions.itemId, item.id))
+          .limit(1);
+        if (version === undefined) await deleteItemSubtree(tx, item.id);
+      }
+      for (const item of descendants) {
+        if (item.kind !== "season") continue;
+        const [child] = await tx
+          .select({ id: items.id })
+          .from(items)
+          .where(eq(items.parentId, item.id))
+          .limit(1);
+        if (child === undefined) await deleteItemSubtree(tx, item.id);
+      }
+    }
+
     await setItemProviderIds(tx, showId, mergedProviderIds);
     return { itemId: showId, versionIds };
   });

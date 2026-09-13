@@ -55,7 +55,13 @@ export type ScanChange =
     };
 
 export type JobPayload =
-  | { type: "scan"; libraryId: string; path: string; changes?: ScanChange[] }
+  | {
+      type: "scan";
+      libraryId: string;
+      path: string;
+      changes?: ScanChange[];
+      reconcileMissing?: boolean;
+    }
   | { type: "probe"; fileId: string }
   | { type: "provider-fetch"; itemId: string; provider: string }
   | { type: "store"; sourceFileId: string; rung: string }

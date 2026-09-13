@@ -15,7 +15,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
-import { createJobQueue, listJobs } from "../jobs/queue.ts";
+import { createJobQueue, type Job, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import {
   createVideoFixture,
@@ -665,6 +665,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           port: 0,
           changeOptions: { delayMs: 10 },
         });
+        let debouncedJobId: string | undefined;
         try {
           const response = await fetch(
             `http://127.0.0.1:${server.apiServer?.port}/api/webhooks/sonarr/${token}`,
@@ -685,8 +686,23 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           );
           expect(response.status).toBe(202);
           expect(await response.json()).toEqual({ accepted: 1 });
-          const [job] = await waitForScanJobs(db, 1);
-          expect(job?.payload).toEqual({
+          const deadline = Date.now() + 5_000;
+          let job: Job | undefined;
+          for (;;) {
+            job = (await listJobs(db, { state: "queued", type: "scan" })).find(
+              (row) =>
+                row.payload.type === "scan" &&
+                row.payload.libraryId === shows.id &&
+                row.payload.path === "Foundation" &&
+                row.payload.changes !== undefined,
+            );
+            if (job !== undefined) break;
+            if (Date.now() >= deadline) {
+              throw new Error("Timed out waiting for the debounced scan job.");
+            }
+            await Bun.sleep(10);
+          }
+          expect(job.payload).toEqual({
             type: "scan",
             libraryId: shows.id,
             path: "Foundation",
@@ -702,7 +718,8 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
               },
             ],
           });
-          expect(job?.concurrencyKey).toBe(libraryConcurrencyKey(shows.id));
+          expect(job.concurrencyKey).toBe(libraryConcurrencyKey(shows.id));
+          debouncedJobId = job.id;
         } finally {
           await server.stop();
         }
@@ -710,11 +727,15 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
         const queue = createJobQueue(db);
         const registry = createJobRegistry();
         registerLibraryJobs(db, registry);
-        const claimed = await queue.claim();
-        if (!claimed) throw new Error("Scan job was not claimed.");
-        expect(claimed.payload).toMatchObject({ path: "Foundation" });
-        await registry.run(claimed);
-        await queue.complete(claimed);
+        let ranDebounced = false;
+        for (;;) {
+          const claimed = await queue.claim(["scan"]);
+          if (!claimed) break;
+          await registry.run(claimed);
+          await queue.complete(claimed);
+          if (claimed.id === debouncedJobId) ranDebounced = true;
+        }
+        expect(ranDebounced).toBe(true);
 
         const itemRows = await db.select().from(items);
         const show = itemRows.find((row) => row.kind === "show");
@@ -732,9 +753,9 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
         expect(
           idRows.map((row) => [row.provider, row.value, row.itemId]),
         ).toEqual([
-          ["imdb", "tt0804484", show?.id],
-          ["tmdb", "106379", show?.id],
-          ["tvdb", "366972", show?.id],
+          ["imdb", "tt0804484", show?.id ?? null],
+          ["tmdb", "106379", show?.id ?? null],
+          ["tvdb", "366972", show?.id ?? null],
         ]);
       });
     }));

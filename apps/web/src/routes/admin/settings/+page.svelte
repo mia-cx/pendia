@@ -41,7 +41,8 @@ async function saveProxies(event: SubmitEvent) {
   proxyBusy = true;
   proxyFailure = undefined;
   try {
-    const lines = proxyValue
+    const submitted = proxyValue;
+    const lines = submitted
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line !== "");
@@ -50,7 +51,7 @@ async function saveProxies(event: SubmitEvent) {
         client.settings.update({ trustedProxyAddresses: lines }),
       ),
     );
-    proxyInput = null;
+    if (proxyInput === submitted) proxyInput = null;
   } catch (error) {
     proxyFailure = readFailure(error);
   } finally {
@@ -122,6 +123,11 @@ async function removeKey(name: string) {
 
 {#if settings.failure}
   <Failure failure={settings.failure} />
+  <button
+    type="button"
+    onclick={() => settings.reload()}
+    disabled={settings.loading}>Retry</button
+  >
 {:else if !settings.data}
   <p class="muted">Loading.</p>
 {:else}

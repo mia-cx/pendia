@@ -1,0 +1,36 @@
+{
+  "eventType": "EpisodeFileDelete",
+  "instanceName": "Sonarr",
+  "applicationUrl": "http://sonarr:8989",
+  "series": {
+    "id": 12,
+    "title": "Foundation",
+    "path": "/media/shows/Foundation",
+    "tvdbId": 366972,
+    "tvMazeId": 46789,
+    "tmdbId": 106379,
+    "imdbId": "tt0804484",
+    "type": "standard",
+    "year": 2021
+  },
+  "episodes": [
+    {
+      "id": 4403,
+      "episodeNumber": 3,
+      "seasonNumber": 1,
+      "title": "The Mathematician's Ghost",
+      "overview": "Brother Dusk reflects on his legacy.",
+      "airDateUtc": "2021-10-01T07:00:00Z"
+    }
+  ],
+  "episodeFile": {
+    "id": 9003,
+    "relativePath": "Season 1/Foundation - S01E03 - The Mathematician's Ghost [WEBDL-1080p].mkv",
+    "path": "/media/shows/Foundation/Season 1/Foundation - S01E03 - The Mathematician's Ghost [WEBDL-1080p].mkv",
+    "quality": "WEBDL-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "NTb",
+    "seasonNumber": 1
+  },
+  "deleteReason": "Manual"
+}

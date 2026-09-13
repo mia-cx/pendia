@@ -1,0 +1,68 @@
+{
+  "eventType": "Download",
+  "instanceName": "Sonarr",
+  "applicationUrl": "http://sonarr:8989",
+  "series": {
+    "id": 12,
+    "title": "Foundation",
+    "path": "/media/shows/Foundation",
+    "tvdbId": 366972,
+    "tvMazeId": 46789,
+    "tmdbId": 106379,
+    "imdbId": "tt0804484",
+    "type": "standard",
+    "year": 2021,
+    "genres": ["Drama", "Sci-Fi & Fantasy"],
+    "tags": ["apple"],
+    "originalLanguage": "english"
+  },
+  "episodes": [
+    {
+      "id": 4401,
+      "episodeNumber": 1,
+      "seasonNumber": 1,
+      "title": "The Emperor's Peace",
+      "overview": "Gaal Dornick leaves her life on Synnax behind.",
+      "airDate": "2021-09-24",
+      "airDateUtc": "2021-09-24T07:00:00Z"
+    },
+    {
+      "id": 4402,
+      "episodeNumber": 2,
+      "seasonNumber": 1,
+      "title": "Preparing to Live",
+      "overview": "The Foundation makes the long journey to Terminus.",
+      "airDate": "2021-09-24",
+      "airDateUtc": "2021-09-24T07:00:00Z"
+    }
+  ],
+  "episodeFile": {
+    "id": 9001,
+    "relativePath": "Season 1/Foundation - S01E01 - The Emperor's Peace [WEBDL-1080p].mkv",
+    "path": "/media/shows/Foundation/Season 1/Foundation - S01E01 - The Emperor's Peace [WEBDL-1080p].mkv",
+    "quality": "WEBDL-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "NTb",
+    "sceneName": "Foundation.S01E01.1080p.ATVP.WEB-DL.DDP5.1.H.264-NTb",
+    "seasonNumber": 1,
+    "size": 3400000000
+  },
+  "isUpgrade": true,
+  "deletedFiles": [
+    {
+      "id": 8990,
+      "relativePath": "Season 1/Foundation - S01E01 - The Emperor's Peace [HDTV-720p].mkv",
+      "path": "/media/shows/Foundation/Season 1/Foundation - S01E01 - The Emperor's Peace [HDTV-720p].mkv",
+      "quality": "HDTV-720p",
+      "qualityVersion": 1,
+      "releaseGroup": "KILLERS",
+      "sceneName": "Foundation.S01E01.720p.HDTV.x264-KILLERS",
+      "seasonNumber": 1
+    }
+  ],
+  "downloadClient": "qBittorrent",
+  "downloadClientType": "torrent",
+  "downloadId": "F9C2A5E7B3D14E8A0C6F2B9D7A5E3C1F8B4D6A2E",
+  "customFormatScore": 320,
+  "releaseGroup": "NTb"
+}

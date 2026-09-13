@@ -14,7 +14,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
 
 ## TODOs
 
-- [ ] Record Sonarr and Radarr webhook fixtures and translate import, rename, file delete and item delete payloads into typed change events.
+- [x] Record Sonarr and Radarr webhook fixtures and translate import, rename, file delete and item delete payloads into typed change events.
   - Validation: `bun test apps/server/src/libraries/servarr.test.ts`
 - [ ] Accept Sonarr and Radarr webhooks through API-key secrets in the URL and coalesce each directory's events for 10 seconds into one scan job.
   - Validation: `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55430/pendia bun test apps/server/src/libraries/webhooks.test.ts`
@@ -29,6 +29,7 @@ Add Sonarr and Radarr webhook change signals, coalesce them into directory scan 
 
 ## Notes
 
+- TODO 1 validated: `bun test apps/server/src/libraries/servarr.test.ts` → 11 pass, 0 fail, 24 expect() calls; `bun run --cwd apps/server check` → clean (tsc --noEmit, no errors).
 - The unattended run cannot confirm test seams. Tests use the public payload translators, HTTP webhook handler, queued scan handler, repair pass and existing library API.
 - Webhook routes are `/api/webhooks/sonarr/<secret>` and `/api/webhooks/radarr/<secret>`. Only a live API-key token is accepted as the secret. Session tokens are rejected.
 - The 10 second debounce is process-local until it writes one durable scan job. Shutdown flushes accepted events before closing the database.

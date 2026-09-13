@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
 import { goto } from "$app/navigation";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
@@ -37,6 +38,9 @@ const scanDone = $derived(
   scanSettled && status !== undefined && status.counts.completed > 0,
 );
 
+const controller = new AbortController();
+onDestroy(() => controller.abort());
+
 async function submitAdmin(event: SubmitEvent) {
   event.preventDefault();
   busy = true;
@@ -58,6 +62,7 @@ async function submitAdmin(event: SubmitEvent) {
 async function watchScan() {
   if (!session) return;
   status = await waitForScan(session.client, libraryId, {
+    signal: controller.signal,
     onStatus: (reading) => {
       status = reading;
     },
@@ -201,13 +206,17 @@ async function rescan() {
         {/if}
         {#if scanDone}
           <p>The first scan is done.</p>
-          <a class="open" href="/admin">Open the admin</a>
         {:else if !scanSettled}
           <p class="muted">Scanning the library.</p>
         {/if}
       {:else}
         <p class="muted">Starting the scan.</p>
       {/if}
+      <p class="muted">
+        The scan keeps running in the background and its progress is on the
+        libraries screen.
+      </p>
+      <a class="open" href="/admin">Open the admin</a>
     {/if}
   </section>
 </main>

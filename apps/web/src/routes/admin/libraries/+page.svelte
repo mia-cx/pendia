@@ -1,4 +1,5 @@
 <script lang="ts">
+import { onDestroy } from "svelte";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
@@ -30,6 +31,9 @@ let deleteFailure = $state<ReturnType<typeof readFailure> | undefined>(
 
 let scanBusy = $state<Record<string, boolean>>({});
 let scanFailures = $state<Record<string, string>>({});
+
+const controller = new AbortController();
+onDestroy(() => controller.abort());
 
 $effect(() => {
   const rows = list.data;
@@ -110,6 +114,7 @@ async function scanNow(row: LibraryRow) {
   try {
     await client.libraries.scan({ id: row.id });
     statuses[row.id] = await waitForScan(client, row.id, {
+      signal: controller.signal,
       onStatus: (reading) => {
         statuses[row.id] = reading;
       },

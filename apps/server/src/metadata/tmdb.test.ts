@@ -50,6 +50,7 @@ describe("TMDB metadata provider", () => {
     expect(url.searchParams.get("query")).toBe("Héllo, World!");
     expect(url.searchParams.has("year")).toBe(false);
     expect(calls[0]?.init?.headers).toEqual({ accept: "application/json" });
+    expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
     await provider.search({ title: "Dune", year: 2021, kind: "movie" });
     expect(calledUrl(calls[1]).searchParams.get("year")).toBe("2021");
     expect(calls).toHaveLength(2);
@@ -107,6 +108,44 @@ describe("TMDB metadata provider", () => {
       "credits,release_dates,external_ids,images",
     );
     expect(calls[0]?.init?.headers).toEqual({ accept: "application/json" });
+    expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test("aborts stalled requests through the request signal", async () => {
+    const request = (async (_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal === null || signal === undefined) {
+          reject(new Error("Missing request signal."));
+          return;
+        }
+        if (signal.aborted) {
+          reject(new Error("The operation timed out."));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => reject(new Error("The operation timed out.")),
+          { once: true },
+        );
+      })) as typeof fetch;
+    const provider = createTmdbMetadataProvider(apiKey, request, 1);
+    await expect(
+      provider.search({ title: "X", kind: "movie" }),
+    ).rejects.toThrow("timed out");
+    await expect(
+      provider.fetch({ providerId: "1", kind: "movie" }),
+    ).rejects.toThrow("timed out");
+  });
+
+  test("rejects invalid request timeouts without a request", () => {
+    const { calls, request } = jsonRequest({ results: [] });
+    for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
+      expect(() =>
+        createTmdbMetadataProvider(apiKey, request, timeoutMs),
+      ).toThrow("Invalid TMDB request timeout.");
+    }
+    expect(calls).toHaveLength(0);
   });
 
   test("fetch maps details, credits, rating, ids and deduped artwork", async () => {

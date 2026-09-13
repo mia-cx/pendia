@@ -90,7 +90,10 @@ export async function storeArtworkOriginal(
   itemId: string,
   candidate: ArtworkCandidate,
   request: typeof fetch = fetch,
+  timeoutMs = 30_000,
 ) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+    throw new Error("Invalid artwork request timeout.");
   const [item] = await db.select().from(items).where(eq(items.id, itemId));
   if (!item) throw new AuthError("NOT_FOUND");
   const [library] = await db
@@ -101,6 +104,7 @@ export async function storeArtworkOriginal(
 
   const response = await request(candidate.url, {
     headers: { accept: "image/*" },
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok)
     throw new Error(`Artwork request failed with status ${response.status}.`);

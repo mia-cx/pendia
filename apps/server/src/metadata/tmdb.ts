@@ -57,9 +57,14 @@ function normalizeTitle(title: string): string {
     .trim();
 }
 
-async function requestJson(request: typeof fetch, url: URL): Promise<unknown> {
+async function requestJson(
+  request: typeof fetch,
+  url: URL,
+  timeoutMs: number,
+): Promise<unknown> {
   const response = await request(url, {
     headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok)
     throw new Error(`TMDB request failed with status ${response.status}.`);
@@ -204,6 +209,7 @@ async function searchMovies(
   request: typeof fetch,
   key: string,
   query: SearchQuery,
+  timeoutMs: number,
 ): Promise<MetadataMatch[]> {
   if (query.kind !== "movie") throw new Error("TMDB only supports movies.");
   const url = new URL(`${baseUrl}/search/movie`);
@@ -211,7 +217,7 @@ async function searchMovies(
   url.searchParams.set("query", query.title);
   if (query.year !== undefined)
     url.searchParams.set("year", String(query.year));
-  const data = asObject(await requestJson(request, url));
+  const data = asObject(await requestJson(request, url, timeoutMs));
   if (!Array.isArray(data.results)) invalid();
   const wanted = normalizeTitle(query.title);
   return data.results.map((entry) => {
@@ -235,6 +241,7 @@ async function fetchMovie(
   request: typeof fetch,
   key: string,
   match: FetchQuery,
+  timeoutMs: number,
 ): Promise<MetadataResult> {
   if (match.kind !== "movie") throw new Error("TMDB only supports movies.");
   if (!/^\d+$/.test(match.providerId) || Number(match.providerId) <= 0)
@@ -245,7 +252,7 @@ async function fetchMovie(
     "append_to_response",
     "credits,release_dates,external_ids,images",
   );
-  const data = asObject(await requestJson(request, url));
+  const data = asObject(await requestJson(request, url, timeoutMs));
   const id = requiredId(data.id);
   const overview = optionalString(data.overview);
   return {
@@ -268,13 +275,16 @@ async function fetchMovie(
 export function createTmdbMetadataProvider(
   apiKey: string,
   request: typeof fetch = fetch,
+  timeoutMs = 30_000,
 ): MetadataProvider {
   const key = apiKey.trim();
   if (key.length === 0) throw new Error("TMDB API key is required.");
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
+    throw new Error("Invalid TMDB request timeout.");
   return {
     id: "tmdb",
     kinds: ["movie"],
-    search: (query) => searchMovies(request, key, query),
-    fetch: (match) => fetchMovie(request, key, match),
+    search: (query) => searchMovies(request, key, query, timeoutMs),
+    fetch: (match) => fetchMovie(request, key, match, timeoutMs),
   };
 }

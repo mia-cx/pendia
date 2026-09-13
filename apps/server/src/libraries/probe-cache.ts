@@ -36,7 +36,8 @@ export async function probeLibraryFile(
     if (
       cached &&
       cached.bytes === before.bytes &&
-      cached.modifiedNs === before.modifiedNs
+      cached.modifiedNs === before.modifiedNs &&
+      cached.result.keyframesSeconds !== undefined
     ) {
       return { ...before, probe: cached.result, cached: true };
     }

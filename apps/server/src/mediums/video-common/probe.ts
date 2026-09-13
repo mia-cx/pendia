@@ -1,6 +1,7 @@
 import { extname } from "node:path";
 import { Schema } from "effect";
 import type { Chapter, streams } from "../../db/schema/core.ts";
+import { readKeyframeIndex } from "./keyframes.ts";
 
 /** A normalized stream row minus database ids, with a JSON-safe decimal bitrate. */
 export type ProbeStream = Omit<
@@ -8,10 +9,11 @@ export type ProbeStream = Omit<
   "id" | "versionId" | "fileId" | "bitrate"
 > & { bitrate: string | null };
 
-/** Normalized ffprobe output: container, duration, chapters and streams. */
+/** Normalized ffprobe output plus keyframes: container, duration, chapters, streams and the container keyframe index. */
 export interface ProbeResult {
   container: string | null;
   durationSeconds: number | null;
+  keyframesSeconds: number[] | null;
   chapters: Chapter[];
   streams: ProbeStream[];
 }
@@ -266,6 +268,7 @@ const fromRaw = (raw: RawProbe, extension: string): ProbeResult => {
   return {
     container: containerOf(raw.format, extension),
     durationSeconds: durationOf(raw),
+    keyframesSeconds: null,
     chapters: (raw.chapters ?? []).map(mapChapter),
     streams,
   };
@@ -276,7 +279,7 @@ export function parseProbeOutput(input: unknown): ProbeResult {
   return fromRaw(Schema.decodeUnknownSync(RawProbe)(input), "");
 }
 
-/** Probe a media file with ffprobe and return normalized JSON-safe output. */
+/** Probe a media file with ffprobe plus the container keyframe index and return normalized JSON-safe output. */
 export async function probeVideo(path: string): Promise<ProbeResult> {
   const proc = Bun.spawn(
     [
@@ -301,8 +304,10 @@ export async function probeVideo(path: string): Promise<ProbeResult> {
   if (exitCode !== 0) {
     throw new Error(`ffprobe failed (${exitCode}): ${stderr.trim()}`);
   }
-  return fromRaw(
+  const result = fromRaw(
     Schema.decodeUnknownSync(RawProbe)(JSON.parse(output)),
     extname(path).toLowerCase(),
   );
+  const { keyframesSeconds } = await readKeyframeIndex(path);
+  return { ...result, keyframesSeconds };
 }

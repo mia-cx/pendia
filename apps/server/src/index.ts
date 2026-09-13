@@ -7,6 +7,7 @@ import { migrateDatabase } from "./db/migrate.ts";
 import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
 import { registerLibraryJobs } from "./libraries/jobs.ts";
+import { createArtworkHandler } from "./metadata/artwork-http.ts";
 import { registerMetadataJobs } from "./metadata/jobs.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
@@ -170,6 +171,7 @@ export async function startPendia(
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
         api: createApiHandler(database.db, eventBroker),
+        artwork: createArtworkHandler(database.db),
       });
     }
     if (runsJobs && database) {

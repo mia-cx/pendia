@@ -7,6 +7,7 @@ import {
   readFile,
   rm,
   symlink,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -17,7 +18,7 @@ import { migrateDatabase } from "../db/migrate.ts";
 import { artwork, libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
-import { storeArtworkOriginal } from "./artwork-store.ts";
+import { readArtworkOriginal, storeArtworkOriginal } from "./artwork-store.ts";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
@@ -250,5 +251,115 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       expect(error).toBeInstanceOf(AuthError);
       expect((error as AuthError).code).toBe("NOT_FOUND");
       expect(calls).toHaveLength(0);
+    }));
+});
+
+describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
+  test("reads the stored bytes and artwork row", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        const original = await readArtworkOriginal(db, row.id);
+        expect(original?.artwork.id).toBe(row.id);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+      });
+    }));
+
+  test("returns null for a missing id and a missing file", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        expect(await readArtworkOriginal(db, Bun.randomUUIDv7())).toBeNull();
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        await rm(join(root, row.storageKey));
+        expect(await readArtworkOriginal(db, row.id)).toBeNull();
+      });
+    }));
+
+  test("returns null for a non-colocated artwork row", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const [row] = await db
+          .insert(artwork)
+          .values({
+            itemId: item.id,
+            versionId: null,
+            type: "poster",
+            sourceUrl: poster.url,
+            backend: "configured-path",
+            storageKey: "elsewhere/poster.jpg",
+            selected: true,
+          })
+          .returning();
+        if (!row) throw new Error("Fixture artwork missing.");
+        expect(await readArtworkOriginal(db, row.id)).toBeNull();
+      });
+    }));
+
+  test("rejects a final-file symlink instead of reading outside the root", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) =>
+        withTempRoot(async (outside) => {
+          const { item } = await fixture(db, root);
+          const outsideFile = join(outside, "secret.png");
+          const [row] = await db
+            .insert(artwork)
+            .values({
+              itemId: item.id,
+              versionId: null,
+              type: "poster",
+              sourceUrl: poster.url,
+              backend: "colocated",
+              storageKey: `Alien (1979)/.pendia/artwork/${Bun.randomUUIDv7()}`,
+              selected: true,
+            })
+            .returning();
+          if (!row) throw new Error("Fixture artwork missing.");
+          const target = join(root, row.storageKey);
+          await mkdir(dirname(target), { recursive: true });
+          await rm(target, { force: true });
+          await symlink(outsideFile, target);
+          await writeFile(outsideFile, png);
+          await expect(readArtworkOriginal(db, row.id)).rejects.toThrow(
+            "Invalid artwork storage path.",
+          );
+        }),
+      );
+    }));
+
+  test("rejects a .pendia symlink in read mode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) =>
+        withTempRoot(async (outside) => {
+          const { item } = await fixture(db, root);
+          await mkdir(join(root, item.canonicalFolder));
+          await symlink(outside, join(root, item.canonicalFolder, ".pendia"));
+          const [row] = await db
+            .insert(artwork)
+            .values({
+              itemId: item.id,
+              versionId: null,
+              type: "poster",
+              sourceUrl: poster.url,
+              backend: "colocated",
+              storageKey: `Alien (1979)/.pendia/artwork/${Bun.randomUUIDv7()}`,
+              selected: true,
+            })
+            .returning();
+          if (!row) throw new Error("Fixture artwork missing.");
+          await expect(readArtworkOriginal(db, row.id)).rejects.toThrow(
+            "Invalid artwork storage path.",
+          );
+        }),
+      );
     }));
 });

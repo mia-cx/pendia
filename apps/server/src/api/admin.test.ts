@@ -494,6 +494,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           libraryId: library.id,
           counts: { queued: 0, running: 0, completed: 0, failed: 0 },
           latest: null,
+          runId: null,
         });
         const { jobId } = await client.libraries.scan({ id: library.id });
         const rest = await fetch(
@@ -505,6 +506,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           libraryId: library.id,
           counts: { queued: 1, running: 0, completed: 0, failed: 0 },
           latest: { id: jobId, state: "queued", error: null },
+          runId: jobId,
         });
       } finally {
         await server.stop();

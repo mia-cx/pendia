@@ -144,7 +144,7 @@ export const ServerSettings = Schema.Struct({
   providerKeys: Schema.Array(Schema.String),
 });
 
-/** Scan job counts and the newest scan job for one library. */
+/** The newest scan run's job counts and newest job for one library. */
 export const ScanStatus = Schema.Struct({
   libraryId: Schema.UUID,
   counts: Schema.Struct({
@@ -160,6 +160,7 @@ export const ScanStatus = Schema.Struct({
       error: Schema.NullOr(Schema.String),
     }),
   ),
+  runId: Schema.NullOr(Schema.UUID),
 });
 
 /** A cross-process event streamed to subscribed clients. */

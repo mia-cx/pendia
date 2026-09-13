@@ -20,6 +20,7 @@ export const playbackTokenLifetimeSeconds = 300;
 
 type PlaybackScope = { sessionId: string; itemId: string };
 type PlaybackCaller = Awaited<ReturnType<typeof authenticate>>;
+type TokenDb = Pick<Database, "select" | "insert">;
 
 const Claims = Schema.Struct({
   v: Schema.Literal(1),
@@ -43,7 +44,7 @@ function unauthenticated(): never {
   throw new AuthError("UNAUTHENTICATED");
 }
 
-async function readSigningKey(db: Database) {
+async function readSigningKey(db: TokenDb) {
   const [row] = await db
     .select({ value: settings.value })
     .from(settings)
@@ -52,7 +53,7 @@ async function readSigningKey(db: Database) {
   return row?.value;
 }
 
-async function signingKey(db: Database) {
+async function signingKey(db: TokenDb) {
   let value = await readSigningKey(db);
   if (value === undefined) {
     await db
@@ -76,7 +77,7 @@ async function signingKey(db: Database) {
   return key;
 }
 
-async function liveSession(db: Database, scope: PlaybackScope) {
+async function liveSession(db: TokenDb, scope: PlaybackScope) {
   if (
     !Schema.is(Schema.UUID)(scope.sessionId) ||
     !Schema.is(Schema.UUID)(scope.itemId)
@@ -102,7 +103,7 @@ async function liveSession(db: Database, scope: PlaybackScope) {
   return row;
 }
 
-async function enabledOwner(db: Database, userId: string) {
+async function enabledOwner(db: TokenDb, userId: string) {
   const [row] = await db
     .select({ id: users.id })
     .from(users)
@@ -112,7 +113,7 @@ async function enabledOwner(db: Database, userId: string) {
 }
 
 async function liveCredential(
-  db: Database,
+  db: TokenDb,
   userId: string,
   credential: Claims["credential"],
 ) {
@@ -159,7 +160,7 @@ async function liveCredential(
 }
 
 async function gate(
-  db: Database,
+  db: TokenDb,
   scope: PlaybackScope,
   userId: string,
   credential: Claims["credential"],
@@ -174,7 +175,7 @@ async function gate(
 
 /** Issues a signed playback token bound to a live session, its Item and the caller's credential. */
 export async function issuePlaybackToken(
-  db: Database,
+  db: TokenDb,
   caller: PlaybackCaller,
   scope: PlaybackScope,
   now = Date.now(),
@@ -203,7 +204,7 @@ export async function issuePlaybackToken(
 
 /** Verifies a playback token against its scope and live auth state; returns its claims. */
 export async function verifyPlaybackToken(
-  db: Database,
+  db: TokenDb,
   token: string,
   scope: PlaybackScope,
   now = Date.now(),

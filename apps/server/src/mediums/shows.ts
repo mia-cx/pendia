@@ -1,39 +1,110 @@
 import { posix } from "node:path";
+import type { Database } from "../db/client.ts";
 import {
   episodes as episodeTable,
   seasons as seasonTable,
   shows as showTable,
 } from "../db/schema/shows.ts";
-import type { Medium } from "./medium.ts";
+import type { Medium, ScanRules } from "./medium.ts";
 import { isVideoExtra, isVideoPath } from "./video-common/paths.ts";
 
-/** The shows medium before its database-bound next-up shelf is attached. */
-export const showsMedium = {
-  id: "shows",
-  kinds: [
-    { kind: "show", parent: null, table: showTable, hasVersions: false },
-    { kind: "season", parent: "show", table: seasonTable, hasVersions: false },
-    {
-      kind: "episode",
-      parent: "season",
-      table: episodeTable,
-      hasVersions: true,
+/** Sonarr-style path rules shared by show walks and the shows medium. */
+export const showsScan = { identify, parse, isExtra } satisfies ScanRules;
+
+/** Create the shows medium with its database-backed next up shelf. */
+export function createShowsMedium(db: Database): Medium {
+  return {
+    id: "shows",
+    kinds: [
+      { kind: "show", parent: null, table: showTable, hasVersions: false },
+      {
+        kind: "season",
+        parent: "show",
+        table: seasonTable,
+        hasVersions: false,
+      },
+      {
+        kind: "episode",
+        parent: "season",
+        table: episodeTable,
+        hasVersions: true,
+      },
+    ],
+    scan: showsScan,
+    providers: ["metadata", "subtitles", "artwork"],
+    formats: ["video"],
+    browse: {
+      coreShelves: ["continue-watching", "recently-added"],
+      shelves: [
+        {
+          id: "next-up",
+          title: "Next up",
+          items: ({ userId }) => nextUp(db, userId),
+        },
+      ],
+      screens: {
+        show: "/shows/:id",
+        season: "/shows/:showId/seasons/:id",
+        episode: "/shows/:showId/seasons/:seasonId/episodes/:id",
+      },
     },
-  ],
-  scan: { identify, parse, isExtra },
-  providers: ["metadata", "subtitles", "artwork"],
-  formats: ["video"],
-  browse: {
-    coreShelves: ["continue-watching", "recently-added"],
-    shelves: [],
-    screens: {
-      show: "/shows/:id",
-      season: "/shows/:showId/seasons/:id",
-      episode: "/shows/:showId/seasons/:seasonId/episodes/:id",
-    },
-  },
-  translation: { protocol: "jellyfin" },
-} satisfies Medium;
+    translation: { protocol: "jellyfin" },
+  };
+}
+
+/** Return the first unwatched Episode after each user's last completed Episode per Show. */
+export async function nextUp(db: Database, userId: string): Promise<string[]> {
+  const rows = await db.$client<{ id: string }[]>`
+    with last_watched as (
+      select distinct on (season.show_id)
+        season.show_id,
+        season.season_number,
+        episode.episode_number,
+        mark.played_at
+      from progress as mark
+      inner join episodes as episode on episode.item_id = mark.item_id
+      inner join seasons as season on season.item_id = episode.season_id
+      where mark.user_id = ${userId}
+        and mark.completed
+      order by
+        season.show_id,
+        season.season_number desc,
+        episode.episode_number desc
+    )
+    select candidate.id
+    from last_watched
+    cross join lateral (
+      select episode_item.id
+      from seasons as candidate_season
+      inner join episodes as candidate_episode
+        on candidate_episode.season_id = candidate_season.item_id
+      inner join items as episode_item
+        on episode_item.id = candidate_episode.item_id
+      left join progress as candidate_mark
+        on candidate_mark.item_id = episode_item.id
+        and candidate_mark.user_id = ${userId}
+      where candidate_season.show_id = last_watched.show_id
+        and (
+          candidate_season.season_number,
+          candidate_episode.episode_number
+        ) > (
+          last_watched.season_number,
+          last_watched.episode_number
+        )
+        and not coalesce(candidate_mark.completed, false)
+      order by
+        candidate_season.season_number,
+        candidate_episode.episode_number,
+        episode_item.id
+      limit 1
+    ) as candidate
+    order by
+      last_watched.played_at desc nulls last,
+      last_watched.show_id,
+      candidate.id
+  `;
+  return Array.from(rows, (row) => row.id);
+}
 
 const seasonFolderPattern = /^season[\s._-]*(\d+)$/i;
 const episodeTokenPattern =

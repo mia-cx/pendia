@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, utimes, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
@@ -602,6 +602,68 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(curated.find((item) => item.id === split.id)?.title).toBe(
           "Curated Episode",
         );
+      });
+    }));
+
+  test("reorders existing split Files when earlier and middle parts arrive", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const source = join(seasonDir, "Show S01E02 - part1.mkv");
+        await createVideoFixture(source);
+        await copyFile(source, join(seasonDir, "Show S01E01 - part2.mkv"));
+        await copyFile(source, join(seasonDir, "Show S01E02 - part3.mkv"));
+
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const showPath = (name: string) => `${show}/Season 01/${name}`;
+        const ep1Part1 = showPath("Show S01E01 - part1.mkv");
+        const ep1Part2 = showPath("Show S01E01 - part2.mkv");
+        const ep2Part1 = showPath("Show S01E02 - part1.mkv");
+        const ep2Part2 = showPath("Show S01E02 - part2.mkv");
+        const ep2Part3 = showPath("Show S01E02 - part3.mkv");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(2);
+        const initialFiles = await db.select().from(files);
+        expect(initialFiles).toHaveLength(3);
+        const idsByPath = new Map(
+          initialFiles.map((file) => [file.path, file.id]),
+        );
+
+        await copyFile(source, join(seasonDir, "Show S01E01 - part1.mkv"));
+        await copyFile(source, join(seasonDir, "Show S01E02 - part2.mkv"));
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toEqual(first.versionIds);
+        expect(await db.select().from(versions)).toHaveLength(2);
+
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(5);
+        const byPath = new Map(fileRows.map((file) => [file.path, file]));
+        const p11 = byPath.get(ep1Part1);
+        const p12 = byPath.get(ep1Part2);
+        const p21 = byPath.get(ep2Part1);
+        const p22 = byPath.get(ep2Part2);
+        const p23 = byPath.get(ep2Part3);
+        if (!p11 || !p12 || !p21 || !p22 || !p23) {
+          throw new Error("Fixture File missing.");
+        }
+        expect(p11.versionId).toBe(p12.versionId);
+        expect([p11.order, p12.order]).toEqual([0, 1]);
+        expect(p21.versionId).toBe(p22.versionId);
+        expect(p22.versionId).toBe(p23.versionId);
+        expect([p21.order, p22.order, p23.order]).toEqual([0, 1, 2]);
+        for (const path of [ep1Part2, ep2Part1, ep2Part3]) {
+          expect(byPath.get(path)?.id).toBe(idsByPath.get(path));
+        }
       });
     }));
 });

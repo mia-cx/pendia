@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   episodes,
+  groups,
   items,
   libraries,
+  libraryAccess,
   progress,
   seasons,
+  userGroups,
   users,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
@@ -414,6 +418,15 @@ async function seedShows(db: Database) {
     ])
     .returning();
   if (!userA || !userB) throw new Error("Fixture users missing.");
+  const [usersGroup] = await db
+    .select()
+    .from(groups)
+    .where(eq(groups.name, "users"));
+  if (!usersGroup) throw new Error("Built-in users group missing.");
+  await db.insert(userGroups).values([
+    { userId: userA.id, groupId: usersGroup.id },
+    { userId: userB.id, groupId: usersGroup.id },
+  ]);
 
   const showA = await addShow(db, library.id, "Show A", [
     [0, [1]],
@@ -479,6 +492,45 @@ describe.skipIf(!databaseUrl)("next up", () => {
       ]);
       expect(await nextUp(db, userB.id)).toEqual([episodeId(showA, 1, 1)]);
       expect(await nextUp(db, Bun.randomUUIDv7())).toEqual([]);
+    }));
+
+  test("excludes a library after view access is revoked", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { userA, showA, showB } = await seedShows(db);
+
+      const [deniedLibrary] = await db
+        .insert(libraries)
+        .values({
+          name: "Denied",
+          medium: "shows",
+          rootPath: "/srv/denied",
+        })
+        .returning();
+      if (!deniedLibrary) throw new Error("Fixture library missing.");
+      const denied = await addShow(db, deniedLibrary.id, "Denied Show", [
+        [1, [1, 2]],
+      ]);
+      const deniedNextId = episodeId(denied, 1, 2);
+      await db.insert(progress).values({
+        userId: userA.id,
+        itemId: episodeId(denied, 1, 1),
+        format: "video",
+        completed: true,
+        playedAt: new Date("2026-07-01T00:00:00Z"),
+      });
+
+      expect(await nextUp(db, userA.id)).toContain(deniedNextId);
+
+      await db.insert(libraryAccess).values({
+        libraryId: deniedLibrary.id,
+        userId: userA.id,
+        allowed: false,
+      });
+      expect(await nextUp(db, userA.id)).toEqual([
+        episodeId(showB, 2, 1),
+        episodeId(showA, 1, 2),
+      ]);
     }));
 
   test("exposes the next up shelf through the database-bound factory", () =>

@@ -345,6 +345,25 @@ describe("groupShowPaths", () => {
     }
   });
 
+  test("keeps split Versions separate across equivalent season folders", () => {
+    const paths = [
+      "Show/Season 1/Show S01E01 - part1.mkv",
+      "Show/Season 01/Show S01E01 - part2.mkv",
+    ];
+    for (const input of [paths, [...paths].reverse()]) {
+      const [group] = groupShowPaths(input);
+      expect(group?.seasons).toHaveLength(1);
+      expect(group?.seasons[0]?.seasonNumber).toBe(1);
+      expect(group?.seasons[0]?.episodes).toHaveLength(1);
+      const versions = group?.seasons[0]?.episodes[0]?.versions;
+      expect(versions).toHaveLength(2);
+      expect(versions?.map((version) => version.paths)).toEqual([
+        ["Show/Season 01/Show S01E01 - part2.mkv"],
+        ["Show/Season 1/Show S01E01 - part1.mkv"],
+      ]);
+    }
+  });
+
   test("deduplicates repeated paths and sorts every level deterministically", () => {
     const input = [
       "B Show/Season 02/B Show S02E01.mkv",

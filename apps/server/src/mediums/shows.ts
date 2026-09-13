@@ -193,7 +193,8 @@ function analyze(path: string): AcceptedPath | null {
     seasonNumber: season,
     episodeNumber: episode.start,
     episodeEndNumber: episode.end,
-    versionKey: part === null ? `file:${path}` : `stem:${versionStem}`,
+    versionKey:
+      part === null ? `file:${path}` : `stem:${seasonFolder}:${versionStem}`,
     part,
   };
 }

@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { libraries } from "../db/schema/index.ts";
+import { items, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
@@ -27,11 +27,23 @@ export function registerLibraryJobs(
       .where(eq(libraries.id, payload.libraryId));
     if (!library) throw new AuthError("NOT_FOUND");
     const rules = library.medium === "movies" ? moviesMedium.scan : showsScan;
+    if (
+      payload.path === "." &&
+      payload.changes !== undefined &&
+      payload.changes.length > 0
+    )
+      throw new AuthError("INVALID_INPUT");
     if (payload.path !== ".") {
       if (library.medium === "movies") {
-        await scanDirectory(db, library.id, payload.path);
+        await scanDirectory(db, library.id, payload.path, {
+          changes: payload.changes,
+          reconcileMissing: payload.reconcileMissing,
+        });
       } else {
-        await scanShowDirectory(db, library.id, payload.path);
+        await scanShowDirectory(db, library.id, payload.path, {
+          changes: payload.changes,
+          reconcileMissing: payload.reconcileMissing,
+        });
       }
       await publishEvent(db, {
         kind: "library.changed",
@@ -39,14 +51,25 @@ export function registerLibraryJobs(
       });
       return;
     }
-    const paths: string[] = [];
+    const walked: string[] = [];
     for await (const file of walkLibrary(library.rootPath, rules))
-      paths.push(file.path);
+      walked.push(file.path);
     const groups =
       library.medium === "movies"
-        ? groupMoviePaths(paths)
-        : groupShowPaths(paths);
-    if (groups.length === 0) {
+        ? groupMoviePaths(walked)
+        : groupShowPaths(walked);
+    const paths = new Set(groups.map((group) => group.canonicalFolder));
+    const existing = await db
+      .select({ canonicalFolder: items.canonicalFolder })
+      .from(items)
+      .where(
+        and(
+          eq(items.libraryId, library.id),
+          eq(items.kind, library.medium === "movies" ? "movie" : "show"),
+        ),
+      );
+    for (const item of existing) paths.add(item.canonicalFolder);
+    if (paths.size === 0) {
       await publishEvent(db, {
         kind: "library.changed",
         libraryId: library.id,
@@ -56,9 +79,14 @@ export function registerLibraryJobs(
     const concurrencyKey = libraryConcurrencyKey(library.id);
     await db.transaction(async (tx) => {
       const queue = createJobQueue(tx);
-      for (const group of groups)
+      for (const path of paths)
         await queue.enqueue(
-          { type: "scan", libraryId: library.id, path: group.canonicalFolder },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path,
+            reconcileMissing: true,
+          },
           { concurrencyKey },
         );
     });

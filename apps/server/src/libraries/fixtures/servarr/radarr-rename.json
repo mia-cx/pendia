@@ -1,0 +1,31 @@
+{
+  "eventType": "Rename",
+  "instanceName": "Radarr",
+  "applicationUrl": "http://radarr:7878",
+  "movie": {
+    "id": 7,
+    "title": "Alien",
+    "year": 1979,
+    "releaseDate": "1979-05-25",
+    "folderPath": "/media/movies/Alien (1979) {tmdb-348}",
+    "filePath": "/media/movies/Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
+    "tmdbId": 348,
+    "imdbId": "tt0078748",
+    "overview": "The crew of a commercial spacecraft encounters a deadly lifeform.",
+    "genres": ["Horror", "Science Fiction"],
+    "tags": []
+  },
+  "renamedMovieFiles": [
+    {
+      "id": 410,
+      "relativePath": "Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
+      "path": "/media/movies/Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
+      "previousPath": "/media/movies/Alien (1979) {tmdb-348}/Alien.1979.1080p.BluRay.x264-FGT.mkv",
+      "previousRelativePath": "Alien.1979.1080p.BluRay.x264-FGT.mkv",
+      "quality": "Bluray-1080p",
+      "qualityVersion": 1,
+      "releaseGroup": "FGT",
+      "edition": "Director's Cut"
+    }
+  ]
+}

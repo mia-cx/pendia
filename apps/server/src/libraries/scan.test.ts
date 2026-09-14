@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { copyFile, mkdir, rename, utimes, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  rename,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
+import { setupAdmin } from "../auth/accounts.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
@@ -11,6 +19,7 @@ import {
   items,
   libraries,
   movies,
+  progress,
   seasons,
   shows,
   streams,
@@ -66,6 +75,49 @@ async function withLibrary(
 
 const streamKeys = (rows: { index: number; codec: string; kind: string }[]) =>
   rows.map((row) => `${row.index}:${row.kind}:${row.codec}`);
+
+async function holdLibraryLock(
+  url: string,
+  libraryId: string,
+  run: (release: () => void) => Promise<void>,
+) {
+  const second = createDatabase(url);
+  let release = () => {};
+  let lockHeld = false;
+  try {
+    const locking = second.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select id from libraries where id = ${libraryId} for update`,
+      );
+      lockHeld = true;
+      await new Promise<void>((resolvePromise) => {
+        release = resolvePromise;
+      });
+    });
+    const deadline = Date.now() + 2_000;
+    while (!lockHeld && Date.now() < deadline) await Bun.sleep(10);
+    if (!lockHeld) throw new Error("Library row lock was not acquired.");
+    await run(release);
+    await locking;
+  } finally {
+    release();
+    await second.close();
+  }
+}
+
+async function waitForBlockedScan(db: Database) {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const rows = await db.$client<{ count: number }[]>`
+      select count(*)::integer as count from pg_stat_activity
+      where wait_event_type = 'Lock'`;
+    if ((rows[0]?.count ?? 0) > 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error("A blocked scan update was not observed.");
+    }
+    await Bun.sleep(10);
+  }
+}
 
 describe.skipIf(!databaseUrl)("scanDirectory", () => {
   test("writes one Item with two Versions, Files and Streams for a canonical folder", () =>
@@ -180,7 +232,7 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
             seen.push(path);
             return probeVideo(path);
           };
-          const first = await scanDirectory(db, library.id, folder, probe);
+          const first = await scanDirectory(db, library.id, folder, { probe });
           expect(seen).toHaveLength(2);
           const fileIds = (await db.select().from(files))
             .map((file) => file.id)
@@ -189,7 +241,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
             .map((stream) => stream.id)
             .sort();
 
-          const second = await scanDirectory(db, library.id, folder, probe);
+          const second = await scanDirectory(db, library.id, folder, {
+            probe,
+          });
           expect(second.itemId).toBe(first.itemId);
           expect(second.versionIds).toEqual(first.versionIds);
           expect(second.probed).toBe(0);
@@ -209,7 +263,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
               tags: ["curated"],
             })
             .where(eq(items.id, first.itemId ?? ""));
-          const curated = await scanDirectory(db, library.id, folder, probe);
+          const curated = await scanDirectory(db, library.id, folder, {
+            probe,
+          });
           expect(curated.itemId).toBe(first.itemId);
           expect(curated.versionIds).toEqual(first.versionIds);
           expect(curated.probed).toBe(0);
@@ -220,7 +276,7 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
 
           const touched = new Date("2026-02-03T00:00:00Z");
           await utimes(join(root, file1080), touched, touched);
-          const third = await scanDirectory(db, library.id, folder, probe);
+          const third = await scanDirectory(db, library.id, folder, { probe });
           expect(third.itemId).toBe(first.itemId);
           expect(third.versionIds).toEqual(first.versionIds);
           expect(third.probed).toBe(1);
@@ -254,11 +310,8 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           const touched = new Date("2026-02-03T00:00:00Z");
           await utimes(join(root, file1080), touched, touched);
           const absolute = join(root, file1080);
-          const result = await scanDirectory(
-            db,
-            library.id,
-            folder,
-            async (path) => {
+          const result = await scanDirectory(db, library.id, folder, {
+            probe: async (path) => {
               const probed = await probeVideo(path);
               if (path !== absolute) return probed;
               return {
@@ -268,7 +321,7 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
                 ),
               };
             },
-          );
+          });
           expect(result.probed).toBe(1);
 
           const after = await db
@@ -292,15 +345,17 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
         await withLibrary(db, root, async (library) => {
           const absolute = join(root, file2160);
           await expect(
-            scanDirectory(db, library.id, folder, async (path) => {
-              const probed = await probeVideo(path);
-              if (path !== absolute) return probed;
-              return {
-                ...probed,
-                streams: probed.streams.filter(
-                  (stream) => stream.kind !== "video",
-                ),
-              };
+            scanDirectory(db, library.id, folder, {
+              probe: async (path) => {
+                const probed = await probeVideo(path);
+                if (path !== absolute) return probed;
+                return {
+                  ...probed,
+                  streams: probed.streams.filter(
+                    (stream) => stream.kind !== "video",
+                  ),
+                };
+              },
             }),
           ).rejects.toThrow("no video stream");
           expect(await db.select().from(items)).toHaveLength(0);
@@ -340,6 +395,54 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
       } finally {
         await db.close();
       }
+    }));
+
+  test("an emptied movie folder revalidates before deleting the Item", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(dir, "Alien.1080p.mkv"));
+        await withLibrary(db, root, async (library) => {
+          const scanned = await scanDirectory(db, library.id, folder);
+          const itemId = scanned.itemId;
+          if (!itemId) throw new Error("Initial scan produced no Item.");
+          const [version] = await db.select().from(versions);
+          if (!version) throw new Error("Initial scan produced no Version.");
+          const admin = await setupAdmin(db, {
+            username: "admin",
+            password: "admin-pass",
+          });
+          await db.insert(progress).values({
+            userId: admin.id,
+            itemId,
+            versionId: version.id,
+            format: "video",
+            positionSeconds: 33,
+          });
+          const progressBefore = await db.select().from(progress);
+          await rm(join(dir, "Alien.1080p.mkv"));
+
+          await holdLibraryLock(url, library.id, async (release) => {
+            const scanning = scanDirectory(db, library.id, folder, {
+              reconcileMissing: true,
+            });
+            await waitForBlockedScan(db);
+            await createVideoFixture(join(dir, "Alien.720p.mkv"));
+            release();
+            await expect(scanning).rejects.toThrow(
+              "Library directory changed before scan write.",
+            );
+          });
+
+          const itemRows = await db.select().from(items);
+          expect(itemRows.map((row) => row.id)).toEqual([itemId]);
+          expect(await db.select().from(versions)).toHaveLength(1);
+          expect(await db.select().from(files)).toHaveLength(1);
+          expect(await db.select().from(progress)).toEqual(progressBefore);
+        });
+      });
     }));
 });
 
@@ -578,15 +681,12 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         }
 
         const seen: string[] = [];
-        const second = await scanShowDirectory(
-          db,
-          library.id,
-          showFolder,
-          async (path) => {
+        const second = await scanShowDirectory(db, library.id, showFolder, {
+          probe: async (path) => {
             seen.push(path);
             return probeVideo(path);
           },
-        );
+        });
         expect(second.itemId).toBe(result.itemId);
         expect(second.versionIds).toEqual(result.versionIds);
         expect(second.probed).toBe(0);
@@ -1093,6 +1193,175 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
             .map((version) => version.id)
             .sort(),
         ).toEqual(versionRows.map((version) => version.id).sort());
+      });
+    }));
+
+  test("reconcileMissing removes a missing Season while the default retains it", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Foundation";
+        const seasonOneDir = join(root, show, "Season 01");
+        const seasonTwoDir = join(root, show, "Season 02");
+        await mkdir(seasonOneDir, { recursive: true });
+        await mkdir(seasonTwoDir, { recursive: true });
+        await createVideoFixture(join(seasonOneDir, "Foundation S01E01.mkv"));
+        await createVideoFixture(join(seasonTwoDir, "Foundation S02E01.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(2);
+        expect(await db.select().from(items)).toHaveLength(5);
+        expect(await db.select().from(seasons)).toHaveLength(2);
+
+        await rm(seasonTwoDir, { recursive: true });
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(1);
+        expect(await db.select().from(items)).toHaveLength(5);
+        expect(await db.select().from(seasons)).toHaveLength(2);
+        expect(await db.select().from(versions)).toHaveLength(2);
+        expect(await db.select().from(files)).toHaveLength(2);
+
+        const third = await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+        });
+        expect(third.versionIds).toHaveLength(1);
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
+        expect(
+          itemRows.find((row) => row.kind === "show")?.canonicalFolder,
+        ).toBe(show);
+        const seasonRows = await db.select().from(seasons);
+        expect(seasonRows).toHaveLength(1);
+        expect(seasonRows[0]?.seasonNumber).toBe(1);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+      });
+    }));
+
+  test("reconcileMissing removes only the missing File of a split Version", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const part1 = join(seasonDir, "Show S01E01 - part1.mkv");
+        const part2 = join(seasonDir, "Show S01E01 - part2.mkv");
+        await createVideoFixture(part1);
+        await createVideoFixture(part2);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(1);
+        const firstFiles = await db.select().from(files);
+        expect(firstFiles).toHaveLength(2);
+        const part1File = firstFiles.find((file) =>
+          file.path.endsWith("part1.mkv"),
+        );
+        if (!part1File) throw new Error("Fixture File missing.");
+        const [firstVersion] = await db.select().from(versions);
+        if (!firstVersion) throw new Error("Fixture Version missing.");
+
+        await rm(part2);
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toEqual([firstVersion.id]);
+        expect(await db.select().from(files)).toHaveLength(2);
+
+        const third = await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+        });
+        expect(third.versionIds).toEqual([firstVersion.id]);
+        const keptFiles = await db.select().from(files);
+        expect(keptFiles).toHaveLength(1);
+        expect(keptFiles[0]).toMatchObject({
+          id: part1File.id,
+          order: 0,
+          path: "Show/Season 01/Show S01E01 - part1.mkv",
+        });
+        const [keptVersion] = await db.select().from(versions);
+        expect(keptVersion?.id).toBe(firstVersion.id);
+        expect(keptVersion?.bytes).toBe(part1File.bytes);
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
+      });
+    }));
+
+  test("an emptied show folder revalidates before deleting the subtree", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Foundation";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(seasonDir, "Foundation S01E01.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const scanned = await scanShowDirectory(db, library.id, show);
+        const showId = scanned.itemId;
+        if (!showId) throw new Error("Initial scan produced no Show.");
+        const itemBefore = await db.select().from(items);
+        const episodeId = itemBefore.find((row) => row.kind === "episode")?.id;
+        if (itemBefore.length !== 3 || !episodeId) {
+          throw new Error("Initial scan produced no hierarchy.");
+        }
+        const [version] = await db.select().from(versions);
+        if (!version) throw new Error("Initial scan produced no Version.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: episodeId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 33,
+        });
+        const progressBefore = await db.select().from(progress);
+        await rm(join(seasonDir, "Foundation S01E01.mkv"));
+
+        await holdLibraryLock(url, library.id, async (release) => {
+          const scanning = scanShowDirectory(db, library.id, show, {
+            reconcileMissing: true,
+          });
+          await waitForBlockedScan(db);
+          await createVideoFixture(join(seasonDir, "Foundation S01E02.mkv"));
+          release();
+          await expect(scanning).rejects.toThrow(
+            "Library directory changed before scan write.",
+          );
+        });
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.id).sort()).toEqual(
+          itemBefore.map((row) => row.id).sort(),
+        );
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
       });
     }));
 });

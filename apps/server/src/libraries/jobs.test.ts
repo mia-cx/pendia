@@ -81,8 +81,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
               type: "scan",
               libraryId: libraryA.id,
               path: "Blade Runner (1982)",
+              reconcileMissing: true,
             },
-            { type: "scan", libraryId: libraryA.id, path: "Alien (1979)" },
+            {
+              type: "scan",
+              libraryId: libraryA.id,
+              path: "Alien (1979)",
+              reconcileMissing: true,
+            },
           ]);
           for (const job of fanned) {
             expect(job.concurrencyKey).toBe(libraryConcurrencyKey(libraryA.id));
@@ -103,6 +109,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             type: "scan",
             libraryId: libraryA.id,
             path: "Alien (1979)",
+            reconcileMissing: true,
           });
           expect(await queue.claim()).toBeUndefined();
           await queue.complete(first ?? rootJob);
@@ -111,6 +118,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             type: "scan",
             libraryId: libraryA.id,
             path: "Blade Runner (1982)",
+            reconcileMissing: true,
           });
         }),
       );
@@ -149,8 +157,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             type: "scan",
             libraryId: library.id,
             path: "Blade Runner (1982)",
+            reconcileMissing: true,
           },
-          { type: "scan", libraryId: library.id, path: "Alien (1979)" },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "Alien (1979)",
+            reconcileMissing: true,
+          },
         ]);
         expect(
           children.every(
@@ -238,8 +252,18 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
 
         const fanned = await listJobs(db, { state: "queued" });
         expect(fanned.map((job) => job.payload)).toEqual([
-          { type: "scan", libraryId: library.id, path: "B Show" },
-          { type: "scan", libraryId: library.id, path: "A Show (2020)" },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "B Show",
+            reconcileMissing: true,
+          },
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: "A Show (2020)",
+            reconcileMissing: true,
+          },
         ]);
         for (const job of fanned) {
           expect(job.concurrencyKey).toBe(libraryConcurrencyKey(library.id));

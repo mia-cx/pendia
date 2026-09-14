@@ -1,0 +1,42 @@
+{
+  "eventType": "Rename",
+  "instanceName": "Sonarr",
+  "applicationUrl": "http://sonarr:8989",
+  "series": {
+    "id": 12,
+    "title": "Foundation",
+    "path": "/media/shows/Foundation",
+    "tvdbId": 366972,
+    "tvMazeId": 46789,
+    "tmdbId": 106379,
+    "imdbId": "tt0804484",
+    "type": "standard",
+    "year": 2021,
+    "genres": ["Drama", "Sci-Fi & Fantasy"],
+    "tags": []
+  },
+  "renamedEpisodeFiles": [
+    {
+      "id": 9001,
+      "relativePath": "Season 1/Foundation - S01E01 - The Emperor's Peace [WEBDL-1080p].mkv",
+      "path": "/media/shows/Foundation/Season 1/Foundation - S01E01 - The Emperor's Peace [WEBDL-1080p].mkv",
+      "previousPath": "/media/shows/Foundation/Season 1/Foundation.S01E01.1080p.ATVP.WEB-DL-NTb.mkv",
+      "previousRelativePath": "Season 1/Foundation.S01E01.1080p.ATVP.WEB-DL-NTb.mkv",
+      "quality": "WEBDL-1080p",
+      "qualityVersion": 1,
+      "releaseGroup": "NTb",
+      "seasonNumber": 1
+    },
+    {
+      "id": 9002,
+      "relativePath": "Season 1/Foundation - S01E02 - Preparing to Live [WEBDL-1080p].mkv",
+      "path": "/media/shows/Foundation/Season 1/Foundation - S01E02 - Preparing to Live [WEBDL-1080p].mkv",
+      "previousPath": "/media/shows/Foundation/Season 1/Foundation.S01E02.1080p.ATVP.WEB-DL-NTb.mkv",
+      "previousRelativePath": "Season 1/Foundation.S01E02.1080p.ATVP.WEB-DL-NTb.mkv",
+      "quality": "WEBDL-1080p",
+      "qualityVersion": 1,
+      "releaseGroup": "NTb",
+      "seasonNumber": 1
+    }
+  ]
+}

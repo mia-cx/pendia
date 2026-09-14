@@ -4,20 +4,39 @@ import type { Database } from "../db/client.ts";
 import {
   episodes,
   files,
+  itemAncestors,
   items,
   libraries,
+  type ScanChange,
   seasons,
   streams,
   versions,
 } from "../db/schema/index.ts";
-import { insertItem } from "../db/tree.ts";
+import { deleteItemSubtree, insertItem } from "../db/tree.ts";
+import type { ScanRules } from "../mediums/medium.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
+import {
+  applyScanChanges,
+  findItemByProviderIds,
+  setItemProviderIds,
+} from "./changes.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import { persistScanTimelines } from "./timelines.ts";
-import { readLibraryFile, walkLibrary } from "./walker.ts";
+import {
+  MissingLibraryPathError,
+  readLibraryFile,
+  walkLibrary,
+} from "./walker.ts";
+
+/** Optional collaborators and queued changes for one directory scan. */
+export type ScanDirectoryOptions = {
+  probe?: typeof probeVideo;
+  changes?: readonly ScanChange[];
+  reconcileMissing?: boolean;
+};
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -71,13 +90,56 @@ async function upsertFileStreams(
   }
 }
 
+/** Re-walks the requested scope inside the write lock before an empty result deletes rows. */
+async function confirmScopeEmpty(
+  rootPath: string,
+  rules: ScanRules,
+  path: string,
+  recursive: boolean,
+): Promise<void> {
+  try {
+    for await (const file of walkLibrary(rootPath, rules, {
+      path,
+      recursive,
+    })) {
+      if (file.path !== "") {
+        throw new Error("Library directory changed before scan write.");
+      }
+    }
+  } catch (error) {
+    if (
+      error instanceof MissingLibraryPathError &&
+      error.scope === "requested"
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/** Deletes leaf Items still holding no Versions after queued file deletes. */
+async function deleteEmptiedItems(tx: Transaction, itemIds: readonly string[]) {
+  for (const itemId of new Set(itemIds)) {
+    const [item] = await tx.select().from(items).where(eq(items.id, itemId));
+    if (!item || item.kind === "show" || item.kind === "season") continue;
+    const [version] = await tx
+      .select({ id: versions.id })
+      .from(versions)
+      .where(eq(versions.itemId, itemId))
+      .limit(1);
+    if (version === undefined) await deleteItemSubtree(tx, item.id);
+  }
+}
+
 /** Scan one canonical directory of a movies library into Items, Versions, Files and Streams. */
 export async function scanDirectory(
   db: Database,
   libraryId: string,
   path: string,
-  probe: typeof probeVideo = probeVideo,
+  options: ScanDirectoryOptions = {},
 ): Promise<{ itemId: string | null; versionIds: string[]; probed: number }> {
+  const probe = options.probe ?? probeVideo;
+  const changes = options.changes ?? [];
   const [library] = await db
     .select()
     .from(libraries)
@@ -86,28 +148,44 @@ export async function scanDirectory(
   if (library.medium !== "movies") throw new AuthError("INVALID_INPUT");
 
   const walked: string[] = [];
-  for await (const file of walkLibrary(library.rootPath, moviesMedium.scan, {
-    path,
-    recursive: false,
-  })) {
-    walked.push(file.path);
+  try {
+    for await (const file of walkLibrary(library.rootPath, moviesMedium.scan, {
+      path,
+      recursive: false,
+    })) {
+      walked.push(file.path);
+    }
+  } catch (error) {
+    if (
+      !(error instanceof MissingLibraryPathError) ||
+      error.scope !== "requested"
+    ) {
+      throw error;
+    }
   }
   const [group] = groupMoviePaths(walked);
-  if (!group) return { itemId: null, versionIds: [], probed: 0 };
 
   const members: ProbedLibraryFile[] = [];
   let probed = 0;
-  for (const memberPath of group.paths) {
-    const member = await probeLibraryFile(db, library, memberPath, probe);
-    if (
-      !member.probe.streams.some(
-        (stream) => stream.kind === "video" && !stream.disposition.attached_pic,
-      )
-    ) {
-      throw new Error(`Recognized media has no video stream: ${memberPath}`);
+  if (group) {
+    for (const memberPath of group.paths) {
+      const member = await probeLibraryFile(db, library, memberPath, probe);
+      if (
+        !member.probe.streams.some(
+          (stream) =>
+            stream.kind === "video" && !stream.disposition.attached_pic,
+        )
+      ) {
+        throw new Error(`Recognized media has no video stream: ${memberPath}`);
+      }
+      if (!member.cached) probed += 1;
+      members.push(member);
     }
-    if (!member.cached) probed += 1;
-    members.push(member);
+  }
+
+  const mergedProviderIds: Record<string, string> = {};
+  for (const change of changes) {
+    Object.assign(mergedProviderIds, change.providerIds);
   }
 
   const written = await db.transaction(async (tx) => {
@@ -117,6 +195,8 @@ export async function scanDirectory(
       .where(eq(libraries.id, libraryId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
+
+    const emptiedItemIds = await applyScanChanges(tx, libraryId, changes);
 
     for (const member of members) {
       const current = await readLibraryFile(library.rootPath, member.path);
@@ -128,6 +208,29 @@ export async function scanDirectory(
       }
     }
 
+    if (!group) {
+      await deleteEmptiedItems(tx, emptiedItemIds);
+      if (options.reconcileMissing === true) {
+        await confirmScopeEmpty(
+          library.rootPath,
+          moviesMedium.scan,
+          path,
+          false,
+        );
+        const [item] = await tx
+          .select()
+          .from(items)
+          .where(
+            and(
+              eq(items.libraryId, libraryId),
+              eq(items.canonicalFolder, path),
+            ),
+          );
+        if (item) await deleteItemSubtree(tx, item.id);
+      }
+      return { itemId: null, versionIds: [] as string[] };
+    }
+
     const [existingItem] = await tx
       .select()
       .from(items)
@@ -137,10 +240,23 @@ export async function scanDirectory(
           eq(items.canonicalFolder, group.canonicalFolder),
         ),
       );
+    const found = await findItemByProviderIds(tx, libraryId, mergedProviderIds);
+    if (existingItem && found && existingItem.id !== found.id)
+      throw new AuthError("CONFLICT");
     let itemId: string;
     if (existingItem) {
       if (existingItem.kind !== "movie") throw new AuthError("CONFLICT");
       itemId = existingItem.id;
+    } else if (found) {
+      if (found.kind !== "movie") throw new AuthError("CONFLICT");
+      await tx
+        .update(items)
+        .set({
+          canonicalFolder: group.canonicalFolder,
+          updatedAt: new Date(),
+        })
+        .where(eq(items.id, found.id));
+      itemId = found.id;
     } else {
       const created = await insertItem(tx, {
         libraryId,
@@ -231,6 +347,26 @@ export async function scanDirectory(
       versionIds.push(versionId);
       await upsertFileStreams(tx, versionId, fileId, member.probe);
     }
+    if (options.reconcileMissing === true) {
+      const itemFiles = await tx
+        .select()
+        .from(files)
+        .where(eq(files.itemId, itemId));
+      const present = new Set(group.paths);
+      for (const file of itemFiles) {
+        if (present.has(file.path)) continue;
+        const [version] = await tx
+          .select({ origin: versions.origin })
+          .from(versions)
+          .where(eq(versions.id, file.versionId));
+        if (version?.origin === "imported") {
+          await tx.delete(versions).where(eq(versions.id, file.versionId));
+        }
+      }
+    }
+
+    await deleteEmptiedItems(tx, emptiedItemIds);
+    await setItemProviderIds(tx, itemId, mergedProviderIds);
     await persistScanTimelines(tx, itemId);
     return { itemId, versionIds };
   });
@@ -242,8 +378,10 @@ export async function scanShowDirectory(
   db: Database,
   libraryId: string,
   path: string,
-  probe: typeof probeVideo = probeVideo,
+  options: ScanDirectoryOptions = {},
 ): Promise<{ itemId: string | null; versionIds: string[]; probed: number }> {
+  const probe = options.probe ?? probeVideo;
+  const changes = options.changes ?? [];
   const [library] = await db
     .select()
     .from(libraries)
@@ -252,19 +390,26 @@ export async function scanShowDirectory(
   if (library.medium !== "shows") throw new AuthError("INVALID_INPUT");
 
   const walked: string[] = [];
-  for await (const file of walkLibrary(library.rootPath, showsScan, {
-    path,
-  })) {
-    walked.push(file.path);
+  try {
+    for await (const file of walkLibrary(library.rootPath, showsScan, {
+      path,
+    })) {
+      walked.push(file.path);
+    }
+  } catch (error) {
+    if (
+      !(error instanceof MissingLibraryPathError) ||
+      error.scope !== "requested"
+    )
+      throw error;
   }
   const group = groupShowPaths(walked).find(
     (candidate) => candidate.canonicalFolder === path,
   );
-  if (!group) return { itemId: null, versionIds: [], probed: 0 };
 
   const memberByPath = new Map<string, ProbedLibraryFile>();
   let probed = 0;
-  for (const season of group.seasons) {
+  for (const season of group?.seasons ?? []) {
     for (const episode of season.episodes) {
       for (const version of episode.versions) {
         for (const memberPath of version.paths) {
@@ -287,6 +432,11 @@ export async function scanShowDirectory(
     }
   }
 
+  const mergedProviderIds: Record<string, string> = {};
+  for (const change of changes) {
+    Object.assign(mergedProviderIds, change.providerIds);
+  }
+
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select()
@@ -294,6 +444,8 @@ export async function scanShowDirectory(
       .where(eq(libraries.id, libraryId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
+
+    const emptiedItemIds = await applyScanChanges(tx, libraryId, changes);
 
     for (const member of memberByPath.values()) {
       const current = await readLibraryFile(library.rootPath, member.path);
@@ -305,6 +457,25 @@ export async function scanShowDirectory(
       }
     }
 
+    if (!group) {
+      await deleteEmptiedItems(tx, emptiedItemIds);
+      if (options.reconcileMissing === true) {
+        await confirmScopeEmpty(library.rootPath, showsScan, path, true);
+        const [show] = await tx
+          .select()
+          .from(items)
+          .where(
+            and(
+              eq(items.libraryId, libraryId),
+              eq(items.canonicalFolder, path),
+              eq(items.kind, "show"),
+            ),
+          );
+        if (show) await deleteItemSubtree(tx, show.id);
+      }
+      return { itemId: null, versionIds: [] as string[] };
+    }
+
     const [existingShow] = await tx
       .select()
       .from(items)
@@ -314,10 +485,23 @@ export async function scanShowDirectory(
           eq(items.canonicalFolder, group.canonicalFolder),
         ),
       );
+    const found = await findItemByProviderIds(tx, libraryId, mergedProviderIds);
+    if (existingShow && found && existingShow.id !== found.id)
+      throw new AuthError("CONFLICT");
     let showId: string;
     if (existingShow) {
       if (existingShow.kind !== "show") throw new AuthError("CONFLICT");
       showId = existingShow.id;
+    } else if (found) {
+      if (found.kind !== "show") throw new AuthError("CONFLICT");
+      await tx
+        .update(items)
+        .set({
+          canonicalFolder: group.canonicalFolder,
+          updatedAt: new Date(),
+        })
+        .where(eq(items.id, found.id));
+      showId = found.id;
     } else {
       const created = await insertItem(tx, {
         libraryId,
@@ -352,6 +536,17 @@ export async function scanShowDirectory(
           throw new AuthError("CONFLICT");
         }
         seasonId = existingSeason.item.id;
+        if (
+          existingSeason.item.canonicalFolder !== seasonGroup.canonicalFolder
+        ) {
+          await tx
+            .update(items)
+            .set({
+              canonicalFolder: seasonGroup.canonicalFolder,
+              updatedAt: new Date(),
+            })
+            .where(eq(items.id, seasonId));
+        }
       } else {
         const created = await insertItem(tx, {
           libraryId,
@@ -416,6 +611,17 @@ export async function scanShowDirectory(
             throw new AuthError("CONFLICT");
           }
           episodeId = existingEpisode.item.id;
+          if (
+            existingEpisode.item.canonicalFolder !== seasonGroup.canonicalFolder
+          ) {
+            await tx
+              .update(items)
+              .set({
+                canonicalFolder: seasonGroup.canonicalFolder,
+                updatedAt: new Date(),
+              })
+              .where(eq(items.id, episodeId));
+          }
           const existingEnd =
             existingEpisode.episode.episodeEndNumber ??
             existingEpisode.episode.episodeNumber;
@@ -611,6 +817,78 @@ export async function scanShowDirectory(
         }
       }
     }
+
+    await deleteEmptiedItems(tx, emptiedItemIds);
+
+    if (options.reconcileMissing === true) {
+      const showFiles = await tx
+        .select({
+          id: files.id,
+          versionId: files.versionId,
+          path: files.path,
+        })
+        .from(files)
+        .innerJoin(
+          itemAncestors,
+          and(
+            eq(itemAncestors.descendantId, files.itemId),
+            eq(itemAncestors.ancestorId, showId),
+          ),
+        );
+      const stale = showFiles.filter((file) => !memberByPath.has(file.path));
+      const staleFileIds = stale.map((file) => file.id);
+      if (staleFileIds.length > 0) {
+        await tx.delete(files).where(inArray(files.id, staleFileIds));
+      }
+      const affectedVersionIds = [
+        ...new Set(stale.map((file) => file.versionId)),
+      ];
+      for (const versionId of affectedVersionIds) {
+        const [version] = await tx
+          .select({ origin: versions.origin })
+          .from(versions)
+          .where(eq(versions.id, versionId));
+        if (version?.origin !== "imported") continue;
+        const [remaining] = await tx
+          .select({ id: files.id })
+          .from(files)
+          .where(eq(files.versionId, versionId))
+          .limit(1);
+        if (remaining === undefined) {
+          await tx.delete(versions).where(eq(versions.id, versionId));
+        }
+      }
+      const descendants = await tx
+        .select({ id: items.id, kind: items.kind })
+        .from(items)
+        .innerJoin(
+          itemAncestors,
+          and(
+            eq(itemAncestors.descendantId, items.id),
+            eq(itemAncestors.ancestorId, showId),
+          ),
+        );
+      for (const item of descendants) {
+        if (item.kind !== "episode") continue;
+        const [version] = await tx
+          .select({ id: versions.id })
+          .from(versions)
+          .where(eq(versions.itemId, item.id))
+          .limit(1);
+        if (version === undefined) await deleteItemSubtree(tx, item.id);
+      }
+      for (const item of descendants) {
+        if (item.kind !== "season") continue;
+        const [child] = await tx
+          .select({ id: items.id })
+          .from(items)
+          .where(eq(items.parentId, item.id))
+          .limit(1);
+        if (child === undefined) await deleteItemSubtree(tx, item.id);
+      }
+    }
+
+    await setItemProviderIds(tx, showId, mergedProviderIds);
     return { itemId: showId, versionIds };
   });
   return { ...written, probed };

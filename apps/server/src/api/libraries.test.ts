@@ -204,6 +204,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
                 type: "scan",
                 libraryId: created.id,
                 path: "Alien (1979)",
+                reconcileMissing: true,
               },
             ]);
             for (const job of jobs)
@@ -378,7 +379,12 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
               ),
           ).toEqual([
             { type: "scan", libraryId: library.id, path: "." },
-            { type: "scan", libraryId: library.id, path: "Show (2020)" },
+            {
+              type: "scan",
+              libraryId: library.id,
+              path: "Show (2020)",
+              reconcileMissing: true,
+            },
           ]);
           for (const job of jobs) {
             expect(job.state).toBe("completed");

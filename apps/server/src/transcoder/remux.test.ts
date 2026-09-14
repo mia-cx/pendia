@@ -273,7 +273,14 @@ describe("remux", () => {
     expect(keyframes[0]).toBeCloseTo(6, 3);
   }, 30_000);
 
-  test("a Dolby Vision strip runs on a hevc source", async () => {
+  // The dovi_rpu bitstream filter arrived in ffmpeg 7.1; the runtime image has
+  // it, the CI runner's apt ffmpeg 6.1 does not.
+  const hasDoviFilter = Bun.spawnSync(["ffmpeg", "-hide_banner", "-bsfs"])
+    .stdout.toString()
+    .includes("dovi_rpu");
+  const doviTest = test.skipIf(!hasDoviFilter);
+
+  doviTest("a Dolby Vision strip runs on a hevc source", async () => {
     // The source carries no RPU, so the filter is a no-op; the run proves
     // ffmpeg accepts dovi_rpu=strip=1 in copy mode.
     const hevcPath = join(dir, "hevc.mkv");
@@ -341,7 +348,7 @@ describe("remux", () => {
     for (const index of segments) {
       expect(await Bun.file(join(runDir, `${index}.m4s`)).exists()).toBe(true);
     }
-  }, 30_000);
+  });
 
   test("a throttled run reports the first segment and goes quiet after kill", async () => {
     const runDir = join(dir, "run-throttled");

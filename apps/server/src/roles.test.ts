@@ -127,6 +127,24 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
       ).rejects.toThrow();
     }));
 
+  test("a trailing slash on the transcoder address is stripped", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const server = await startPendia("transcoder", {
+        databaseUrl: url,
+        transcoderOptions: { port: 0, address: "http://127.0.0.1:9/" },
+      });
+      try {
+        expect(server.transcoder?.address).toBe("http://127.0.0.1:9");
+        const [node] = await db
+          .select({ address: transcoderCapabilities.address })
+          .from(transcoderCapabilities);
+        expect(node?.address).toBe("http://127.0.0.1:9");
+      } finally {
+        await server.stop();
+      }
+    }));
+
   for (const role of [
     "api",
     "transcoder",

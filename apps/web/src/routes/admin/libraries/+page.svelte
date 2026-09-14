@@ -109,10 +109,10 @@ async function saveRename(row: LibraryRow) {
   const name = editName;
   try {
     await client.libraries.update({ id: row.id, name });
-    if (editName === name) editingId = null;
+    if (editingId === row.id && editName === name) editingId = null;
     await list.reload();
   } catch (error) {
-    editFailure = readFailure(error);
+    if (editingId === row.id) editFailure = readFailure(error);
   } finally {
     editBusy = false;
   }

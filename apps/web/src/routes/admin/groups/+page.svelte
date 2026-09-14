@@ -58,10 +58,11 @@ async function saveEdit(row: GroupRow) {
   const perms = [...editPerms];
   try {
     await client.groups.setPermissions({ id: row.id, permissions: perms });
-    if (samePermissions(editPerms, perms)) editingId = null;
+    if (editingId === row.id && samePermissions(editPerms, perms))
+      editingId = null;
     await list.reload();
   } catch (error) {
-    editFailure = readFailure(error);
+    if (editingId === row.id) editFailure = readFailure(error);
   } finally {
     editBusy = false;
   }

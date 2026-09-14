@@ -425,7 +425,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           await rm(join(dir, "Alien.1080p.mkv"));
 
           await holdLibraryLock(url, library.id, async (release) => {
-            const scanning = scanDirectory(db, library.id, folder);
+            const scanning = scanDirectory(db, library.id, folder, {
+              reconcileMissing: true,
+            });
             await waitForBlockedScan(db);
             await createVideoFixture(join(dir, "Alien.720p.mkv"));
             release();
@@ -1342,7 +1344,9 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await rm(join(seasonDir, "Foundation S01E01.mkv"));
 
         await holdLibraryLock(url, library.id, async (release) => {
-          const scanning = scanShowDirectory(db, library.id, show);
+          const scanning = scanShowDirectory(db, library.id, show, {
+            reconcileMissing: true,
+          });
           await waitForBlockedScan(db);
           await createVideoFixture(join(seasonDir, "Foundation S01E02.mkv"));
           release();

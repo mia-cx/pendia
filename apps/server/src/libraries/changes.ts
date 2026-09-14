@@ -4,6 +4,7 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
   files,
+  itemAncestors,
   items,
   providerIds as providerIdRows,
   type ScanChange,
@@ -13,6 +14,16 @@ import { deleteItemSubtree } from "../db/tree.ts";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
+
+const rootItemId = async (db: Connection, itemId: string): Promise<string> => {
+  const [root] = await db
+    .select({ id: items.id })
+    .from(itemAncestors)
+    .innerJoin(items, eq(itemAncestors.ancestorId, items.id))
+    .where(and(eq(itemAncestors.descendantId, itemId), eq(items.kind, "show")))
+    .limit(1);
+  return root?.id ?? itemId;
+};
 
 const requireRelativePath = (path: string, allowDot: boolean): string => {
   if (
@@ -119,7 +130,14 @@ export async function applyScanChanges(
             .delete(versions)
             .where(eq(versions.id, destination.versionId));
         } else {
-          await deleteItemSubtree(db, destination.itemId);
+          const sourceRootId = await rootItemId(db, file.itemId);
+          const destinationRootId = await rootItemId(db, destination.itemId);
+          await deleteItemSubtree(
+            db,
+            sourceRootId === destinationRootId
+              ? destination.itemId
+              : destinationRootId,
+          );
         }
       }
       if (file) {

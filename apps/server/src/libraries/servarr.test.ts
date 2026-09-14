@@ -237,7 +237,7 @@ describe("webhook change guards", () => {
         kind: "delete",
         path: "/media/shows/Gone",
         target: "item",
-        providerIds: { imdb: "  " },
+        providerIds: {},
       },
     ]);
     expect(

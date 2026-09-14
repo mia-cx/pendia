@@ -196,7 +196,7 @@ export async function scanDirectory(
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
 
-    await applyScanChanges(tx, libraryId, changes);
+    const emptiedItemIds = await applyScanChanges(tx, libraryId, changes);
 
     for (const member of members) {
       const current = await readLibraryFile(library.rootPath, member.path);
@@ -209,14 +209,25 @@ export async function scanDirectory(
     }
 
     if (!group) {
-      await confirmScopeEmpty(library.rootPath, moviesMedium.scan, path, false);
-      const [item] = await tx
-        .select()
-        .from(items)
-        .where(
-          and(eq(items.libraryId, libraryId), eq(items.canonicalFolder, path)),
+      await deleteEmptiedItems(tx, emptiedItemIds);
+      if (options.reconcileMissing === true) {
+        await confirmScopeEmpty(
+          library.rootPath,
+          moviesMedium.scan,
+          path,
+          false,
         );
-      if (item) await deleteItemSubtree(tx, item.id);
+        const [item] = await tx
+          .select()
+          .from(items)
+          .where(
+            and(
+              eq(items.libraryId, libraryId),
+              eq(items.canonicalFolder, path),
+            ),
+          );
+        if (item) await deleteItemSubtree(tx, item.id);
+      }
       return { itemId: null, versionIds: [] as string[] };
     }
 
@@ -336,22 +347,25 @@ export async function scanDirectory(
       versionIds.push(versionId);
       await upsertFileStreams(tx, versionId, fileId, member.probe);
     }
-    const itemFiles = await tx
-      .select()
-      .from(files)
-      .where(eq(files.itemId, itemId));
-    const present = new Set(group.paths);
-    for (const file of itemFiles) {
-      if (present.has(file.path)) continue;
-      const [version] = await tx
-        .select({ origin: versions.origin })
-        .from(versions)
-        .where(eq(versions.id, file.versionId));
-      if (version?.origin === "imported") {
-        await tx.delete(versions).where(eq(versions.id, file.versionId));
+    if (options.reconcileMissing === true) {
+      const itemFiles = await tx
+        .select()
+        .from(files)
+        .where(eq(files.itemId, itemId));
+      const present = new Set(group.paths);
+      for (const file of itemFiles) {
+        if (present.has(file.path)) continue;
+        const [version] = await tx
+          .select({ origin: versions.origin })
+          .from(versions)
+          .where(eq(versions.id, file.versionId));
+        if (version?.origin === "imported") {
+          await tx.delete(versions).where(eq(versions.id, file.versionId));
+        }
       }
     }
 
+    await deleteEmptiedItems(tx, emptiedItemIds);
     await setItemProviderIds(tx, itemId, mergedProviderIds);
     await persistScanTimelines(tx, itemId);
     return { itemId, versionIds };
@@ -444,18 +458,21 @@ export async function scanShowDirectory(
     }
 
     if (!group) {
-      await confirmScopeEmpty(library.rootPath, showsScan, path, true);
-      const [show] = await tx
-        .select()
-        .from(items)
-        .where(
-          and(
-            eq(items.libraryId, libraryId),
-            eq(items.canonicalFolder, path),
-            eq(items.kind, "show"),
-          ),
-        );
-      if (show) await deleteItemSubtree(tx, show.id);
+      await deleteEmptiedItems(tx, emptiedItemIds);
+      if (options.reconcileMissing === true) {
+        await confirmScopeEmpty(library.rootPath, showsScan, path, true);
+        const [show] = await tx
+          .select()
+          .from(items)
+          .where(
+            and(
+              eq(items.libraryId, libraryId),
+              eq(items.canonicalFolder, path),
+              eq(items.kind, "show"),
+            ),
+          );
+        if (show) await deleteItemSubtree(tx, show.id);
+      }
       return { itemId: null, versionIds: [] as string[] };
     }
 

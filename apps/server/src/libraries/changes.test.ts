@@ -546,7 +546,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
-  test("a plain rescan reconciles a file missing on disk", () =>
+  test("only reconcileMissing removes a file missing on disk", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withVideoFixture(async (root) => {
@@ -566,6 +566,12 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, folder);
 
         expect(await db.select().from(items)).toHaveLength(1);
+        expect(await db.select().from(versions)).toHaveLength(2);
+        expect(await db.select().from(files)).toHaveLength(2);
+
+        await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
         const versionRows = await db.select().from(versions);
         expect(versionRows.map((row) => row.id)).toEqual([kept.versionId]);
         const remainingFiles = await db.select().from(files);
@@ -573,7 +579,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
-  test("a plain rescan removes an Item whose only file vanished", () =>
+  test("only reconcileMissing removes an Item whose only file vanished", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withVideoFixture(async (root) => {
@@ -587,6 +593,13 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await rm(join(root, file1080));
         await runScanJob(db, library.id, folder);
 
+        expect(await db.select().from(items)).toHaveLength(1);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+
+        await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
         expect(await db.select().from(items)).toEqual([]);
         expect(await db.select().from(versions)).toEqual([]);
         expect(await db.select().from(files)).toEqual([]);
@@ -902,6 +915,10 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         const progressBefore = await db.select().from(progress);
 
         await rename(join(root, oldShow), join(root, newShow));
+        const temporary = await scanShowDirectory(db, library.id, newShow);
+        expect(temporary.itemId).not.toBe(showId);
+        expect(await db.select().from(items)).toHaveLength(6);
+
         await runScanJob(db, library.id, newShow, [
           {
             kind: "move",

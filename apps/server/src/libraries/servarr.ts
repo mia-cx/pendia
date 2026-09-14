@@ -37,7 +37,7 @@ const providerIdsOf = (
     const value = source[field];
     if (typeof value === "number" && Number.isFinite(value) && value > 0) {
       providerIds[name] = String(value);
-    } else if (typeof value === "string" && value !== "") {
+    } else if (typeof value === "string" && value.trim() !== "") {
       providerIds[name] = value;
     }
   }

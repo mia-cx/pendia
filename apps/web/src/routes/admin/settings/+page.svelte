@@ -200,7 +200,7 @@ async function removeKey(name: string) {
                 onclick={() => removeKey(name)}
                 disabled={removeBusy[name] === true}>Remove</button
               >
-              {#if removeFailures[name]}
+              {#if Object.hasOwn(removeFailures, name)}
                 <Failure failure={removeFailures[name]} />
               {/if}
             </td>

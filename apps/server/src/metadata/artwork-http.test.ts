@@ -70,6 +70,7 @@ async function withServer<T>(
     resize?: ArtworkResize;
     maxCacheEntries?: number;
     maxCacheBytes?: number;
+    maxConcurrentResizes?: number;
   },
   run: (base: string) => Promise<T>,
 ): Promise<T> {
@@ -420,6 +421,67 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
       });
     }));
 
+  test("bounds in-flight artwork work to the concurrency limit", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        const callWaiters: { n: number; resolve: () => void }[] = [];
+        const waitForCalls = (n: number) =>
+          calls.length >= n
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => callWaiters.push({ n, resolve }));
+        const releases = new Map<number, () => void>();
+        const resize: ArtworkResize = (_input, width) => {
+          calls.push(width);
+          for (let i = callWaiters.length - 1; i >= 0; i -= 1) {
+            const waiter = callWaiters[i];
+            if (waiter !== undefined && calls.length >= waiter.n) {
+              callWaiters.splice(i, 1);
+              waiter.resolve();
+            }
+          }
+          return new Promise((resolve) => {
+            releases.set(width, () =>
+              resolve({
+                bytes: new Uint8Array([width]),
+                contentType: "image/x-artwork",
+              }),
+            );
+          });
+        };
+        await withServer(
+          db,
+          { resize, maxConcurrentResizes: 2 },
+          async (base) => {
+            const url = (w: number) =>
+              `${base}/api/artwork/${row.id}?width=${w}`;
+            const pending4 = fetch(url(4));
+            const pending5 = fetch(url(5));
+            const pending6 = fetch(url(6));
+            await waitForCalls(2);
+            expect(calls).toHaveLength(2);
+            const firstWidth = calls[0];
+            if (firstWidth === undefined)
+              throw new Error("Resize call missing.");
+            releases.get(firstWidth)?.();
+            await waitForCalls(3);
+            expect(calls).toHaveLength(3);
+            for (const release of releases.values()) release();
+            const [r4, r5, r6] = await Promise.all([
+              pending4,
+              pending5,
+              pending6,
+            ]);
+            expect(r4.status).toBe(200);
+            expect(r5.status).toBe(200);
+            expect(r6.status).toBe(200);
+          },
+        );
+      });
+    }));
+
   test("a rejected in-flight resize does not poison the cache key", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -436,17 +498,21 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
             contentType: "image/x-artwork",
           };
         };
-        await withServer(db, { resize }, async (base) => {
-          const url = `${base}/api/artwork/${row.id}?width=4`;
-          const failed = await fetch(url);
-          expect(failed.status).toBe(500);
-          const retried = await fetch(url);
-          expect(retried.status).toBe(200);
-          expect(Buffer.from(await retried.arrayBuffer())).toEqual(
-            Buffer.from([4]),
-          );
-          expect(calls).toEqual([4, 4]);
-        });
+        await withServer(
+          db,
+          { resize, maxConcurrentResizes: 1 },
+          async (base) => {
+            const url = `${base}/api/artwork/${row.id}?width=4`;
+            const failed = await fetch(url);
+            expect(failed.status).toBe(500);
+            const retried = await fetch(url);
+            expect(retried.status).toBe(200);
+            expect(Buffer.from(await retried.arrayBuffer())).toEqual(
+              Buffer.from([4]),
+            );
+            expect(calls).toEqual([4, 4]);
+          },
+        );
       });
     }));
 
@@ -456,6 +522,17 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
         expect(() => createArtworkHandler(db, { maxCacheBytes })).toThrow(
           "Invalid artwork cache size.",
         );
+      }
+      for (const maxConcurrentResizes of [
+        0,
+        -1,
+        1.5,
+        Number.NaN,
+        Number.MAX_VALUE,
+      ]) {
+        expect(() =>
+          createArtworkHandler(db, { maxConcurrentResizes }),
+        ).toThrow("Invalid artwork cache size.");
       }
     }));
 

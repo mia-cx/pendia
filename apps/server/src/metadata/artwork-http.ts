@@ -67,17 +67,40 @@ export function createArtworkHandler(
     resize?: ArtworkResize;
     maxCacheEntries?: number;
     maxCacheBytes?: number;
+    maxConcurrentResizes?: number;
   } = {},
 ): (request: Request) => Promise<Response | undefined> {
   const maxCacheEntries = options.maxCacheEntries ?? 128;
   const maxCacheBytes = options.maxCacheBytes ?? 64 * 1024 * 1024;
+  const maxConcurrentResizes = options.maxConcurrentResizes ?? 4;
   if (
     !Number.isSafeInteger(maxCacheEntries) ||
     maxCacheEntries < 1 ||
     !Number.isSafeInteger(maxCacheBytes) ||
-    maxCacheBytes < 1
+    maxCacheBytes < 1 ||
+    !Number.isSafeInteger(maxConcurrentResizes) ||
+    maxConcurrentResizes < 1
   )
     throw new Error("Invalid artwork cache size.");
+  let active = 0;
+  const waiters: (() => void)[] = [];
+  const acquireSlot = async () => {
+    if (active < maxConcurrentResizes) {
+      active += 1;
+    } else {
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = waiters.shift();
+      if (next === undefined) active -= 1;
+      else next();
+    };
+  };
   const resize = options.resize ?? sharpResize;
   const cache = new Map<
     string,
@@ -127,74 +150,86 @@ export function createArtworkHandler(
           : Number(value);
       if (!Number.isSafeInteger(width) || width < 1 || width > maxWidth)
         return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
-      const original = await readArtworkOriginal(db, id);
-      if (original === null)
-        return jsonError(404, "NOT_FOUND", "Artwork not found.");
+      const release = await acquireSlot();
+      try {
+        const original = await readArtworkOriginal(db, id);
+        if (original === null)
+          return jsonError(404, "NOT_FOUND", "Artwork not found.");
 
-      const effectiveWidth =
-        original.artwork.width === null
-          ? width
-          : Math.min(width, original.artwork.width);
-      const hasher = new Bun.CryptoHasher("sha256");
-      hasher.update(original.bytes);
-      hasher.update(`;w=${effectiveWidth}`);
-      const sourceKey = hasher.digest("hex");
+        const effectiveWidth =
+          original.artwork.width === null
+            ? width
+            : Math.min(width, original.artwork.width);
+        const hasher = new Bun.CryptoHasher("sha256");
+        hasher.update(original.bytes);
+        hasher.update(`;w=${effectiveWidth}`);
+        const sourceKey = hasher.digest("hex");
 
-      let result = cache.get(sourceKey);
-      if (result) {
-        cache.delete(sourceKey);
-        cache.set(sourceKey, result);
-      } else {
-        let pending = inFlight.get(sourceKey);
-        if (pending === undefined) {
-          pending = resize(original.bytes, effectiveWidth).then((resized) => {
-            const etagHasher = new Bun.CryptoHasher("sha256");
-            etagHasher.update(resized.contentType);
-            etagHasher.update(":");
-            etagHasher.update(resized.bytes);
-            return { ...resized, etag: `"${etagHasher.digest("hex")}"` };
-          });
-          inFlight.set(sourceKey, pending);
-          const cleanup = () => {
-            if (inFlight.get(sourceKey) === pending) inFlight.delete(sourceKey);
-          };
-          pending.then(cleanup, cleanup);
-        }
-        const resized = await pending;
-        result = cache.get(sourceKey);
+        let result = cache.get(sourceKey);
         if (result) {
           cache.delete(sourceKey);
           cache.set(sourceKey, result);
         } else {
-          result = resized;
-          if (result.bytes.byteLength <= maxCacheBytes) {
+          let pending = inFlight.get(sourceKey);
+          if (pending === undefined) {
+            pending = resize(original.bytes, effectiveWidth).then((resized) => {
+              const etagHasher = new Bun.CryptoHasher("sha256");
+              etagHasher.update(resized.contentType);
+              etagHasher.update(":");
+              etagHasher.update(resized.bytes);
+              return { ...resized, etag: `"${etagHasher.digest("hex")}"` };
+            });
+            inFlight.set(sourceKey, pending);
+            const cleanup = () => {
+              if (inFlight.get(sourceKey) === pending)
+                inFlight.delete(sourceKey);
+            };
+            pending.then(cleanup, cleanup);
+          }
+          const resized = await pending;
+          result = cache.get(sourceKey);
+          if (result) {
+            cache.delete(sourceKey);
             cache.set(sourceKey, result);
-            cacheBytes += result.bytes.byteLength;
-            while (cache.size > maxCacheEntries || cacheBytes > maxCacheBytes) {
-              const oldest = cache.keys().next().value;
-              if (oldest === undefined) break;
-              const evicted = cache.get(oldest);
-              cache.delete(oldest);
-              if (evicted !== undefined) cacheBytes -= evicted.bytes.byteLength;
+          } else {
+            result = resized;
+            if (result.bytes.byteLength <= maxCacheBytes) {
+              cache.set(sourceKey, result);
+              cacheBytes += result.bytes.byteLength;
+              while (
+                cache.size > maxCacheEntries ||
+                cacheBytes > maxCacheBytes
+              ) {
+                const oldest = cache.keys().next().value;
+                if (oldest === undefined) break;
+                const evicted = cache.get(oldest);
+                cache.delete(oldest);
+                if (evicted !== undefined)
+                  cacheBytes -= evicted.bytes.byteLength;
+              }
             }
           }
         }
+        const headers = {
+          ETag: result.etag,
+          "Cache-Control": cacheControl,
+          "X-Content-Type-Options": "nosniff",
+        };
+        if (
+          matchesIfNoneMatch(request.headers.get("if-none-match"), result.etag)
+        )
+          return new Response(null, { status: 304, headers });
+        return new Response(Buffer.from(result.bytes), {
+          status: 200,
+          headers: {
+            ...headers,
+            "Content-Type": result.contentType,
+            "Content-Length": String(result.bytes.byteLength),
+          },
+        });
+      } finally {
+        release();
       }
-      const headers = {
-        ETag: result.etag,
-        "Cache-Control": cacheControl,
-        "X-Content-Type-Options": "nosniff",
-      };
-      if (matchesIfNoneMatch(request.headers.get("if-none-match"), result.etag))
-        return new Response(null, { status: 304, headers });
-      return new Response(Buffer.from(result.bytes), {
-        status: 200,
-        headers: {
-          ...headers,
-          "Content-Type": result.contentType,
-          "Content-Length": String(result.bytes.byteLength),
-        },
-      });
     } catch (error) {
       if (error instanceof AuthError)
         return jsonError(error.status, error.code, error.message);

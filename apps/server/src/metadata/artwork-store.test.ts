@@ -612,44 +612,54 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
       });
     }));
 
-  test("retries once when the stored generation is replaced before open", () =>
+  test("retries while stored generations are replaced before open", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
         const { item } = await fixture(db, root);
         const { request } = mockRequest(() => new Response(png));
         const first = await storeArtworkOriginal(db, item.id, poster, request);
-        const replacement = await sharp({
-          create: {
-            width: 4,
-            height: 4,
-            channels: 3,
-            background: { r: 0, g: 0, b: 255 },
-          },
-        })
-          .png()
-          .toBuffer();
+        const replacements = await Promise.all(
+          [
+            { r: 0, g: 0, b: 255 },
+            { r: 0, g: 255, b: 0 },
+          ].map((background) =>
+            sharp({
+              create: { width: 4, height: 4, channels: 3, background },
+            })
+              .png()
+              .toBuffer(),
+          ),
+        );
         const paths: string[] = [];
         const openFile: ArtworkOpen = async (path, flags) => {
           paths.push(path);
-          if (paths.length === 1)
+          const replacement = replacements[paths.length - 1];
+          if (replacement !== undefined)
             await storeArtworkOriginal(
               db,
               item.id,
-              { type: "poster", url: "https://image.example/new.png" },
+              {
+                type: "poster",
+                url: `https://image.example/new-${paths.length}.png`,
+              },
               mockRequest(() => new Response(replacement)).request,
             );
           return open(path, flags);
         };
         const original = await readArtworkOriginal(db, first.id, openFile);
-        expect(paths).toHaveLength(2);
+        expect(paths).toHaveLength(3);
         expect(paths[0]).not.toBe(paths[1]);
+        expect(paths[1]).not.toBe(paths[2]);
         expect(original?.artwork.id).toBe(first.id);
         expect(original?.artwork.storageKey).not.toBe(first.storageKey);
         expect(original?.artwork.sourceUrl).toBe(
-          "https://image.example/new.png",
+          "https://image.example/new-2.png",
         );
-        expect(Buffer.from(original?.bytes ?? [])).toEqual(replacement);
+        const finalReplacement = replacements[1];
+        if (finalReplacement === undefined)
+          throw new Error("Replacement missing.");
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(finalReplacement);
       });
     }));
 

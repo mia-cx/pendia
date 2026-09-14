@@ -299,7 +299,7 @@ export async function readArtworkOriginal(
   artworkId: string,
   openFile: ArtworkOpen = open,
 ): Promise<ArtworkOriginal | null> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (;;) {
     const [row] = await db
       .select()
       .from(artwork)
@@ -335,7 +335,12 @@ export async function readArtworkOriginal(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        if (attempt === 0) continue;
+        const [current] = await db
+          .select({ storageKey: artwork.storageKey })
+          .from(artwork)
+          .where(and(eq(artwork.id, artworkId), eq(artwork.selected, true)));
+        if (current !== undefined && current.storageKey !== row.storageKey)
+          continue;
         return null;
       }
       if (code === "ELOOP") throw new Error("Invalid artwork storage path.");
@@ -349,5 +354,4 @@ export async function readArtworkOriginal(
       await handle.close();
     }
   }
-  return null;
 }

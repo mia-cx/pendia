@@ -1,5 +1,5 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -14,11 +14,14 @@ import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
+import type { PlaybackDecision } from "../playback/decisions.ts";
+import { loadPlaybackSource } from "../playback/planning.ts";
 import { type HlsName, parseHlsName } from "../playback/playlists.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
 import {
   createSessionManager,
   type SessionManager,
+  type SessionManagerOptions,
   type SessionScope,
 } from "./sessions.ts";
 
@@ -106,6 +109,8 @@ describe.skipIf(!databaseUrl)("session manager", () => {
       itemId: string;
       versionId: string;
     }) => Promise<void>,
+    managerOptions: Partial<SessionManagerOptions> = {},
+    decision?: PlaybackDecision,
   ) => {
     await withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -131,6 +136,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
           versionId,
           playMethod: "remux",
           state: "starting",
+          ...(decision === undefined ? {} : { decision }),
         })
         .returning();
       if (session === undefined) {
@@ -142,6 +148,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         idleMs: 400,
         waitMs: 300,
         readRate: { rate: 1, initialBurstSeconds: 3.5 },
+        ...managerOptions,
       });
       try {
         await run({
@@ -166,7 +173,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   test(
     "starts on the master request and serves the first segment",
     () =>
-      withSession(async ({ manager, scope }) => {
+      withSession(async ({ db, manager, scope }) => {
         const startedAt = Date.now();
         const master = await manager.serve(
           scope,
@@ -182,6 +189,19 @@ describe.skipIf(!databaseUrl)("session manager", () => {
           throw new Error("Expected a master playlist.");
         }
         expect(parsed.variants[0]?.uri).toBe("media.m3u8?token=t");
+        const { source } = await loadPlaybackSource(
+          db,
+          scope.userId,
+          scope.itemId,
+          scope.versionId,
+        );
+        const variant = parsed.variants[0];
+        expect(variant?.bandwidth).toBeGreaterThanOrEqual(
+          Math.round(source.video.bitrate),
+        );
+        expect(variant?.bandwidth).toBe(
+          Math.round(source.video.bitrate + (source.audio[0]?.bitrate ?? 0)),
+        );
         const info = await manager.inspect(scope.sessionId);
         expect(info?.runs).toBe(1);
         expect(info?.running).toBe(true);
@@ -308,6 +328,60 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   );
 
   test(
+    "carries the Dolby Vision strip decision into the session",
+    () =>
+      withSession(
+        async ({ db, manager, scope }) => {
+          // The h264 fixture makes the dovi bitstream filter fail, so only
+          // the master is requested; the flag itself is what is asserted.
+          // The run's remux.failed log is expected and silenced.
+          const quiet = spyOn(console, "error").mockImplementation(() => {});
+          try {
+            await manager.serve(scope, hlsName("master.m3u8"), "");
+            expect(
+              (await manager.inspect(scope.sessionId))?.stripDolbyVision,
+            ).toBe(true);
+
+            const [second] = await db
+              .insert(sessionRegistry)
+              .values({
+                userId: scope.userId,
+                itemId: scope.itemId,
+                versionId: scope.versionId,
+                playMethod: "remux",
+                state: "starting",
+              })
+              .returning();
+            if (second === undefined) {
+              throw new Error("Session insert returned no row.");
+            }
+            const secondScope = { ...scope, sessionId: second.id };
+            await manager.serve(secondScope, hlsName("master.m3u8"), "");
+            expect((await manager.inspect(second.id))?.stripDolbyVision).toBe(
+              false,
+            );
+          } finally {
+            await manager.stop();
+            quiet.mockRestore();
+          }
+        },
+        {},
+        {
+          method: "remux",
+          video: {
+            action: "copy",
+            codec: "h264",
+            hdr: "sdr",
+            stripDolbyVision: true,
+          },
+          audio: [],
+          subtitles: [],
+        },
+      ),
+    30_000,
+  );
+
+  test(
     "publishes segment.ready events",
     () =>
       withSession(async ({ db, manager, scope }) => {
@@ -352,6 +426,51 @@ describe.skipIf(!databaseUrl)("session manager", () => {
           );
         expect(failure).toBeInstanceOf(AuthError);
         expect((failure as AuthError).code).toBe("CONFLICT");
+      }),
+    30_000,
+  );
+
+  test(
+    "a request at the idle boundary waits for cleanup and revives",
+    () =>
+      withSession(
+        async ({ manager, scope, scratchDir }) => {
+          // idleMs 100: the stop has at least started by the second request.
+          for (let round = 0; round < 3; round += 1) {
+            const first = await manager.serve(scope, hlsName("0.m4s"), "");
+            expect(first.status).toBe(200);
+            await first.body?.cancel();
+            await Bun.sleep(150);
+            const revived = await manager.serve(scope, hlsName("0.m4s"), "");
+            expect(revived.status).toBe(200);
+            await revived.body?.cancel();
+            expect((await manager.inspect(scope.sessionId))?.runs).toBe(1);
+            const sessionDir = join(scratchDir, scope.sessionId);
+            expect(await pathExists(sessionDir)).toBe(true);
+            const entries = await readdir(sessionDir);
+            expect(entries.some((name) => name.startsWith("run-"))).toBe(true);
+          }
+        },
+        { idleMs: 100 },
+      ),
+    30_000,
+  );
+
+  test(
+    "serve after stop answers 503 TRANSCODER_STOPPING and stop leaves no session",
+    () =>
+      withSession(async ({ manager, scope, scratchDir }) => {
+        await manager.serve(scope, hlsName("master.m3u8"), "");
+        await manager.stop();
+        const after = await manager.serve(scope, hlsName("master.m3u8"), "");
+        expect(after.status).toBe(503);
+        expect(after.headers.get("retry-after")).toBe("1");
+        const body = (await after.json()) as {
+          error?: { code?: string };
+        };
+        expect(body.error?.code).toBe("TRANSCODER_STOPPING");
+        expect(await manager.inspect(scope.sessionId)).toBeUndefined();
+        expect(await pathExists(join(scratchDir, scope.sessionId))).toBe(false);
       }),
     30_000,
   );

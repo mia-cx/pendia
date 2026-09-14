@@ -82,6 +82,7 @@ function toAudioStream(row: StreamRow): AudioStream {
         ? "dts-hd"
         : row.codec,
     channels: row.channels,
+    bitrate: row.bitrate === null ? null : Number(row.bitrate),
   };
 }
 
@@ -302,6 +303,7 @@ export async function planPlayback(
         versionId: version.id,
         playMethod: method,
         state: "starting",
+        decision,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");

@@ -4,7 +4,11 @@ import { eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { libraries, segmentTimelines } from "../db/schema/index.ts";
+import {
+  libraries,
+  segmentTimelines,
+  sessionRegistry,
+} from "../db/schema/index.ts";
 import { readLibraryFile } from "../libraries/walker.ts";
 import { standardHeaders } from "../playback/direct.ts";
 import {
@@ -20,10 +24,10 @@ import { loadPlaybackSource } from "../playback/planning.ts";
 import {
   buildMasterPlaylist,
   buildMediaPlaylist,
-  codecString,
   type HlsName,
   type PlaylistVariant,
   segmentCount,
+  variantCodecs,
 } from "../playback/playlists.ts";
 import { type RemuxRun, type RunHandle, startRemuxRun } from "./remux.ts";
 
@@ -65,6 +69,7 @@ type LiveSession = {
   publishes: Set<Promise<unknown>>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   stopped: boolean;
+  stripDolbyVision: boolean;
 };
 
 const log = (
@@ -98,6 +103,8 @@ export function createSessionManager(
   const waitMs = options.waitMs ?? 20_000;
   const readRate = options.readRate;
   const sessions = new Map<string, Promise<LiveSession>>();
+  const stopping = new Map<string, Promise<void>>();
+  let closed = false;
 
   const playlist = (body: string) =>
     new Response(body, {
@@ -248,6 +255,7 @@ export function createSessionManager(
         startIndex: index,
         directory,
         readRate,
+        stripDolbyVision: session.stripDolbyVision,
       },
       (indexes) => onReady(session, handle, directory, indexes),
     );
@@ -319,21 +327,28 @@ export function createSessionManager(
       .where(eq(segmentTimelines.id, version.segmentTimelineId))
       .limit(1);
     if (timeline === undefined) throw new AuthError("CONFLICT");
+    const [row] = await db
+      .select({ decision: sessionRegistry.decision })
+      .from(sessionRegistry)
+      .where(eq(sessionRegistry.id, scope.sessionId))
+      .limit(1);
+    const decision = row?.decision;
+    const stripDolbyVision =
+      decision?.video.action === "copy" &&
+      decision.video.stripDolbyVision === true;
     const audio = source.audio[0];
     const variant: PlaylistVariant = {
-      bandwidth: Math.round(source.video.bitrate),
+      bandwidth: Math.round(source.video.bitrate + (audio?.bitrate ?? 0)),
       width: source.video.width,
       height: source.video.height,
-      codecs: [
-        codecString({
+      codecs: variantCodecs(
+        {
           codec: source.video.codec,
           profile: source.video.profile ?? null,
           level: source.video.level ?? null,
-        }),
-        ...(audio === undefined
-          ? []
-          : [codecString({ codec: audio.codec, profile: null, level: null })]),
-      ].filter((codec) => codec !== null),
+        },
+        audio === undefined ? undefined : { codec: audio.codec },
+      ),
     };
     return {
       scope,
@@ -352,10 +367,15 @@ export function createSessionManager(
       publishes: new Set(),
       idleTimer: null,
       stopped: false,
+      stripDolbyVision,
     };
   };
 
-  const liveSession = (scope: SessionScope) => {
+  const liveSession = async (scope: SessionScope) => {
+    // A request at the idle boundary waits for kill and rm to finish, then
+    // gets a fresh session and directory.
+    const cleanup = stopping.get(scope.sessionId);
+    if (cleanup !== undefined) await cleanup.catch(() => {});
     const existing = sessions.get(scope.sessionId);
     if (existing !== undefined) return existing;
     const pending = loadSession(scope);
@@ -435,23 +455,31 @@ export function createSessionManager(
     return waitForInit(session);
   };
 
-  const stopSession = async (
-    sessionId: string,
-    reason: "idle" | "shutdown",
-  ) => {
-    const pending = sessions.get(sessionId);
-    sessions.delete(sessionId);
-    if (pending === undefined) return;
-    const session = await pending.catch(() => null);
-    if (session === null) return;
-    if (session.idleTimer !== null) clearTimeout(session.idleTimer);
-    session.stopped = true;
-    await session.transition.catch(() => {});
-    await session.current?.handle.kill();
-    rejectWaiters(session);
-    await Promise.allSettled(session.publishes);
-    await rm(session.directory, { recursive: true, force: true });
-    log("info", "session.stopped", { sessionId, reason });
+  const stopSession = (sessionId: string, reason: "idle" | "shutdown") => {
+    const work = (async () => {
+      // The sessions entry goes first so new requests never touch the dying
+      // object; the stopping entry lets them wait for cleanup instead.
+      const pending = sessions.get(sessionId);
+      sessions.delete(sessionId);
+      if (pending === undefined) return;
+      const session = await pending.catch(() => null);
+      if (session === null) return;
+      if (session.idleTimer !== null) clearTimeout(session.idleTimer);
+      session.stopped = true;
+      await session.transition.catch(() => {});
+      await session.current?.handle.kill();
+      rejectWaiters(session);
+      await Promise.allSettled(session.publishes);
+      await rm(session.directory, { recursive: true, force: true });
+      log("info", "session.stopped", { sessionId, reason });
+    })();
+    stopping.set(sessionId, work);
+    void work
+      .finally(() => {
+        if (stopping.get(sessionId) === work) stopping.delete(sessionId);
+      })
+      .catch(() => {});
+    return work;
   };
 
   return {
@@ -460,6 +488,20 @@ export function createSessionManager(
       name: HlsName,
       query: string,
     ): Promise<Response> {
+      if (closed) {
+        return Response.json(
+          {
+            error: {
+              code: "TRANSCODER_STOPPING",
+              message: "The transcoder is stopping.",
+            },
+          },
+          {
+            status: 503,
+            headers: { ...standardHeaders, "retry-after": "1" },
+          },
+        );
+      }
       const session = await liveSession(scope);
       touch(session);
       if (name.kind === "master" || name.kind === "media") {
@@ -481,14 +523,24 @@ export function createSessionManager(
         running: session.current !== null,
         pid: session.current?.handle.pid ?? null,
         ready: [...session.state.ready].sort((a, b) => a - b),
+        stripDolbyVision: session.stripDolbyVision,
       };
     },
     async stop() {
-      await Promise.all(
-        [...sessions.keys()].map((sessionId) =>
-          stopSession(sessionId, "shutdown"),
-        ),
-      );
+      closed = true;
+      // A stop already in flight adds to `stopping` mid-loop; keep draining
+      // until both maps are empty.
+      while (sessions.size > 0 || stopping.size > 0) {
+        for (const sessionId of [...sessions.keys()]) {
+          await stopSession(sessionId, "shutdown").catch((error: unknown) =>
+            log("error", "session.stop_failed", {
+              sessionId,
+              error: errorMessage(error),
+            }),
+          );
+        }
+        await Promise.allSettled([...stopping.values()]);
+      }
     },
   };
 }

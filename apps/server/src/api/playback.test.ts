@@ -293,6 +293,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           state: "starting",
           transcoderNodeId: null,
         });
+        expect(registry?.decision?.method).toBe("direct-play");
 
         const rest = await fetch(`${base}/api/playback/plan`, {
           method: "POST",
@@ -394,6 +395,8 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           playMethod: "remux",
           transcoderNodeId: null,
         });
+        expect(remuxRow?.decision?.method).toBe("remux");
+        expect(remuxRow?.decision?.video.action).toBe("copy");
 
         const [sequelVersion] = await db
           .select({ id: versions.id })

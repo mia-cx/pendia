@@ -22,8 +22,12 @@ export type VideoStream = {
   dvProfile?: number | null;
 };
 
-/** A normalized audio Stream: codec and channel count. */
-export type AudioStream = { codec: string; channels: number };
+/** A normalized audio Stream: codec, channel count and probed bitrate. */
+export type AudioStream = {
+  codec: string;
+  channels: number;
+  bitrate?: number | null;
+};
 
 /** A normalized subtitle Stream: format and text-or-bitmap kind. */
 export type SubtitleStream = { format: string; kind: "text" | "bitmap" };
@@ -273,3 +277,6 @@ export function decidePlayback(
     ),
   };
 }
+
+/** The engine's full output for one plan, persisted on the session. */
+export type PlaybackDecision = ReturnType<typeof decidePlayback>;

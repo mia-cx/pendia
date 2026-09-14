@@ -74,6 +74,23 @@ export function codecString(stream: {
   return audioCodecs[stream.codec] ?? null;
 }
 
+/** Returns the CODECS list for a variant; empty when any chosen codec is unknown, which omits the attribute. */
+export function variantCodecs(
+  video: { codec: string; profile: string | null; level: number | null },
+  audio: { codec: string } | undefined,
+) {
+  const videoCodec = codecString(video);
+  if (videoCodec === null) return [];
+  if (audio === undefined) return [videoCodec];
+  const audioCodec = codecString({
+    codec: audio.codec,
+    profile: null,
+    level: null,
+  });
+  if (audioCodec === null) return [];
+  return [videoCodec, audioCodec];
+}
+
 /** Builds the master playlist: one variant whose media playlist URI carries the query. */
 export function buildMasterPlaylist(variant: PlaylistVariant, query: string) {
   const attributes = [

@@ -140,15 +140,20 @@ async function scanNow(row: LibraryRow) {
   }
 }
 
+function startDelete(row: LibraryRow) {
+  confirmingId = row.id;
+  deleteFailure = undefined;
+}
+
 async function confirmDelete(row: LibraryRow) {
   deleteBusy = true;
   deleteFailure = undefined;
   try {
     await client.libraries.delete({ id: row.id });
-    confirmingId = null;
+    if (confirmingId === row.id) confirmingId = null;
     await list.reload();
   } catch (error) {
-    deleteFailure = readFailure(error);
+    if (confirmingId === row.id) deleteFailure = readFailure(error);
   } finally {
     deleteBusy = false;
   }
@@ -260,7 +265,7 @@ function scanCell(row: LibraryRow): string {
               <button type="button" onclick={() => startRename(row)}
                 >Rename</button
               >
-              <button type="button" onclick={() => (confirmingId = row.id)}
+              <button type="button" onclick={() => startDelete(row)}
                 >Delete</button
               >
             {/if}

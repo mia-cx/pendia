@@ -17,6 +17,9 @@ export type SegmentDecision =
 /** The empty state of a new session. */
 export const initialState: LiveState = { ready: new Set(), run: null };
 
+/** How many segments past the frontier a request waits for instead of restarting ffmpeg. */
+export const lookAheadSegments = 2;
+
 /** Decides how to answer a request for one segment. */
 export function decideSegment(
   state: LiveState,
@@ -29,7 +32,12 @@ export function decideSegment(
   if (state.ready.has(index)) {
     return { action: "serve" };
   }
-  if (state.run !== null && index === state.run.frontier + 1) {
+  // A request within the look-ahead waits for the running ffmpeg to reach it.
+  if (
+    state.run !== null &&
+    index > state.run.frontier &&
+    index - state.run.frontier <= lookAheadSegments
+  ) {
     return { action: "wait" };
   }
   return { action: "restart", index };

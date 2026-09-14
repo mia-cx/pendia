@@ -22,7 +22,11 @@ describe("decideSegment", () => {
     expect(decideSegment(running, 3, 10)).toEqual({ action: "wait" });
   });
 
-  test("restarts for a segment ahead of the frontier", () => {
+  test("waits within the look-ahead past the frontier", () => {
+    expect(decideSegment(running, 4, 10)).toEqual({ action: "wait" });
+  });
+
+  test("restarts past the look-ahead", () => {
     expect(decideSegment(running, 5, 10)).toEqual({
       action: "restart",
       index: 5,

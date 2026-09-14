@@ -120,6 +120,7 @@ The `settings` row with key `auth` holds one JSON object. Missing fields use the
   "loginMaxAttempts": 5,
   "loginWindowSeconds": 900,
   "trustedProxyAddresses": [],
+  "artworkRequiresAuth": false,
   "oidc": null
 }
 ```
@@ -141,6 +142,7 @@ The issuer, clientId and clientSecret fields are required. `openid` must be incl
 
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
 Settings apply on the next request. Invalid stored settings fail closed. Admin settings screens belong to a later slice.
+`artworkRequiresAuth` false keeps artwork anonymous for clients such as Findroid. True requires the existing bearer token or session cookie.
 A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
 
 Login attempts share independent address and normalized-account windows across API replicas. Successful logins consume an attempt too.
@@ -213,7 +215,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
 
-Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year` and `addedAt`.
+Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}`.
 Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.

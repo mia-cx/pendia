@@ -13,6 +13,8 @@ import {
   createChangeDebouncer,
   createServarrWebhookHandler,
 } from "./libraries/webhooks.ts";
+import { createArtworkHandler } from "./metadata/artwork-http.ts";
+import { registerMetadataJobs } from "./metadata/jobs.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -220,6 +222,7 @@ export async function startPendia(
         auth: createAuthHandler(database.db),
         api: createApiHandler(database.db, eventBroker),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
+        artwork: createArtworkHandler(database.db),
       });
     }
     if (runsJobs && database) {
@@ -228,8 +231,10 @@ export async function startPendia(
         runtimeRegistry.register(type, async (_payload, job) =>
           registry.run(job),
         );
-      if (!registry.types().includes("scan"))
+      if (!runtimeRegistry.types().includes("scan"))
         registerLibraryJobs(database.db, runtimeRegistry);
+      if (!runtimeRegistry.types().includes("provider-fetch"))
+        registerMetadataJobs(database.db, runtimeRegistry);
       worker = await startJobWorker(database.db, runtimeRegistry, {
         ...workerOptions,
         onError:

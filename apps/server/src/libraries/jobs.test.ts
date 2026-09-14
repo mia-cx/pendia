@@ -6,10 +6,11 @@ import { sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { events, libraries } from "../db/schema/index.ts";
+import { events, items, libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJobQueue, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
+import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
@@ -171,6 +172,83 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             (job) => job.concurrencyKey === libraryConcurrencyKey(library.id),
           ),
         ).toBe(true);
+      });
+    }));
+
+  test("a directory scan enqueues one provider-fetch job for its Item", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Alien (1979) {tmdb-348}";
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, folder, "Alien.mkv"));
+        const library = await insertLibrary(db, "Movies", root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim();
+        if (!claimed) throw new Error("Scan job was not claimed.");
+        await registry.run(claimed);
+        const [item] = await db.select().from(items);
+        if (!item) throw new Error("Scanned item missing.");
+        const queued = await listJobs(db, { state: "queued" });
+        expect(queued.map((job) => job.payload)).toEqual([
+          { type: "provider-fetch", itemId: item.id },
+        ]);
+        expect(queued[0]?.concurrencyKey).toBe(`provider:${item.id}`);
+        expect(await db.select().from(events)).toMatchObject([
+          { kind: "library.changed" },
+        ]);
+      });
+    }));
+
+  test("provider-fetch jobs on one item claim one at a time", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const itemId = Bun.randomUUIDv7();
+      const key = `provider:${itemId}`;
+      const first = await queue.enqueue(
+        { type: "provider-fetch", itemId },
+        { concurrencyKey: key },
+      );
+      const second = await queue.enqueue(
+        { type: "provider-fetch", itemId },
+        { concurrencyKey: key },
+      );
+      const claimed = await queue.claim(["provider-fetch"]);
+      expect(claimed?.id).toBe(first.id);
+      expect(await queue.claim(["provider-fetch"])).toBeUndefined();
+      await queue.complete(claimed ?? first);
+      const next = await queue.claim(["provider-fetch"]);
+      expect(next?.id).toBe(second.id);
+    }));
+
+  test("an empty directory scan enqueues no provider-fetch job", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await mkdir(join(root, "empty"));
+        const library = await insertLibrary(db, "Movies", root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "empty" },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim();
+        if (!claimed) throw new Error("Scan job was not claimed.");
+        await registry.run(claimed);
+        expect(await listJobs(db, { state: "queued" })).toHaveLength(0);
+        expect(await db.select().from(items)).toHaveLength(0);
+        expect(await db.select().from(events)).toMatchObject([
+          { kind: "library.changed" },
+        ]);
       });
     }));
 

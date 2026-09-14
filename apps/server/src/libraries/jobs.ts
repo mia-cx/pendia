@@ -35,10 +35,15 @@ export function registerLibraryJobs(
       throw new AuthError("INVALID_INPUT");
     if (payload.path !== ".") {
       if (library.medium === "movies") {
-        await scanDirectory(db, library.id, payload.path, {
+        const result = await scanDirectory(db, library.id, payload.path, {
           changes: payload.changes,
           reconcileMissing: payload.reconcileMissing,
         });
+        if (result.itemId !== null)
+          await createJobQueue(db).enqueue(
+            { type: "provider-fetch", itemId: result.itemId },
+            { concurrencyKey: `provider:${result.itemId}` },
+          );
       } else {
         await scanShowDirectory(db, library.id, payload.path, {
           changes: payload.changes,

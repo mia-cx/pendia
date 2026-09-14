@@ -190,7 +190,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await setItemProviderIds(db, itemId, { tmdb: "348" });
         const progressBefore = await db.select().from(progress);
 
-        const movedFolder = "Alien Remastered (1979) {tmdb-348}";
+        const movedFolder = "Alien Remastered (1979)";
         const movedPath = `${movedFolder}/Alien.1080p.mkv`;
         await rename(dir, join(root, movedFolder));
         const temporary = await scanDirectory(db, library.id, movedFolder);
@@ -646,6 +646,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         ]);
         const idRows = await db.select().from(providerIds);
         expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
+          ["tmdb", first.itemId],
           ["tmdb", second.itemId],
         ]);
       });

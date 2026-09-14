@@ -183,7 +183,9 @@ export async function scanDirectory(
     }
   }
 
-  const mergedProviderIds: Record<string, string> = {};
+  const mergedProviderIds: Record<string, string> = group
+    ? { ...group.providerIds }
+    : {};
   for (const change of changes) {
     Object.assign(mergedProviderIds, change.providerIds);
   }

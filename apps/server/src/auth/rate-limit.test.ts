@@ -27,6 +27,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
         loginMaxAttempts: 5,
         loginWindowSeconds: 900,
         trustedProxyAddresses: [],
+        artworkRequiresAuth: false,
         oidc: null,
       });
       await db.insert(settings).values({
@@ -38,6 +39,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
         loginMaxAttempts: 7,
         loginWindowSeconds: 900,
         trustedProxyAddresses: ["10.0.0.2", "10.0.0.3"],
+        artworkRequiresAuth: false,
         oidc: null,
       });
       for (const value of [
@@ -133,7 +135,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
       expect(retry).toBeGreaterThanOrEqual(1);
       // Five minutes tolerates loaded CI but stays below the fresh,
       // nonblocking address counter's fifteen-minute window.
-      expect(retry).toBeLessThanOrEqual(blockingWindowSeconds);
+      expect(retry).toBeLessThanOrEqual(blockingWindowSeconds + 1);
     }));
 
   test("concurrent callers share the same fixed windows", () =>

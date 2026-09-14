@@ -162,7 +162,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const before = await migrationState(db);
-      expect(before.journal).toHaveLength(4);
+      expect(before.journal).toHaveLength(5);
       expect(before.tables).toHaveLength(34);
       expect(before.extensions).toEqual([
         { extname: "btree_gist" },
@@ -172,6 +172,13 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         { name: "admins", builtIn: true, permissions: [...permissions] },
         { name: "users", builtIn: true, permissions: ["view", "play"] },
       ]);
+      expect(
+        Array.from(
+          await db.execute(
+            sql`select column_default from information_schema.columns where table_schema = 'public' and table_name = 'items' and column_name = 'metadata_state'`,
+          ),
+        ),
+      ).toEqual([{ column_default: "'pending'::metadata_state" }]);
       await migrateDatabase(db);
       expect(await migrationState(db)).toEqual(before);
     }));
@@ -204,7 +211,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             { code: 0, stderr: "" },
           ]);
           const state = await migrationState(db);
-          expect(state.journal).toHaveLength(4);
+          expect(state.journal).toHaveLength(5);
           expect(state.tables).toHaveLength(34);
           expect(state.groups).toHaveLength(2);
         } finally {

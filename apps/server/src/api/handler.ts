@@ -2,18 +2,25 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { Database } from "../db/client.ts";
 import { createDirectPlayHandler } from "../playback/direct.ts";
+import type { Transcoder } from "../transcoder/index.ts";
 import type { ApiContext } from "./context.ts";
 import type { EventBroker } from "./events.ts";
+import { createHlsHandler } from "./hls.ts";
 import { openApiDocument } from "./openapi.ts";
 import { pendiaRouter } from "./router.ts";
 
 const eventStreamPaths = new Set(["/api/events", "/rpc/events/stream"]);
 
-/** Creates the handler that serves the router over /rpc and /api. */
-export function createApiHandler(db: Database, events: EventBroker) {
+/** Creates the handler that serves the router over /rpc and /api plus the playback file routes. */
+export function createApiHandler(
+  db: Database,
+  events: EventBroker,
+  transcoder?: Transcoder,
+) {
   const rpc = new RPCHandler<ApiContext>(pendiaRouter);
   const openapi = new OpenAPIHandler<ApiContext>(pendiaRouter);
   const direct = createDirectPlayHandler(db);
+  const hls = createHlsHandler(db, transcoder);
   return async (
     request: Request,
     peerAddress: string,
@@ -24,6 +31,8 @@ export function createApiHandler(db: Database, events: EventBroker) {
       return Response.json(await openApiDocument());
     const played = await direct(request, peerAddress);
     if (played !== undefined) return played;
+    const streamed = await hls(request, server);
+    if (streamed !== undefined) return streamed;
     // Bun.serve drops connections idle for ten seconds; the event stream must outlive that.
     if (eventStreamPaths.has(pathname)) server.timeout(request, 0);
     const context: ApiContext = { db, request, peerAddress, events };

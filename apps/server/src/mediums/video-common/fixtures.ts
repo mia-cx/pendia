@@ -7,6 +7,10 @@ export interface VideoFixtureOptions {
   width?: number;
   height?: number;
   chapters?: boolean;
+  durationSeconds?: number;
+  frameRate?: number;
+  gopSeconds?: number;
+  pattern?: "color" | "testsrc2";
 }
 
 /** Generate a short real MKV with h264 video, AAC audio and SRT subtitles. */
@@ -14,7 +18,21 @@ export async function createVideoFixture(
   path: string,
   options: VideoFixtureOptions = {},
 ): Promise<void> {
-  const { width = 1920, height = 1080, chapters = false } = options;
+  const {
+    width = 1920,
+    height = 1080,
+    chapters = false,
+    durationSeconds = 1,
+    frameRate = 2,
+    gopSeconds,
+    pattern = "color",
+  } = options;
+  const source =
+    pattern === "testsrc2"
+      ? `testsrc2=s=${width}x${height}:r=${frameRate}:d=${durationSeconds}`
+      : `color=c=black:s=${width}x${height}:r=${frameRate}:d=${durationSeconds}`;
+  const gopFrames =
+    gopSeconds === undefined ? undefined : Math.round(gopSeconds * frameRate);
   const subtitlesPath = `${path}.srt`;
   const metadataPath = `${path}.ffmetadata`;
   await writeFile(subtitlesPath, "1\n00:00:00,000 --> 00:00:00,800\nFixture\n");
@@ -34,7 +52,7 @@ export async function createVideoFixture(
         "-f",
         "lavfi",
         "-i",
-        `color=c=black:s=${width}x${height}:r=2:d=1`,
+        source,
         "-f",
         "lavfi",
         "-i",
@@ -58,15 +76,26 @@ export async function createVideoFixture(
         "-map_chapters",
         "3",
         "-t",
-        "1",
+        String(durationSeconds),
         "-c:v",
         "libx264",
         "-preset",
         "ultrafast",
-        "-threads",
-        "1",
+        // testsrc2 at 1080p is too slow to encode on one thread.
+        ...(pattern === "testsrc2" ? [] : ["-threads", "1"]),
         "-pix_fmt",
         "yuv420p",
+        ...(gopFrames === undefined
+          ? []
+          : [
+              "-g",
+              String(gopFrames),
+              "-keyint_min",
+              String(gopFrames),
+              "-sc_threshold",
+              "0",
+            ]),
+        ...(pattern === "testsrc2" ? ["-crf", "30"] : []),
         "-c:a",
         "aac",
         "-c:s",

@@ -82,6 +82,7 @@ function toAudioStream(row: StreamRow): AudioStream {
         ? "dts-hd"
         : row.codec,
     channels: row.channels,
+    bitrate: row.bitrate === null ? null : Number(row.bitrate),
   };
 }
 
@@ -220,15 +221,22 @@ function isLanAddress(address: string): boolean {
   return (firstHextet & 0xfe00) === 0xfc00 || (firstHextet & 0xffc0) === 0xfe80;
 }
 
-function directUrl(
+function playbackUrl(
+  method: "direct-play" | "remux",
   request: Request,
   caller: Caller,
   sessionId: string,
   itemId: string,
   issued: { token: string; expiresAt: string },
 ) {
-  const path = `/api/playback/${sessionId}/${itemId}/direct`;
+  const path =
+    method === "remux"
+      ? `/api/playback/${sessionId}/${itemId}/hls/master.m3u8`
+      : `/api/playback/${sessionId}/${itemId}/direct`;
+  // Cookie callers can keep the token out of direct URLs; every HLS URL must
+  // carry it because segments are requested without other credentials.
   if (
+    method === "direct-play" &&
     request.headers.get("authorization") === null &&
     caller.credential.kind === "session"
   )
@@ -239,7 +247,7 @@ function directUrl(
   };
 }
 
-/** Runs the playback decision and, for direct play, opens a session with a token URL. */
+/** Runs the playback decision and, for direct play and remux, opens a session with a token URL. */
 export async function planPlayback(
   db: Database,
   caller: Caller,
@@ -278,7 +286,14 @@ export async function planPlayback(
     url: null as string | null,
     expiresAt: null as string | null,
   };
-  if (decision.method !== "direct-play") return base;
+  if (decision.method === "transcode") return base;
+  // A Version without an aligned timeline cannot be segmented for remux.
+  if (
+    decision.method === "remux" &&
+    (version.segmentTimelineId === null || !version.timelineAligned)
+  )
+    throw new AuthError("CONFLICT");
+  const method = decision.method;
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -286,8 +301,9 @@ export async function planPlayback(
         userId: caller.user.id,
         itemId: item.id,
         versionId: version.id,
-        playMethod: "direct-play",
+        playMethod: method,
         state: "starting",
+        decision,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");
@@ -298,12 +314,19 @@ export async function planPlayback(
     return {
       ...base,
       sessionId: session.id,
-      ...directUrl(transport.request, caller, session.id, item.id, issued),
+      ...playbackUrl(
+        method,
+        transport.request,
+        caller,
+        session.id,
+        item.id,
+        issued,
+      ),
     };
   });
 }
 
-/** Re-issues a playback token for the caller's live direct-play session. */
+/** Re-issues a playback token for the caller's live direct-play or remux session. */
 export async function refreshPlayback(
   db: Database,
   caller: Caller,
@@ -334,7 +357,7 @@ export async function refreshPlayback(
     !session ||
     session.userId !== caller.user.id ||
     session.state === "stopped" ||
-    session.playMethod !== "direct-play"
+    session.playMethod === "transcode"
   )
     throw new AuthError("UNAUTHENTICATED");
   const issued = await issuePlaybackToken(db, caller, scope);
@@ -342,12 +365,14 @@ export async function refreshPlayback(
     .update(sessionRegistry)
     .set({ lastSeenAt: sql`clock_timestamp()` })
     .where(eq(sessionRegistry.id, scope.sessionId));
+  const method = session.playMethod;
   return {
-    method: "direct-play" as const,
+    method,
     itemId: scope.itemId,
     versionId: session.versionId,
     sessionId: scope.sessionId,
-    ...directUrl(
+    ...playbackUrl(
+      method,
       transport.request,
       caller,
       scope.sessionId,

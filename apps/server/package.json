@@ -24,6 +24,7 @@
     "oauth4webapi": "3.8.7"
   },
   "devDependencies": {
-    "drizzle-kit": "0.31.10"
+    "drizzle-kit": "0.31.10",
+    "hls-parser": "0.16.1"
   }
 }

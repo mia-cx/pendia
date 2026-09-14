@@ -12,6 +12,7 @@ import {
   text,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { PlaybackDecision } from "../../playback/decisions.ts";
 import { users } from "./access.ts";
 import {
   id,
@@ -148,6 +149,7 @@ export const sessionRegistry = pgTable(
     playMethod: playMethod("play_method").notNull(),
     state: playbackState("state").notNull(),
     transcoderNodeId: uuid("transcoder_node_id"),
+    decision: jsonb("decision").$type<PlaybackDecision>(),
     createdAt: instant("created_at").notNull().defaultNow(),
     lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
   },

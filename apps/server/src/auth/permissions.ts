@@ -112,7 +112,11 @@ export async function requirePermission(
 
 const builtInNames = ["admins", "users"];
 
-async function requireAdmin(db: Queryable, userId: string): Promise<void> {
+/** Throws FORBIDDEN unless the user is an enabled built-in admin. */
+export async function requireAdmin(
+  db: Queryable,
+  userId: string,
+): Promise<void> {
   if (!(await enabledUser(db, userId))) throw new AuthError("FORBIDDEN");
   const memberGroups = await memberships(db, userId);
   if (!memberGroups.some((group) => group.builtIn && group.name === "admins"))
@@ -123,7 +127,7 @@ async function requireAdmin(db: Queryable, userId: string): Promise<void> {
 export async function createGroup(
   db: Database,
   actorId: string,
-  input: { name: string; permissions: Permission[] },
+  input: { name: string; permissions: readonly Permission[] },
 ) {
   await requireAdmin(db, actorId);
   const name = input.name.trim();
@@ -155,7 +159,7 @@ export async function setUserGroups(
   db: Database,
   actorId: string,
   userId: string,
-  groupIds: string[],
+  groupIds: readonly string[],
 ): Promise<void> {
   const unique = [...new Set(groupIds)];
   await db.transaction(async (tx) => {

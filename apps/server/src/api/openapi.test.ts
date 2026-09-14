@@ -4,6 +4,7 @@ import { openApiDocument } from "./openapi.ts";
 type Parameter = { name: string; in: string };
 type Operation = {
   parameters?: (Parameter | { $ref: string })[];
+  security?: unknown[];
   responses?: Record<
     string,
     { content?: { "application/json"?: { schema?: unknown } } }
@@ -53,6 +54,20 @@ describe("openapi document", () => {
         "/items/{itemId}/rating",
         "/shelves/continue-watching",
         "/shelves/next-up",
+        "/setup/status",
+        "/users",
+        "/users/{id}",
+        "/users/{id}/sessions",
+        "/sessions/{id}/revoke",
+        "/users/{id}/groups",
+        "/users/{id}/overrides/{permission}",
+        "/users/{id}/settings",
+        "/users/{id}/libraries/{libraryId}",
+        "/groups",
+        "/groups/{id}/permissions",
+        "/settings",
+        "/settings/providers/{name}",
+        "/libraries/{id}/scan-status",
       ]),
     );
   });
@@ -181,5 +196,15 @@ describe("openapi document", () => {
       name: "pendia_session",
     });
     expect(doc.security).toEqual([{ bearerAuth: [] }, { cookieAuth: [] }]);
+  });
+
+  test("setup status opts out of the root security requirement", async () => {
+    const doc = await openApiDocument();
+    const paths = doc.paths as Record<string, PathItem> | undefined;
+    expect(paths?.["/setup/status"]?.get?.security).toEqual([]);
+    expect(paths?.["/users"]?.get?.security ?? doc.security).toEqual([
+      { bearerAuth: [] },
+      { cookieAuth: [] },
+    ]);
   });
 });

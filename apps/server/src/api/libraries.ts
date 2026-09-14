@@ -3,13 +3,14 @@ import {
   createLibrary,
   deleteLibrary,
   getLibrary,
+  libraryScanStatus,
   listLibraries,
   scanLibrary,
   updateLibrary,
 } from "../libraries/service.ts";
 import { authenticated, authenticatedMutation } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
-import { Library, LibraryInput } from "./schema.ts";
+import { Library, LibraryInput, ScanStatus } from "./schema.ts";
 
 const idInput = Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID }));
 const libraryOutput = Schema.standardSchemaV1(Library);
@@ -81,6 +82,30 @@ const scan = authenticatedMutation
     ),
   );
 
+const scanStatus = authenticated
+  .route({ method: "GET", path: "/libraries/{id}/scan-status" })
+  .input(
+    Schema.standardSchemaV1(
+      Schema.Struct({
+        id: Schema.UUID,
+        runId: Schema.optional(Schema.UUID),
+      }),
+    ),
+  )
+  .output(Schema.standardSchemaV1(ScanStatus))
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        libraryScanStatus(
+          context.db,
+          context.caller.user.id,
+          input.id,
+          input.runId,
+        ),
+      ),
+    ),
+  );
+
 /** The library administration procedures mounted under `libraries`. */
 export const libraryProcedures = {
   list,
@@ -89,4 +114,5 @@ export const libraryProcedures = {
   update,
   delete: remove,
   scan,
+  scanStatus,
 };

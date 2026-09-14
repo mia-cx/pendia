@@ -7,6 +7,7 @@ import {
   type HlsName,
   parseHlsName,
   segmentCount,
+  variantCodecs,
 } from "./playlists.ts";
 
 HLS.setOptions({ strictMode: true });
@@ -134,5 +135,35 @@ describe("codecString", () => {
   ];
   test.each(cases)("%o -> %p", (stream, expected) => {
     expect(codecString(stream)).toBe(expected);
+  });
+});
+
+describe("variantCodecs", () => {
+  const h264 = { codec: "h264", profile: "high", level: 40 };
+
+  test("lists video and audio when both are known", () => {
+    expect(variantCodecs(h264, { codec: "aac" })).toEqual([
+      "avc1.640028",
+      "mp4a.40.2",
+    ]);
+  });
+
+  test("returns empty when the video codec is unknown", () => {
+    expect(
+      variantCodecs(
+        { codec: "vp9", profile: null, level: null },
+        {
+          codec: "aac",
+        },
+      ),
+    ).toEqual([]);
+  });
+
+  test("returns empty when the audio codec is unknown", () => {
+    expect(variantCodecs(h264, { codec: "dts-hd" })).toEqual([]);
+  });
+
+  test("lists only the video when there is no audio", () => {
+    expect(variantCodecs(h264, undefined)).toEqual(["avc1.640028"]);
   });
 });

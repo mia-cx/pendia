@@ -112,6 +112,31 @@ describe("remux", () => {
       expect(args[args.indexOf("-segment_start_number") + 1]).toBe("2");
     });
 
+    test("a Dolby Vision strip puts the bitstream filter right after -c copy", () => {
+      const args = remuxArguments({
+        inputPath,
+        boundariesSeconds: boundaries,
+        startIndex: 0,
+        directory: "/run",
+        stripDolbyVision: true,
+      });
+      const copy = args.indexOf("-c");
+      expect(args[copy + 1]).toBe("copy");
+      expect(args[copy + 2]).toBe("-bsf:v");
+      expect(args[copy + 3]).toBe("dovi_rpu=strip=1");
+      expect(args[copy + 4]).toBe("-copyts");
+    });
+
+    test("no Dolby Vision strip leaves the bitstream filter out", () => {
+      const args = remuxArguments({
+        inputPath,
+        boundariesSeconds: boundaries,
+        startIndex: 0,
+        directory: "/run",
+      });
+      expect(args).not.toContain("-bsf:v");
+    });
+
     test("a throttled run passes the read rate before the input", () => {
       const args = remuxArguments({
         inputPath,
@@ -246,6 +271,76 @@ describe("remux", () => {
     expect(format.startTime).toBeCloseTo(6, 1);
     const keyframes = await ffprobeKeyframeTimes(joined);
     expect(keyframes[0]).toBeCloseTo(6, 3);
+  }, 30_000);
+
+  test("a Dolby Vision strip runs on a hevc source", async () => {
+    // The source carries no RPU, so the filter is a no-op; the run proves
+    // ffmpeg accepts dovi_rpu=strip=1 in copy mode.
+    const hevcPath = join(dir, "hevc.mkv");
+    const proc = Bun.spawn(
+      [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=s=160x90:r=25:d=8",
+        "-c:v",
+        "libx265",
+        "-preset",
+        "ultrafast",
+        "-x265-params",
+        "log-level=error",
+        "-g",
+        "50",
+        "-keyint_min",
+        "50",
+        "-sc_threshold",
+        "0",
+        "-pix_fmt",
+        "yuv420p",
+        "-tag:v",
+        "hvc1",
+        hevcPath,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    const [stderr, code] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (code !== 0) {
+      throw new Error(`ffmpeg failed (${code}): ${stderr.trim()}`);
+    }
+    const probe = await probeVideo(hevcPath);
+    if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
+      throw new Error("HEVC probe returned no duration or keyframes.");
+    }
+    const hevcBoundaries = deriveSegmentTimeline(
+      probe.keyframesSeconds,
+      probe.durationSeconds,
+    );
+    const runDir = join(dir, "run-hevc");
+    await mkdir(runDir);
+    const batches: number[][] = [];
+    const handle = startRemuxRun(
+      {
+        inputPath: hevcPath,
+        boundariesSeconds: hevcBoundaries,
+        startIndex: 0,
+        directory: runDir,
+        stripDolbyVision: true,
+      },
+      (indexes) => batches.push(indexes),
+    );
+    expect(await handle.exited).toBe(0);
+    const segments = batches.flat();
+    expect(segments.length).toBe(hevcBoundaries.length - 1);
+    for (const index of segments) {
+      expect(await Bun.file(join(runDir, `${index}.m4s`)).exists()).toBe(true);
+    }
   }, 30_000);
 
   test("a throttled run reports the first segment and goes quiet after kill", async () => {

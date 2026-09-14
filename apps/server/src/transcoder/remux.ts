@@ -7,6 +7,8 @@ export type RemuxRun = {
   startIndex: number; // segment index to start at
   directory: string; // the run directory, created by the caller
   readRate?: { rate: number; initialBurstSeconds: number }; // optional throttle, tests only
+  /** The engine decided the client plays the HDR10 base layer of a profile 7 or 8 source. */
+  stripDolbyVision?: boolean;
 };
 
 /** Builds the ffmpeg argument list for a remux run. */
@@ -46,6 +48,11 @@ export function remuxArguments(run: RemuxRun) {
     "-dn",
     "-c",
     "copy",
+  );
+  if (run.stripDolbyVision === true) {
+    args.push("-bsf:v", "dovi_rpu=strip=1");
+  }
+  args.push(
     "-copyts",
     "-avoid_negative_ts",
     "disabled",

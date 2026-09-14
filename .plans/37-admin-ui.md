@@ -111,6 +111,25 @@ threads are the review of that head.
 The two screen fixes carry no test. `apps/web` has no component test harness, and
 adding one is a larger change than these findings ask for.
 
+### Macroscope round at `d74ef72`
+
+Macroscope raised three threads. One is this branch's, two are not.
+
+- `56e0acc`: `writeUserSettings` now rejects a bitrate cap above
+  `Number.MAX_SAFE_INTEGER`. The playback planner reads the bigint column with
+  `Number()` and throws `Invalid playback settings` for anything larger
+  (`apps/server/src/playback/planning.ts:200`), so this branch's writer could
+  store a value that broke every later playback plan for that user. The existing
+  rejection loop in `apps/server/src/auth/admin.test.ts` gained the value.
+- `apps/server/src/libraries/scan.ts` is untouched by this branch, so the two
+  findings against it belong to the merged shows medium slice. Filed as #67
+  (show versions stored without a keyframe index) and #68 (overlapping episode
+  ranges in one scan can violate the range exclusion constraint).
+
+The matching read-side note, `Number()` on a stored cap larger than the writer
+now allows, is rejected: with the writer bounded, nothing in the application
+produces that row.
+
 ### Gate after the review round, from the repository root
 
 | Command | Exit | Result |
@@ -119,7 +138,7 @@ adding one is a larger change than these findings ask for.
 | `bun run lint` | 0 | 169 files, no fixes applied |
 | `bun run check` | 0 | 6 of 6 tasks, svelte-check 0 errors 0 warnings |
 | `bun run build` | 0 | 4 of 4 tasks |
-| `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55437/pendia bun test` | 0 | 656 pass, 0 fail, 2677 expects, 50 files |
+| `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55437/pendia bun test` | 0 | 656 pass, 0 fail, 2678 expects, 50 files |
 | `env -u DATABASE_URL bun test` | 0 | 407 pass, 249 skip, 0 fail |
 
 ### Decisions and deviations

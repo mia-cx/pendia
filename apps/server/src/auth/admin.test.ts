@@ -244,7 +244,11 @@ describe.skipIf(!databaseUrl)("auth admin", () => {
         bitrateCapBps: null,
         contentRatingCeiling: null,
       });
-      for (const bitrateCapBps of [0n, -1n])
+      for (const bitrateCapBps of [
+        0n,
+        -1n,
+        BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+      ])
         await expect(
           writeUserSettings(db, admin.id, viewer.id, {
             bitrateCapBps,

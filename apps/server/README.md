@@ -237,7 +237,7 @@ The other admin procedures check permissions inside the auth slice: `manage-user
 
 `users.get` and the four `users.set*` mutations all answer the full `UserAccess` shape, so the per-user screen refreshes in one round trip. The mutations read that shape back without re-checking the caller, which exposes nothing new because reaching that line already required passing the write's own check; it lets an admin demote themselves and still receive the saved state.
 `users.setOverride` restores inheritance on a null `allowed`. `users.setLibraryAccess` writes user rows only; group access rows stay unexposed in this slice.
-`bitrateCapBps` crosses the API as a nullable integer and the service stores it as bigint. `contentRatingCeiling` trims, rejects blanks and clears on null.
+`bitrateCapBps` crosses the API as a nullable integer and the service stores it as bigint. It must be a positive safe integer, because the playback planner reads the column as a number and rejects anything larger. `contentRatingCeiling` trims, rejects blanks and clears on null.
 Session and user instants cross as ISO-8601 at millisecond precision, because the auth slice hands back `Date` values. Item instants stay the database's own UTC text.
 
 Group permission edits apply to custom groups only. The built-in `admins` and `users` groups reject writes: admins bypass every check, and `users` is the documented default group.

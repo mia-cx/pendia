@@ -20,6 +20,7 @@ import {
   libraries,
   movies,
   progress,
+  providerIds,
   seasons,
   shows,
   streams,
@@ -31,7 +32,6 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
-import { applyMetadata } from "../metadata/service.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
@@ -244,6 +244,15 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           const streamIds = (await db.select().from(streams))
             .map((stream) => stream.id)
             .sort();
+          const [initialId] = await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, first.itemId ?? ""));
+          expect(initialId).toMatchObject({
+            provider: "tmdb",
+            value: "348",
+            itemId: first.itemId,
+          });
 
           const second = await scanDirectory(db, library.id, folder, {
             probe,

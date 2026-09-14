@@ -104,11 +104,16 @@ export function createArtworkHandler(
   const resize = options.resize ?? sharpResize;
   const cache = new Map<
     string,
-    { bytes: Uint8Array; contentType: string; etag: string }
+    { bytes: Uint8Array; body: Blob; contentType: string; etag: string }
   >();
   const inFlight = new Map<
     string,
-    Promise<{ bytes: Uint8Array; contentType: string; etag: string }>
+    Promise<{
+      bytes: Uint8Array;
+      body: Blob;
+      contentType: string;
+      etag: string;
+    }>
   >();
   let cacheBytes = 0;
 
@@ -177,7 +182,11 @@ export function createArtworkHandler(
               etagHasher.update(resized.contentType);
               etagHasher.update(":");
               etagHasher.update(resized.bytes);
-              return { ...resized, etag: `"${etagHasher.digest("hex")}"` };
+              return {
+                ...resized,
+                body: new Blob([new Uint8Array(resized.bytes)]),
+                etag: `"${etagHasher.digest("hex")}"`,
+              };
             });
             inFlight.set(sourceKey, pending);
             const cleanup = () => {
@@ -219,7 +228,7 @@ export function createArtworkHandler(
           matchesIfNoneMatch(request.headers.get("if-none-match"), result.etag)
         )
           return new Response(null, { status: 304, headers });
-        return new Response(Buffer.from(result.bytes), {
+        return new Response(result.body, {
           status: 200,
           headers: {
             ...headers,

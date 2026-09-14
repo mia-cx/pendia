@@ -143,20 +143,21 @@ describe("TMDB metadata provider", () => {
       const signal = init?.signal;
       if (signal === null || signal === undefined)
         throw new Error("Missing request signal.");
-      return {
-        ok: true,
-        status: 200,
-        json: () =>
-          new Promise<unknown>((_resolve, reject) => {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
             if (signal.aborted) {
-              reject(signal.reason);
+              controller.error(signal.reason);
               return;
             }
-            signal.addEventListener("abort", () => reject(signal.reason), {
-              once: true,
-            });
-          }),
-      } as unknown as Response;
+            signal.addEventListener(
+              "abort",
+              () => controller.error(signal.reason),
+              { once: true },
+            );
+          },
+        }),
+      );
     }) as typeof fetch;
     const provider = createTmdbMetadataProvider(apiKey, request, 1);
     const error = await provider
@@ -166,12 +167,70 @@ describe("TMDB metadata provider", () => {
     expect((error as Error).message).not.toBe("Invalid TMDB response.");
   });
 
+  test("bounds declared and streamed response bodies", async () => {
+    let declaredCancelled = false;
+    const declared = mockRequest(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1]));
+            },
+            cancel() {
+              declaredCancelled = true;
+            },
+          }),
+          { headers: { "content-length": "17" } },
+        ),
+    );
+    await expect(
+      createTmdbMetadataProvider(apiKey, declared.request, 30_000, 16).search({
+        title: "X",
+        kind: "movie",
+      }),
+    ).rejects.toThrow("TMDB response too large.");
+    expect(declaredCancelled).toBe(true);
+
+    let streamedCancelled = false;
+    const streamed = mockRequest(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(9));
+              controller.enqueue(new Uint8Array(9));
+            },
+            cancel() {
+              streamedCancelled = true;
+            },
+          }),
+        ),
+    );
+    await expect(
+      createTmdbMetadataProvider(apiKey, streamed.request, 30_000, 16).fetch({
+        providerId: "1",
+        kind: "movie",
+      }),
+    ).rejects.toThrow("TMDB response too large.");
+    expect(streamedCancelled).toBe(true);
+  });
+
   test("rejects invalid request timeouts without a request", () => {
     const { calls, request } = jsonRequest({ results: [] });
     for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
       expect(() =>
         createTmdbMetadataProvider(apiKey, request, timeoutMs),
       ).toThrow("Invalid TMDB request timeout.");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects invalid response limits without a request", () => {
+    const { calls, request } = jsonRequest({ results: [] });
+    for (const maxResponseBytes of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
+      expect(() =>
+        createTmdbMetadataProvider(apiKey, request, 30_000, maxResponseBytes),
+      ).toThrow("Invalid TMDB response limit.");
     }
     expect(calls).toHaveLength(0);
   });

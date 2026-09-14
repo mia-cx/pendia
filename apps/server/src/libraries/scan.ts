@@ -183,7 +183,9 @@ export async function scanDirectory(
     }
   }
 
-  const mergedProviderIds: Record<string, string> = {};
+  const mergedProviderIds: Record<string, string> = group
+    ? { ...group.providerIds }
+    : {};
   for (const change of changes) {
     Object.assign(mergedProviderIds, change.providerIds);
   }
@@ -267,27 +269,6 @@ export async function scanDirectory(
         extension: {},
       });
       itemId = created.id;
-    }
-
-    for (const [provider, value] of Object.entries(group.providerIds)) {
-      const [existingId] = await tx
-        .select()
-        .from(providerIds)
-        .where(
-          and(
-            eq(providerIds.itemId, itemId),
-            eq(providerIds.provider, provider),
-          ),
-        );
-      if (existingId) {
-        if (existingId.value !== value)
-          await tx
-            .update(providerIds)
-            .set({ value })
-            .where(eq(providerIds.id, existingId.id));
-      } else {
-        await tx.insert(providerIds).values({ provider, value, itemId });
-      }
     }
 
     const versionIds: string[] = [];

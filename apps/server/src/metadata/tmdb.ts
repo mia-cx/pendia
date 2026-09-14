@@ -57,10 +57,56 @@ function normalizeTitle(title: string): string {
     .trim();
 }
 
+async function readJsonBody(
+  response: Response,
+  signal: AbortSignal,
+  maxResponseBytes: number,
+): Promise<unknown> {
+  const declared = response.headers.get("content-length")?.trim() ?? "";
+  if (/^\d+$/.test(declared) && Number(declared) > maxResponseBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error("TMDB response too large.");
+  }
+  if (response.body === null) invalid();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxResponseBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error("TMDB response too large.");
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (signal.aborted) throw signal.reason;
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    if (signal.aborted) throw signal.reason;
+    invalid();
+  }
+}
+
 async function requestJson(
   request: typeof fetch,
   url: URL,
   timeoutMs: number,
+  maxResponseBytes: number,
 ): Promise<unknown> {
   const signal = AbortSignal.timeout(timeoutMs);
   const response = await request(url, {
@@ -69,12 +115,7 @@ async function requestJson(
   });
   if (!response.ok)
     throw new Error(`TMDB request failed with status ${response.status}.`);
-  try {
-    return await response.json();
-  } catch {
-    if (signal.aborted) throw signal.reason;
-    invalid();
-  }
+  return readJsonBody(response, signal, maxResponseBytes);
 }
 
 function readGenres(value: unknown): string[] {
@@ -212,6 +253,7 @@ async function searchMovies(
   key: string,
   query: SearchQuery,
   timeoutMs: number,
+  maxResponseBytes: number,
 ): Promise<MetadataMatch[]> {
   if (query.kind !== "movie") throw new Error("TMDB only supports movies.");
   const url = new URL(`${baseUrl}/search/movie`);
@@ -219,7 +261,9 @@ async function searchMovies(
   url.searchParams.set("query", query.title);
   if (query.year !== undefined)
     url.searchParams.set("year", String(query.year));
-  const data = asObject(await requestJson(request, url, timeoutMs));
+  const data = asObject(
+    await requestJson(request, url, timeoutMs, maxResponseBytes),
+  );
   if (!Array.isArray(data.results)) invalid();
   const wanted = normalizeTitle(query.title);
   return data.results.map((entry) => {
@@ -244,6 +288,7 @@ async function fetchMovie(
   key: string,
   match: FetchQuery,
   timeoutMs: number,
+  maxResponseBytes: number,
 ): Promise<MetadataResult> {
   if (match.kind !== "movie") throw new Error("TMDB only supports movies.");
   if (!/^\d+$/.test(match.providerId) || Number(match.providerId) <= 0)
@@ -254,7 +299,9 @@ async function fetchMovie(
     "append_to_response",
     "credits,release_dates,external_ids,images",
   );
-  const data = asObject(await requestJson(request, url, timeoutMs));
+  const data = asObject(
+    await requestJson(request, url, timeoutMs, maxResponseBytes),
+  );
   const id = requiredId(data.id);
   const overview = optionalString(data.overview);
   return {
@@ -278,15 +325,20 @@ export function createTmdbMetadataProvider(
   apiKey: string,
   request: typeof fetch = fetch,
   timeoutMs = 30_000,
+  maxResponseBytes = 8 * 1024 * 1024,
 ): MetadataProvider {
   const key = apiKey.trim();
   if (key.length === 0) throw new Error("TMDB API key is required.");
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
     throw new Error("Invalid TMDB request timeout.");
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1)
+    throw new Error("Invalid TMDB response limit.");
   return {
     id: "tmdb",
     kinds: ["movie"],
-    search: (query) => searchMovies(request, key, query, timeoutMs),
-    fetch: (match) => fetchMovie(request, key, match, timeoutMs),
+    search: (query) =>
+      searchMovies(request, key, query, timeoutMs, maxResponseBytes),
+    fetch: (match) =>
+      fetchMovie(request, key, match, timeoutMs, maxResponseBytes),
   };
 }

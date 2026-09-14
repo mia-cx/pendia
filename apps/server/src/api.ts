@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
+import type { createArtworkHandler } from "./metadata/artwork-http.ts";
 
 const defaultPort = 3000;
 const defaultWebRoot = fileURLToPath(
@@ -62,6 +63,7 @@ export function startApiServer(
     auth?: ReturnType<typeof createAuthHandler>;
     api?: ReturnType<typeof createApiHandler>;
     webhooks?: ReturnType<typeof createServarrWebhookHandler>;
+    artwork?: ReturnType<typeof createArtworkHandler>;
   } = {},
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;

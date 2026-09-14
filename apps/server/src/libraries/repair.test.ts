@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, rename, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import type { Database } from "../db/client.ts";
+import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   files,
@@ -288,6 +288,52 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         ).toHaveLength(baseline.length);
         expect(baseline.length).toBeGreaterThanOrEqual(1);
         expect(errors).toEqual([]);
+      });
+    }));
+
+  test("two controllers on one database elect a single startup leader", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const second = createDatabase(url);
+        const errors: unknown[] = [];
+        try {
+          const first = createLibraryRepair(db, {
+            intervalMs: 60_000,
+            onError: (error) => {
+              errors.push(error);
+            },
+          });
+          const contender = createLibraryRepair(second.db, {
+            intervalMs: 60_000,
+            onError: (error) => {
+              errors.push(error);
+            },
+          });
+          try {
+            first.start();
+            contender.start();
+            await waitForScanJobs(db, 1);
+            await Bun.sleep(150);
+            const found = await listJobs(db, { type: "scan" });
+            expect(found).toHaveLength(1);
+            expect(found[0]?.payload).toEqual({
+              type: "scan",
+              libraryId: library.id,
+              path: folder,
+              reconcileMissing: true,
+            });
+            expect(errors).toEqual([]);
+          } finally {
+            await first.stop();
+            await contender.stop();
+          }
+        } finally {
+          await second.close();
+        }
       });
     }));
 

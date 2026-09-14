@@ -346,6 +346,99 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       }
     }));
 
+  test("concurrent submissions append to the batch in call order", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const library = await insertLibrary(db, "Movies", "/media/movies");
+      const debouncer = createChangeDebouncer(db, { delayMs: 60_000 });
+      const second = createDatabase(url);
+      let release = () => {};
+      try {
+        const locked = second.db.transaction(async (tx) => {
+          await tx.execute(sql`lock table libraries in access exclusive mode`);
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        });
+        const lockDeadline = Date.now() + 2_000;
+        for (;;) {
+          const rows = await db.$client<{ count: number }[]>`
+            select count(*)::integer as count from pg_locks
+            where locktype = 'relation' and granted
+              and mode = 'AccessExclusiveLock'
+              and relation = 'libraries'::regclass`;
+          if ((rows[0]?.count ?? 0) > 0) break;
+          if (Date.now() >= lockDeadline) {
+            throw new Error("Libraries lock was not observed.");
+          }
+          await Bun.sleep(10);
+        }
+        const first = debouncer.submit("radarr", [
+          {
+            kind: "move",
+            path: "/media/movies/Alien (1979)/Alien-B.mkv",
+            previousPath: "/media/movies/Alien (1979)/Alien-A.mkv",
+            providerIds: {},
+          },
+        ]);
+        const secondSubmit = debouncer.submit("radarr", [
+          {
+            kind: "move",
+            path: "/media/movies/Alien (1979)/Alien-C.mkv",
+            previousPath: "/media/movies/Alien (1979)/Alien-B.mkv",
+            providerIds: {},
+          },
+        ]);
+        const deadline = Date.now() + 2_000;
+        for (;;) {
+          const rows = await db.$client<{ count: number }[]>`
+            select count(*)::integer as count from pg_locks
+            where locktype = 'relation' and not granted
+              and relation = 'libraries'::regclass`;
+          const count = rows[0]?.count ?? 0;
+          if (count === 1) break;
+          if (count > 1) {
+            throw new Error(
+              `Expected one blocked libraries query; found ${count}.`,
+            );
+          }
+          if (Date.now() >= deadline) {
+            throw new Error("Submit lock wait was not observed.");
+          }
+          await Bun.sleep(10);
+        }
+        release();
+        await first;
+        await secondSubmit;
+        await debouncer.close();
+        const found = await listJobs(db, { type: "scan" });
+        expect(found).toHaveLength(1);
+        expect(found[0]?.payload).toEqual({
+          type: "scan",
+          libraryId: library.id,
+          path: "Alien (1979)",
+          changes: [
+            {
+              kind: "move",
+              path: "Alien (1979)/Alien-B.mkv",
+              previousPath: "Alien (1979)/Alien-A.mkv",
+              providerIds: {},
+            },
+            {
+              kind: "move",
+              path: "Alien (1979)/Alien-C.mkv",
+              previousPath: "Alien (1979)/Alien-B.mkv",
+              providerIds: {},
+            },
+          ],
+        });
+        await locked;
+      } finally {
+        release();
+        await second.close();
+      }
+    }));
+
   test("a failed timer flush retries the same ordered batch", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

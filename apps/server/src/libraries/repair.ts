@@ -19,6 +19,9 @@ export type RepairOptions = {
 
 type SnapshotUpdate = { path: string; modifiedNs: bigint | undefined };
 type TrackedJob = { jobId: string; updates: SnapshotUpdate[] };
+type ReservedConnection = Awaited<ReturnType<Database["$client"]["reserve"]>>;
+
+const repairLockKey = 0x70656e6469617270n;
 
 /** Creates the startup and nightly library repair pass. */
 export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
@@ -37,6 +40,9 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
   const trackedJobs = new Map<string, Map<string, TrackedJob>>();
   let active: Promise<number> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let leader: ReservedConnection | undefined;
+  let electing: Promise<void> | undefined;
+  let electionTimer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
 
   const report = (error: unknown) => {
@@ -250,14 +256,57 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
     return active;
   }
 
+  const scheduleElection = () => {
+    if (stopped || timer !== undefined || electionTimer !== undefined) return;
+    electionTimer = setTimeout(() => {
+      electionTimer = undefined;
+      electLeader();
+    }, intervalMs);
+  };
+
+  const electLeader = () => {
+    if (stopped || timer !== undefined || electing !== undefined) return;
+    electing = (async () => {
+      try {
+        const connection = await db.$client.reserve();
+        try {
+          const rows = await connection<{ acquired: boolean }[]>`
+            select pg_try_advisory_lock(${repairLockKey}) as acquired`;
+          if (rows[0]?.acquired !== true) {
+            connection.release();
+            scheduleElection();
+            return;
+          }
+          if (stopped || timer !== undefined) {
+            await connection`select pg_advisory_unlock(${repairLockKey})`;
+            connection.release();
+            return;
+          }
+          leader = connection;
+          run().catch(report);
+          timer = setInterval(() => {
+            run().catch(report);
+          }, intervalMs);
+        } catch (error) {
+          try {
+            connection.release();
+          } catch {}
+          throw error;
+        }
+      } catch (error) {
+        report(error);
+        scheduleElection();
+      }
+    })().finally(() => {
+      electing = undefined;
+    });
+  };
+
   return {
     run,
     start() {
       if (stopped || timer !== undefined) return;
-      run().catch(report);
-      timer = setInterval(() => {
-        run().catch(report);
-      }, intervalMs);
+      electLeader();
     },
     async stop() {
       stopped = true;
@@ -265,7 +314,25 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
         clearInterval(timer);
         timer = undefined;
       }
+      if (electionTimer !== undefined) {
+        clearTimeout(electionTimer);
+        electionTimer = undefined;
+      }
+      await electing?.catch(() => {});
       await active?.catch(() => {});
+      const connection = leader;
+      leader = undefined;
+      if (connection !== undefined) {
+        try {
+          await connection`select pg_advisory_unlock(${repairLockKey})`;
+        } catch (error) {
+          report(error);
+        } finally {
+          try {
+            connection.release();
+          } catch {}
+        }
+      }
     },
   };
 }

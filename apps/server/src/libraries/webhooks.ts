@@ -283,6 +283,8 @@ export function createChangeDebouncer(
     }
   };
 
+  let submissionTail: Promise<void> = Promise.resolve();
+
   const submit = (
     source: "sonarr" | "radarr",
     changes: ChangeEvent[],
@@ -292,7 +294,13 @@ export function createChangeDebouncer(
         new InvalidWebhookError("Change debouncer is closed."),
       );
     }
-    const submission = submitChanges(source, changes);
+    const submission = submissionTail.then(() =>
+      submitChanges(source, changes),
+    );
+    submissionTail = submission.then(
+      () => undefined,
+      () => undefined,
+    );
     submissions.add(submission);
     void submission.then(
       () => submissions.delete(submission),

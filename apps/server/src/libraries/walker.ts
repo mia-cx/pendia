@@ -1,4 +1,4 @@
-import type { BigIntStats } from "node:fs";
+import type { BigIntStats, Dirent } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { isAbsolute, posix, resolve } from "node:path";
 import type { ScanRules } from "../mediums/medium.ts";
@@ -27,6 +27,26 @@ const isEnoent = (error: unknown): boolean =>
   error !== null &&
   "code" in error &&
   error.code === "ENOENT";
+
+const revalidateRoot = async (
+  rootPath: string,
+  rootStat: BigIntStats,
+): Promise<void> => {
+  let currentRoot: BigIntStats;
+  try {
+    currentRoot = await lstat(rootPath, { bigint: true });
+  } catch (error) {
+    if (isEnoent(error)) throw new MissingLibraryPathError(".", "root");
+    throw error;
+  }
+  if (
+    !currentRoot.isDirectory() ||
+    currentRoot.dev !== rootStat.dev ||
+    currentRoot.ino !== rootStat.ino
+  ) {
+    throw new MissingLibraryPathError(".", "root");
+  }
+};
 
 const normalizeRelative = (path: string): string => {
   if (path.includes("\0")) {
@@ -70,21 +90,7 @@ async function resolveEntry(
       stat = await lstat(absolute, { bigint: true });
     } catch (error) {
       if (isEnoent(error)) {
-        let currentRoot: BigIntStats;
-        try {
-          currentRoot = await lstat(rootPath, { bigint: true });
-        } catch (rootError) {
-          if (isEnoent(rootError))
-            throw new MissingLibraryPathError(".", "root");
-          throw rootError;
-        }
-        if (
-          !currentRoot.isDirectory() ||
-          currentRoot.dev !== rootStat.dev ||
-          currentRoot.ino !== rootStat.ino
-        ) {
-          throw new MissingLibraryPathError(".", "root");
-        }
+        await revalidateRoot(rootPath, rootStat);
         throw new MissingLibraryPathError(
           parts.slice(0, index + 1).join("/"),
           scope,
@@ -199,7 +205,17 @@ export async function* walkLibraryDirectories(
     relative: string,
     stat: BigIntStats,
   ): AsyncGenerator<LibraryDirectory> {
-    const entries = await readdir(absolute, { withFileTypes: true });
+    let entries: Dirent[];
+    try {
+      entries = await readdir(absolute, { withFileTypes: true });
+    } catch (error) {
+      if (isEnoent(error)) {
+        await revalidateRoot(rootPath, start.stat);
+        if (relative !== ".") return;
+        throw new MissingLibraryPathError(".", "root");
+      }
+      throw error;
+    }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const files: string[] = [];
     const directories: string[] = [];

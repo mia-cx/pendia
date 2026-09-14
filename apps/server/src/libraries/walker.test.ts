@@ -390,6 +390,39 @@ describe("walkLibraryDirectories", () => {
         "Alien (1979)/Deleted.Scenes",
       ]);
     }));
+
+  test("skips a child removed after validation but before readdir", () =>
+    withVideoFixture(async (root) => {
+      await mkdir(join(root, "Alien (1979)"));
+      await writeFile(join(root, "Alien (1979)", "Alien.mkv"), "movie");
+      const child = join(root, "Gone");
+      await mkdir(child);
+      let removed = false;
+      const realReaddir = fsp.readdir;
+      const spy = spyOn(fsp, "readdir").mockImplementation((async (
+        path: PathLike,
+        ...args: unknown[]
+      ) => {
+        if (!removed && path === child) {
+          removed = true;
+          await rm(child, { recursive: true });
+        }
+        return Reflect.apply(realReaddir, fsp, [path, ...args]);
+      }) as typeof realReaddir);
+      try {
+        const directories: string[] = [];
+        for await (const directory of walkLibraryDirectories(
+          root,
+          moviesMedium.scan,
+        )) {
+          directories.push(directory.path);
+        }
+        expect(removed).toBe(true);
+        expect(directories).toEqual([".", "Alien (1979)"]);
+      } finally {
+        spy.mockRestore();
+      }
+    }));
 });
 
 describe("readLibraryFile", () => {

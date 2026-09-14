@@ -13,6 +13,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { deleteItemSubtree, insertItem } from "../db/tree.ts";
+import type { ScanRules } from "../mediums/medium.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
@@ -86,6 +87,33 @@ async function upsertFileStreams(
       .where(
         and(eq(streams.fileId, fileId), notInArray(streams.index, indexes)),
       );
+  }
+}
+
+/** Re-walks the requested scope inside the write lock before an empty result deletes rows. */
+async function confirmScopeEmpty(
+  rootPath: string,
+  rules: ScanRules,
+  path: string,
+  recursive: boolean,
+): Promise<void> {
+  try {
+    for await (const file of walkLibrary(rootPath, rules, {
+      path,
+      recursive,
+    })) {
+      if (file.path !== "") {
+        throw new Error("Library directory changed before scan write.");
+      }
+    }
+  } catch (error) {
+    if (
+      error instanceof MissingLibraryPathError &&
+      error.scope === "requested"
+    ) {
+      return;
+    }
+    throw error;
   }
 }
 
@@ -181,6 +209,7 @@ export async function scanDirectory(
     }
 
     if (!group) {
+      await confirmScopeEmpty(library.rootPath, moviesMedium.scan, path, false);
       const [item] = await tx
         .select()
         .from(items)
@@ -415,6 +444,7 @@ export async function scanShowDirectory(
     }
 
     if (!group) {
+      await confirmScopeEmpty(library.rootPath, showsScan, path, true);
       const [show] = await tx
         .select()
         .from(items)

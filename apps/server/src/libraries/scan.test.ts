@@ -8,7 +8,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
+import { setupAdmin } from "../auth/accounts.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
@@ -18,6 +19,7 @@ import {
   items,
   libraries,
   movies,
+  progress,
   seasons,
   shows,
   streams,
@@ -73,6 +75,49 @@ async function withLibrary(
 
 const streamKeys = (rows: { index: number; codec: string; kind: string }[]) =>
   rows.map((row) => `${row.index}:${row.kind}:${row.codec}`);
+
+async function holdLibraryLock(
+  url: string,
+  libraryId: string,
+  run: (release: () => void) => Promise<void>,
+) {
+  const second = createDatabase(url);
+  let release = () => {};
+  let lockHeld = false;
+  try {
+    const locking = second.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select id from libraries where id = ${libraryId} for update`,
+      );
+      lockHeld = true;
+      await new Promise<void>((resolvePromise) => {
+        release = resolvePromise;
+      });
+    });
+    const deadline = Date.now() + 2_000;
+    while (!lockHeld && Date.now() < deadline) await Bun.sleep(10);
+    if (!lockHeld) throw new Error("Library row lock was not acquired.");
+    await run(release);
+    await locking;
+  } finally {
+    release();
+    await second.close();
+  }
+}
+
+async function waitForBlockedScan(db: Database) {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const rows = await db.$client<{ count: number }[]>`
+      select count(*)::integer as count from pg_stat_activity
+      where wait_event_type = 'Lock'`;
+    if ((rows[0]?.count ?? 0) > 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error("A blocked scan update was not observed.");
+    }
+    await Bun.sleep(10);
+  }
+}
 
 describe.skipIf(!databaseUrl)("scanDirectory", () => {
   test("writes one Item with two Versions, Files and Streams for a canonical folder", () =>
@@ -350,6 +395,52 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
       } finally {
         await db.close();
       }
+    }));
+
+  test("an emptied movie folder revalidates before deleting the Item", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(dir, "Alien.1080p.mkv"));
+        await withLibrary(db, root, async (library) => {
+          const scanned = await scanDirectory(db, library.id, folder);
+          const itemId = scanned.itemId;
+          if (!itemId) throw new Error("Initial scan produced no Item.");
+          const [version] = await db.select().from(versions);
+          if (!version) throw new Error("Initial scan produced no Version.");
+          const admin = await setupAdmin(db, {
+            username: "admin",
+            password: "admin-pass",
+          });
+          await db.insert(progress).values({
+            userId: admin.id,
+            itemId,
+            versionId: version.id,
+            format: "video",
+            positionSeconds: 33,
+          });
+          const progressBefore = await db.select().from(progress);
+          await rm(join(dir, "Alien.1080p.mkv"));
+
+          await holdLibraryLock(url, library.id, async (release) => {
+            const scanning = scanDirectory(db, library.id, folder);
+            await waitForBlockedScan(db);
+            await createVideoFixture(join(dir, "Alien.720p.mkv"));
+            release();
+            await expect(scanning).rejects.toThrow(
+              "Library directory changed before scan write.",
+            );
+          });
+
+          const itemRows = await db.select().from(items);
+          expect(itemRows.map((row) => row.id)).toEqual([itemId]);
+          expect(await db.select().from(versions)).toHaveLength(1);
+          expect(await db.select().from(files)).toHaveLength(1);
+          expect(await db.select().from(progress)).toEqual(progressBefore);
+        });
+      });
     }));
 });
 
@@ -1209,6 +1300,64 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
           "season",
           "show",
         ]);
+      });
+    }));
+
+  test("an emptied show folder revalidates before deleting the subtree", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Foundation";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(seasonDir, "Foundation S01E01.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const scanned = await scanShowDirectory(db, library.id, show);
+        const showId = scanned.itemId;
+        if (!showId) throw new Error("Initial scan produced no Show.");
+        const itemBefore = await db.select().from(items);
+        const episodeId = itemBefore.find((row) => row.kind === "episode")?.id;
+        if (itemBefore.length !== 3 || !episodeId) {
+          throw new Error("Initial scan produced no hierarchy.");
+        }
+        const [version] = await db.select().from(versions);
+        if (!version) throw new Error("Initial scan produced no Version.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: episodeId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 33,
+        });
+        const progressBefore = await db.select().from(progress);
+        await rm(join(seasonDir, "Foundation S01E01.mkv"));
+
+        await holdLibraryLock(url, library.id, async (release) => {
+          const scanning = scanShowDirectory(db, library.id, show);
+          await waitForBlockedScan(db);
+          await createVideoFixture(join(seasonDir, "Foundation S01E02.mkv"));
+          release();
+          await expect(scanning).rejects.toThrow(
+            "Library directory changed before scan write.",
+          );
+        });
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.id).sort()).toEqual(
+          itemBefore.map((row) => row.id).sort(),
+        );
+        expect(await db.select().from(versions)).toHaveLength(1);
+        expect(await db.select().from(files)).toHaveLength(1);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
       });
     }));
 });

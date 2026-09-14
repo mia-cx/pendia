@@ -1,7 +1,9 @@
+import { constants } from "node:fs";
 import {
+  type FileHandle,
   lstat,
   mkdir,
-  readFile,
+  open,
   rename,
   rm,
   writeFile,
@@ -167,64 +169,89 @@ export async function storeArtworkOriginal(
     throw new Error("Invalid artwork response.");
   }
 
-  const stored = await db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select()
-      .from(items)
-      .where(eq(items.id, itemId))
-      .for("update");
-    if (!locked) throw new AuthError("NOT_FOUND");
-    const [lockedLibrary] = await tx
-      .select()
-      .from(libraries)
-      .where(eq(libraries.id, locked.libraryId));
-    if (!lockedLibrary) throw new AuthError("NOT_FOUND");
+  let freshTarget: string | undefined;
+  let freshKey: string | undefined;
+  const stored = await db
+    .transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(items)
+        .where(eq(items.id, itemId))
+        .for("update");
+      if (!locked) throw new AuthError("NOT_FOUND");
+      const [lockedLibrary] = await tx
+        .select()
+        .from(libraries)
+        .where(eq(libraries.id, locked.libraryId));
+      if (!lockedLibrary) throw new AuthError("NOT_FOUND");
 
-    const [selected] = await tx
-      .select()
-      .from(artwork)
-      .where(
-        and(
-          eq(artwork.itemId, itemId),
-          eq(artwork.type, candidate.type),
-          eq(artwork.selected, true),
-        ),
+      const [selected] = await tx
+        .select()
+        .from(artwork)
+        .where(
+          and(
+            eq(artwork.itemId, itemId),
+            eq(artwork.type, candidate.type),
+            eq(artwork.selected, true),
+          ),
+        );
+      const reused = selected?.backend === "colocated" ? selected : undefined;
+      const artworkId = reused?.id ?? Bun.randomUUIDv7();
+      const previousTarget =
+        reused === undefined
+          ? undefined
+          : resolveStoragePath(lockedLibrary.rootPath, reused.storageKey)
+              .target;
+      const storageKey = `${locked.canonicalFolder}/.pendia/artwork/${artworkId}.${Bun.randomUUIDv7()}`;
+      const { root, target } = resolveStoragePath(
+        lockedLibrary.rootPath,
+        storageKey,
       );
-    const reused = selected?.backend === "colocated" ? selected : undefined;
-    const artworkId = reused?.id ?? Bun.randomUUIDv7();
-    const previousTarget =
-      reused === undefined
-        ? undefined
-        : resolveStoragePath(lockedLibrary.rootPath, reused.storageKey).target;
-    const storageKey = `${locked.canonicalFolder}/.pendia/artwork/${artworkId}.${Bun.randomUUIDv7()}`;
-    const { root, target } = resolveStoragePath(
-      lockedLibrary.rootPath,
-      storageKey,
-    );
-    await walkStorageDirectory(root, dirname(target), true);
-    const temporary = `${target}.${Bun.randomUUIDv7()}.tmp`;
-    try {
-      await writeFile(temporary, bytes);
-      await rename(temporary, target);
-    } catch (error) {
-      await rm(temporary, { force: true });
-      throw error;
-    }
+      await walkStorageDirectory(root, dirname(target), true);
+      const temporary = `${target}.${Bun.randomUUIDv7()}.tmp`;
+      try {
+        await writeFile(temporary, bytes);
+        await rename(temporary, target);
+      } catch (error) {
+        await rm(temporary, { force: true });
+        throw error;
+      }
+      freshTarget = target;
+      freshKey = storageKey;
 
-    await tx
-      .update(artwork)
-      .set({ selected: false })
-      .where(
-        and(
-          eq(artwork.itemId, itemId),
-          eq(artwork.type, candidate.type),
-          eq(artwork.selected, true),
-        ),
-      );
-    if (reused) {
-      const [row] = await tx
+      await tx
         .update(artwork)
-        .set({
+        .set({ selected: false })
+        .where(
+          and(
+            eq(artwork.itemId, itemId),
+            eq(artwork.type, candidate.type),
+            eq(artwork.selected, true),
+          ),
+        );
+      if (reused) {
+        const [row] = await tx
+          .update(artwork)
+          .set({
+            sourceUrl: candidate.url,
+            backend: "colocated",
+            storageKey,
+            width: dimensions.width,
+            height: dimensions.height,
+            selected: true,
+          })
+          .where(eq(artwork.id, reused.id))
+          .returning();
+        if (!row) throw new Error("Artwork update returned no row.");
+        return { row, previousTarget, target };
+      }
+      const [row] = await tx
+        .insert(artwork)
+        .values({
+          id: artworkId,
+          itemId,
+          versionId: null,
+          type: candidate.type,
           sourceUrl: candidate.url,
           backend: "colocated",
           storageKey,
@@ -232,29 +259,23 @@ export async function storeArtworkOriginal(
           height: dimensions.height,
           selected: true,
         })
-        .where(eq(artwork.id, reused.id))
         .returning();
-      if (!row) throw new Error("Artwork update returned no row.");
+      if (!row) throw new Error("Artwork insertion returned no row.");
       return { row, previousTarget, target };
-    }
-    const [row] = await tx
-      .insert(artwork)
-      .values({
-        id: artworkId,
-        itemId,
-        versionId: null,
-        type: candidate.type,
-        sourceUrl: candidate.url,
-        backend: "colocated",
-        storageKey,
-        width: dimensions.width,
-        height: dimensions.height,
-        selected: true,
-      })
-      .returning();
-    if (!row) throw new Error("Artwork insertion returned no row.");
-    return { row, previousTarget, target };
-  });
+    })
+    .catch(async (error: unknown) => {
+      if (freshTarget !== undefined && freshKey !== undefined) {
+        const referenced = await db
+          .select({ id: artwork.id })
+          .from(artwork)
+          .where(eq(artwork.storageKey, freshKey))
+          .limit(1)
+          .then((rows) => rows.length > 0)
+          .catch(() => true);
+        if (!referenced) await rm(freshTarget, { force: true }).catch(() => {});
+      }
+      throw error;
+    });
   if (
     stored.previousTarget !== undefined &&
     stored.previousTarget !== stored.target
@@ -269,34 +290,64 @@ export interface ArtworkOriginal {
   artwork: typeof artwork.$inferSelect;
 }
 
+/** Opens an artwork original without following a final symlink. */
+export type ArtworkOpen = (path: string, flags: number) => Promise<FileHandle>;
+
 /** Reads one colocated artwork original without following symlinks. */
 export async function readArtworkOriginal(
   db: Database,
   artworkId: string,
+  openFile: ArtworkOpen = open,
 ): Promise<ArtworkOriginal | null> {
-  const [row] = await db
-    .select()
-    .from(artwork)
-    .where(eq(artwork.id, artworkId));
-  if (
-    !row ||
-    row.itemId === null ||
-    row.backend !== "colocated" ||
-    !row.selected
-  )
-    return null;
-  const [item] = await db.select().from(items).where(eq(items.id, row.itemId));
-  if (!item) return null;
-  const [library] = await db
-    .select()
-    .from(libraries)
-    .where(eq(libraries.id, item.libraryId));
-  if (!library) return null;
-  const { root, target } = resolveStoragePath(library.rootPath, row.storageKey);
-  await walkStorageDirectory(root, dirname(target), false);
-  const stat = await statOrNull(target);
-  if (stat === null) return null;
-  if (stat.isSymbolicLink() || !stat.isFile())
-    throw new Error("Invalid artwork storage path.");
-  return { bytes: new Uint8Array(await readFile(target)), artwork: row };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const [row] = await db
+      .select()
+      .from(artwork)
+      .where(eq(artwork.id, artworkId));
+    if (
+      !row ||
+      row.itemId === null ||
+      row.backend !== "colocated" ||
+      !row.selected
+    )
+      return null;
+    const [item] = await db
+      .select()
+      .from(items)
+      .where(eq(items.id, row.itemId));
+    if (!item) return null;
+    const [library] = await db
+      .select()
+      .from(libraries)
+      .where(eq(libraries.id, item.libraryId));
+    if (!library) return null;
+    const { root, target } = resolveStoragePath(
+      library.rootPath,
+      row.storageKey,
+    );
+    await walkStorageDirectory(root, dirname(target), false);
+    let handle: FileHandle;
+    try {
+      handle = await openFile(
+        target,
+        constants.O_RDONLY | constants.O_NOFOLLOW,
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        if (attempt === 0) continue;
+        return null;
+      }
+      if (code === "ELOOP") throw new Error("Invalid artwork storage path.");
+      throw error;
+    }
+    try {
+      if (!(await handle.stat()).isFile())
+        throw new Error("Invalid artwork storage path.");
+      return { bytes: new Uint8Array(await handle.readFile()), artwork: row };
+    } finally {
+      await handle.close();
+    }
+  }
+  return null;
 }

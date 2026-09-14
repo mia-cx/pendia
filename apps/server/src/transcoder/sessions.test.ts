@@ -304,6 +304,28 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   );
 
   test(
+    "parallel requests after a seek restart once and both are served",
+    () =>
+      withSession(
+        async ({ manager, scope }) => {
+          await manager.serve(scope, hlsName("master.m3u8"), "");
+          // Both decisions are taken against the initial run; the second
+          // must not kill the restart the first one queued.
+          const [second, third] = await Promise.all([
+            manager.serve(scope, hlsName("2.m4s"), ""),
+            manager.serve(scope, hlsName("3.m4s"), ""),
+          ]);
+          expect(second.status).toBe(200);
+          expect(third.status).toBe(200);
+          expect((await manager.inspect(scope.sessionId))?.runs).toBe(2);
+        },
+        // The last segment lands after the throttle; keep idle and wait clear of it.
+        { waitMs: 5_000, idleMs: 10_000 },
+      ),
+    30_000,
+  );
+
+  test(
     "idle stop deletes scratch and a later request revives",
     () =>
       withSession(async ({ db, manager, scope, scratchDir }) => {
@@ -466,6 +488,25 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         expect(after.status).toBe(503);
         expect(after.headers.get("retry-after")).toBe("1");
         const body = (await after.json()) as {
+          error?: { code?: string };
+        };
+        expect(body.error?.code).toBe("TRANSCODER_STOPPING");
+        expect(await manager.inspect(scope.sessionId)).toBeUndefined();
+        expect(await pathExists(join(scratchDir, scope.sessionId))).toBe(false);
+      }),
+    30_000,
+  );
+
+  test(
+    "a request still loading when stop begins answers 503 and leaves no process or scratch",
+    () =>
+      withSession(async ({ manager, scope, scratchDir }) => {
+        // The first request is inside loadSession's queries when stop runs.
+        const admitted = manager.serve(scope, hlsName("master.m3u8"), "");
+        await manager.stop();
+        const response = await admitted;
+        expect(response.status).toBe(503);
+        const body = (await response.json()) as {
           error?: { code?: string };
         };
         expect(body.error?.code).toBe("TRANSCODER_STOPPING");

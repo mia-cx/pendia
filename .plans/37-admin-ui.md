@@ -143,16 +143,36 @@ produces that row.
 Neither carries a test, for the same reason: `apps/web` has no component test
 harness.
 
+### Rebase on the change-detection slice
+
+`#61` merged while this round was in review, so the branch rebased on
+`origin/main` at `368d6ce`. Conflicts resolved in favour of the merged code,
+keeping this branch's addition on top:
+
+- `apps/server/src/db/schema/operations.ts`, `apps/server/src/libraries/jobs.ts`
+  and three test files: a scan job payload now carries the merged `changes` and
+  `reconcileMissing` alongside this branch's `runId`.
+- `4ce4e5d`: `apps/server/src/libraries/changes.test.ts` asserts the fan-out
+  payload exactly, so it gained the run id. It was the one failure on the
+  rebased tree.
+
+The rebase also dropped the duplicate commit line that the earlier ancestry
+merge had carried, so the branch is 45 commits rather than 71. `60642a3` is the
+ancestry merge that keeps the published history, so the push stayed a
+fast-forward.
+
 ### Gate after the review round, from the repository root
+
+Run on the rebased tree at `4ce4e5d`.
 
 | Command | Exit | Result |
 | --- | --- | --- |
 | `bun install --frozen-lockfile` | 0 | 116 installs across 219 packages, no changes |
-| `bun run lint` | 0 | 169 files, no fixes applied |
+| `bun run lint` | 0 | 187 files, no fixes applied |
 | `bun run check` | 0 | 6 of 6 tasks, svelte-check 0 errors 0 warnings |
 | `bun run build` | 0 | 4 of 4 tasks |
-| `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55437/pendia bun test` | 0 | 656 pass, 0 fail, 2678 expects, 50 files |
-| `env -u DATABASE_URL bun test` | 0 | 407 pass, 249 skip, 0 fail |
+| `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55437/pendia bun test` | 0 | 723 pass, 0 fail, 3029 expects, 54 files |
+| `env -u DATABASE_URL bun test` | 0 | 428 pass, 295 skip, 0 fail |
 
 ### Decisions and deviations
 

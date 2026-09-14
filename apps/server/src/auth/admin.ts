@@ -125,6 +125,9 @@ export async function setGroupPermissions(
   return updated;
 }
 
+/** The largest cap the playback planner accepts, since it reads the column as a number. */
+const maxBitrateCapBps = BigInt(Number.MAX_SAFE_INTEGER);
+
 /** Writes a user's bitrate cap and content-rating ceiling for a caller holding manage-users. */
 export async function writeUserSettings(
   db: Database,
@@ -133,7 +136,10 @@ export async function writeUserSettings(
   input: { bitrateCapBps: bigint | null; contentRatingCeiling: string | null },
 ) {
   await requirePermission(db, actorId, "manage-users");
-  if (input.bitrateCapBps !== null && input.bitrateCapBps <= 0n)
+  if (
+    input.bitrateCapBps !== null &&
+    (input.bitrateCapBps <= 0n || input.bitrateCapBps > maxBitrateCapBps)
+  )
     throw new AuthError("INVALID_INPUT");
   let contentRatingCeiling: string | null = null;
   if (input.contentRatingCeiling !== null) {

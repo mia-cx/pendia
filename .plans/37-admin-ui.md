@@ -88,6 +88,40 @@ Read `CONTEXT.md`, `docs/adr/0010-orpc-api-transport.md`, `docs/spec/auth.md`, `
 | `env -u DATABASE_URL bun test` | 0 | 344 pass, 175 skip, 0 fail, one skip banner |
 | `env -u DATABASE_URL CI=true bun test apps/server/src/api/wizard.test.ts` | 1, expected | `DATABASE_URL is required for database tests in CI.` |
 
+### Review round at `857c67a`
+
+Pullfrog and Codex raised five threads against `857c67a`, which fall into three
+fixes. The worktree held no uncommitted work when this round started: the
+previous round's fix was already committed and pushed as `857c67a`, and these
+threads are the review of that head.
+
+- `c37fe02`: both edit continuations now check `editingId === row.id` as well as
+  the draft. Cancel is live during a save, so an abandoned editor's answer used
+  to close or fail whichever editor was open next.
+- `28dea0a`: `waitForScan` folds `timeoutMs` and the caller's signal into one
+  `AbortSignal`, passes it to the status request, checks it before each round and
+  wakes from the wait on abort. Previously a stalled request outlived both.
+  `apps/web/src/lib/scan.test.ts` covers it: no request after an abort, and a
+  stalled request ended by the deadline. Both fail against the old poller, the
+  second by hanging.
+- `3327af3`: `apps/web/src/routes/+error.svelte` renders the shared failure panel
+  with a Try again action, so a failed guard load no longer lands on SvelteKit's
+  fatal page.
+
+The two screen fixes carry no test. `apps/web` has no component test harness, and
+adding one is a larger change than these findings ask for.
+
+### Gate after the review round, from the repository root
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `bun install --frozen-lockfile` | 0 | 116 installs across 219 packages, no changes |
+| `bun run lint` | 0 | 169 files, no fixes applied |
+| `bun run check` | 0 | 6 of 6 tasks, svelte-check 0 errors 0 warnings |
+| `bun run build` | 0 | 4 of 4 tasks |
+| `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55437/pendia bun test` | 0 | 656 pass, 0 fail, 2677 expects, 50 files |
+| `env -u DATABASE_URL bun test` | 0 | 407 pass, 249 skip, 0 fail |
+
 ### Decisions and deviations
 
 - Decisions I made because nobody was available to ask:

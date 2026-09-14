@@ -130,6 +130,19 @@ The matching read-side note, `Number()` on a stored cap larger than the writer
 now allows, is rejected: with the writer bounded, nothing in the application
 produces that row.
 
+### Codex round at `696b67a`
+
+- `e418a04`: the libraries delete confirmation now checks `confirmingId === row.id`
+  in both continuations, and opening a confirmation clears the previous failure.
+  Other rows' Delete buttons stay live during a delete, so the answer used to
+  land on whichever confirmation was open.
+- `e8887d4`: `removeFailures[name]` on the settings screen read
+  `Object.prototype.constructor` for a key named `constructor`, which the name
+  pattern accepts. The template checks `Object.hasOwn` now.
+
+Neither carries a test, for the same reason: `apps/web` has no component test
+harness.
+
 ### Gate after the review round, from the repository root
 
 | Command | Exit | Result |

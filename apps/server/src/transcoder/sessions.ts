@@ -245,6 +245,8 @@ export function createSessionManager(
   };
 
   const startRun = async (session: LiveSession, index: number) => {
+    // A transition queued after the stop must not recreate scratch.
+    if (session.stopped) return;
     session.runs += 1;
     const directory = join(session.directory, `run-${session.runs}`);
     await mkdir(directory, { recursive: true });
@@ -286,6 +288,10 @@ export function createSessionManager(
 
   const restartAt = (session: LiveSession, index: number) => {
     session.transition = session.transition.then(async () => {
+      // A transition ahead in the queue may have moved the run; decide again
+      // on the state it left behind so parallel seeks restart once.
+      const decision = decideSegment(session.state, index, count(session));
+      if (decision.action !== "restart") return;
       const run = session.current;
       session.current = null;
       if (run !== null) {
@@ -482,27 +488,30 @@ export function createSessionManager(
     return work;
   };
 
+  const stoppingResponse = () =>
+    Response.json(
+      {
+        error: {
+          code: "TRANSCODER_STOPPING",
+          message: "The transcoder is stopping.",
+        },
+      },
+      {
+        status: 503,
+        headers: { ...standardHeaders, "retry-after": "1" },
+      },
+    );
+
   return {
     async serve(
       scope: SessionScope,
       name: HlsName,
       query: string,
     ): Promise<Response> {
-      if (closed) {
-        return Response.json(
-          {
-            error: {
-              code: "TRANSCODER_STOPPING",
-              message: "The transcoder is stopping.",
-            },
-          },
-          {
-            status: 503,
-            headers: { ...standardHeaders, "retry-after": "1" },
-          },
-        );
-      }
+      if (closed) return stoppingResponse();
       const session = await liveSession(scope);
+      // A stop that began while the session loaded has already claimed it.
+      if (closed || session.stopped) return stoppingResponse();
       touch(session);
       if (name.kind === "master" || name.kind === "media") {
         await ensureStarted(session);

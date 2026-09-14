@@ -106,10 +106,11 @@ export async function startTranscoder(
     },
   });
 
-  const address =
+  const address = (
     options.address ??
     Bun.env.PENDIA_TRANSCODER_URL ??
-    `http://127.0.0.1:${server.port}`;
+    `http://127.0.0.1:${server.port}`
+  ).replace(/\/+$/, "");
   let node: { id: string };
   try {
     const [inserted] = await db

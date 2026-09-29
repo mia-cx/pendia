@@ -52,6 +52,9 @@ function resolveStoragePath(
   return { root, target };
 }
 
+/** Signals that a storage parent component is absent on disk. */
+class MissingArtworkStoragePathError extends Error {}
+
 async function statOrNull(path: string) {
   try {
     return await lstat(path);
@@ -77,7 +80,7 @@ async function walkStorageDirectory(
     current = join(current, part);
     let stat = await statOrNull(current);
     if (stat === null) {
-      if (!create) throw new Error("Invalid artwork storage path.");
+      if (!create) throw new MissingArtworkStoragePathError();
       try {
         await mkdir(current);
       } catch (error) {
@@ -185,17 +188,19 @@ export async function storeArtworkOriginal(
   let freshKey: string | undefined;
   const stored = await db
     .transaction(async (tx) => {
+      const [lockedLibrary] = await tx
+        .select()
+        .from(libraries)
+        .where(eq(libraries.id, item.libraryId))
+        .for("update");
+      if (!lockedLibrary) throw new AuthError("NOT_FOUND");
       const [locked] = await tx
         .select()
         .from(items)
         .where(eq(items.id, itemId))
         .for("update");
-      if (!locked) throw new AuthError("NOT_FOUND");
-      const [lockedLibrary] = await tx
-        .select()
-        .from(libraries)
-        .where(eq(libraries.id, locked.libraryId));
-      if (!lockedLibrary) throw new AuthError("NOT_FOUND");
+      if (!locked || locked.libraryId !== lockedLibrary.id)
+        throw new AuthError("NOT_FOUND");
 
       const [selected] = await tx
         .select()
@@ -218,6 +223,11 @@ export async function storeArtworkOriginal(
       const { root, target } = resolveStoragePath(
         lockedLibrary.rootPath,
         storageKey,
+      );
+      await walkStorageDirectory(
+        root,
+        join(root, locked.canonicalFolder),
+        false,
       );
       await walkStorageDirectory(root, dirname(target), true);
       const temporary = `${target}.${Bun.randomUUIDv7()}.tmp`;
@@ -396,7 +406,12 @@ export async function readArtworkOriginal(
       library.rootPath,
       row.storageKey,
     );
-    await walkStorageDirectory(root, dirname(target), false);
+    try {
+      await walkStorageDirectory(root, dirname(target), false);
+    } catch (error) {
+      if (error instanceof MissingArtworkStoragePathError) return null;
+      throw error;
+    }
     let handle: FileHandle;
     try {
       handle = await openFile(

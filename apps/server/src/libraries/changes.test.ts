@@ -240,6 +240,20 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         const movedFolder = "Alien Remastered (1979)";
         const movedPath = `${movedFolder}/Alien.1080p.mkv`;
         await rename(dir, join(root, movedFolder));
+
+        // A poster refresh racing the rename must fail instead of recreating
+        // the old canonical folder.
+        await expect(
+          storeArtworkOriginal(
+            db,
+            itemId,
+            { type: "poster", url: "https://image.example/fresh.jpg" },
+            respondWith(png),
+          ),
+        ).rejects.toThrow();
+        await expect(access(dir)).rejects.toThrow();
+        await expect(access(join(root, folder, ".pendia"))).rejects.toThrow();
+
         const temporary = await scanDirectory(db, library.id, movedFolder);
         expect(temporary.itemId).not.toBe(itemId);
         expect(await db.select().from(items)).toHaveLength(2);
@@ -283,6 +297,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         const original = await readArtworkOriginal(db, stored.id);
         expect(original?.artwork.id).toBe(stored.id);
         expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+        await expect(access(dir)).rejects.toThrow();
       });
     }));
 

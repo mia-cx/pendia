@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -55,6 +55,7 @@ async function seed(db: Database, root: string, bytes: Uint8Array) {
     canonicalFolder: "Alien (1979)",
     extension: {},
   });
+  await mkdir(join(root, item.canonicalFolder), { recursive: true });
   const row = await storeArtworkOriginal(
     db,
     item.id,

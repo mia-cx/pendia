@@ -59,6 +59,7 @@ async function fixture(db: Database, rootPath: string) {
     canonicalFolder: "Alien (1979)",
     extension: {},
   });
+  await mkdir(join(rootPath, item.canonicalFolder), { recursive: true });
   return { library, item };
 }
 
@@ -527,7 +528,6 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       await withTempRoot(async (root) =>
         withTempRoot(async (outside) => {
           const { item } = await fixture(db, root);
-          await mkdir(join(root, item.canonicalFolder));
           await symlink(outside, join(root, item.canonicalFolder, ".pendia"));
           const { calls, request } = mockRequest(() => new Response(png));
           await expect(
@@ -631,6 +631,23 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
         const row = await storeArtworkOriginal(db, item.id, poster, request);
         await rm(join(root, row.storageKey));
         expect(await readArtworkOriginal(db, row.id)).toBeNull();
+      });
+    }));
+
+  test("returns null when a stored artwork parent disappeared", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        await rm(join(root, item.canonicalFolder, ".pendia"), {
+          recursive: true,
+        });
+        expect(await readArtworkOriginal(db, row.id)).toBeNull();
+        const second = await storeArtworkOriginal(db, item.id, poster, request);
+        await rm(join(root, item.canonicalFolder), { recursive: true });
+        expect(await readArtworkOriginal(db, second.id)).toBeNull();
       });
     }));
 
@@ -760,7 +777,6 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
       await withTempRoot(async (root) =>
         withTempRoot(async (outside) => {
           const { item } = await fixture(db, root);
-          await mkdir(join(root, item.canonicalFolder));
           await symlink(outside, join(root, item.canonicalFolder, ".pendia"));
           const [row] = await db
             .insert(artwork)

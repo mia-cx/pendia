@@ -77,6 +77,7 @@ async function fixture(db: Database, rootPath: string) {
     canonicalFolder: "Alien (1979) {tmdb-550}",
     extension: {},
   });
+  await mkdir(join(rootPath, item.canonicalFolder), { recursive: true });
   return { library, item };
 }
 

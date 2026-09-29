@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { asc, eq, sql } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
+import { AuthError } from "../auth/errors.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
@@ -520,6 +521,66 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           expect(
             (await db.select().from(files)).map((row) => row.id).sort(),
           ).toEqual(fileIds);
+          expect(await db.select().from(progress)).toEqual(progressBefore);
+        });
+      });
+    }));
+
+  test("a provider-id match with media still in place rejects relocation", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const folderB = "Alien Remastered (1979) {tmdb-348}";
+        const fileB = `${folderB}/Alien.2160p.mkv`;
+        const dir = join(root, folder);
+        const dirB = join(root, folderB);
+        await mkdir(dir, { recursive: true });
+        await mkdir(dirB, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        await createVideoFixture(join(root, fileB));
+        await withLibrary(db, root, async (library) => {
+          const scanned = await scanDirectory(db, library.id, folder);
+          const itemId = scanned.itemId;
+          if (!itemId) throw new Error("Initial scan produced no Item.");
+          const [version] = await db.select().from(versions);
+          const [file] = await db.select().from(files);
+          if (!version || !file)
+            throw new Error("Initial scan produced no Version.");
+          const admin = await setupAdmin(db, {
+            username: "admin",
+            password: "admin-pass",
+          });
+          await db.insert(progress).values({
+            userId: admin.id,
+            itemId,
+            versionId: version.id,
+            format: "video",
+            positionSeconds: 33,
+          });
+          const progressBefore = await db.select().from(progress);
+
+          const error = await scanDirectory(db, library.id, folderB, {
+            reconcileMissing: true,
+          }).catch((cause: unknown) => cause);
+          expect(error).toBeInstanceOf(AuthError);
+          expect((error as AuthError).code).toBe("CONFLICT");
+
+          const itemRows = await db.select().from(items);
+          expect(itemRows).toHaveLength(1);
+          expect(itemRows[0]).toMatchObject({
+            id: itemId,
+            canonicalFolder: folder,
+          });
+          const versionRows = await db.select().from(versions);
+          expect(versionRows.map((row) => row.id)).toEqual([version.id]);
+          const fileRows = await db.select().from(files);
+          expect(fileRows).toHaveLength(1);
+          expect(fileRows[0]).toMatchObject({
+            id: file.id,
+            itemId,
+            versionId: version.id,
+            path: file1080,
+          });
           expect(await db.select().from(progress)).toEqual(progressBefore);
         });
       });

@@ -5,7 +5,7 @@ import type {
   MetadataProvider,
   MetadataResult,
 } from "@pendia/plugin-api";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -365,6 +365,52 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       const error = await pending.catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(AuthError);
       expect((error as AuthError).code).toBe("NOT_FOUND");
+    }));
+
+  test("a provider id changed during fetch rejects the stale application", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      await db
+        .insert(providerIds)
+        .values({ provider: "tmdb", value: "old", itemId: item.id });
+      let fetchStarted: () => void = () => {};
+      let releaseFetch: (result: MetadataResult) => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        fetchStarted = resolve;
+      });
+      const released = new Promise<MetadataResult>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const { provider } = mockProvider("tmdb", {
+        fetch: () => {
+          fetchStarted();
+          return released;
+        },
+      });
+      const pending = applyMetadata(db, item.id, [provider]);
+      await started;
+      await db
+        .update(providerIds)
+        .set({ value: "new" })
+        .where(
+          and(
+            eq(providerIds.itemId, item.id),
+            eq(providerIds.provider, "tmdb"),
+          ),
+        );
+      releaseFetch(fetchedResult({ providerIds: { tmdb: "old" } }));
+      await expect(pending).rejects.toThrow(
+        "Provider id changed during metadata fetch.",
+      );
+      expect(await itemProviderIds(db, item.id)).toEqual([
+        { provider: "tmdb", value: "new" },
+      ]);
+      expect(await storedItem(db, item.id)).toMatchObject({
+        title: "Inception",
+        metadataState: "pending",
+      });
+      expect(await db.select().from(credits)).toEqual([]);
     }));
 
   test("a missing item throws NOT_FOUND", () =>

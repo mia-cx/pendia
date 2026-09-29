@@ -48,6 +48,7 @@ async function persistMatch(
   providerId: string,
   confidence: number,
   result: MetadataResult,
+  expectedProviderId: string | null,
 ): Promise<MetadataApplication> {
   const idEntries = new Map<string, string>();
   for (const [name, value] of Object.entries(result.providerIds)) {
@@ -64,6 +65,14 @@ async function persistMatch(
       .where(eq(items.id, itemId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
+    const [current] = await tx
+      .select({ value: providerIds.value })
+      .from(providerIds)
+      .where(
+        and(eq(providerIds.itemId, itemId), eq(providerIds.provider, provider)),
+      );
+    if ((current?.value ?? null) !== expectedProviderId)
+      throw new Error("Provider id changed during metadata fetch.");
     await tx
       .update(items)
       .set({
@@ -200,7 +209,15 @@ export async function applyMetadata(
         providerId: existing.value,
         kind: item.kind,
       });
-      return persistMatch(db, item.id, provider.id, existing.value, 1, result);
+      return persistMatch(
+        db,
+        item.id,
+        provider.id,
+        existing.value,
+        1,
+        result,
+        existing.value,
+      );
     }
     const matches = await provider.search({
       title: item.title,
@@ -220,6 +237,7 @@ export async function applyMetadata(
       best.providerId,
       best.confidence,
       result,
+      null,
     );
   }
   return persistUnmatched(db, item.id);

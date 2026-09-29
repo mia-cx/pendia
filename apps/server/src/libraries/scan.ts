@@ -130,6 +130,32 @@ async function revalidateScope(
   }
 }
 
+/** Returns whether the requested scope still holds recognized media. */
+async function scopeHasMedia(
+  rootPath: string,
+  rules: ScanRules,
+  path: string,
+  recursive: boolean,
+): Promise<boolean> {
+  try {
+    for await (const file of walkLibrary(rootPath, rules, {
+      path,
+      recursive,
+    })) {
+      if (file.path !== "") return true;
+    }
+    return false;
+  } catch (error) {
+    if (
+      error instanceof MissingLibraryPathError &&
+      error.scope === "requested"
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 /** Combines ordered member keyframes into one Version index offset by duration. */
 function combineKeyframes(
   members: readonly ProbedLibraryFile[],
@@ -299,6 +325,15 @@ export async function scanDirectory(
       itemId = existingItem.id;
     } else if (found) {
       if (found.kind !== "movie") throw new AuthError("CONFLICT");
+      if (
+        await scopeHasMedia(
+          library.rootPath,
+          moviesMedium.scan,
+          found.canonicalFolder,
+          false,
+        )
+      )
+        throw new AuthError("CONFLICT");
       await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       itemId = found.id;
     } else {
@@ -548,6 +583,15 @@ export async function scanShowDirectory(
       showId = existingShow.id;
     } else if (found) {
       if (found.kind !== "show") throw new AuthError("CONFLICT");
+      if (
+        await scopeHasMedia(
+          library.rootPath,
+          showsScan,
+          found.canonicalFolder,
+          true,
+        )
+      )
+        throw new AuthError("CONFLICT");
       await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       showId = found.id;
     } else {

@@ -134,6 +134,8 @@ describe("codecString", () => {
     [{ codec: "aac", profile: "heaacv2", level: null }, "mp4a.40.29"],
     [{ codec: "aac", profile: null, level: null }, "mp4a.40.2"],
     [{ codec: "aac", profile: "main", level: null }, null],
+    [{ codec: "opus", profile: null, level: null }, "Opus"],
+    [{ codec: "flac", profile: null, level: null }, "fLaC"],
     [{ codec: "h264", profile: "high", level: null }, null],
     [{ codec: "vp9", profile: null, level: null }, null],
   ];

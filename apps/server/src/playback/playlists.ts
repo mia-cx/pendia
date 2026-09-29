@@ -40,11 +40,12 @@ const hevcProfiles: Record<string, string> = {
   main10: "hvc1.2.4",
 };
 
+// ISO BMFF sample entry names are case sensitive: Opus and fLaC.
 const audioCodecs: Record<string, string> = {
   ac3: "ac-3",
   eac3: "ec-3",
-  opus: "opus",
-  flac: "flac",
+  opus: "Opus",
+  flac: "fLaC",
 };
 
 const aacProfiles: Record<string, string> = {

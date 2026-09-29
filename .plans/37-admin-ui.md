@@ -174,6 +174,58 @@ Run on the rebased tree at `4ce4e5d`.
 | `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55437/pendia bun test` | 0 | 723 pass, 0 fail, 3029 expects, 54 files |
 | `env -u DATABASE_URL bun test` | 0 | 428 pass, 295 skip, 0 fail |
 
+### Codex round at `87d57fa`
+
+Three findings, all this branch's own screens, all fixed.
+
+- `4a7d04d`: the libraries screen gives each library its own status ticket. A
+  refresh used to replace the whole `statuses` map, so a batch that started
+  before Scan now could land after `waitForScan` reported the run settled and
+  put the older reading back, where it stayed because polling had ended. A
+  refresh now skips a row whose scan is in flight, and a refresh answer that
+  arrives after `scanNow` claimed the ticket is dropped.
+- `01bd426`: `resetRouteState` resets the per-visit mutation queue, so a save
+  started on the next user no longer waits behind the abandoned visit's
+  request. The abandoned request still runs and its continuations still no-op
+  through `currentVisit`.
+- `b354609`: the group checkboxes and Save are disabled for a disabled account,
+  with one sentence saying why. `setUserGroups` selects its target with
+  `isNull(users.disabledAt)` at `apps/server/src/auth/permissions.ts:177`, so
+  Save could only ever answer `NOT_FOUND` and claim the displayed user does not
+  exist. The server rule stays; the screen reflects it. Settings, overrides and
+  library access do accept disabled users and are untouched.
+
+None of the three carries a test. `apps/web` still has no component test
+harness, and these are screen-state fixes.
+
+### Macroscope round at `87d57fa`
+
+Four findings, none of them this branch's. `apps/server/src/libraries/changes.ts`,
+`webhooks.ts` and `scan.ts` are absent from `git diff origin/main...HEAD`, and
+the only change to `jobs.ts` is `runId: job.id` on the enqueued payload. All
+four read as real against the merged slices, so they are filed rather than
+dropped:
+
+- #69: a cross-show move deletes the destination show's whole subtree, and the
+  webhook validator only compares library ids, so the move reaches that branch.
+- #70: show reconciliation deletes stale `files` rows before it reads
+  `versions.origin`, so a stored Version survives with no files. The movie
+  reconciler reads the origin first.
+- #71: reconciliation trusts a walk taken before the write lock, so a file
+  recreated during the probe pass is deleted as missing.
+
+### Gate after the Codex round, from the repository root
+
+Run at `b354609`, against the baseline recorded at `87d57fa`.
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `bun run lint` | 0 | 187 files, no fixes applied |
+| `bun run check` | 0 | 6 of 6 tasks, svelte-check 0 errors 0 warnings |
+| `bun run build` | 0 | 4 of 4 tasks |
+| `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55437/pendia bun test` | 0 | 723 pass, 0 fail, 3029 expects, 54 files |
+| `env -u DATABASE_URL bun test` | 0 | 428 pass, 295 skip, 0 fail |
+
 ### Decisions and deviations
 
 - Decisions I made because nobody was available to ask:

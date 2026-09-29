@@ -1,6 +1,6 @@
 <script lang="ts">
 import { untrack } from "svelte";
-import { goto } from "$app/navigation";
+import { goto, invalidateAll } from "$app/navigation";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
@@ -178,6 +178,7 @@ async function saveGroups() {
     if (!currentVisit(target, generation)) return;
     access.set(updated);
     groupSel = {};
+    if (target === data.me.user.id) await invalidateAll();
   } catch (error) {
     if (currentVisit(target, generation)) groupsFailure = readFailure(error);
   } finally {

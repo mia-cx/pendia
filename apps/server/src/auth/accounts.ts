@@ -30,7 +30,8 @@ export async function prepareLocalAccount(input: LocalAccountInput) {
     input.password.length < 1 ||
     input.password.length > 1024 ||
     displayName.length < 1 ||
-    displayName.length > 128
+    displayName.length > 128 ||
+    displayName.includes("\0")
   )
     throw new AuthError("INVALID_INPUT");
   const passwordHash = await Bun.password.hash(input.password, {

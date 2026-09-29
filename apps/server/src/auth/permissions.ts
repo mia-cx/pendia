@@ -141,6 +141,7 @@ export async function createGroup(
   if (
     !name ||
     name.length > 80 ||
+    name.includes("\0") ||
     builtInNames.includes(name.toLowerCase()) ||
     input.permissions.some(
       (p) => !(permissions as readonly string[]).includes(p),

@@ -338,7 +338,7 @@ describe.skipIf(!databaseUrl)("auth permissions", () => {
         setPermissionOverride(db, admin.id, Bun.randomUUIDv7(), "view", true),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
-      for (const name of ["admins", "USERS", "  ", "x".repeat(81)])
+      for (const name of ["admins", "USERS", "  ", "x".repeat(81), "\u0000"])
         await expect(
           createGroup(db, admin.id, { name, permissions: [] }),
         ).rejects.toMatchObject({ code: "INVALID_INPUT" });

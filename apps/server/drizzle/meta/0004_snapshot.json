@@ -1,5 +1,5 @@
 {
-  "id": "d5005344-1336-464a-8e78-55922876502e",
+  "id": "c51d32f7-1076-4ffc-84dc-6b4d673100a8",
   "prevId": "8ad7a406-f319-4cbf-b001-eb4cab162e7d",
   "version": "7",
   "dialect": "postgresql",
@@ -1462,14 +1462,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'::text[]"
-        },
-        "metadata_state": {
-          "name": "metadata_state",
-          "type": "metadata_state",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
         },
         "canonical_folder": {
           "name": "canonical_folder",
@@ -3111,6 +3103,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "decision": {
+          "name": "decision",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -3626,11 +3624,6 @@
       "name": "medium",
       "schema": "public",
       "values": ["movies", "shows"]
-    },
-    "public.metadata_state": {
-      "name": "metadata_state",
-      "schema": "public",
-      "values": ["pending", "matched", "unmatched"]
     },
     "public.stream_kind": {
       "name": "stream_kind",

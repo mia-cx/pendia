@@ -30,7 +30,8 @@ export async function prepareLocalAccount(input: LocalAccountInput) {
     input.password.length < 1 ||
     input.password.length > 1024 ||
     displayName.length < 1 ||
-    displayName.length > 128
+    displayName.length > 128 ||
+    displayName.includes("\0")
   )
     throw new AuthError("INVALID_INPUT");
   const passwordHash = await Bun.password.hash(input.password, {
@@ -48,6 +49,11 @@ async function setupClosed(db: Pick<Database, "select">): Promise<boolean> {
   if (marker) return true;
   const [existing] = await db.select({ id: users.id }).from(users).limit(1);
   return !!existing;
+}
+
+/** Reports whether the first admin already exists, so the wizard knows setup is closed. */
+export async function isSetupComplete(db: Database) {
+  return setupClosed(db);
 }
 
 async function seedGroup(db: Pick<Database, "select">, name: string) {

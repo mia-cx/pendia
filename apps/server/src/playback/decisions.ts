@@ -22,8 +22,13 @@ export type VideoStream = {
   dvProfile?: number | null;
 };
 
-/** A normalized audio Stream: codec and channel count. */
-export type AudioStream = { codec: string; channels: number };
+/** A normalized audio Stream: codec, channel count and probed bitrate. */
+export type AudioStream = {
+  codec: string;
+  profile?: string | null;
+  channels: number;
+  bitrate?: number | null;
+};
 
 /** A normalized subtitle Stream: format and text-or-bitmap kind. */
 export type SubtitleStream = { format: string; kind: "text" | "bitmap" };
@@ -95,8 +100,13 @@ function decideVideo(
   cap: number | null,
   capabilities: CapabilityTable,
   burnSubtitles: boolean,
+  hls: boolean,
 ) {
-  if (!burnSubtitles && videoPasses(video, client, cap)) {
+  if (
+    !burnSubtitles &&
+    videoPasses(video, client, cap) &&
+    (!hls || hlsCopyVideo.has(video.codec))
+  ) {
     const hdr = playbackHdr(video, client.hdr.includes("dolby-vision"));
     return {
       action: "copy" as const,
@@ -179,6 +189,28 @@ function decideVideo(
   throw new Error("No backend supports the required video output.");
 }
 
+/** Video codecs the fMP4 muxer takes on a stream copy; anything else transcodes over HLS. */
+const hlsCopyVideo = new Set([
+  "h264",
+  "hevc",
+  "av1",
+  "vp9",
+  "mpeg4",
+  "mpeg2video",
+]);
+
+/** Audio codecs the fMP4 muxer takes on a stream copy; anything else transcodes over HLS. */
+const hlsCopyAudio = new Set([
+  "aac",
+  "ac3",
+  "eac3",
+  "opus",
+  "flac",
+  "mp3",
+  "alac",
+  "dts",
+]);
+
 function decideAudio(audio: AudioStream, client: ClientProfile, hls: boolean) {
   const accepts = (codec: string, channels: number) =>
     client.audioCodecs.some(
@@ -187,7 +219,7 @@ function decideAudio(audio: AudioStream, client: ClientProfile, hls: boolean) {
     );
   if (
     accepts(audio.codec, audio.channels) &&
-    !(hls && ["truehd", "dts-hd"].includes(audio.codec))
+    (!hls || hlsCopyAudio.has(audio.codec))
   ) {
     return {
       action: "copy" as const,
@@ -236,12 +268,16 @@ export function decidePlayback(
   const subtitles = source.subtitles.map((subtitle) =>
     decideSubtitle(subtitle, client, false),
   );
+  const burnSubtitles = subtitles.some(
+    (subtitle) => subtitle.action === "burn",
+  );
   const video = decideVideo(
     source.video,
     client,
     cap,
     capabilities,
-    subtitles.some((subtitle) => subtitle.action === "burn"),
+    burnSubtitles,
+    false,
   );
   const directAudio = source.audio.map((audio) =>
     decideAudio(audio, client, false),
@@ -261,15 +297,26 @@ export function decidePlayback(
     };
   }
   const audio = source.audio.map((stream) => decideAudio(stream, client, true));
+  const hlsVideo = decideVideo(
+    source.video,
+    client,
+    cap,
+    capabilities,
+    burnSubtitles,
+    true,
+  );
   const transcodes =
-    video.action === "transcode" ||
+    hlsVideo.action === "transcode" ||
     audio.some((stream) => stream.action === "transcode");
   return {
     method: transcodes ? ("transcode" as const) : ("remux" as const),
-    video,
+    video: hlsVideo,
     audio,
     subtitles: source.subtitles.map((subtitle) =>
       decideSubtitle(subtitle, client, true),
     ),
   };
 }
+
+/** The engine's full output for one plan, persisted on the session. */
+export type PlaybackDecision = ReturnType<typeof decidePlayback>;

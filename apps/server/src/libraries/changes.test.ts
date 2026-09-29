@@ -1796,6 +1796,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             libraryId: library.id,
             path: folder,
             reconcileMissing: true,
+            runId: claimedRoot.id,
           },
         ]);
         const claimedChild = await queue.claim();

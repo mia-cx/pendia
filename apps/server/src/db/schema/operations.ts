@@ -12,6 +12,7 @@ import {
   text,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { PlaybackDecision } from "../../playback/decisions.ts";
 import { users } from "./access.ts";
 import {
   id,
@@ -28,6 +29,9 @@ export const settings = pgTable("settings", {
   value: jsonb("value").$type<JsonValue>().notNull(),
   updatedAt: instant("updated_at").notNull().defaultNow(),
 });
+
+/** The advisory lock class serialising read-modify-write of one settings row. */
+export const settingsLockClass = 0x70656e64;
 
 // Plugin approval and enabled state belong to settings keyed by plugin name.
 export const pluginLockfile = pgTable("plugin_lockfile", {
@@ -55,12 +59,14 @@ export type ScanChange =
     };
 
 export type JobPayload =
+  // A directory scan's runId is the id of the root job that fanned it out.
   | {
       type: "scan";
       libraryId: string;
       path: string;
       changes?: ScanChange[];
       reconcileMissing?: boolean;
+      runId?: string;
     }
   | { type: "probe"; fileId: string }
   | { type: "provider-fetch"; itemId: string }
@@ -170,6 +176,7 @@ export const sessionRegistry = pgTable(
     playMethod: playMethod("play_method").notNull(),
     state: playbackState("state").notNull(),
     transcoderNodeId: uuid("transcoder_node_id"),
+    decision: jsonb("decision").$type<PlaybackDecision>(),
     createdAt: instant("created_at").notNull().defaultNow(),
     lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
   },

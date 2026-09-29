@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
+import { jobs } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { listJobs } from "../jobs/queue.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
@@ -13,6 +15,7 @@ import {
   createLibrary,
   deleteLibrary,
   getLibrary,
+  libraryScanStatus,
   listLibraries,
   scanLibrary,
   updateLibrary,
@@ -251,5 +254,178 @@ describe.skipIf(!databaseUrl)("library service", () => {
         concurrencyKey: libraryConcurrencyKey(library.id),
         payload: { type: "scan", libraryId: library.id, path: "." },
       });
+    }));
+
+  test("libraryScanStatus counts scan jobs and reports the newest", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      expect(await libraryScanStatus(db, admin.id, library.id)).toEqual({
+        libraryId: library.id,
+        counts: { queued: 0, running: 0, completed: 0, failed: 0 },
+        latest: null,
+        runId: null,
+      });
+      const { jobId } = await scanLibrary(db, admin.id, library.id);
+      const status = await libraryScanStatus(db, admin.id, library.id);
+      expect(status.counts).toEqual({
+        queued: 1,
+        running: 0,
+        completed: 0,
+        failed: 0,
+      });
+      expect(status.latest).toMatchObject({
+        id: jobId,
+        state: "queued",
+        error: null,
+      });
+      expect(status.runId).toBe(jobId);
+      await db
+        .update(jobs)
+        .set({ state: "completed" })
+        .where(eq(jobs.id, jobId));
+      const second = await scanLibrary(db, admin.id, library.id);
+      const rerun = await libraryScanStatus(db, admin.id, library.id);
+      expect(rerun.counts).toEqual({
+        queued: 1,
+        running: 0,
+        completed: 0,
+        failed: 0,
+      });
+      expect(rerun.runId).toBe(second.jobId);
+      expect(rerun.latest?.id).toBe(second.jobId);
+      const other = await createLibrary(db, admin.id, {
+        name: "Other",
+        medium: "movies",
+        rootPath: "/srv/other",
+      });
+      await scanLibrary(db, admin.id, other.id);
+      expect(
+        (await libraryScanStatus(db, admin.id, library.id)).counts.queued,
+      ).toBe(1);
+      expect(
+        (await libraryScanStatus(db, admin.id, other.id)).counts.queued,
+      ).toBe(1);
+    }));
+
+  test("libraryScanStatus scopes counts to one run when scans overlap", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      const first = await scanLibrary(db, admin.id, library.id);
+      const second = await scanLibrary(db, admin.id, library.id);
+      const [child] = await db
+        .insert(jobs)
+        .values({
+          type: "scan",
+          payload: {
+            type: "scan",
+            libraryId: library.id,
+            path: "Alien (1979)",
+            runId: first.jobId,
+          },
+          state: "failed",
+          maxAttempts: 3,
+        })
+        .returning({ id: jobs.id });
+      if (!child) throw new Error("Job insert returned no row.");
+
+      const forSecond = await libraryScanStatus(
+        db,
+        admin.id,
+        library.id,
+        second.jobId,
+      );
+      expect(forSecond.runId).toBe(second.jobId);
+      expect(forSecond.counts.failed).toBe(0);
+      expect(forSecond.latest?.id).toBe(second.jobId);
+
+      const forFirst = await libraryScanStatus(
+        db,
+        admin.id,
+        library.id,
+        first.jobId,
+      );
+      expect(forFirst.runId).toBe(first.jobId);
+      expect(forFirst.counts.failed).toBe(1);
+      expect(forFirst.latest?.id).toBe(child.id);
+
+      const resolved = await libraryScanStatus(db, admin.id, library.id);
+      expect(resolved.runId).toBe(second.jobId);
+      expect(resolved.counts.failed).toBe(0);
+
+      await expectAuthError(
+        libraryScanStatus(db, admin.id, library.id, Bun.randomUUIDv7()),
+        "NOT_FOUND",
+      );
+    }));
+
+  test("libraryScanStatus rejects a directory job id as a run id", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      const { jobId } = await scanLibrary(db, admin.id, library.id);
+      const [child] = await db
+        .insert(jobs)
+        .values({
+          type: "scan",
+          payload: {
+            type: "scan",
+            libraryId: library.id,
+            path: "Alien (1979)",
+            runId: jobId,
+          },
+          state: "completed",
+          maxAttempts: 3,
+        })
+        .returning({ id: jobs.id });
+      if (!child) throw new Error("Job insert returned no row.");
+
+      await expectAuthError(
+        libraryScanStatus(db, admin.id, library.id, child.id),
+        "NOT_FOUND",
+      );
+      const status = await libraryScanStatus(db, admin.id, library.id, jobId);
+      expect(status.runId).toBe(jobId);
+      expect(status.counts).toEqual({
+        queued: 1,
+        running: 0,
+        completed: 1,
+        failed: 0,
+      });
+    }));
+
+  test("libraryScanStatus rejects unknown ids and non-admin actors", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin, viewer } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
+      await expectAuthError(
+        libraryScanStatus(db, admin.id, Bun.randomUUIDv7()),
+        "NOT_FOUND",
+      );
+      await expectAuthError(
+        libraryScanStatus(db, viewer.id, library.id),
+        "FORBIDDEN",
+      );
     }));
 });

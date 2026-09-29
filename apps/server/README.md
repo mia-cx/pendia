@@ -13,6 +13,7 @@ docker compose -p pendia-db-test -f compose.yaml -f compose.test.yaml down -v
 Tests create and drop unique databases on that server. They leave the database named in DATABASE_URL intact.
 The test role needs CREATEDB and permission to install pg_trgm and btree_gist. The Compose role has these permissions.
 Missing DATABASE_URL skips database tests locally and fails in CI. Connection errors always fail.
+The browser playback test runs when a Chromium binary is on PATH or PENDIA_BROWSER points at one, and skips otherwise.
 
 After changing the Drizzle schema, generate the next migration:
 
@@ -60,6 +61,14 @@ A local timer wakes the worker when its failed job becomes eligible again.
 On SIGTERM, shutdown stops new claim loops and drains active handlers before closing Postgres.
 Abrupt process loss does not recover running jobs in this slice. Handlers must be safe to retry after a reported failure.
 Plugin cron scheduling belongs to the plugin host, not this queue.
+
+## Transcoder
+
+The transcoder and all roles run live remux sessions. When the playback engine decides remux, `playback.plan` returns `/api/playback/{sessionId}/{itemId}/hls/master.m3u8?token=...`. The api serves `media.m3u8`, `init.mp4` and `N.m4s` under the same path, and every HLS URL carries the playback token.
+One ffmpeg remuxes each session into transcoder-local scratch, cutting segments on the Item's segment timeline. A segment that is not ready yet waits up to twenty seconds, then answers 503. A seek restarts ffmpeg at that segment; segments already in scratch serve without a restart. Sixty seconds idle stops ffmpeg and deletes scratch while the session row stays live; the next request revives it.
+`PENDIA_SCRATCH_DIR` chooses the scratch root, default `pendia-scratch` under the OS temp dir. Use local disk, never NFS. `PENDIA_TRANSCODER_PORT` defaults to 3001. `PENDIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
+The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `PENDIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
+This slice is remux only. Live transcoding, subtitles and the admission cap are #34; stored Versions are #35. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
 
 ## Auth
 
@@ -141,7 +150,8 @@ To enable OIDC, set `oidc` to an object:
 The issuer, clientId and clientSecret fields are required. `openid` must be included, and scopes use OAuth scope-token characters. HTTPS is required except loopback HTTP for tests. Keep client secrets out of source control and logs.
 
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
-Settings apply on the next request. Invalid stored settings fail closed. Admin settings screens belong to a later slice.
+`artworkRequiresAuth` is a boolean defaulting to false. `settings.update` writes `trustedProxyAddresses` and `artworkRequiresAuth` only.
+Settings apply on the next request. Invalid stored settings fail closed.
 `artworkRequiresAuth` false keeps artwork anonymous for clients such as Findroid. True requires the existing bearer token or session cookie.
 A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
 
@@ -167,7 +177,7 @@ Discovery document: `https://id.mia.cx/application/o/pendia/.well-known/openid-c
 Authentik must emit `email` and `email_verified`. Only verified email links an existing Pendia account.
 Reverse proxies and firewalls must allow server-side discovery, token, JWKS, and UserInfo requests between Pendia and id.mia.cx.
 
-The admin settings screen is a later issue. Until then, configure OIDC with this PostgreSQL 18 upsert:
+OIDC stays read-only over the API in this slice. Configure it with this PostgreSQL 18 upsert:
 
 ```sql
 INSERT INTO settings (id, key, value)
@@ -207,13 +217,43 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 
 | Procedure | REST route | Input | Output |
 | --- | --- | --- | --- |
-| `me` | GET `/api/me` | None | `user` and `credential` |
+| `me` | GET `/api/me` | None | `user`, `credential`, and `admin` saying whether the caller is a built-in admin |
 | `items.list` | GET `/api/items` | `libraryId`, `kind`, `limit`, `cursor` | `{ items, cursor }` of cards |
 | `items.get` | GET `/api/items/{id}` | `id` in the path | the detail shape |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
+| `setup.status` | GET `/api/setup/status` | None | `{ complete }` |
+| `users.list` | GET `/api/users` | None | `AdminUser` array |
+| `users.get` | GET `/api/users/{id}` | `id` | `UserAccess` |
+| `users.create` | POST `/api/users` | `username`, `password`, optional `displayName` | `UserAccount` |
+| `users.sessions` | GET `/api/users/{id}/sessions` | `id` | `Session` array |
+| `users.revokeSession` | POST `/api/sessions/{id}/revoke` | `id` | `{ ok: true }` |
+| `users.setGroups` | PUT `/api/users/{id}/groups` | `id`, `groupIds` | `UserAccess` |
+| `users.setOverride` | PUT `/api/users/{id}/overrides/{permission}` | `id`, `permission`, nullable `allowed` | `UserAccess` |
+| `users.setSettings` | PUT `/api/users/{id}/settings` | `id`, nullable `bitrateCapBps`, nullable `contentRatingCeiling` | `UserAccess` |
+| `users.setLibraryAccess` | PUT `/api/users/{id}/libraries/{libraryId}` | `id`, `libraryId`, nullable `allowed` | `UserAccess` |
+| `groups.list` | GET `/api/groups` | None | `Group` array |
+| `groups.create` | POST `/api/groups` | `name`, `permissions` | `Group` |
+| `groups.setPermissions` | PUT `/api/groups/{id}/permissions` | `id`, `permissions` | `Group` |
+| `settings.get` | GET `/api/settings` | None | `ServerSettings` |
+| `settings.update` | PATCH `/api/settings` | optional `trustedProxyAddresses`, optional `artworkRequiresAuth` | `ServerSettings` |
+| `settings.setProviderKey` | PUT `/api/settings/providers/{name}` | `name`, `value` | `ServerSettings` |
+| `settings.deleteProviderKey` | DELETE `/api/settings/providers/{name}` | `name` | `ServerSettings` |
 
 Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
+
+`setup.status` is the only unauthenticated procedure. The first-run wizard asks it before any account exists, and it leaks one boolean that `POST /api/auth/setup` already leaks through its 409.
+The other admin procedures check permissions inside the auth slice: `manage-users` for user reads and settings, `manage-server` for server settings, and built-in admin membership for group and library access writes.
+
+`users.get` and the four `users.set*` mutations all answer the full `UserAccess` shape, so the per-user screen refreshes in one round trip. The mutations read that shape back without re-checking the caller, which exposes nothing new because reaching that line already required passing the write's own check; it lets an admin demote themselves and still receive the saved state.
+`users.setOverride` restores inheritance on a null `allowed`. `users.setLibraryAccess` writes user rows only; group access rows stay unexposed in this slice.
+`bitrateCapBps` crosses the API as a nullable integer and the service stores it as bigint. It must be a positive safe integer, because the playback planner reads the column as a number and rejects anything larger. `contentRatingCeiling` trims, rejects blanks and clears on null.
+Session and user instants cross as ISO-8601 at millisecond precision, because the auth slice hands back `Date` values. Item instants stay the database's own UTC text.
+
+Group permission edits apply to custom groups only. The built-in `admins` and `users` groups reject writes: admins bypass every check, and `users` is the documented default group.
+
+`settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured and the provider key names. No read returns a provider key value or the OIDC client secret; provider keys are write-only over the API.
+Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `settings.update`. OIDC stays read-only in this slice.
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}`.
 Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
@@ -266,7 +306,9 @@ Library administration requires `manage-libraries` on every procedure. The API e
 | `libraries.update` | PATCH `/api/libraries/{id}` | `id`, `name` | Library |
 | `libraries.delete` | DELETE `/api/libraries/{id}` | `id` | `{ ok: true }` |
 | `libraries.scan` | POST `/api/libraries/{id}/scan` | `id` | `{ jobId }` |
+| `libraries.scanStatus` | GET `/api/libraries/{id}/scan-status` | `id`, `runId?` | `ScanStatus` |
 
+A ScanStatus describes one scan invocation, identified by the `jobId` that `libraries.scan` returned: the library id, counts for the four job states covering that run's root job and the directory jobs it fanned out, the newest scan job's id, state and error or null, and `runId`, the run's root job id. Directory jobs inherit the run id in their payload, so the counts cover exactly one run even when another scan starts while a run is still fanning out. Omitting `runId` reports the newest run (the newest root job, `path` of `.`), and an unknown `runId` answers 404. When the library has never scanned, the counts answer zero, `latest` and `runId` answer null.
 A Library contains `id`, `name`, `medium` and `rootPath`. Names trim surrounding whitespace and allow 1 to 128 characters. Roots must be absolute. Roots and mediums cannot change through `update`. Deleting a library removes its database records, never its files. Mutations use the auth module's origin checks.
 
 The returned scan job walks the root and enqueues one scan per canonical movie or show folder in one transaction. Every root and directory job carries `library:<id>` as its concurrency key. The existing queue key limit applies. Worker and all roles register the built-in handler on startup. An explicit custom scan handler takes precedence.

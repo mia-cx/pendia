@@ -14,7 +14,8 @@ import { loadPlaybackSource } from "./planning.ts";
 
 const directPath = /^\/api\/playback\/([^/]+)\/([^/]+)\/direct$/;
 
-const standardHeaders: Record<string, string> = {
+/** Headers every playback and HLS response carries. */
+export const standardHeaders: Record<string, string> = {
   "cache-control": "no-store",
   vary: "cookie, authorization",
   "x-content-type-options": "nosniff",
@@ -32,7 +33,8 @@ function respond(
   });
 }
 
-function errorResponse(error: unknown): Response {
+/** Turns an auth failure into its JSON response; anything else is a logged 500. */
+export function errorResponse(error: unknown): Response {
   if (error instanceof AuthError)
     return respond(
       { error: { code: error.code, message: error.message } },

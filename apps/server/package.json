@@ -26,6 +26,8 @@
     "sharp": "0.35.4"
   },
   "devDependencies": {
-    "drizzle-kit": "0.31.10"
+    "drizzle-kit": "0.31.10",
+    "hls-parser": "0.16.1",
+    "hls.js": "1.7.3"
   }
 }

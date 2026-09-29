@@ -144,7 +144,7 @@ export async function writeUserSettings(
   let contentRatingCeiling: string | null = null;
   if (input.contentRatingCeiling !== null) {
     const trimmed = input.contentRatingCeiling.trim();
-    if (trimmed.length === 0 || trimmed.length > 64)
+    if (trimmed.length === 0 || trimmed.length > 64 || trimmed.includes("\0"))
       throw new AuthError("INVALID_INPUT");
     contentRatingCeiling = trimmed;
   }

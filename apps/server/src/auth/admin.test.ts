@@ -255,7 +255,7 @@ describe.skipIf(!databaseUrl)("auth admin", () => {
             contentRatingCeiling: null,
           }),
         ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-      for (const contentRatingCeiling of ["   ", "x".repeat(65)])
+      for (const contentRatingCeiling of ["   ", "x".repeat(65), "PG\u000013"])
         await expect(
           writeUserSettings(db, admin.id, viewer.id, {
             bitrateCapBps: null,

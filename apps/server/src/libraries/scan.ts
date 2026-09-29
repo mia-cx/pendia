@@ -2,6 +2,7 @@ import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
+  artwork,
   episodes,
   files,
   itemAncestors,
@@ -819,14 +820,86 @@ export async function scanShowDirectory(
                 .select({ id: files.id })
                 .from(files)
                 .where(eq(files.versionId, existingFile.versionId));
+              const allVersionFileIds = allVersionFiles.map((file) => file.id);
               const destinationFileIds = new Set(
                 existingFiles.map((file) => file.id),
               );
               if (
-                allVersionFiles.length !== destinationFileIds.size ||
-                allVersionFiles.some((file) => !destinationFileIds.has(file.id))
+                allVersionFileIds.length !== destinationFileIds.size ||
+                allVersionFileIds.some(
+                  (fileId) => !destinationFileIds.has(fileId),
+                )
               ) {
                 throw new AuthError("CONFLICT");
+              }
+              // Stored Versions derived from the moved Files retire with the
+              // source Item; keep their colocated artwork for byte cleanup.
+              const dependentStoredVersions =
+                allVersionFileIds.length === 0
+                  ? []
+                  : await tx
+                      .select({ id: versions.id })
+                      .from(versions)
+                      .where(
+                        and(
+                          eq(versions.origin, "stored"),
+                          inArray(versions.sourceFileId, allVersionFileIds),
+                        ),
+                      );
+              if (dependentStoredVersions.length > 0) {
+                const storedIds = dependentStoredVersions.map(
+                  (version) => version.id,
+                );
+                const orphanedArtwork = await tx
+                  .select({
+                    rootPath: libraries.rootPath,
+                    storageKey: artwork.storageKey,
+                  })
+                  .from(artwork)
+                  .innerJoin(versions, eq(artwork.versionId, versions.id))
+                  .innerJoin(libraries, eq(versions.libraryId, libraries.id))
+                  .where(
+                    and(
+                      eq(artwork.backend, "colocated"),
+                      inArray(artwork.versionId, storedIds),
+                    ),
+                  );
+                deletedArtwork.push(...orphanedArtwork);
+                await tx
+                  .delete(versions)
+                  .where(inArray(versions.id, storedIds));
+              }
+              // Same-user Progress: the freshest persisted playback state wins.
+              const sourceProgress = await tx
+                .select()
+                .from(progress)
+                .where(eq(progress.versionId, existingFile.versionId));
+              for (const sourceRow of sourceProgress) {
+                const [destinationRow] = await tx
+                  .select()
+                  .from(progress)
+                  .where(
+                    and(
+                      eq(progress.userId, sourceRow.userId),
+                      eq(progress.itemId, episodeId),
+                    ),
+                  )
+                  .limit(1);
+                if (destinationRow === undefined) continue;
+                const sourceIsFresher =
+                  sourceRow.updatedAt.getTime() >
+                    destinationRow.updatedAt.getTime() ||
+                  (sourceRow.updatedAt.getTime() ===
+                    destinationRow.updatedAt.getTime() &&
+                    sourceRow.id > destinationRow.id);
+                await tx
+                  .delete(progress)
+                  .where(
+                    eq(
+                      progress.id,
+                      sourceIsFresher ? destinationRow.id : sourceRow.id,
+                    ),
+                  );
               }
               const sourceEpisodeId = existingFile.itemId;
               // files.(version_id, item_id), progress.(version_id, item_id,

@@ -1477,6 +1477,32 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         if (!sourceSession) {
           throw new Error("Session fixture missing.");
         }
+        const [sourceVersion] = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.id, sourceFile.versionId));
+        if (sourceVersion?.segmentTimelineId == null) {
+          throw new Error("Source Version has no segment timeline.");
+        }
+        const [storedVersion] = await db
+          .insert(versions)
+          .values({
+            itemId: sourceFile.itemId,
+            itemKind: "episode",
+            libraryId: library.id,
+            label: "Stored 720p",
+            format: "video",
+            bytes: 1n,
+            origin: "stored",
+            sourceFileId: sourceFile.id,
+            segmentTimelineId: sourceVersion.segmentTimelineId,
+            timelineAligned: true,
+            storedFolder: "/stored/episode",
+            rung: "720p",
+            complete: true,
+          })
+          .returning();
+        if (!storedVersion) throw new Error("Stored Version missing.");
 
         await rename(join(root, sourcePath), join(root, displacedPath));
         await runScanJob(db, library.id, "Foundation", [
@@ -1552,6 +1578,129 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(
           afterVersions.find((row) => row.id === displacedFile.versionId),
         ).toBeUndefined();
+        expect(
+          afterVersions.find((row) => row.id === storedVersion.id),
+        ).toBeUndefined();
+
+        const rescanned = await scanShowDirectory(db, library.id, "Foundation");
+        expect(rescanned.itemId).toBe(showRoot.id);
+        expect(await db.select().from(files)).toEqual(afterFiles);
+      });
+    }));
+
+  test("a non-colliding cross-show move keeps the fresher Progress", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const foundationDir = join(root, "Foundation", "Season 01");
+        const severanceDir = join(root, "Severance", "Season 01");
+        await mkdir(foundationDir, { recursive: true });
+        await mkdir(severanceDir, { recursive: true });
+        const destinationPath = "Foundation/Season 01/Foundation S01E01.mkv";
+        const movedPath = "Foundation/Season 01/Foundation S01E01 - Alt.mkv";
+        const sourcePath = "Severance/Season 01/Severance S01E01.mkv";
+        await createVideoFixture(join(root, destinationPath));
+        await createVideoFixture(join(root, sourcePath));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        await scanShowDirectory(db, library.id, "Severance");
+
+        const [destinationFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, destinationPath));
+        const [sourceFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, sourcePath));
+        if (!destinationFile || !sourceFile) {
+          throw new Error("Initial scan produced no Episode Files.");
+        }
+        const beforeItems = await db.select().from(items);
+        const showRoot = beforeItems.find(
+          (row) => row.kind === "show" && row.canonicalFolder === "Foundation",
+        );
+        const severanceItems = beforeItems
+          .filter((row) => row.canonicalFolder.startsWith("Severance"))
+          .map((row) => row.id);
+        if (!showRoot || severanceItems.length === 0) {
+          throw new Error("Initial scan produced no Show hierarchies.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const [destinationProgress] = await db
+          .insert(progress)
+          .values({
+            userId: admin.id,
+            itemId: destinationFile.itemId,
+            versionId: destinationFile.versionId,
+            format: "video",
+            positionSeconds: 11,
+            updatedAt: new Date("2020-01-01T00:00:00Z"),
+          })
+          .returning();
+        const [sourceProgress] = await db
+          .insert(progress)
+          .values({
+            userId: admin.id,
+            itemId: sourceFile.itemId,
+            versionId: sourceFile.versionId,
+            format: "video",
+            positionSeconds: 22,
+            updatedAt: new Date("2024-01-01T00:00:00Z"),
+          })
+          .returning();
+        if (!destinationProgress || !sourceProgress) {
+          throw new Error("Progress fixture missing.");
+        }
+
+        await rename(join(root, sourcePath), join(root, movedPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: movedPath,
+            previousPath: sourcePath,
+            providerIds: {},
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(
+          severanceItems.filter(
+            (id) => itemRows.find((row) => row.id === id) !== undefined,
+          ),
+        ).toEqual([]);
+        expect(itemRows.find((row) => row.id === showRoot.id)).toBeDefined();
+        const afterFiles = await db.select().from(files);
+        const movedFile = afterFiles.find((row) => row.path === movedPath);
+        if (!movedFile) throw new Error("Moved File missing.");
+        expect(movedFile).toMatchObject({
+          id: sourceFile.id,
+          versionId: sourceFile.versionId,
+          itemId: destinationFile.itemId,
+        });
+        expect(
+          afterFiles.find((row) => row.path === destinationPath),
+        ).toMatchObject({
+          id: destinationFile.id,
+          versionId: destinationFile.versionId,
+          itemId: destinationFile.itemId,
+        });
+        const afterVersions = await db.select().from(versions);
+        const destinationVersions = afterVersions.filter(
+          (row) => row.itemId === destinationFile.itemId,
+        );
+        expect(destinationVersions.map((row) => row.id).sort()).toEqual(
+          [sourceFile.versionId, destinationFile.versionId].sort(),
+        );
+        expect(
+          afterVersions.find((row) => row.id === sourceFile.versionId)?.itemId,
+        ).toBe(destinationFile.itemId);
+        expect(await db.select().from(progress)).toEqual([
+          { ...sourceProgress, itemId: destinationFile.itemId },
+        ]);
 
         const rescanned = await scanShowDirectory(db, library.id, "Foundation");
         expect(rescanned.itemId).toBe(showRoot.id);

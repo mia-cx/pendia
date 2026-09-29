@@ -345,6 +345,16 @@ Three findings, which are two defects.
   this slice exposes that `d8c4e54` did not reach. It carries a test that
   fails against the unfixed function.
 
+### Macroscope round at `e040d2d`
+
+One finding, in the gating `b3e529f` had just added.
+
+- `889daa4`: saving groups for the signed-in user re-runs the layout load. An
+  admin who removed their own `admins` membership kept a stale `me.admin`, so
+  the controls stayed enabled and every later change came back FORBIDDEN.
+  Membership is the only thing that moves that flag, so this is the only path
+  that needed it.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

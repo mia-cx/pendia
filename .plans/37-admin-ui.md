@@ -355,6 +355,28 @@ One finding, in the gating `b3e529f` had just added.
   Membership is the only thing that moves that flag, so this is the only path
   that needed it.
 
+### Codex round at `58b54af`
+
+Four findings. Three fixed, one already filed.
+
+- `5df308c`: a self-demotion reloads the screen, not just the layout.
+  `889daa4` refreshed `me.admin` but left `access`, `groups` and `libs`
+  holding what the caller could read a moment earlier, so the caps form stayed
+  live for an admin who had just given away `manage-users` too.
+- `1b57ccd`: a screen whose read came back forbidden hides its mutation forms.
+  The admin layout guards on authentication, not permission, so any signed-in
+  user reaches these screens, saw the denied panel, and still had live create,
+  invite and add forms. Only forbidden and unauthorized hide them; a transient
+  read failure leaves the writes alone.
+- `4b95847`: the settings read-back stops authorizing a second time. A caller
+  who lost `manage-server` between a committed write and the read that
+  followed it was told the change failed. The unchecked reader beside the
+  checked wrapper matches `readUserAccess` beside `getUserAccess`.
+- Deferred to #64: an OIDC sign-in button on the login page. That issue was
+  filed out of this slice because the button needs an unauthenticated read of
+  whether OIDC is configured, and `setup.status` is the only unauthenticated
+  procedure this slice added.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

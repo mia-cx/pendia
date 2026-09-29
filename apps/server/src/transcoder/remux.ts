@@ -152,11 +152,20 @@ export function startRemuxRun(
     }
   });
 
-  const proc = Bun.spawn(["ffmpeg", ...args], {
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "pipe",
-  });
+  const spawnFfmpeg = () =>
+    Bun.spawn(["ffmpeg", ...args], {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+  let proc: ReturnType<typeof spawnFfmpeg>;
+  try {
+    proc = spawnFfmpeg();
+  } catch (error) {
+    // No handle is returned, so nobody else can close the watcher.
+    watcher.close();
+    throw error;
+  }
   const stderr = new Response(proc.stderr).text();
 
   const exited = (async (): Promise<number | null> => {

@@ -214,9 +214,25 @@ dropped:
 - #71: reconciliation trusts a walk taken before the write lock, so a file
   recreated during the probe pass is deleted as missing.
 
+### Macroscope round at `55ec9c5`
+
+One finding, against `01bd426` from the round above, and it was right.
+
+- `2790060`: the mutation queue is keyed by the target user instead of by the
+  visit. Resetting the queue on a route change dropped ordering between two
+  writes to the same user, so an admin who left user A and came back while the
+  first save was still in flight could have the stale write commit second and
+  leave the database holding the old value under a screen showing the new one.
+  The shared queue it replaced had the opposite fault, which is what `01bd426`
+  was for: a save on B waited behind an in-flight request for A. One chain per
+  target user answers both. Macroscope asked for the shared chain back; that
+  reinstates the cross-user coupling, so the fix went to the ownership boundary
+  instead.
+
 ### Gate after the Codex round, from the repository root
 
-Run at `b354609`, against the baseline recorded at `87d57fa`.
+Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at
+`2790060` is identical on every line.
 
 | Command | Exit | Result |
 | --- | --- | --- |

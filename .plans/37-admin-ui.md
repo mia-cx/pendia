@@ -367,7 +367,8 @@ Four findings. Three fixed, one already filed.
   The admin layout guards on authentication, not permission, so any signed-in
   user reaches these screens, saw the denied panel, and still had live create,
   invite and add forms. Only forbidden and unauthorized hide them; a transient
-  read failure leaves the writes alone.
+  read failure leaves the writes alone. The settings screen needed nothing:
+  its denied panel already replaces the whole content.
 - `4b95847`: the settings read-back stops authorizing a second time. A caller
   who lost `manage-server` between a committed write and the read that
   followed it was told the change failed. The unchecked reader beside the
@@ -376,6 +377,9 @@ Four findings. Three fixed, one already filed.
   filed out of this slice because the button needs an unauthenticated read of
   whether OIDC is configured, and `setup.status` is the only unauthenticated
   procedure this slice added.
+- Two things came out of reading that diff rather than out of review: the
+  settings screen's guards could never be false, and `listProviderKeys` lost
+  its last caller when the read-back stopped checking twice. Both are gone.
 
 ### Gate after the Codex round, from the repository root
 

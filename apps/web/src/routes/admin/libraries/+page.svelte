@@ -123,6 +123,7 @@ async function saveRename(row: LibraryRow) {
 async function scanNow(row: LibraryRow) {
   scanBusy[row.id] = true;
   delete scanFailures[row.id];
+  delete statusFailures[row.id];
   const ticket = claimStatus(row.id);
   try {
     const { jobId } = await client.libraries.scan({ id: row.id });
@@ -133,10 +134,7 @@ async function scanNow(row: LibraryRow) {
         if (holdsStatus(row.id, ticket)) statuses[row.id] = reading;
       },
     });
-    if (holdsStatus(row.id, ticket)) {
-      statuses[row.id] = settled;
-      delete statusFailures[row.id];
-    }
+    if (holdsStatus(row.id, ticket)) statuses[row.id] = settled;
   } catch (error) {
     scanFailures[row.id] =
       error instanceof Error

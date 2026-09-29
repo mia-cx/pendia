@@ -3,12 +3,16 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
   artwork,
+  credits,
   episodes,
+  favourites,
   files,
   itemAncestors,
   items,
   libraries,
   progress,
+  providerIds,
+  ratings,
   type ScanChange,
   seasons,
   sessionRegistry,
@@ -198,6 +202,200 @@ function combineKeyframes(
     offset += duration;
   }
   return combined;
+}
+
+/** Moves surviving Item-owned state from an emptied source Episode to its destination. */
+async function mergeEmptiedEpisodeState(
+  tx: Transaction,
+  sourceEpisodeId: string,
+  episodeId: string,
+): Promise<void> {
+  const [sourceItem] = await tx
+    .select()
+    .from(items)
+    .where(eq(items.id, sourceEpisodeId));
+  const [destinationItem] = await tx
+    .select()
+    .from(items)
+    .where(eq(items.id, episodeId));
+  if (!sourceItem || !destinationItem) {
+    throw new Error("Merge participants missing.");
+  }
+
+  // Descriptive metadata winner: state rank, then freshness, then id.
+  const stateRank = (state: string) =>
+    state === "matched" ? 3 : state === "unmatched" ? 2 : 1;
+  const sourceWins =
+    stateRank(sourceItem.metadataState) !==
+    stateRank(destinationItem.metadataState)
+      ? stateRank(sourceItem.metadataState) >
+        stateRank(destinationItem.metadataState)
+      : sourceItem.updatedAt.getTime() !== destinationItem.updatedAt.getTime()
+        ? sourceItem.updatedAt.getTime() > destinationItem.updatedAt.getTime()
+        : sourceItem.id > destinationItem.id;
+  if (sourceWins) {
+    await tx
+      .update(items)
+      .set({
+        title: sourceItem.title,
+        year: sourceItem.year,
+        overview: sourceItem.overview,
+        contentRating: sourceItem.contentRating,
+        genres: sourceItem.genres,
+        tags: sourceItem.tags,
+        metadataState: sourceItem.metadataState,
+        updatedAt: new Date(),
+      })
+      .where(eq(items.id, episodeId));
+  }
+
+  // Favourites merge as a user set.
+  const heldFavourites = new Set(
+    (
+      await tx
+        .select({ userId: favourites.userId })
+        .from(favourites)
+        .where(eq(favourites.itemId, episodeId))
+    ).map((row) => row.userId),
+  );
+  const sourceFavourites = await tx
+    .select()
+    .from(favourites)
+    .where(eq(favourites.itemId, sourceEpisodeId));
+  for (const favourite of sourceFavourites) {
+    if (heldFavourites.has(favourite.userId)) {
+      await tx.delete(favourites).where(eq(favourites.id, favourite.id));
+    } else {
+      await tx
+        .update(favourites)
+        .set({ itemId: episodeId })
+        .where(eq(favourites.id, favourite.id));
+    }
+  }
+
+  // Same-user Ratings keep the fresher row, like Progress.
+  const sourceRatings = await tx
+    .select()
+    .from(ratings)
+    .where(eq(ratings.itemId, sourceEpisodeId));
+  for (const rating of sourceRatings) {
+    const [existing] = await tx
+      .select()
+      .from(ratings)
+      .where(
+        and(eq(ratings.itemId, episodeId), eq(ratings.userId, rating.userId)),
+      )
+      .limit(1);
+    if (existing === undefined) {
+      await tx
+        .update(ratings)
+        .set({ itemId: episodeId })
+        .where(eq(ratings.id, rating.id));
+      continue;
+    }
+    const sourceNewer =
+      rating.updatedAt.getTime() !== existing.updatedAt.getTime()
+        ? rating.updatedAt.getTime() > existing.updatedAt.getTime()
+        : rating.id > existing.id;
+    if (sourceNewer) {
+      await tx.delete(ratings).where(eq(ratings.id, existing.id));
+      await tx
+        .update(ratings)
+        .set({ itemId: episodeId })
+        .where(eq(ratings.id, rating.id));
+    } else {
+      await tx.delete(ratings).where(eq(ratings.id, rating.id));
+    }
+  }
+
+  // Explicit provider ids outrank derived ones; equal provenance follows the
+  // descriptive metadata winner.
+  const sourceProviderIds = await tx
+    .select()
+    .from(providerIds)
+    .where(eq(providerIds.itemId, sourceEpisodeId));
+  for (const row of sourceProviderIds) {
+    const [existing] = await tx
+      .select()
+      .from(providerIds)
+      .where(
+        and(
+          eq(providerIds.itemId, episodeId),
+          eq(providerIds.provider, row.provider),
+        ),
+      )
+      .limit(1);
+    if (existing === undefined) {
+      await tx
+        .update(providerIds)
+        .set({ itemId: episodeId })
+        .where(eq(providerIds.id, row.id));
+      continue;
+    }
+    const keepSource =
+      row.metadataDerived !== existing.metadataDerived
+        ? !row.metadataDerived
+        : sourceWins;
+    if (keepSource) {
+      await tx.delete(providerIds).where(eq(providerIds.id, existing.id));
+      await tx
+        .update(providerIds)
+        .set({ itemId: episodeId })
+        .where(eq(providerIds.id, row.id));
+    } else {
+      await tx.delete(providerIds).where(eq(providerIds.id, row.id));
+    }
+  }
+
+  // Credits follow the descriptive metadata winner as a set.
+  if (sourceWins) {
+    await tx.delete(credits).where(eq(credits.itemId, episodeId));
+    await tx
+      .update(credits)
+      .set({ itemId: episodeId })
+      .where(eq(credits.itemId, sourceEpisodeId));
+  } else {
+    await tx.delete(credits).where(eq(credits.itemId, sourceEpisodeId));
+  }
+
+  // All artwork rows move so bytes stay referenced; the descriptive winner's
+  // selection wins per type.
+  const sourceArtwork = await tx
+    .select()
+    .from(artwork)
+    .where(eq(artwork.itemId, sourceEpisodeId));
+  for (const row of sourceArtwork) {
+    if (row.selected) {
+      const [held] = await tx
+        .select({ id: artwork.id })
+        .from(artwork)
+        .where(
+          and(
+            eq(artwork.itemId, episodeId),
+            eq(artwork.type, row.type),
+            eq(artwork.selected, true),
+          ),
+        )
+        .limit(1);
+      if (held !== undefined) {
+        if (sourceWins) {
+          await tx
+            .update(artwork)
+            .set({ selected: false })
+            .where(eq(artwork.id, held.id));
+        } else {
+          await tx
+            .update(artwork)
+            .set({ selected: false })
+            .where(eq(artwork.id, row.id));
+        }
+      }
+    }
+    await tx
+      .update(artwork)
+      .set({ itemId: episodeId })
+      .where(eq(artwork.id, row.id));
+  }
 }
 
 /** Deletes leaf Items still holding no Versions after queued file deletes. */
@@ -1082,7 +1280,10 @@ export async function scanShowDirectory(
                   timeline_aligned = false
                 where id = ${existingFile.versionId}
               `);
-              emptiedItemIds.push(sourceEpisodeId);
+              if (sourceEpisodeWillEmpty) {
+                await mergeEmptiedEpisodeState(tx, sourceEpisodeId, episodeId);
+                emptiedItemIds.push(sourceEpisodeId);
+              }
             }
             const [version] = await tx
               .select()

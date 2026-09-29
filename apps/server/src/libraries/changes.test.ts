@@ -9,12 +9,14 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { and, asc, eq } from "drizzle-orm";
-import { setupAdmin } from "../auth/accounts.ts";
+import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   artwork,
+  contributors,
+  credits,
   episodes,
   favourites,
   files,
@@ -2298,6 +2300,337 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             itemId: indexedFile.itemId,
           },
         ]);
+      });
+    }));
+
+  test("a same-Season rename renumbers the preserved Episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const seasonDir = join(root, "Foundation", "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const firstPath = "Foundation/Season 01/Foundation S01E01.mkv";
+        const secondPath = "Foundation/Season 01/Foundation S01E02.mkv";
+        await createVideoFixture(join(root, firstPath));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        const [sourceFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, firstPath));
+        if (!sourceFile) throw new Error("Scan produced no File.");
+        const episodeItemId = sourceFile.itemId;
+
+        // The complete File moves to a vacant number in the same Season.
+        await rename(join(root, firstPath), join(root, secondPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: secondPath,
+            previousPath: firstPath,
+            providerIds: {},
+          },
+        ]);
+
+        const [episodeRow] = await db
+          .select()
+          .from(episodes)
+          .where(eq(episodes.itemId, episodeItemId));
+        expect(episodeRow).toMatchObject({ episodeNumber: 2 });
+        expect(await db.select().from(files)).toMatchObject([
+          {
+            id: sourceFile.id,
+            itemId: episodeItemId,
+            versionId: sourceFile.versionId,
+            path: secondPath,
+          },
+        ]);
+
+        await scanShowDirectory(db, library.id, "Foundation");
+        expect(await db.select().from(episodes)).toMatchObject([
+          { itemId: episodeItemId, episodeNumber: 2 },
+        ]);
+        expect(await db.select().from(files)).toHaveLength(1);
+      });
+    }));
+
+  test("an emptied source Episode merges its Item state into the destination", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const foundationDir = join(root, "Foundation", "Season 01");
+        const severanceDir = join(root, "Severance", "Season 01");
+        await mkdir(foundationDir, { recursive: true });
+        await mkdir(severanceDir, { recursive: true });
+        const destinationPath = "Foundation/Season 01/Foundation S01E01.mkv";
+        const sourcePath = "Severance/Season 01/Severance S01E01.mkv";
+        const mergedPath = "Foundation/Season 01/Foundation S01E01 - Alt.mkv";
+        await createVideoFixture(join(root, destinationPath));
+        await createVideoFixture(join(root, sourcePath));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        await scanShowDirectory(db, library.id, "Severance");
+        const [destinationFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, destinationPath));
+        const [sourceFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, sourcePath));
+        if (!destinationFile || !sourceFile) {
+          throw new Error("Initial scans produced no Episode Files.");
+        }
+        const destinationId = destinationFile.itemId;
+        const sourceId = sourceFile.itemId;
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const viewer = await createLocalUser(db, admin.id, {
+          username: "viewer",
+          password: "viewer-pass",
+        });
+        // The source Item is the descriptive metadata winner.
+        await db
+          .update(items)
+          .set({
+            title: "Source Title",
+            overview: "Source overview.",
+            contentRating: "TV-MA",
+            genres: ["Drama"],
+            tags: ["curated"],
+            metadataState: "matched",
+            updatedAt: new Date("2024-01-01T00:00:00Z"),
+          })
+          .where(eq(items.id, sourceId));
+        await db
+          .update(items)
+          .set({
+            title: "Destination Title",
+            metadataState: "unmatched",
+            updatedAt: new Date("2020-01-01T00:00:00Z"),
+          })
+          .where(eq(items.id, destinationId));
+        const [duplicateFavourite] = await db
+          .insert(favourites)
+          .values({ userId: admin.id, itemId: sourceId })
+          .returning();
+        const [destinationFavourite] = await db
+          .insert(favourites)
+          .values({ userId: admin.id, itemId: destinationId })
+          .returning();
+        const [movedFavourite] = await db
+          .insert(favourites)
+          .values({ userId: viewer.id, itemId: sourceId })
+          .returning();
+        const [winningRating] = await db
+          .insert(ratings)
+          .values({
+            userId: admin.id,
+            itemId: sourceId,
+            value: "8.5",
+            updatedAt: new Date("2024-06-01T00:00:00Z"),
+          })
+          .returning();
+        await db.insert(ratings).values({
+          userId: admin.id,
+          itemId: destinationId,
+          value: "5.0",
+          updatedAt: new Date("2020-06-01T00:00:00Z"),
+        });
+        const [movedRating] = await db
+          .insert(ratings)
+          .values({
+            userId: viewer.id,
+            itemId: sourceId,
+            value: "7.0",
+          })
+          .returning();
+        const [explicitSourceId] = await db
+          .insert(providerIds)
+          .values({
+            provider: "tmdb",
+            value: "550",
+            itemId: sourceId,
+            metadataDerived: false,
+          })
+          .returning();
+        const [derivedSourceImdb] = await db
+          .insert(providerIds)
+          .values({
+            provider: "imdb",
+            value: "tt-source",
+            itemId: sourceId,
+            metadataDerived: true,
+          })
+          .returning();
+        await db.insert(providerIds).values({
+          provider: "tmdb",
+          value: "999",
+          itemId: destinationId,
+          metadataDerived: true,
+        });
+        const [destinationTvdb] = await db
+          .insert(providerIds)
+          .values({
+            provider: "tvdb",
+            value: "42",
+            itemId: destinationId,
+            metadataDerived: true,
+          })
+          .returning();
+        const [nolan] = await db
+          .insert(contributors)
+          .values({ name: "Nolan" })
+          .returning();
+        const [hitchcock] = await db
+          .insert(contributors)
+          .values({ name: "Hitchcock" })
+          .returning();
+        if (!nolan || !hitchcock) throw new Error("Contributors missing.");
+        await db.insert(credits).values({
+          itemId: destinationId,
+          contributorId: nolan.id,
+          role: "director",
+          order: 0,
+        });
+        await db.insert(credits).values({
+          itemId: sourceId,
+          contributorId: hitchcock.id,
+          role: "director",
+          order: 0,
+        });
+        const [destinationPoster] = await db
+          .insert(artwork)
+          .values({
+            itemId: destinationId,
+            type: "poster",
+            backend: "configured-path",
+            storageKey: "posters/dest.jpg",
+            selected: true,
+          })
+          .returning();
+        const [sourcePoster] = await db
+          .insert(artwork)
+          .values({
+            itemId: sourceId,
+            type: "poster",
+            backend: "configured-path",
+            storageKey: "posters/src.jpg",
+            selected: true,
+          })
+          .returning();
+        const [sourceLogo] = await db
+          .insert(artwork)
+          .values({
+            itemId: sourceId,
+            type: "logo",
+            backend: "configured-path",
+            storageKey: "logos/src.jpg",
+            selected: true,
+          })
+          .returning();
+        if (
+          !duplicateFavourite ||
+          !destinationFavourite ||
+          !movedFavourite ||
+          !winningRating ||
+          !movedRating ||
+          !explicitSourceId ||
+          !derivedSourceImdb ||
+          !destinationTvdb ||
+          !destinationPoster ||
+          !sourcePoster ||
+          !sourceLogo
+        ) {
+          throw new Error("Item state fixture missing.");
+        }
+
+        await rename(join(root, sourcePath), join(root, mergedPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: mergedPath,
+            previousPath: sourcePath,
+            providerIds: {},
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows.find((row) => row.id === sourceId)).toBeUndefined();
+        expect(
+          itemRows.filter((row) => row.canonicalFolder.startsWith("Severance")),
+        ).toEqual([]);
+        const [destinationItem] = await db
+          .select()
+          .from(items)
+          .where(eq(items.id, destinationId));
+        // The descriptive winner's fields land on the surviving Item.
+        expect(destinationItem).toMatchObject({
+          id: destinationId,
+          title: "Source Title",
+          overview: "Source overview.",
+          contentRating: "TV-MA",
+          genres: ["Drama"],
+          tags: ["curated"],
+          metadataState: "matched",
+          canonicalFolder: "Foundation/Season 01",
+        });
+        expect(
+          (await db.select().from(favourites)).map((row) => row.id).sort(),
+        ).toEqual([destinationFavourite.id, movedFavourite.id].sort());
+        expect(
+          (await db.select().from(ratings)).map((row) => row.id).sort(),
+        ).toEqual([winningRating.id, movedRating.id].sort());
+        const storedIds = await db
+          .select()
+          .from(providerIds)
+          .where(eq(providerIds.itemId, destinationId));
+        expect(
+          storedIds
+            .map((row) => [row.provider, row.value, row.metadataDerived])
+            .sort(),
+        ).toEqual([
+          ["imdb", "tt-source", true],
+          ["tmdb", "550", false],
+          ["tvdb", "42", true],
+        ]);
+        expect(storedIds.map((row) => row.id).sort()).toEqual(
+          [
+            explicitSourceId.id,
+            derivedSourceImdb.id,
+            destinationTvdb.id,
+          ].sort(),
+        );
+        expect(await db.select().from(credits)).toMatchObject([
+          { itemId: destinationId, contributorId: hitchcock.id },
+        ]);
+        expect(
+          (await db.select().from(artwork))
+            .map((row) => [row.id, row.itemId, row.type, row.selected])
+            .sort(),
+        ).toEqual(
+          [
+            [destinationPoster.id, destinationId, "poster", false],
+            [sourcePoster.id, destinationId, "poster", true],
+            [sourceLogo.id, destinationId, "logo", true],
+          ].sort(),
+        );
+        expect(
+          (await db.select().from(files)).find(
+            (row) => row.path === mergedPath,
+          ),
+        ).toMatchObject({
+          id: sourceFile.id,
+          itemId: destinationId,
+          versionId: sourceFile.versionId,
+        });
+        expect(
+          (await db.select().from(versions)).find(
+            (row) => row.id === sourceFile.versionId,
+          ),
+        ).toMatchObject({ itemId: destinationId });
       });
     }));
 

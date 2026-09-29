@@ -61,7 +61,11 @@ export async function startTranscoder(
         if (stopping !== undefined) {
           return Response.json({ status: "stopping" }, { status: 503 });
         }
-        return (await (options.ready?.() ?? Promise.resolve(true)))
+        const ready = await (options.ready?.() ?? Promise.resolve(true));
+        if (stopping !== undefined) {
+          return Response.json({ status: "stopping" }, { status: 503 });
+        }
+        return ready
           ? Response.json({ status: "ready" })
           : Response.json({ status: "database unavailable" }, { status: 503 });
       }

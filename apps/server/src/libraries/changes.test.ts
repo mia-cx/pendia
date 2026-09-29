@@ -631,6 +631,85 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
+  test("a reversal chain lands the original File at its final path", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        const fileB = `${folder}/Alien.720p.mkv`;
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const [file] = await db.select().from(files);
+        const [version] = await db.select().from(versions);
+        if (!file || !version) {
+          throw new Error("Initial scan produced no File.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 9,
+          playCount: 4,
+        });
+        const progressBefore = await db.select().from(progress);
+
+        await rename(join(root, file1080), join(root, fileB));
+
+        await runScanJob(db, library.id, folder, [
+          {
+            kind: "move",
+            path: fileB,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+          {
+            kind: "move",
+            path: file1080,
+            previousPath: fileB,
+            providerIds: { tmdb: "348" },
+          },
+          {
+            kind: "move",
+            path: fileB,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const afterFiles = await db.select().from(files);
+        expect(afterFiles).toHaveLength(1);
+        expect(afterFiles[0]).toMatchObject({
+          id: file.id,
+          versionId: version.id,
+          itemId,
+          path: fileB,
+        });
+        expect((await db.select().from(versions)).map((row) => row.id)).toEqual(
+          [version.id],
+        );
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+        expect(
+          afterFiles.some(
+            (row) =>
+              row.path === file1080 || row.path.startsWith(".pendia-move/"),
+          ),
+        ).toBe(false);
+
+        const rescanned = await scanDirectory(db, library.id, folder);
+        expect(rescanned.itemId).toBe(itemId);
+        expect(await db.select().from(files)).toEqual(afterFiles);
+      });
+    }));
+
   test("duplicate move sources or destinations reject INVALID_INPUT", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

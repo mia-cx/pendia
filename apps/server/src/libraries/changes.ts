@@ -148,7 +148,7 @@ export async function applyScanChanges(
   changes: readonly ScanChange[],
   deletedArtwork: DeletedArtworkFile[] = [],
 ): Promise<string[]> {
-  const normalizedChanges = changes.map((change) => ({
+  const normalized = changes.map((change) => ({
     change,
     path: requireRelativePath(
       change.path,
@@ -159,32 +159,28 @@ export async function applyScanChanges(
         ? requireRelativePath(change.previousPath, false)
         : undefined,
   }));
-  // Retried webhook deliveries can append an exact move pair; keep the first.
-  const seenMovePairs = new Set<string>();
-  const normalized = normalizedChanges.filter(
-    ({ change, path, previousPath }) => {
-      if (change.kind !== "move" || previousPath === undefined) return true;
-      const key = JSON.stringify([previousPath, path]);
-      if (seenMovePairs.has(key)) return false;
-      seenMovePairs.add(key);
-      return true;
-    },
-  );
   const emptiedItemIds: string[] = [];
-  // A batch of moves maps sources to destinations one-to-one. Snapshot every
-  // source row and park it at a transaction-local placeholder so a later
-  // destination that is itself a source does not pick up the mutated row.
-  const moveSources = new Map<string, typeof files.$inferSelect>();
-  const moveSourcePaths = new Set<string>();
-  const moveDestinationPaths = new Set<string>();
+  // A batch of moves maps sources to destinations one-to-one. Exact repeats
+  // process idempotently; conflicting mappings reject before any write.
+  const moveDestinationsBySource = new Map<string, string>();
+  const moveSourcesByDestination = new Map<string, string>();
   for (const { change, path, previousPath } of normalized) {
     if (change.kind !== "move" || previousPath === undefined) continue;
-    if (moveSourcePaths.has(previousPath) || moveDestinationPaths.has(path)) {
+    const mappedDestination = moveDestinationsBySource.get(previousPath);
+    if (mappedDestination !== undefined && mappedDestination !== path) {
       throw new AuthError("INVALID_INPUT");
     }
-    moveSourcePaths.add(previousPath);
-    moveDestinationPaths.add(path);
+    const mappedSource = moveSourcesByDestination.get(path);
+    if (mappedSource !== undefined && mappedSource !== previousPath) {
+      throw new AuthError("INVALID_INPUT");
+    }
+    moveDestinationsBySource.set(previousPath, path);
+    moveSourcesByDestination.set(path, previousPath);
   }
+  // Snapshot every source row and park it at a transaction-local placeholder
+  // so a later destination that is itself a source does not pick up the
+  // mutated row.
+  const moveSources = new Map<string, typeof files.$inferSelect>();
   for (const { change, previousPath } of normalized) {
     if (change.kind !== "move" || previousPath === undefined) continue;
     const [file] = await db

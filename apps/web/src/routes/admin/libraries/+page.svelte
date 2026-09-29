@@ -164,20 +164,18 @@ async function confirmDelete(row: LibraryRow) {
   }
 }
 
-const stateLabels = {
-  queued: "Queued",
-  running: "Running",
-  completed: "Completed",
-  failed: "Failed",
-};
-
+/** The run's state read from its job counts, because one child job is not the run. */
 function scanCell(row: LibraryRow): string {
   const status = statuses[row.id];
-  const latest = status?.latest;
-  if (!status || !latest) return "Not scanned";
-  const failed =
-    status.counts.failed > 0 ? `, ${status.counts.failed} failed` : "";
-  return `${stateLabels[latest.state]}${failed}`;
+  if (!status || status.latest === null) return "Not scanned";
+  const { counts } = status;
+  const failed = counts.failed > 0 ? `, ${counts.failed} failed` : "";
+  if (counts.running > 0) return `Running${failed}`;
+  if (counts.queued > 0) return `Queued${failed}`;
+  if (counts.completed > 0) return `Completed${failed}`;
+  if (counts.failed > 0)
+    return counts.failed === 1 ? "Failed" : `${counts.failed} failed`;
+  return "Not scanned";
 }
 </script>
 

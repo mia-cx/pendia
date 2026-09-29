@@ -503,11 +503,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
             .set({ timelineAligned: true })
             .where(eq(versions.id, versionId));
 
-          const master = await manager.serve(
-            scope,
-            hlsName("master.m3u8"),
-            "",
-          );
+          const master = await manager.serve(scope, hlsName("master.m3u8"), "");
           expect(master.status).toBe(200);
           const first = await manager.serve(scope, hlsName("0.m4s"), "");
           expect(first.status).toBe(200);

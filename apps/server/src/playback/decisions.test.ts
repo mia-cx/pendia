@@ -940,7 +940,11 @@ describe("decidePlayback audio", () => {
       ],
     };
     const result = decidePlayback(
-      { ...source, container: "mkv", audio: [{ codec: "vorbis", channels: 2 }] },
+      {
+        ...source,
+        container: "mkv",
+        audio: [{ codec: "vorbis", channels: 2 }],
+      },
       vorbisClient,
       { isLan: false },
     );

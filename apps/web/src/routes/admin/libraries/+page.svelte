@@ -34,6 +34,7 @@ let addRoot = $state("");
 let addMedium = $state<LibraryRow["medium"]>("movies");
 let addBusy = $state(false);
 let addFailure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
+let addNotice = $state("");
 
 let editingId = $state<string | null>(null);
 let editName = $state("");
@@ -85,13 +86,19 @@ async function addLibrary(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  addNotice = "";
   const name = addName;
   const medium = addMedium;
   const root = addRoot;
   try {
-    await client.libraries.create({ name, medium, rootPath: root });
+    const created = await client.libraries.create({
+      name,
+      medium,
+      rootPath: root,
+    });
     if (addName === name) addName = "";
     if (addRoot === root) addRoot = "";
+    addNotice = `Added ${created.name}.`;
     await list.reload();
   } catch (error) {
     addFailure = readFailure(error);
@@ -294,6 +301,9 @@ function scanCell(row: LibraryRow): string {
   <h3>Add a library</h3>
   {#if addFailure}
     <Failure failure={addFailure} />
+  {/if}
+  {#if addNotice}
+    <p class="muted">{addNotice}</p>
   {/if}
   <label for="addName">Name</label>
   <input id="addName" name="name" required bind:value={addName} />

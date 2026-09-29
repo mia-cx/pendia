@@ -53,7 +53,6 @@ async function sendInvite(event: SubmitEvent) {
   event.preventDefault();
   inviteBusy = true;
   inviteFailure = undefined;
-  inviteResult = undefined;
   const email = inviteEmail;
   try {
     inviteResult = await createInvite({

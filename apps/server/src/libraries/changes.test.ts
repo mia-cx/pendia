@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import { createDatabase, type Database } from "../db/client.ts";
@@ -1917,6 +1917,387 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(rescanItems.map((row) => row.id).sort()).toEqual(
           itemRows.map((row) => row.id).sort(),
         );
+      });
+    }));
+
+  test("a move into a Season with a different existing number lands atomically", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const foundationDir = join(root, "Foundation", "Season 01");
+        const severanceDir = join(root, "Severance", "Season 01");
+        await mkdir(foundationDir, { recursive: true });
+        await mkdir(severanceDir, { recursive: true });
+        const occupiedPath = "Foundation/Season 01/Foundation S01E01.mkv";
+        const destinationPath = "Foundation/Season 01/Foundation S01E02.mkv";
+        const sourcePath = "Severance/Season 01/Severance S01E01.mkv";
+        await createVideoFixture(join(root, occupiedPath));
+        await createVideoFixture(join(root, sourcePath));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        await scanShowDirectory(db, library.id, "Severance");
+        const [occupiedFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, occupiedPath));
+        const [sourceFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, sourcePath));
+        if (!occupiedFile || !sourceFile) {
+          throw new Error("Initial scan produced no Episode Files.");
+        }
+        const season = (await db.select().from(items)).find(
+          (row) =>
+            row.kind === "season" &&
+            row.canonicalFolder === "Foundation/Season 01",
+        );
+        if (!season) throw new Error("Foundation Season missing.");
+
+        await rename(join(root, sourcePath), join(root, destinationPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: destinationPath,
+            previousPath: sourcePath,
+            providerIds: {},
+          },
+        ]);
+
+        const [episodeRow] = await db
+          .select()
+          .from(episodes)
+          .where(eq(episodes.itemId, sourceFile.itemId));
+        expect(episodeRow).toMatchObject({
+          seasonId: season.id,
+          episodeNumber: 2,
+          episodeEndNumber: null,
+        });
+        const [occupiedRow] = await db
+          .select()
+          .from(episodes)
+          .where(eq(episodes.itemId, occupiedFile.itemId));
+        expect(occupiedRow).toMatchObject({
+          seasonId: season.id,
+          episodeNumber: 1,
+        });
+        const itemRows = await db.select().from(items);
+        expect(
+          itemRows.find((row) => row.id === sourceFile.itemId),
+        ).toMatchObject({
+          parentId: season.id,
+          canonicalFolder: "Foundation/Season 01",
+        });
+        expect(
+          (await db.select().from(files)).find(
+            (row) => row.path === destinationPath,
+          ),
+        ).toMatchObject({ id: sourceFile.id, itemId: sourceFile.itemId });
+
+        const rescanned = await scanShowDirectory(db, library.id, "Foundation");
+        expect(rescanned.versionIds).toHaveLength(2);
+      });
+    }));
+
+  test("a moved ranged Episode clamps before a persisted blocker", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const foundationDir = join(root, "Foundation", "Season 01");
+        const severanceDir = join(root, "Severance", "Season 01");
+        await mkdir(foundationDir, { recursive: true });
+        await mkdir(severanceDir, { recursive: true });
+        const blockerPath = "Foundation/Season 01/Foundation S01E02.mkv";
+        const destinationPath =
+          "Foundation/Season 01/Foundation S01E01-E03.mkv";
+        const sourcePath = "Severance/Season 01/Severance S01E01-E03.mkv";
+        await createVideoFixture(join(root, blockerPath));
+        await createVideoFixture(join(root, sourcePath));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        await scanShowDirectory(db, library.id, "Severance");
+        const [blockerFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, blockerPath));
+        const [sourceFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, sourcePath));
+        if (!blockerFile || !sourceFile) {
+          throw new Error("Initial scan produced no Episode Files.");
+        }
+        const beforeBlocker = await db
+          .select()
+          .from(episodes)
+          .where(eq(episodes.itemId, blockerFile.itemId));
+        expect(beforeBlocker[0]?.episodeNumber).toBe(2);
+
+        await rename(join(root, sourcePath), join(root, destinationPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: destinationPath,
+            previousPath: sourcePath,
+            providerIds: {},
+          },
+        ]);
+
+        const [episodeRow] = await db
+          .select()
+          .from(episodes)
+          .where(eq(episodes.itemId, sourceFile.itemId));
+        expect(episodeRow).toMatchObject({
+          episodeNumber: 1,
+          episodeEndNumber: null,
+        });
+        expect(
+          await db
+            .select()
+            .from(episodes)
+            .where(eq(episodes.itemId, blockerFile.itemId)),
+        ).toEqual(beforeBlocker);
+        const [itemRow] = await db
+          .select()
+          .from(items)
+          .where(eq(items.id, sourceFile.itemId));
+        expect(itemRow?.canonicalFolder).toBe("Foundation/Season 01");
+
+        await scanShowDirectory(db, library.id, "Foundation");
+        const [rescanRow] = await db
+          .select()
+          .from(episodes)
+          .where(eq(episodes.itemId, sourceFile.itemId));
+        expect(rescanRow).toMatchObject({
+          episodeNumber: 1,
+          episodeEndNumber: null,
+        });
+      });
+    }));
+
+  test("two source Episodes merge into one absent destination Episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const destinationDir = join(root, "Foundation", "Season 01");
+        const severanceDir = join(root, "Severance", "Season 01");
+        const darkDir = join(root, "Dark", "Season 01");
+        await mkdir(destinationDir, { recursive: true });
+        await mkdir(severanceDir, { recursive: true });
+        await mkdir(darkDir, { recursive: true });
+        await createVideoFixture(join(destinationDir, "Foundation S01E02.mkv"));
+        const pathA = "Severance/Season 01/Severance S01E01.mkv";
+        const pathB = "Dark/Season 01/Dark S01E01.mkv";
+        const movedA = "Foundation/Season 01/Foundation S01E01.mkv";
+        const movedB = "Foundation/Season 01/Foundation S01E01 - Alt.mkv";
+        await createVideoFixture(join(root, pathA));
+        await createVideoFixture(join(root, pathB));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        await scanShowDirectory(db, library.id, "Severance");
+        await scanShowDirectory(db, library.id, "Dark");
+        const [fileA] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, pathA));
+        const [fileB] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, pathB));
+        if (!fileA || !fileB) {
+          throw new Error("Initial scans produced no Episode Files.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const [progressA] = await db
+          .insert(progress)
+          .values({
+            userId: admin.id,
+            itemId: fileA.itemId,
+            versionId: fileA.versionId,
+            format: "video",
+            positionSeconds: 30,
+            updatedAt: new Date("2024-01-01T00:00:00Z"),
+          })
+          .returning();
+        const [progressB] = await db
+          .insert(progress)
+          .values({
+            userId: admin.id,
+            itemId: fileB.itemId,
+            versionId: fileB.versionId,
+            format: "video",
+            positionSeconds: 10,
+            updatedAt: new Date("2020-01-01T00:00:00Z"),
+          })
+          .returning();
+        if (!progressA || !progressB) {
+          throw new Error("Progress fixture missing.");
+        }
+
+        await rename(join(root, pathA), join(root, movedA));
+        await rename(join(root, pathB), join(root, movedB));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: movedA,
+            previousPath: pathA,
+            providerIds: {},
+          },
+          {
+            kind: "move",
+            path: movedB,
+            previousPath: pathB,
+            providerIds: {},
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(
+          itemRows.filter(
+            (row) =>
+              row.canonicalFolder.startsWith("Severance") ||
+              row.canonicalFolder.startsWith("Dark"),
+          ),
+        ).toEqual([]);
+        const destinationEpisodes = itemRows.filter(
+          (row) =>
+            row.kind === "episode" &&
+            row.canonicalFolder === "Foundation/Season 01",
+        );
+        expect(destinationEpisodes).toHaveLength(2);
+        const mergedRows = await db
+          .select({ itemId: episodes.itemId })
+          .from(episodes)
+          .innerJoin(items, eq(items.id, episodes.itemId))
+          .where(
+            and(
+              eq(items.canonicalFolder, "Foundation/Season 01"),
+              eq(episodes.episodeNumber, 1),
+            ),
+          );
+        const mergedEpisodeId = mergedRows[0]?.itemId;
+        expect(mergedRows).toHaveLength(1);
+        if (!mergedEpisodeId) throw new Error("Destination Episode missing.");
+        const afterFiles = await db.select().from(files);
+        expect(
+          afterFiles
+            .filter((row) => row.itemId === mergedEpisodeId)
+            .sort((a, b) => a.path.localeCompare(b.path)),
+        ).toMatchObject([
+          { id: fileB.id, versionId: fileB.versionId, path: movedB },
+          { id: fileA.id, versionId: fileA.versionId, path: movedA },
+        ]);
+        const afterVersions = await db.select().from(versions);
+        expect(
+          afterVersions
+            .filter((row) => row.itemId === mergedEpisodeId)
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual([fileA.versionId, fileB.versionId].sort());
+        expect(await db.select().from(progress)).toEqual([
+          { ...progressA, itemId: mergedEpisodeId },
+        ]);
+
+        const rescanned = await scanShowDirectory(db, library.id, "Foundation");
+        expect(rescanned.versionIds).toHaveLength(3);
+        expect(
+          (await db.select().from(files)).map((row) => row.id).sort(),
+        ).toEqual(afterFiles.map((row) => row.id).sort());
+      });
+    }));
+
+  test("a stale indexed File blocks provider-id relocation", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const folderA = "Alien (1979) {tmdb-550}";
+        const folderB = "Alien Remake (1979) {tmdb-550}";
+        await mkdir(join(root, folderA));
+        const fileA = `${folderA}/Alien.mkv`;
+        await createVideoFixture(join(root, fileA));
+        const library = await insertLibrary(db, root);
+        const first = await scanDirectory(db, library.id, folderA);
+        if (!first.itemId) throw new Error("Scan produced no Item.");
+        const [indexedFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, fileA));
+        if (!indexedFile) throw new Error("Indexed File missing.");
+
+        // The media left out-of-band: the indexed row stays stale.
+        await rm(join(root, folderA), { recursive: true });
+        await mkdir(join(root, folderB));
+        await createVideoFixture(join(root, `${folderB}/Alien Remake.mkv`));
+
+        await expectAuthError(runScanJob(db, library.id, folderB), "CONFLICT");
+        const [item] = await db.select().from(items);
+        expect(item).toMatchObject({
+          id: first.itemId,
+          canonicalFolder: folderA,
+        });
+        expect(await db.select().from(files)).toMatchObject([
+          { id: indexedFile.id, path: fileA, itemId: first.itemId },
+        ]);
+      });
+    }));
+
+  test("a stale indexed descendant File blocks Show provider-id relocation", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const showA = "Foundation";
+        const showB = "Foundation Remake";
+        const seasonA = join(root, showA, "Season 01");
+        const seasonB = join(root, showB, "Season 01");
+        await mkdir(seasonA, { recursive: true });
+        const fileA = `${showA}/Season 01/${showA} S01E01.mkv`;
+        await createVideoFixture(join(root, fileA));
+        const library = await insertLibrary(db, root, "shows");
+        const first = await scanShowDirectory(db, library.id, showA);
+        if (!first.itemId) throw new Error("Scan produced no Show.");
+        await setItemProviderIds(db, first.itemId, { tmdb: "550" });
+        const [indexedFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, fileA));
+        if (!indexedFile) throw new Error("Indexed File missing.");
+
+        // The media left out-of-band: the descendant File row stays stale.
+        await rm(join(root, showA), { recursive: true });
+        await mkdir(seasonB, { recursive: true });
+        await createVideoFixture(
+          join(root, `${showB}/Season 01/${showB} S01E01.mkv`),
+        );
+
+        await expectAuthError(
+          runScanJob(db, library.id, showB, [
+            {
+              kind: "add",
+              path: `${showB}/Season 01/${showB} S01E01.mkv`,
+              providerIds: { tmdb: "550" },
+            },
+          ]),
+          "CONFLICT",
+        );
+        const itemRows = await db.select().from(items);
+        const showRow = itemRows.find((row) => row.kind === "show");
+        expect(showRow).toMatchObject({
+          id: first.itemId,
+          canonicalFolder: showA,
+        });
+        expect(itemRows.map((row) => row.canonicalFolder).sort()).toEqual(
+          [showA, `${showA}/Season 01`, `${showA}/Season 01`].sort(),
+        );
+        expect(await db.select().from(files)).toMatchObject([
+          {
+            id: indexedFile.id,
+            path: fileA,
+            itemId: indexedFile.itemId,
+          },
+        ]);
       });
     }));
 

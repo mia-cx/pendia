@@ -136,11 +136,23 @@ export async function moveItem(
   db: Connection,
   itemId: string,
   parentId: string | null,
+  placement?: {
+    episodeNumber: number;
+    episodeEndNumber: number | null;
+  },
 ) {
   return db.transaction(async (tx) => {
     const original = await getItem(tx, itemId);
     const library = await lockLibrary(tx, original.libraryId);
     const item = await getItem(tx, itemId);
+    if (
+      placement !== undefined &&
+      (item.kind !== "episode" || parentId === null)
+    ) {
+      throw new Error(
+        "Episode placement requires an Episode Item and a parent.",
+      );
+    }
     if (parentId !== null) {
       const [cycle] = await tx
         .select()
@@ -188,7 +200,15 @@ export async function moveItem(
       if (item.kind === "episode")
         await tx
           .update(episodes)
-          .set({ seasonId: parentId })
+          .set(
+            placement === undefined
+              ? { seasonId: parentId }
+              : {
+                  seasonId: parentId,
+                  episodeNumber: placement.episodeNumber,
+                  episodeEndNumber: placement.episodeEndNumber,
+                },
+          )
           .where(eq(episodes.itemId, itemId));
     }
     const [moved] = await tx

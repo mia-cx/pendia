@@ -229,6 +229,17 @@ One finding, against `01bd426` from the round above, and it was right.
   reinstates the cross-user coupling, so the fix went to the ownership boundary
   instead.
 
+### Codex round at `f993cd4`
+
+One finding, in the scan-status code `4a7d04d` had just touched.
+
+- `c04e04a`: `scanNow` clears a stale status read error when the scan starts,
+  not when it settles. The cell shows `scanFailures` first and `statusFailures`
+  second, so after a failed refresh an admin who started a scan watched the old
+  read error for the whole run while live progress was being written
+  underneath it. The settle-time clear went with it: nothing can put a failure
+  back on a row whose scan holds the ticket.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

@@ -70,6 +70,7 @@ type LiveSession = {
   idleTimer: ReturnType<typeof setTimeout> | null;
   stopped: boolean;
   stripDolbyVision: boolean;
+  videoCodec: string;
 };
 
 const log = (
@@ -245,6 +246,7 @@ export function createSessionManager(
         boundariesSeconds: session.boundariesSeconds,
         startIndex: index,
         directory,
+        videoCodec: session.videoCodec,
         readRate,
         stripDolbyVision: session.stripDolbyVision,
       },
@@ -268,15 +270,17 @@ export function createSessionManager(
   };
 
   const ensureStarted = (session: LiveSession) => {
-    session.transition = session.transition.then(async () => {
+    const next = session.transition.then(async () => {
       if (session.state.run !== null || session.state.ready.size > 0) return;
       await startRun(session, 0);
     });
-    return session.transition;
+    // The caller sees the failure; the queue does not stay poisoned by it.
+    session.transition = next.catch(() => {});
+    return next;
   };
 
   const restartAt = (session: LiveSession, index: number) => {
-    session.transition = session.transition.then(async () => {
+    const next = session.transition.then(async () => {
       // A transition ahead in the queue may have moved the run; decide again
       // on the state it left behind so parallel seeks restart once.
       const decision = decideSegment(session.state, index, count(session));
@@ -297,7 +301,9 @@ export function createSessionManager(
       }
       await startRun(session, index);
     });
-    return session.transition;
+    // The caller sees the failure; the queue does not stay poisoned by it.
+    session.transition = next.catch(() => {});
+    return next;
   };
 
   const loadSession = async (scope: SessionScope): Promise<LiveSession> => {
@@ -373,6 +379,7 @@ export function createSessionManager(
       idleTimer: null,
       stopped: false,
       stripDolbyVision,
+      videoCodec: source.video.codec,
     };
   };
 
@@ -409,8 +416,12 @@ export function createSessionManager(
   const waitForSegment = (
     session: LiveSession,
     index: number,
-  ): Promise<Response> =>
-    new Promise<Response>((resolvePromise) => {
+  ): Promise<Response> => {
+    // A ready event may have landed during the transition that led here.
+    if (session.state.ready.has(index)) {
+      return Promise.resolve(serveSegmentFile(session, index));
+    }
+    return new Promise<Response>((resolvePromise) => {
       const waiters = session.segmentWaiters.get(index) ?? new Set<Waiter>();
       session.segmentWaiters.set(index, waiters);
       const finish = (ok: boolean) => {
@@ -421,6 +432,7 @@ export function createSessionManager(
       const timer = setTimeout(() => finish(false), waitMs);
       waiters.add(finish);
     });
+  };
 
   const waitForInit = (session: LiveSession): Promise<Response> =>
     new Promise<Response>((resolvePromise) => {

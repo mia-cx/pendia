@@ -544,6 +544,25 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   );
 
   test(
+    "a failed run start does not poison later requests",
+    () =>
+      withSession(async ({ manager, scope, scratchDir }) => {
+        // A regular file where the session directory must go fails mkdir.
+        const blocker = join(scratchDir, scope.sessionId);
+        await writeFile(blocker, "blocked");
+        await expect(
+          manager.serve(scope, hlsName("master.m3u8"), ""),
+        ).rejects.toThrow();
+        await rm(blocker);
+        const master = await manager.serve(scope, hlsName("master.m3u8"), "");
+        expect(master.status).toBe(200);
+        const segment = await manager.serve(scope, hlsName("0.m4s"), "");
+        expect(segment.status).toBe(200);
+      }),
+    30_000,
+  );
+
+  test(
     "refuses a version without an aligned timeline",
     () =>
       withSession(async ({ db, manager, scope, versionId }) => {

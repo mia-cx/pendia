@@ -1,4 +1,5 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { postgresCode } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { sessionRegistry, transcoderCapabilities } from "../db/schema/index.ts";
 import { errorResponse, standardHeaders } from "../playback/direct.ts";
@@ -45,7 +46,7 @@ async function leastLoadedNode(db: Database) {
   return row?.id;
 }
 
-/** Claims a session for a transcoder node; null when no node is registered. */
+/** Claims a session for a transcoder node; null when no node is registered or the node was removed mid-claim. */
 async function assignOwner(
   db: Database,
   sessionId: string,
@@ -53,16 +54,22 @@ async function assignOwner(
 ) {
   const candidate = localNodeId ?? (await leastLoadedNode(db));
   if (candidate === undefined) return null;
-  const [assigned] = await db
-    .update(sessionRegistry)
-    .set({ transcoderNodeId: candidate })
-    .where(
-      and(
-        eq(sessionRegistry.id, sessionId),
-        isNull(sessionRegistry.transcoderNodeId),
-      ),
-    )
-    .returning({ nodeId: sessionRegistry.transcoderNodeId });
+  let assigned: { nodeId: string | null } | undefined;
+  try {
+    [assigned] = await db
+      .update(sessionRegistry)
+      .set({ transcoderNodeId: candidate })
+      .where(
+        and(
+          eq(sessionRegistry.id, sessionId),
+          isNull(sessionRegistry.transcoderNodeId),
+        ),
+      )
+      .returning({ nodeId: sessionRegistry.transcoderNodeId });
+  } catch (error) {
+    if (postgresCode(error) === "23503") return null;
+    throw error;
+  }
   if (assigned !== undefined) return assigned.nodeId;
   // Another api won the claim; read the owner it assigned.
   const [row] = await db

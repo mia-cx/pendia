@@ -11,7 +11,11 @@ import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { sessionRegistry, versions } from "../db/schema/index.ts";
+import {
+  sessionRegistry,
+  transcoderCapabilities,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
@@ -514,6 +518,26 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
         } finally {
           await server.stop();
         }
+      }),
+    30_000,
+  );
+
+  test(
+    "answers 503 NO_TRANSCODER when the local node row is gone",
+    () =>
+      withServer(async ({ db, base, client, itemId, versionId, server }) => {
+        const nodeId = server.transcoder?.nodeId;
+        if (nodeId === undefined) {
+          throw new Error("Expected a local transcoder.");
+        }
+        await db
+          .delete(transcoderCapabilities)
+          .where(eq(transcoderCapabilities.id, nodeId));
+        const planned = await planRemux(client, itemId, versionId);
+        const master = await fetch(new URL(planned.url, base));
+        expect(master.status).toBe(503);
+        expect(master.headers.get("retry-after")).toBe("5");
+        expect((await jsonError(master))?.code).toBe("NO_TRANSCODER");
       }),
     30_000,
   );

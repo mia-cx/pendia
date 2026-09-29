@@ -396,7 +396,7 @@ Four findings. Three fixed, one filed.
 - `694ab77`: `prepareLocalAccount` rejects a NUL in a display name. The
   username was already safe, because its pattern rejects one. With this, every
   text field this slice exposes carries the same guard.
-- Filed as a follow-up: the web app has no screen where an invited user
+- Filed as #75: the web app has no screen where an invited user
   redeems a token, so the invite this slice creates can only be accepted by
   calling the API. That is an unauthenticated onboarding screen rather than an
   admin one, the same family as the OIDC login button in #64.

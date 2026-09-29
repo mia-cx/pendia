@@ -365,25 +365,25 @@ The `settings` row with key `metadata` holds one JSON object. Missing fields use
 }
 ```
 
-`tmdb` must be `{ "apiKey": "..." }` before the TMDB provider is constructed. Keep the key out of source control and logs. A missing or null value means no TMDB provider, and scanned movies stay unmatched.
+The TMDB API key lives in the separate `providers` settings row, written by the admin Provider keys screen or `settings.setProviderKey` with the name `tmdb`. Key values are write-only: `settings.get` returns names, never secrets. Storing or rotating `tmdb` marks every unmatched movie `pending`, so the next rescan queues a provider-fetch for each of them; a missing key means no TMDB provider, and scanned movies stay unmatched. The embedded `metadata.tmdb.apiKey` field is still read as a backward-compatible fallback when no provider key is stored, but new deployments should use the provider key store.
 
-Settings apply to the next provider-fetch job, and rescanning queues enrichment. `artworkRequiresAuth` stays in the separate `auth` settings row and defaults to false.
+Settings apply to the next provider-fetch job. A rescan enqueues enrichment only while an Item is `pending`: matched rescans stay quiet, a changed provider ID marks the Item `pending` again, and scans coalesce onto an already queued or running fetch for the same Item. `artworkRequiresAuth` stays in the separate `auth` settings row and defaults to false.
 
-The admin settings screen is a later issue. Until then, configure metadata with this PostgreSQL 18 upsert, replacing the `<tmdb-api-key>` placeholder:
+Configure the `providers` row with this PostgreSQL 18 upsert, replacing the `<tmdb-api-key>` placeholder. The conflict clause merges with any keys already stored rather than replacing them:
 
 ```sql
 INSERT INTO settings (id, key, value)
 VALUES (
   uuidv7(),
-  'metadata',
-  jsonb_build_object(
-    'providerOrder', jsonb_build_array('tmdb'),
-    'confidenceThreshold', 0.9,
-    'libraries', jsonb_build_object(),
-    'tmdb', jsonb_build_object('apiKey', '<tmdb-api-key>')
-  )
+  'providers',
+  jsonb_build_object('keys', jsonb_build_object('tmdb', '<tmdb-api-key>'))
 )
 ON CONFLICT (key) DO UPDATE
-SET value = EXCLUDED.value,
+SET value = jsonb_build_object(
+      'keys',
+      coalesce(settings.value->'keys', '{}'::jsonb) || (EXCLUDED.value->'keys')
+    ),
     updated_at = clock_timestamp();
 ```
+
+Provider order, the confidence threshold and per-Library overrides remain independently configurable in the `metadata` row with the documented default JSON.

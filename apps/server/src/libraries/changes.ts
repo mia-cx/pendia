@@ -70,8 +70,19 @@ export async function setItemProviderIds(
   db: Connection,
   itemId: string,
   providerIds: Record<string, string>,
-): Promise<void> {
+): Promise<boolean> {
+  let changed = false;
   for (const [provider, value] of providerIdPairs(providerIds)) {
+    const [existing] = await db
+      .select({ value: providerIdRows.value })
+      .from(providerIdRows)
+      .where(
+        and(
+          eq(providerIdRows.itemId, itemId),
+          eq(providerIdRows.provider, provider),
+        ),
+      );
+    if (existing?.value === value) continue;
     await db
       .insert(providerIdRows)
       .values({ provider, value, itemId })
@@ -80,7 +91,9 @@ export async function setItemProviderIds(
         targetWhere: sql`${providerIdRows.itemId} is not null`,
         set: { value },
       });
+    changed = true;
   }
+  return changed;
 }
 
 async function pathExists(path: string): Promise<boolean> {

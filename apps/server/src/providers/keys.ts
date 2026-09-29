@@ -1,9 +1,9 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { settings, settingsLockClass } from "../db/schema/index.ts";
+import { items, settings, settingsLockClass } from "../db/schema/index.ts";
 
 const providersKey = "providers";
 const namePattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -34,6 +34,9 @@ function normalizeName(name: string): string {
 async function writeKeys(
   db: Database,
   update: (keys: Record<string, string>) => void,
+  afterWrite?: (
+    tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  ) => Promise<void>,
 ) {
   return db.transaction(async (tx) => {
     await tx.execute(
@@ -58,6 +61,7 @@ async function writeKeys(
         target: settings.key,
         set: { value, updatedAt: sql`clock_timestamp()` },
       });
+    if (afterWrite) await afterWrite(tx);
     return Object.keys(keys).sort();
   });
 }
@@ -72,6 +76,20 @@ export async function readProviderKeyNames(db: Database) {
   return Object.keys(storedKeys(row?.value)).sort();
 }
 
+/** Reads one normalized provider key without exposing it through an API response. */
+export async function readProviderKey(
+  db: Database,
+  name: string,
+): Promise<string | undefined> {
+  const key = normalizeName(name);
+  const [row] = await db
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, providersKey))
+    .limit(1);
+  return storedKeys(row?.value)[key];
+}
+
 /** Stores one provider key for a caller holding manage-server and returns the sorted names. */
 export async function setProviderKey(
   db: Database,
@@ -83,9 +101,27 @@ export async function setProviderKey(
   const key = normalizeName(name);
   if (value.length < 1 || value.length > maxValueLength || value.includes("\0"))
     throw new AuthError("INVALID_INPUT");
-  return writeKeys(db, (keys) => {
-    keys[key] = value;
-  });
+  return writeKeys(
+    db,
+    (keys) => {
+      keys[key] = value;
+    },
+    key === "tmdb"
+      ? async (tx) => {
+          // A fresh TMDB credential gives previously unmatched movies a
+          // chance: the next scan finds them pending and enqueues a fetch.
+          await tx
+            .update(items)
+            .set({ metadataState: "pending", updatedAt: new Date() })
+            .where(
+              and(
+                eq(items.kind, "movie"),
+                eq(items.metadataState, "unmatched"),
+              ),
+            );
+        }
+      : undefined,
+  );
 }
 
 /** Removes one provider key for a caller holding manage-server and returns the sorted names. */

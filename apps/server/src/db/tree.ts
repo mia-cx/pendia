@@ -9,6 +9,7 @@ import {
   movies,
   seasons,
   shows,
+  versions,
 } from "./schema/index.ts";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -237,7 +238,33 @@ export async function deleteItemSubtree(
       )
       .innerJoin(libraries, eq(items.libraryId, libraries.id))
       .where(eq(artwork.backend, "colocated"));
+    const versionOwned = await tx
+      .select({
+        rootPath: libraries.rootPath,
+        storageKey: artwork.storageKey,
+      })
+      .from(artwork)
+      .innerJoin(versions, eq(artwork.versionId, versions.id))
+      .innerJoin(items, eq(versions.itemId, items.id))
+      .innerJoin(
+        itemAncestors,
+        and(
+          eq(itemAncestors.descendantId, items.id),
+          eq(itemAncestors.ancestorId, itemId),
+        ),
+      )
+      .innerJoin(libraries, eq(items.libraryId, libraries.id))
+      .where(eq(artwork.backend, "colocated"));
+    const seen = new Set(
+      orphaned.map((row) => `${row.rootPath}\n${row.storageKey}`),
+    );
     for (const row of orphaned) {
+      deletedArtwork.push(row);
+    }
+    for (const row of versionOwned) {
+      const key = `${row.rootPath}\n${row.storageKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       deletedArtwork.push(row);
     }
     await tx.delete(items).where(eq(items.id, itemId));

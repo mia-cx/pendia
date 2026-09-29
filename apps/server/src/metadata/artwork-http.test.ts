@@ -202,7 +202,10 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           await storeArtworkOriginal(
             db,
             item.id,
-            poster,
+            {
+              type: "poster",
+              url: "https://image.example/poster-v2.jpg",
+            },
             respondWith(replacement),
           );
           const changed = await fetch(url);

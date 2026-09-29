@@ -3,6 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
@@ -21,6 +22,7 @@ import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import { registerLibraryJobs } from "../libraries/jobs.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
+import { setProviderKey } from "../providers/keys.ts";
 import { registerMetadataJobs } from "./jobs.ts";
 
 const png = Buffer.from(
@@ -218,6 +220,60 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
             payload: { kind: "library.changed", libraryId: library.id },
           },
         ]);
+      });
+    }));
+
+  test("provider-fetch reads the TMDB key from the provider key store", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Alien (1979) {tmdb-550}";
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, folder, "Alien.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Movies", medium: "movies", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await db.insert(settings).values({
+          key: "metadata",
+          value: { providerOrder: ["tmdb"], confidenceThreshold: 0.9 },
+        });
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await setProviderKey(db, admin.id, "tmdb", "store-key");
+        const { calls, request } = mockRequest((url) => {
+          if (url.hostname === "api.themoviedb.org")
+            return Response.json(tmdbDetail);
+          if (url.hostname === "image.tmdb.org") return new Response(png);
+          throw new Error(`Unexpected request to ${url.hostname}.`);
+        });
+        const item = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Alien",
+          year: 1979,
+          canonicalFolder: folder,
+          extension: {},
+        });
+        await db
+          .insert(providerIds)
+          .values({ itemId: item.id, provider: "tmdb", value: "550" });
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request);
+        await queue.enqueue({ type: "provider-fetch", itemId: item.id });
+        const claimedFetch = await queue.claim(["provider-fetch"]);
+        if (!claimedFetch) throw new Error("provider-fetch was not enqueued.");
+        await registry.run(claimedFetch);
+        const tmdb = calls.find((url) => url.hostname === "api.themoviedb.org");
+        expect(tmdb?.searchParams.get("api_key")).toBe("store-key");
+        expect(await storedItem(db, item.id)).toMatchObject({
+          title: "Fight Club",
+          metadataState: "matched",
+        });
       });
     }));
 

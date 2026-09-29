@@ -1,8 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { items, libraries } from "../db/schema/index.ts";
+import { items, jobs, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
@@ -39,11 +39,32 @@ export function registerLibraryJobs(
           changes: payload.changes,
           reconcileMissing: payload.reconcileMissing,
         });
-        if (result.itemId !== null)
-          await createJobQueue(db).enqueue(
-            { type: "provider-fetch", itemId: result.itemId },
-            { concurrencyKey: `provider:${result.itemId}` },
-          );
+        if (result.itemId !== null) {
+          const [item] = await db
+            .select({ metadataState: items.metadataState })
+            .from(items)
+            .where(eq(items.id, result.itemId));
+          if (!item) throw new AuthError("NOT_FOUND");
+          if (item.metadataState === "pending") {
+            const concurrencyKey = `provider:${result.itemId}`;
+            const [existing] = await db
+              .select({ id: jobs.id })
+              .from(jobs)
+              .where(
+                and(
+                  eq(jobs.type, "provider-fetch"),
+                  eq(jobs.concurrencyKey, concurrencyKey),
+                  inArray(jobs.state, ["queued", "running"]),
+                ),
+              )
+              .limit(1);
+            if (existing === undefined)
+              await createJobQueue(db).enqueue(
+                { type: "provider-fetch", itemId: result.itemId },
+                { concurrencyKey },
+              );
+          }
+        }
       } else {
         await scanShowDirectory(db, library.id, payload.path, {
           changes: payload.changes,

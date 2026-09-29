@@ -5,6 +5,7 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { items } from "../db/schema/index.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
+import { readProviderKey } from "../providers/keys.ts";
 import {
   removeSelectedArtwork,
   storeArtworkOriginal,
@@ -31,8 +32,9 @@ export function registerMetadataJobs(
   registry.register("provider-fetch", async (payload) => {
     const config = await readMetadataSettings(db);
     const providers: MetadataProvider[] = [];
-    if (config.tmdb !== null)
-      providers.push(createTmdbMetadataProvider(config.tmdb.apiKey, request));
+    const tmdbKey = (await readProviderKey(db, "tmdb")) ?? config.tmdb?.apiKey;
+    if (tmdbKey !== undefined)
+      providers.push(createTmdbMetadataProvider(tmdbKey, request));
     const application = await applyMetadata(db, payload.itemId, providers);
     await publishLibraryChanged(db, payload.itemId);
     if (application.state !== "matched") return;

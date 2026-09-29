@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -208,6 +208,141 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         expect(queued[0]?.concurrencyKey).toBe(`provider:${item.id}`);
         expect(await db.select().from(events)).toMatchObject([
           { kind: "library.changed" },
+        ]);
+      });
+    }));
+
+  test("an unchanged rescan of a matched Item enqueues no provider-fetch job", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Alien (1979) {tmdb-348}";
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, folder, "Alien.mkv"));
+        const library = await insertLibrary(db, "Movies", root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const first = await queue.claim();
+        if (!first) throw new Error("Scan job was not claimed.");
+        await registry.run(first);
+        await queue.complete(first);
+        const [item] = await db.select().from(items);
+        if (!item) throw new Error("Scanned item missing.");
+        await db
+          .update(items)
+          .set({ metadataState: "matched" })
+          .where(eq(items.id, item.id));
+        // The first scan's provider-fetch job stays queued; drain it so the
+        // rescan result is observable.
+        const drained = await queue.claim(["provider-fetch"]);
+        if (!drained) throw new Error("provider-fetch was not enqueued.");
+        await queue.complete(drained);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim(["scan"]);
+        if (!claimed) throw new Error("Rescan job was not claimed.");
+        await registry.run(claimed);
+        const [rescanned] = await db.select().from(items);
+        expect(rescanned?.metadataState).toBe("matched");
+        expect(await listJobs(db, { state: "queued" })).toHaveLength(0);
+      });
+    }));
+
+  test("a pending rescan does not duplicate a queued provider-fetch job", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Alien (1979) {tmdb-348}";
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, folder, "Alien.mkv"));
+        const library = await insertLibrary(db, "Movies", root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const first = await queue.claim();
+        if (!first) throw new Error("Scan job was not claimed.");
+        await registry.run(first);
+        await queue.complete(first);
+        const [item] = await db.select().from(items);
+        if (!item) throw new Error("Scanned item missing.");
+        // The Item stays pending while its provider-fetch remains queued.
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim(["scan"]);
+        if (!claimed) throw new Error("Rescan job was not claimed.");
+        await registry.run(claimed);
+        const queued = await listJobs(db, { state: "queued" });
+        expect(queued.map((job) => job.payload)).toEqual([
+          { type: "provider-fetch", itemId: item.id },
+        ]);
+      });
+    }));
+
+  test("a changed provider id marks the Item pending and enqueues a refresh", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Alien (1979) {tmdb-348}";
+        const filePath = `${folder}/Alien.mkv`;
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, filePath));
+        const library = await insertLibrary(db, "Movies", root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const first = await queue.claim();
+        if (!first) throw new Error("Scan job was not claimed.");
+        await registry.run(first);
+        await queue.complete(first);
+        const [item] = await db.select().from(items);
+        if (!item) throw new Error("Scanned item missing.");
+        await db
+          .update(items)
+          .set({ metadataState: "matched" })
+          .where(eq(items.id, item.id));
+        const drained = await queue.claim(["provider-fetch"]);
+        if (!drained) throw new Error("provider-fetch was not enqueued.");
+        await queue.complete(drained);
+        await queue.enqueue(
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            changes: [
+              {
+                kind: "add",
+                path: filePath,
+                providerIds: { tmdb: "999" },
+              },
+            ],
+          },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim(["scan"]);
+        if (!claimed) throw new Error("Rescan job was not claimed.");
+        await registry.run(claimed);
+        const [rescanned] = await db.select().from(items);
+        expect(rescanned?.metadataState).toBe("pending");
+        const queued = await listJobs(db, { state: "queued" });
+        expect(queued.map((job) => job.payload)).toEqual([
+          { type: "provider-fetch", itemId: item.id },
         ]);
       });
     }));

@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { startApiServer } from "../api.ts";
+import { removeColocatedArtworkFiles } from "../metadata/artwork-store.ts";
 import { type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import {
+  artwork,
   contributors,
   episodes,
   favourites,
@@ -28,7 +33,12 @@ import {
   versions,
 } from "./schema/index.ts";
 import { databaseUrl, withDatabase } from "./testing.ts";
-import { deleteItemSubtree, insertItem, moveItem } from "./tree.ts";
+import {
+  type DeletedArtworkFile,
+  deleteItemSubtree,
+  insertItem,
+  moveItem,
+} from "./tree.ts";
 
 async function fixture(db: Database) {
   const [library] = await db
@@ -273,6 +283,66 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         { itemId: f.sibling.id },
       ]);
       expect(await db.select().from(movies)).toHaveLength(1);
+    }));
+
+  test("collects Version-owned colocated artwork on subtree deletion", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const root = await mkdtemp(join(tmpdir(), "pendia-tree-"));
+      try {
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Movies", medium: "movies", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Library missing.");
+        const item = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Alien",
+          year: 1979,
+          canonicalFolder: "Alien (1979)",
+          extension: {},
+        });
+        const [version] = await db
+          .insert(versions)
+          .values({
+            itemId: item.id,
+            itemKind: "movie",
+            libraryId: library.id,
+            label: "1080p",
+            format: "video",
+            bytes: 1n,
+          })
+          .returning();
+        if (!version) throw new Error("Version missing.");
+        const storageKey = "Alien (1979)/.pendia/artwork/poster.png";
+        const target = join(root, storageKey);
+        await mkdir(join(root, "Alien (1979)", ".pendia", "artwork"), {
+          recursive: true,
+        });
+        await writeFile(target, Buffer.from("png"));
+        const [row] = await db
+          .insert(artwork)
+          .values({
+            itemId: null,
+            versionId: version.id,
+            type: "poster",
+            backend: "colocated",
+            storageKey,
+            selected: true,
+          })
+          .returning();
+        if (!row) throw new Error("Artwork missing.");
+
+        const deletedArtwork: DeletedArtworkFile[] = [];
+        await deleteItemSubtree(db, item.id, deletedArtwork);
+        expect(await db.select().from(artwork)).toEqual([]);
+        expect(deletedArtwork).toEqual([{ rootPath: root, storageKey }]);
+        await removeColocatedArtworkFiles(deletedArtwork);
+        await expect(access(target)).rejects.toThrow();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }));
 
   test("enforces provider uniqueness, numbering and extension kinds", () =>

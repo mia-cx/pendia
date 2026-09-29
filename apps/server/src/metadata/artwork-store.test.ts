@@ -166,6 +166,22 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       });
     }));
 
+  test("returns the selected row without a request for the same source", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { calls, request } = mockRequest(() => new Response(png));
+        const first = await storeArtworkOriginal(db, item.id, poster, request);
+        expect(calls).toHaveLength(1);
+        const second = await storeArtworkOriginal(db, item.id, poster, request);
+        expect(second).toEqual(first);
+        expect(calls).toHaveLength(1);
+        expect(await db.select().from(artwork)).toHaveLength(1);
+        expect(await readFile(join(root, first.storageKey))).toEqual(png);
+      });
+    }));
+
   test("concurrent stores for one item serialize on the item lock", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

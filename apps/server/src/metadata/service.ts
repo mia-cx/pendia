@@ -1,5 +1,5 @@
 import type { MetadataProvider, MetadataResult } from "@pendia/plugin-api";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -82,6 +82,31 @@ async function persistMatch(
       );
     if ((current?.value ?? null) !== expectedProviderId)
       throw new Error("Provider id changed during metadata fetch.");
+    if (expectedProviderId === null) {
+      // Search matches may not collide with another Item's provider id.
+      for (const [name, value] of idEntries) {
+        const [collision] = await tx
+          .select({ itemId: providerIds.itemId })
+          .from(providerIds)
+          .innerJoin(items, eq(items.id, providerIds.itemId))
+          .where(
+            and(
+              eq(items.libraryId, libraryId),
+              eq(providerIds.provider, name),
+              eq(providerIds.value, value),
+              ne(providerIds.itemId, itemId),
+            ),
+          )
+          .limit(1);
+        if (collision !== undefined) {
+          await tx
+            .update(items)
+            .set({ metadataState: "unmatched", updatedAt: new Date() })
+            .where(eq(items.id, itemId));
+          return { state: "unmatched", artwork: [] };
+        }
+      }
+    }
     await tx
       .update(items)
       .set({

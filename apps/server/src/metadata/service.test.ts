@@ -201,6 +201,61 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       expect(calls.search[1]?.year).toBeUndefined();
     }));
 
+  test("a search result owned by another Item in the Library stays unmatched", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { library, item } = await fixture(db);
+      const owner = await insertItem(db, {
+        libraryId: library.id,
+        title: "Fight Club",
+        kind: "movie",
+        canonicalFolder: "/movies/fight-club",
+        extension: {},
+      });
+      await db
+        .insert(providerIds)
+        .values({ itemId: owner.id, provider: "tmdb", value: "550" });
+      const { provider } = mockProvider("tmdb", {
+        search: async () => [
+          {
+            providerId: "550",
+            title: "Inception",
+            year: 2010,
+            confidence: 0.95,
+          },
+        ],
+        fetch: async () => fetchedResult(),
+      });
+      const application = await applyMetadata(db, item.id, [provider]);
+      expect(application).toEqual({ state: "unmatched", artwork: [] });
+      const stored = await storedItem(db, item.id);
+      expect(stored).toMatchObject({
+        title: "Inception",
+        year: 2010,
+        metadataState: "unmatched",
+      });
+      expect(await itemProviderIds(db, item.id)).toEqual([]);
+      expect(
+        await db.select().from(credits).where(eq(credits.itemId, item.id)),
+      ).toEqual([]);
+
+      // The same provider id in a different Library does not collide.
+      const [otherLibrary] = await db
+        .insert(libraries)
+        .values({ name: "Other", medium: "movies", rootPath: "/other" })
+        .returning();
+      if (!otherLibrary) throw new Error("Other library missing.");
+      const elsewhere = await insertItem(db, {
+        libraryId: otherLibrary.id,
+        title: "Elsewhere",
+        kind: "movie",
+        canonicalFolder: "/other/elsewhere",
+        extension: {},
+      });
+      const control = await applyMetadata(db, elsewhere.id, [provider]);
+      expect(control).toMatchObject({ state: "matched" });
+    }));
+
   test("tries providers in configured order and skips unusable ones", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

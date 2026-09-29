@@ -151,6 +151,24 @@ export async function storeArtworkOriginal(
     .where(eq(libraries.id, item.libraryId));
   if (!library) throw new AuthError("NOT_FOUND");
 
+  const [selected] = await db
+    .select()
+    .from(artwork)
+    .where(
+      and(
+        eq(artwork.itemId, itemId),
+        eq(artwork.type, candidate.type),
+        eq(artwork.selected, true),
+      ),
+    );
+  if (
+    selected?.backend === "colocated" &&
+    selected.sourceUrl === candidate.url &&
+    (await colocatedArtworkExists(library.rootPath, selected.storageKey))
+  ) {
+    return selected;
+  }
+
   const response = await request(candidate.url, {
     headers: { accept: "image/*" },
     signal: AbortSignal.timeout(timeoutMs),
@@ -369,6 +387,39 @@ export async function removeSelectedArtwork(
 export interface ArtworkOriginal {
   bytes: Uint8Array;
   artwork: typeof artwork.$inferSelect;
+}
+
+/** True when a colocated artwork original still exists as a real file. */
+async function colocatedArtworkExists(
+  rootPath: string,
+  storageKey: string,
+): Promise<boolean> {
+  const { root, target } = resolveStoragePath(rootPath, storageKey);
+  try {
+    await walkStorageDirectory(root, dirname(target), false);
+  } catch (error) {
+    if (error instanceof MissingArtworkStoragePathError) return false;
+    throw error;
+  }
+  let handle: FileHandle;
+  try {
+    handle = await open(
+      target,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return false;
+    if (code === "ELOOP") throw new Error("Invalid artwork storage path.");
+    throw error;
+  }
+  try {
+    if (!(await handle.stat()).isFile())
+      throw new Error("Invalid artwork storage path.");
+    return true;
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Opens an artwork original without following a final symlink. */

@@ -474,7 +474,12 @@ export async function scanDirectory(
     }
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
-    await setItemProviderIds(tx, itemId, mergedProviderIds);
+    if (await setItemProviderIds(tx, itemId, mergedProviderIds)) {
+      await tx
+        .update(items)
+        .set({ metadataState: "pending", updatedAt: new Date() })
+        .where(eq(items.id, itemId));
+    }
     await persistScanTimelines(tx, itemId);
     return { itemId, versionIds };
   });
@@ -908,6 +913,22 @@ export async function scanShowDirectory(
                           inArray(versions.sourceFileId, allVersionFileIds),
                         ),
                       );
+              const sourceEpisodeId = existingFile.itemId;
+              const retiredVersionIds = new Set([
+                existingFile.versionId,
+                ...dependentStoredVersions.map((version) => version.id),
+              ]);
+              const remainingSourceVersions = await tx
+                .select({ id: versions.id })
+                .from(versions)
+                .where(
+                  and(
+                    eq(versions.itemId, sourceEpisodeId),
+                    notInArray(versions.id, [...retiredVersionIds]),
+                  ),
+                );
+              const sourceEpisodeWillEmpty =
+                remainingSourceVersions.length === 0;
               if (dependentStoredVersions.length > 0) {
                 const storedIds = dependentStoredVersions.map(
                   (version) => version.id,
@@ -931,39 +952,58 @@ export async function scanShowDirectory(
                   .delete(versions)
                   .where(inArray(versions.id, storedIds));
               }
-              // Same-user Progress: the freshest persisted playback state wins.
+              // Same-user Progress: the freshest persisted playback state
+              // wins. When the source Episode empties, detached rows follow
+              // the surviving media too.
               const sourceProgress = await tx
                 .select()
                 .from(progress)
-                .where(eq(progress.versionId, existingFile.versionId));
-              for (const sourceRow of sourceProgress) {
-                const [destinationRow] = await tx
+                .where(
+                  sourceEpisodeWillEmpty
+                    ? eq(progress.itemId, sourceEpisodeId)
+                    : eq(progress.versionId, existingFile.versionId),
+                );
+              const progressByUser = new Map<string, typeof sourceProgress>();
+              for (const row of sourceProgress) {
+                const rows = progressByUser.get(row.userId) ?? [];
+                rows.push(row);
+                progressByUser.set(row.userId, rows);
+              }
+              for (const [userId, sourceRows] of progressByUser) {
+                const destinationRows = await tx
                   .select()
                   .from(progress)
                   .where(
                     and(
-                      eq(progress.userId, sourceRow.userId),
+                      eq(progress.userId, userId),
                       eq(progress.itemId, episodeId),
                     ),
-                  )
-                  .limit(1);
-                if (destinationRow === undefined) continue;
-                const sourceIsFresher =
-                  sourceRow.updatedAt.getTime() >
-                    destinationRow.updatedAt.getTime() ||
-                  (sourceRow.updatedAt.getTime() ===
-                    destinationRow.updatedAt.getTime() &&
-                    sourceRow.id > destinationRow.id);
-                await tx
-                  .delete(progress)
-                  .where(
-                    eq(
-                      progress.id,
-                      sourceIsFresher ? destinationRow.id : sourceRow.id,
-                    ),
                   );
+                const contenders = [...sourceRows, ...destinationRows];
+                let winner = contenders[0];
+                if (winner === undefined) continue;
+                for (const row of contenders) {
+                  if (
+                    row.updatedAt.getTime() > winner.updatedAt.getTime() ||
+                    (row.updatedAt.getTime() === winner.updatedAt.getTime() &&
+                      row.id > winner.id)
+                  )
+                    winner = row;
+                }
+                for (const row of contenders) {
+                  if (row.id === winner.id) continue;
+                  await tx.delete(progress).where(eq(progress.id, row.id));
+                }
+                if (
+                  winner.itemId !== episodeId &&
+                  winner.versionId !== existingFile.versionId
+                ) {
+                  await tx
+                    .update(progress)
+                    .set({ itemId: episodeId })
+                    .where(eq(progress.id, winner.id));
+                }
               }
-              const sourceEpisodeId = existingFile.itemId;
               // files.(version_id, item_id), progress.(version_id, item_id,
               // format) and session_registry.(version_id, item_id) reference
               // versions.(id, item_id) non-deferrably, so all four tables must
@@ -1183,7 +1223,12 @@ export async function scanShowDirectory(
       }
     }
 
-    await setItemProviderIds(tx, showId, mergedProviderIds);
+    if (await setItemProviderIds(tx, showId, mergedProviderIds)) {
+      await tx
+        .update(items)
+        .set({ metadataState: "pending", updatedAt: new Date() })
+        .where(eq(items.id, showId));
+    }
     for (const episodeId of processedEpisodeIds) {
       await persistScanTimelines(tx, episodeId);
     }

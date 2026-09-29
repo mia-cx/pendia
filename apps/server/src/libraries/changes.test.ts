@@ -1651,12 +1651,38 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             updatedAt: new Date("2020-01-01T00:00:00Z"),
           })
           .returning();
+        const [sourceVersion] = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.id, sourceFile.versionId));
+        if (sourceVersion?.segmentTimelineId == null) {
+          throw new Error("Source Version has no segment timeline.");
+        }
+        const [storedVersion] = await db
+          .insert(versions)
+          .values({
+            itemId: sourceFile.itemId,
+            itemKind: "episode",
+            libraryId: library.id,
+            label: "Stored 720p",
+            format: "video",
+            bytes: 1n,
+            origin: "stored",
+            sourceFileId: sourceFile.id,
+            segmentTimelineId: sourceVersion.segmentTimelineId,
+            timelineAligned: true,
+            storedFolder: "/stored/episode",
+            rung: "720p",
+            complete: true,
+          })
+          .returning();
+        if (!storedVersion) throw new Error("Stored Version missing.");
         const [sourceProgress] = await db
           .insert(progress)
           .values({
             userId: admin.id,
             itemId: sourceFile.itemId,
-            versionId: sourceFile.versionId,
+            versionId: storedVersion.id,
             format: "video",
             positionSeconds: 22,
             updatedAt: new Date("2024-01-01T00:00:00Z"),
@@ -1708,8 +1734,15 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(
           afterVersions.find((row) => row.id === sourceFile.versionId)?.itemId,
         ).toBe(destinationFile.itemId);
+        expect(
+          afterVersions.find((row) => row.id === storedVersion.id),
+        ).toBeUndefined();
         expect(await db.select().from(progress)).toEqual([
-          { ...sourceProgress, itemId: destinationFile.itemId },
+          {
+            ...sourceProgress,
+            itemId: destinationFile.itemId,
+            versionId: null,
+          },
         ]);
 
         const rescanned = await scanShowDirectory(db, library.id, "Foundation");

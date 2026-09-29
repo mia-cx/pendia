@@ -100,6 +100,9 @@ const capValue = $derived(
 const ratingValue = $derived(
   ratingInput ?? access.data?.settings.contentRatingCeiling ?? "",
 );
+const groupsLocked = $derived(
+  access.data !== undefined && access.data.user.disabledAt !== null,
+);
 
 async function saveSettings(event: SubmitEvent) {
   const target = id;
@@ -418,7 +421,7 @@ async function revoke(sessionId: string) {
           false}
           onchange={(event) =>
             (groupSel[group.id] = event.currentTarget.checked)}
-          disabled={groupsBusy || !access.data}
+          disabled={groupsBusy || !access.data || groupsLocked}
         />
         <label for={`group-${group.id}`}
           >{group.name}{#if group.builtIn}
@@ -429,10 +432,16 @@ async function revoke(sessionId: string) {
     {#if groupsFailure}
       <Failure failure={groupsFailure} />
     {/if}
+    {#if groupsLocked}
+      <p class="muted">
+        Group membership cannot change while the account is disabled.
+      </p>
+    {/if}
     <button
       type="button"
       onclick={saveGroups}
-      disabled={groupsBusy || !groups.data || !access.data}>Save</button
+      disabled={groupsBusy || !groups.data || !access.data || groupsLocked}
+      >Save</button
     >
   {/if}
 </section>

@@ -298,6 +298,19 @@ One finding, the libraries-screen sibling of `e6e2b0c`.
   concurrency key. The run id is dropped once the run settles, so the next
   press starts a fresh scan. These were the only two places that start one.
 
+### Macroscope round at `d078677`
+
+One finding, on the libraries add form.
+
+- `c1c7364`: adding a library says so. `resource.reload` catches its own
+  failure and resolves, so a failed reload after a successful create left the
+  admin looking at a generic server error where the list was, with nothing
+  saying the library existed. Re-entering it would have made a duplicate,
+  since `createLibrary` inserts unconditionally and `rootPath` carries no
+  unique constraint. The form now reports what it created. Rename and delete
+  swallow a reload failure the same way and keep it: re-running a rename is
+  harmless and re-running a delete answers NOT_FOUND.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

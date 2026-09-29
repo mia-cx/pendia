@@ -113,6 +113,18 @@ async function rescan() {
     busy = false;
   }
 }
+
+async function resumeWatch() {
+  busy = true;
+  failure = undefined;
+  try {
+    await watchScan();
+  } catch (error) {
+    failure = readFailure(error);
+  } finally {
+    busy = false;
+  }
+}
 </script>
 
 <svelte:head>
@@ -226,6 +238,13 @@ async function rescan() {
         {/if}
         {#if scanDone}
           <p>The first scan is done.</p>
+        {:else if failure && !scanSettled}
+          <p class="muted">
+            This page stopped following the scan. The scan itself keeps running.
+          </p>
+          <button type="button" onclick={resumeWatch} disabled={busy}>
+            Check again
+          </button>
         {:else if !scanSettled}
           <p class="muted">Scanning the library.</p>
         {/if}

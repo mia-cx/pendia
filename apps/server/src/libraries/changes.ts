@@ -214,6 +214,22 @@ export async function applyScanChanges(
     moveDestinationsBySource.set(previousPath, path);
     moveSourcesByDestination.set(path, previousPath);
   }
+  // Classify genuine cycle sources. A one-to-one mapping makes each walk
+  // terminate, and every node on a cycle discovers itself on its own walk.
+  const cycleMoveSources = new Set<string>();
+  for (const source of moveDestinationsBySource.keys()) {
+    const seen = new Set([source]);
+    let current = moveDestinationsBySource.get(source);
+    while (current !== undefined) {
+      if (current === source) {
+        cycleMoveSources.add(source);
+        break;
+      }
+      if (seen.has(current)) break;
+      seen.add(current);
+      current = moveDestinationsBySource.get(current);
+    }
+  }
   // Snapshot every source row and park it at a transaction-local placeholder
   // so a later destination that is itself a source does not pick up the
   // mutated row.
@@ -236,7 +252,6 @@ export async function applyScanChanges(
   // Consumed originals stay identifiable so a repeated event for an already
   // moved row can displace whichever produced row now occupies its source.
   const consumedMoveSources = new Map<string, typeof files.$inferSelect>();
-  const originalMoveSourcePaths = new Set(moveSources.keys());
   const firstMoveSource = normalized.find(
     (entry) => entry.change.kind === "move",
   )?.previousPath;
@@ -253,8 +268,8 @@ export async function applyScanChanges(
         producedAtSource.id !== parkedOriginal.id
       ) {
         moveSources.delete(previousPath);
-        if (originalMoveSourcePaths.has(path)) {
-          // Simultaneous swap: the parked original still owns this transition.
+        if (cycleMoveSources.has(previousPath)) {
+          // Simultaneous cycle: the parked original still owns this move.
           consumedMoveSources.set(previousPath, parkedOriginal);
           file = parkedOriginal;
         } else {

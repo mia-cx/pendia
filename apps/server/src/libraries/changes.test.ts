@@ -938,6 +938,133 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
+  test("an occupied three-hop chain keeps only the first surviving File", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        const fileA = file1080;
+        const fileB = `${folder}/Alien.720p.mkv`;
+        const fileC = `${folder}/Alien.2160p.mkv`;
+        const fileD = `${folder}/Alien.4k.mkv`;
+        await createVideoFixture(join(root, fileA));
+        await createVideoFixture(join(root, fileB));
+        await createVideoFixture(join(root, fileC));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const fileRows = await db.select().from(files);
+        const versionRows = await db.select().from(versions);
+        const rowA = fileRows.find((row) => row.path === fileA);
+        const rowB = fileRows.find((row) => row.path === fileB);
+        const rowC = fileRows.find((row) => row.path === fileC);
+        if (!rowA || !rowB || !rowC || versionRows.length !== 3) {
+          throw new Error("Initial scan produced no split Files.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const watchers = [admin.id];
+        for (const username of ["viewer", "guest"]) {
+          const [user] = await db
+            .insert(users)
+            .values({
+              username,
+              displayName: username,
+              passwordHash: "fixture",
+            })
+            .returning();
+          if (!user) throw new Error("User fixture missing.");
+          watchers.push(user.id);
+        }
+        for (const [index, version] of versionRows.entries()) {
+          await db.insert(progress).values({
+            userId: watchers[index] ?? "",
+            itemId,
+            versionId: version.id,
+            format: "video",
+            positionSeconds: 9,
+            playCount: 4,
+          });
+        }
+        const progressBefore = await db.select().from(progress);
+
+        // rename overwrites: only A's bytes survive, at D.
+        await rename(join(root, fileA), join(root, fileB));
+        await rename(join(root, fileB), join(root, fileC));
+        await rename(join(root, fileC), join(root, fileD));
+
+        await runScanJob(db, library.id, folder, [
+          {
+            kind: "move",
+            path: fileB,
+            previousPath: fileA,
+            providerIds: { tmdb: "348" },
+          },
+          {
+            kind: "move",
+            path: fileC,
+            previousPath: fileB,
+            providerIds: { tmdb: "348" },
+          },
+          {
+            kind: "move",
+            path: fileD,
+            previousPath: fileC,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const afterFiles = await db.select().from(files);
+        expect(afterFiles).toHaveLength(1);
+        expect(afterFiles[0]).toMatchObject({
+          id: rowA.id,
+          versionId: rowA.versionId,
+          itemId,
+          path: fileD,
+        });
+        expect((await db.select().from(versions)).map((row) => row.id)).toEqual(
+          [rowA.versionId],
+        );
+        const surviving = progressBefore.find(
+          (row) => row.versionId === rowA.versionId,
+        );
+        const detachedIds = [rowB.versionId, rowC.versionId];
+        if (!surviving) throw new Error("Progress fixture missing.");
+        const afterProgress = await db.select().from(progress);
+        expect(afterProgress).toHaveLength(3);
+        expect(afterProgress.find((row) => row.id === surviving.id)).toEqual(
+          surviving,
+        );
+        for (const versionId of detachedIds) {
+          const detached = progressBefore.find(
+            (row) => row.versionId === versionId,
+          );
+          if (!detached) throw new Error("Progress fixture missing.");
+          expect(afterProgress.find((row) => row.id === detached.id)).toEqual({
+            ...detached,
+            versionId: null,
+          });
+        }
+        expect(
+          afterFiles.some(
+            (row) =>
+              row.path === fileA ||
+              row.path === fileB ||
+              row.path === fileC ||
+              row.path.startsWith(".pendia-move/"),
+          ),
+        ).toBe(false);
+
+        const rescanned = await scanDirectory(db, library.id, folder);
+        expect(rescanned.itemId).toBe(itemId);
+        expect(await db.select().from(files)).toEqual(afterFiles);
+      });
+    }));
+
   test("a repeated reverse move keeps the first surviving identity", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

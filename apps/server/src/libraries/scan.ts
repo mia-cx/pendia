@@ -130,6 +130,26 @@ async function revalidateScope(
   }
 }
 
+/** Combines ordered member keyframes into one Version index offset by duration. */
+function combineKeyframes(
+  members: readonly ProbedLibraryFile[],
+): number[] | null {
+  const combined: number[] = [];
+  let offset = 0;
+  for (const member of members) {
+    const duration = member.probe.durationSeconds;
+    const keyframes = member.probe.keyframesSeconds;
+    if (duration === null || keyframes === null) return null;
+    for (const keyframe of keyframes) {
+      const shifted = keyframe + offset;
+      const last = combined[combined.length - 1];
+      if (last === undefined || shifted > last) combined.push(shifted);
+    }
+    offset += duration;
+  }
+  return combined;
+}
+
 /** Deletes leaf Items still holding no Versions after queued file deletes. */
 async function deleteEmptiedItems(
   tx: Transaction,
@@ -543,6 +563,7 @@ export async function scanShowDirectory(
     }
 
     const versionIds: string[] = [];
+    const processedEpisodeIds = new Set<string>();
     for (const seasonGroup of group.seasons) {
       const [existingSeason] = await tx
         .select({ item: items, season: seasons })
@@ -648,12 +669,19 @@ export async function scanShowDirectory(
               candidate.episodeNumber > discoveredEnd &&
               candidate.episodeNumber <= existingEnd,
           );
-          const blocksWidening = persistedEpisodes.some(
-            (candidate) =>
-              candidate.itemId !== episodeId &&
-              candidate.episodeNumber > existingEnd &&
-              candidate.episodeNumber <= discoveredEnd,
-          );
+          const blocksWidening =
+            persistedEpisodes.some(
+              (candidate) =>
+                candidate.itemId !== episodeId &&
+                candidate.episodeNumber > existingEnd &&
+                candidate.episodeNumber <= discoveredEnd,
+            ) ||
+            seasonGroup.episodes.some(
+              (candidate) =>
+                candidate.episodeNumber !== episodeGroup.episodeNumber &&
+                candidate.episodeNumber > existingEnd &&
+                candidate.episodeNumber <= discoveredEnd,
+            );
           if (
             (discoveredEnd > existingEnd && !blocksWidening) ||
             (discoveredEnd < existingEnd && overlapsDiscoveredEpisode)
@@ -679,6 +707,7 @@ export async function scanShowDirectory(
         }
 
         for (const versionGroup of episodeGroup.versions) {
+          processedEpisodeIds.add(episodeId);
           const members = versionGroup.paths.map((memberPath) => {
             const member = memberByPath.get(memberPath);
             if (!member) throw new Error(`Unprobed member: ${memberPath}`);
@@ -696,6 +725,7 @@ export async function scanShowDirectory(
                 0,
               )
             : null;
+          const combinedKeyframes = combineKeyframes(members);
           const first = members[0];
           if (!first) throw new Error("Show Version has no Files.");
           const label = videoVersionLabel(first.path, first.probe);
@@ -734,7 +764,13 @@ export async function scanShowDirectory(
             }
             await tx
               .update(versions)
-              .set({ label, bytes, durationSeconds })
+              .set({
+                label,
+                bytes,
+                durationSeconds,
+                keyframesSeconds: combinedKeyframes,
+                lazyIndexPending: combinedKeyframes === null,
+              })
               .where(eq(versions.id, version.id));
             versionId = version.id;
           } else {
@@ -748,6 +784,8 @@ export async function scanShowDirectory(
                 format: "video",
                 bytes,
                 durationSeconds,
+                keyframesSeconds: combinedKeyframes,
+                lazyIndexPending: combinedKeyframes === null,
               })
               .returning();
             if (!version) {
@@ -907,6 +945,9 @@ export async function scanShowDirectory(
     }
 
     await setItemProviderIds(tx, showId, mergedProviderIds);
+    for (const episodeId of processedEpisodeIds) {
+      await persistScanTimelines(tx, episodeId);
+    }
     return { itemId: showId, versionIds };
   });
   await removeColocatedArtworkFiles(deletedArtwork);

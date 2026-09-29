@@ -76,38 +76,79 @@ export function createArtworkHandler(
     maxCacheEntries?: number;
     maxCacheBytes?: number;
     maxConcurrentResizes?: number;
+    maxQueuedResizes?: number;
   } = {},
 ): (request: Request) => Promise<Response | undefined> {
   const maxCacheEntries = options.maxCacheEntries ?? 128;
   const maxCacheBytes = options.maxCacheBytes ?? 64 * 1024 * 1024;
   const maxConcurrentResizes = options.maxConcurrentResizes ?? 4;
+  const maxQueuedResizes = options.maxQueuedResizes ?? 128;
   if (
     !Number.isSafeInteger(maxCacheEntries) ||
     maxCacheEntries < 1 ||
     !Number.isSafeInteger(maxCacheBytes) ||
     maxCacheBytes < 1 ||
     !Number.isSafeInteger(maxConcurrentResizes) ||
-    maxConcurrentResizes < 1
+    maxConcurrentResizes < 1 ||
+    !Number.isSafeInteger(maxQueuedResizes) ||
+    maxQueuedResizes < 0
   )
     throw new Error("Invalid artwork cache size.");
   let active = 0;
-  const waiters: (() => void)[] = [];
-  const acquireSlot = async () => {
-    if (active < maxConcurrentResizes) {
-      active += 1;
-    } else {
-      await new Promise<void>((resolve) => {
-        waiters.push(resolve);
-      });
+  type ResizeWaiter = {
+    signal: AbortSignal;
+    onAbort: () => void;
+    grant: (acquired: boolean) => void;
+  };
+  const waiters: ResizeWaiter[] = [];
+  const releaseSlot = () => {
+    for (;;) {
+      const next = waiters.shift();
+      if (next === undefined) {
+        active -= 1;
+        return;
+      }
+      next.signal.removeEventListener("abort", next.onAbort);
+      if (next.signal.aborted) {
+        next.grant(false);
+        continue;
+      }
+      next.grant(true);
+      return;
     }
+  };
+  const makeRelease = () => {
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      const next = waiters.shift();
-      if (next === undefined) active -= 1;
-      else next();
+      releaseSlot();
     };
+  };
+  const acquireSlot = async (
+    signal: AbortSignal,
+  ): Promise<(() => void) | undefined> => {
+    if (active < maxConcurrentResizes) {
+      active += 1;
+      return makeRelease();
+    }
+    if (signal.aborted || waiters.length >= maxQueuedResizes) return undefined;
+    return new Promise<(() => void) | undefined>((resolvePromise) => {
+      const waiter: ResizeWaiter = {
+        signal,
+        onAbort: () => {
+          const index = waiters.indexOf(waiter);
+          if (index < 0) return;
+          waiters.splice(index, 1);
+          resolvePromise(undefined);
+        },
+        grant: (acquired) => {
+          resolvePromise(acquired ? makeRelease() : undefined);
+        },
+      };
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+      waiters.push(waiter);
+    });
   };
   const resize = options.resize ?? sharpResize;
   const cache = new Map<string, ArtworkResult>();
@@ -152,7 +193,13 @@ export function createArtworkHandler(
           : Number(value);
       if (!Number.isSafeInteger(width) || width < 1 || width > maxWidth)
         return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
-      const release = await acquireSlot();
+      const release = await acquireSlot(request.signal);
+      if (release === undefined)
+        return jsonError(
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Artwork service is busy.",
+        );
       try {
         const original = await readArtworkOriginal(db, id);
         if (original === null)

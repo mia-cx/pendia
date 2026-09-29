@@ -71,6 +71,7 @@ async function withServer<T>(
     maxCacheEntries?: number;
     maxCacheBytes?: number;
     maxConcurrentResizes?: number;
+    maxQueuedResizes?: number;
   },
   run: (base: string) => Promise<T>,
 ): Promise<T> {
@@ -522,6 +523,111 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
       });
     }));
 
+  test("bounds the resize queue and frees aborted waiters", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        let resolveGate!: () => void;
+        let markStarted!: () => void;
+        const resizeStarted = new Promise<void>((resolve) => {
+          markStarted = resolve;
+        });
+        const gate = new Promise<{
+          bytes: Uint8Array;
+          contentType: string;
+        }>((resolve) => {
+          resolveGate = () =>
+            resolve({
+              bytes: new Uint8Array([1, 2, 4]),
+              contentType: "image/x-artwork",
+            });
+        });
+        const resize: ArtworkResize = (_input, width) => {
+          calls.push(width);
+          markStarted();
+          return gate;
+        };
+        const handler = createArtworkHandler(db, {
+          resize,
+          maxConcurrentResizes: 1,
+          maxQueuedResizes: 0,
+        });
+        const url = `http://x/api/artwork/${row.id}?width=4`;
+        const first = handler(new Request(url));
+        await resizeStarted;
+        expect(calls).toEqual([4]);
+        const busy = await handler(new Request(url));
+        expect(busy?.status).toBe(503);
+        resolveGate();
+        const done = await first;
+        expect(done?.status).toBe(200);
+        expect(
+          Buffer.from((await done?.arrayBuffer()) ?? new ArrayBuffer(0)),
+        ).toEqual(Buffer.from([1, 2, 4]));
+        expect(calls).toEqual([4]);
+      });
+    }));
+
+  test("an aborted queued request frees its slot for a later request", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const calls: number[] = [];
+        let resolveGate!: () => void;
+        let markStarted!: () => void;
+        const resizeStarted = new Promise<void>((resolve) => {
+          markStarted = resolve;
+        });
+        const gate = new Promise<{
+          bytes: Uint8Array;
+          contentType: string;
+        }>((resolve) => {
+          resolveGate = () =>
+            resolve({
+              bytes: new Uint8Array([9]),
+              contentType: "image/x-artwork",
+            });
+        });
+        const resize: ArtworkResize = (_input, width) => {
+          calls.push(width);
+          markStarted();
+          return gate;
+        };
+        const handler = createArtworkHandler(db, {
+          resize,
+          maxConcurrentResizes: 1,
+          maxQueuedResizes: 1,
+        });
+        const url = `http://x/api/artwork/${row.id}?width=4`;
+        const first = handler(new Request(url));
+        await resizeStarted;
+        expect(calls).toEqual([4]);
+        const controller = new AbortController();
+        const aborted = handler(
+          new Request(url, { signal: controller.signal }),
+        );
+        await Bun.sleep(50);
+        controller.abort();
+        const rejected = await aborted;
+        expect(rejected?.status).toBe(503);
+        const third = handler(
+          new Request(`http://x/api/artwork/${row.id}?width=3`),
+        );
+        await Bun.sleep(50);
+        resolveGate();
+        const [firstDone, thirdDone] = await Promise.all([first, third]);
+        expect(firstDone?.status).toBe(200);
+        expect(thirdDone?.status).toBe(200);
+        expect(
+          Buffer.from((await thirdDone?.arrayBuffer()) ?? new ArrayBuffer(0)),
+        ).toEqual(Buffer.from([9]));
+        expect(calls).toEqual([4, 3]);
+      });
+    }));
+
   test("rejects invalid cache bounds", () =>
     withDatabase(async (db) => {
       for (const maxCacheBytes of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
@@ -540,6 +646,14 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           createArtworkHandler(db, { maxConcurrentResizes }),
         ).toThrow("Invalid artwork cache size.");
       }
+      for (const maxQueuedResizes of [-1, 1.5, Number.NaN, Number.MAX_VALUE]) {
+        expect(() => createArtworkHandler(db, { maxQueuedResizes })).toThrow(
+          "Invalid artwork cache size.",
+        );
+      }
+      expect(() =>
+        createArtworkHandler(db, { maxQueuedResizes: 0 }),
+      ).not.toThrow();
     }));
 
   test("enforces artworkRequiresAuth with a real credential", () =>

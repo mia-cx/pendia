@@ -214,6 +214,13 @@ export async function deleteItemSubtree(
   await db.transaction(async (tx) => {
     const item = await getItem(tx, itemId);
     await lockLibrary(tx, item.libraryId);
+    // Serialize the artwork snapshot against concurrent stores on descendants.
+    await tx
+      .select({ id: items.id })
+      .from(items)
+      .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
+      .where(eq(itemAncestors.ancestorId, itemId))
+      .for("update", { of: items });
     const orphaned = await tx
       .select({
         rootPath: libraries.rootPath,

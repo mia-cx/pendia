@@ -1,10 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { access, mkdir, readFile, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import {
+  access,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
-import type { Database } from "../db/client.ts";
+import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   artwork,
@@ -87,6 +94,20 @@ async function runScanJob(
     throw error;
   }
   await queue.complete(claimed);
+}
+
+async function waitForBlockedUpdate(db: Database) {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const rows = await db.$client<{ count: number }[]>`
+      select count(*)::integer as count from pg_stat_activity
+      where wait_event_type = 'Lock'`;
+    if ((rows[0]?.count ?? 0) > 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error("A blocked update was not observed.");
+    }
+    await Bun.sleep(10);
+  }
 }
 
 async function expectAuthError(
@@ -670,6 +691,66 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(await db.select().from(items)).toEqual([]);
         expect(await db.select().from(artwork)).toEqual([]);
         await expect(access(target)).rejects.toThrow();
+      });
+    }));
+
+  test("a reconcile delete collects artwork committed under the subtree lock", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        await rm(join(root, file1080));
+
+        const second = createDatabase(url);
+        try {
+          let markLocked = () => {};
+          const lockHeld = new Promise<void>((resolve) => {
+            markLocked = resolve;
+          });
+          const writer = second.db.transaction(async (tx) => {
+            const [item] = await tx
+              .select({ id: items.id })
+              .from(items)
+              .where(eq(items.id, itemId))
+              .for("update");
+            if (!item) throw new Error("Fixture Item missing.");
+            markLocked();
+            await waitForBlockedUpdate(db);
+            const storageKey = `${folder}/.pendia/artwork/${Bun.randomUUIDv7()}`;
+            await tx.insert(artwork).values({
+              itemId,
+              versionId: null,
+              type: "poster",
+              sourceUrl: poster.url,
+              backend: "colocated",
+              storageKey,
+              selected: true,
+            });
+            await mkdir(dirname(join(root, storageKey)), {
+              recursive: true,
+            });
+            await writeFile(join(root, storageKey), png);
+            return storageKey;
+          });
+          await lockHeld;
+          const scanning = scanDirectory(db, library.id, folder, {
+            reconcileMissing: true,
+          });
+          const storageKey = await writer;
+          await scanning;
+
+          expect(await db.select().from(items)).toEqual([]);
+          expect(await db.select().from(artwork)).toEqual([]);
+          await expect(access(join(root, storageKey))).rejects.toThrow();
+        } finally {
+          await second.close();
+        }
       });
     }));
 

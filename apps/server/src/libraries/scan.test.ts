@@ -22,6 +22,7 @@ import {
   progress,
   providerIds,
   seasons,
+  segmentTimelines,
   shows,
   streams,
   versions,
@@ -31,6 +32,7 @@ import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
+import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 
@@ -1440,6 +1442,128 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(await db.select().from(versions)).toHaveLength(1);
         expect(await db.select().from(files)).toHaveLength(1);
         expect(await db.select().from(progress)).toEqual(progressBefore);
+      });
+    }));
+
+  test("persists keyframes and a scan timeline for a split Episode Version", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        await createKeyframeFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
+        await createKeyframeFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(1);
+        const [version] = await db.select().from(versions);
+        if (!version) throw new Error("Fixture Version missing.");
+        expect(version.keyframesSeconds).not.toBeNull();
+        expect(version.lazyIndexPending).toBe(false);
+        const timelineId = version.segmentTimelineId;
+        if (timelineId === null) throw new Error("Timeline id missing.");
+        expect(version.timelineAligned).toBe(true);
+        const timelines = await db.select().from(segmentTimelines);
+        expect(timelines).toHaveLength(1);
+        expect(timelines[0]?.id).toBe(timelineId);
+
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toEqual(first.versionIds);
+        const [again] = await db.select().from(versions);
+        expect(again?.id).toBe(version.id);
+        expect(again?.keyframesSeconds).toEqual(version.keyframesSeconds);
+        expect(again?.lazyIndexPending).toBe(false);
+        expect(again?.segmentTimelineId).toBe(timelineId);
+        expect(again?.timelineAligned).toBe(true);
+        expect(await db.select().from(segmentTimelines)).toHaveLength(1);
+      });
+    }));
+
+  test("a discovered Episode blocks widening a retained range", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const ranged = join(seasonDir, "Show S01E01-E03.mkv");
+        await createVideoFixture(ranged);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(1);
+        const firstEpisodes = await db.select().from(episodes);
+        expect(firstEpisodes).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: 3 },
+        ]);
+        const rangedEpisodeId = firstEpisodes[0]?.itemId;
+        const rangedVersionId = first.versionIds[0];
+        if (!rangedEpisodeId || !rangedVersionId) {
+          throw new Error("Fixture Episode missing.");
+        }
+
+        await copyFile(ranged, join(seasonDir, "Show S01E02.mkv"));
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(2);
+        const secondEpisodes = await db
+          .select()
+          .from(episodes)
+          .orderBy(asc(episodes.episodeNumber));
+        expect(secondEpisodes).toMatchObject([
+          {
+            itemId: rangedEpisodeId,
+            episodeNumber: 1,
+            episodeEndNumber: null,
+          },
+          { episodeNumber: 2, episodeEndNumber: null },
+        ]);
+        const secondEpisodeId = secondEpisodes[1]?.itemId;
+        if (!secondEpisodeId) throw new Error("Fixture Episode missing.");
+        const fileRows = await db.select().from(files).orderBy(asc(files.path));
+        expect(fileRows).toMatchObject([
+          {
+            itemId: rangedEpisodeId,
+            versionId: rangedVersionId,
+            path: "Show/Season 01/Show S01E01-E03.mkv",
+          },
+          {
+            itemId: secondEpisodeId,
+            path: "Show/Season 01/Show S01E02.mkv",
+          },
+        ]);
+
+        const third = await scanShowDirectory(db, library.id, show);
+        expect(third.versionIds).toEqual(second.versionIds);
+        const thirdEpisodes = await db
+          .select()
+          .from(episodes)
+          .orderBy(asc(episodes.episodeNumber));
+        expect(thirdEpisodes).toMatchObject([
+          {
+            itemId: rangedEpisodeId,
+            episodeNumber: 1,
+            episodeEndNumber: null,
+          },
+          {
+            itemId: secondEpisodeId,
+            episodeNumber: 2,
+            episodeEndNumber: null,
+          },
+        ]);
+        const thirdFiles = await db.select().from(files);
+        expect(thirdFiles.map((row) => row.id).sort()).toEqual(
+          fileRows.map((row) => row.id).sort(),
+        );
       });
     }));
 

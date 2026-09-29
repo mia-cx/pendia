@@ -287,6 +287,17 @@ One finding, in the recovery path `f1ca568` had just added.
   behind the first on the shared library concurrency key. It resumes the known
   run now and only starts a new one when no run id came back.
 
+### Codex round at `ced2e34`
+
+One finding, the libraries-screen sibling of `e6e2b0c`.
+
+- `5da9e71`: the libraries screen keeps a per-row run id, so a row whose polling
+  failed offers Check again and resumes that run. It used to hold the job id in
+  a local, lose it to the failure, and leave Scan now as the only action, which
+  enqueued a second full scan behind the first on the shared library
+  concurrency key. The run id is dropped once the run settles, so the next
+  press starts a fresh scan. These were the only two places that start one.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

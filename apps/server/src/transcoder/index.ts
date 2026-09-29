@@ -98,6 +98,22 @@ export async function startTranscoder(
           itemId: hls.itemId,
         });
         if (session.transcoderNodeId !== nodeId) {
+          // The drain released this node's sessions; a request already on its
+          // way here retries through the api, which assigns a live node.
+          if (stopping !== undefined) {
+            return Response.json(
+              {
+                error: {
+                  code: "TRANSCODER_STOPPING",
+                  message: "The transcoder is stopping.",
+                },
+              },
+              {
+                status: 503,
+                headers: { ...standardHeaders, "retry-after": "1" },
+              },
+            );
+          }
           return Response.json(
             {
               error: {

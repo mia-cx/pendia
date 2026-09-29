@@ -6,6 +6,9 @@ import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
 const list = resource(() => client.users.list());
+const denied = $derived(
+  list.failure?.code === "FORBIDDEN" || list.failure?.code === "UNAUTHORIZED",
+);
 
 type InviteResult = Awaited<ReturnType<typeof createInvite>>;
 
@@ -108,6 +111,7 @@ async function sendInvite(event: SubmitEvent) {
   </table>
 {/if}
 
+{#if !denied}
 <div class="forms">
   <form onsubmit={addUser}>
     <h3>Create a user</h3>
@@ -181,6 +185,7 @@ async function sendInvite(event: SubmitEvent) {
     {/if}
   </form>
 </div>
+{/if}
 
 <style>
 .forms {

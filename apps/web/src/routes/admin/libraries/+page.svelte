@@ -7,6 +7,9 @@ import { resource } from "$lib/resource.svelte.ts";
 import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 
 const list = resource(() => client.libraries.list());
+const denied = $derived(
+  list.failure?.code === "FORBIDDEN" || list.failure?.code === "UNAUTHORIZED",
+);
 type LibraryRow = NonNullable<typeof list.data>[number];
 
 const mediumNames: Record<LibraryRow["medium"], string> = {
@@ -297,6 +300,7 @@ function scanCell(row: LibraryRow): string {
   {/if}
 {/if}
 
+{#if !denied}
 <form onsubmit={addLibrary}>
   <h3>Add a library</h3>
   {#if addFailure}
@@ -318,6 +322,7 @@ function scanCell(row: LibraryRow): string {
   </select>
   <button type="submit" disabled={addBusy}>Add library</button>
 </form>
+{/if}
 
 <style>
 table {

@@ -330,6 +330,21 @@ Three findings, all real.
   `setProviderKey`. This one carries a test: the existing rejection loop in
   `admin.test.ts` gained the value, and it fails against the unfixed writer.
 
+### Codex round at `e95aa03`
+
+Three findings, which are two defects.
+
+- `b3e529f`: the caller says whether it is a built-in admin, and the screens
+  gate on it. This slice gave the admin reads a `manage-users` bar while the
+  matching writes keep `requireAdmin`, so a manager holding `manage-users`
+  through a custom group saw group membership, permission overrides, library
+  access, group creation and group permission editing as live controls that
+  could only answer 403. The settings form stays available to that caller,
+  because `writeUserSettings` takes `manage-users` like the reads.
+- `b8f5844`: `createGroup` rejects a NUL in the name, the one text boundary
+  this slice exposes that `d8c4e54` did not reach. It carries a test that
+  fails against the unfixed function.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

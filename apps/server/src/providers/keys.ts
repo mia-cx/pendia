@@ -62,15 +62,20 @@ async function writeKeys(
   });
 }
 
-/** Lists configured provider key names for a caller holding manage-server; values never leave the server. */
-export async function listProviderKeys(db: Database, actorId: string) {
-  await requirePermission(db, actorId, "manage-server");
+/** Lists the provider key names without a caller check; values never leave the server. */
+export async function readProviderKeyNames(db: Database) {
   const [row] = await db
     .select({ value: settings.value })
     .from(settings)
     .where(eq(settings.key, providersKey))
     .limit(1);
   return Object.keys(storedKeys(row?.value)).sort();
+}
+
+/** Lists the provider key names for a caller holding manage-server; values never leave the server. */
+export async function listProviderKeys(db: Database, actorId: string) {
+  await requirePermission(db, actorId, "manage-server");
+  return readProviderKeyNames(db);
 }
 
 /** Stores one provider key for a caller holding manage-server and returns the sorted names. */

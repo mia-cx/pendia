@@ -19,7 +19,7 @@ import { listSessions, revokeSession } from "../auth/sessions.ts";
 import { readAuthSettings, writeAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import {
-  listProviderKeys,
+  readProviderKeyNames,
   removeProviderKey,
   setProviderKey,
 } from "../providers/keys.ts";
@@ -71,9 +71,10 @@ const toUserAccess = (access: Awaited<ReturnType<typeof getUserAccess>>) => ({
   },
 });
 
-async function readServerSettings(db: Database, actorId: string) {
+/** Reads the server settings without a caller check; the handler authorizes. */
+async function readServerSettings(db: Database) {
   const config = await readAuthSettings(db);
-  const providerKeys = await listProviderKeys(db, actorId);
+  const providerKeys = await readProviderKeyNames(db);
   return {
     trustedProxyAddresses: config.trustedProxyAddresses,
     artworkRequiresAuth: config.artworkRequiresAuth,
@@ -346,7 +347,7 @@ export const settingsProcedures = {
             context.caller.user.id,
             "manage-server",
           );
-          return readServerSettings(context.db, context.caller.user.id);
+          return readServerSettings(context.db);
         }),
       ),
     ),
@@ -365,7 +366,7 @@ export const settingsProcedures = {
       runApi(
         fromHost(async () => {
           await writeAuthSettings(context.db, context.caller.user.id, input);
-          return readServerSettings(context.db, context.caller.user.id);
+          return readServerSettings(context.db);
         }),
       ),
     ),
@@ -386,7 +387,7 @@ export const settingsProcedures = {
             input.name,
             input.value,
           );
-          return readServerSettings(context.db, context.caller.user.id);
+          return readServerSettings(context.db);
         }),
       ),
     ),
@@ -402,7 +403,7 @@ export const settingsProcedures = {
             context.caller.user.id,
             input.name,
           );
-          return readServerSettings(context.db, context.caller.user.id);
+          return readServerSettings(context.db);
         }),
       ),
     ),

@@ -137,6 +137,13 @@ describe.skipIf(!databaseUrl)("admin api", () => {
               id: Bun.randomUUIDv7(),
               permissions: [],
             }),
+          () => viewerClient.settings.update({ trustedProxyAddresses: [] }),
+          () =>
+            viewerClient.settings.setProviderKey({
+              name: "tmdb",
+              value: "secret",
+            }),
+          () => viewerClient.settings.deleteProviderKey({ name: "tmdb" }),
         ]) {
           const error = await capture(denied());
           expect(error.code).toBe("FORBIDDEN");

@@ -76,13 +76,28 @@ function newDeviceId() {
   );
 }
 
+function storedDeviceId(): string | null {
+  try {
+    return localStorage.getItem("pendia.deviceId");
+  } catch {
+    return null;
+  }
+}
+
+function rememberDeviceId(deviceId: string): void {
+  try {
+    localStorage.setItem("pendia.deviceId", deviceId);
+  } catch {
+    // A browser that denies storage gets an id for this page only.
+  }
+}
+
 /** The device identity this browser keeps across reloads. */
 export function deviceInfo() {
-  const store = typeof localStorage === "undefined" ? null : localStorage;
-  let deviceId = store?.getItem("pendia.deviceId") ?? null;
+  let deviceId = storedDeviceId();
   if (deviceId === null) {
     deviceId = newDeviceId();
-    store?.setItem("pendia.deviceId", deviceId);
+    rememberDeviceId(deviceId);
   }
   const agent = (typeof navigator === "undefined" ? "" : navigator.userAgent)
     .trim()

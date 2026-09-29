@@ -277,6 +277,16 @@ Two findings. One fixed, one already filed.
   table belongs with the queue rather than with a screen, and a migration on
   this branch would collide with the other slices in flight.
 
+### Codex round at `4786ec2`
+
+One finding, in the recovery path `f1ca568` had just added.
+
+- `e6e2b0c`: the wizard's no-reading recovery follows the run that was started.
+  A first status request that failed left `runId` set and `status` undefined,
+  and the button there called `rescan`, which enqueued a second full scan
+  behind the first on the shared library concurrency key. It resumes the known
+  run now and only starts a new one when no run id came back.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

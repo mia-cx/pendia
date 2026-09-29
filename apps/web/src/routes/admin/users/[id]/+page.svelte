@@ -178,7 +178,18 @@ async function saveGroups() {
     if (!currentVisit(target, generation)) return;
     access.set(updated);
     groupSel = {};
-    if (target === data.me.user.id) await invalidateAll();
+    if (target === data.me.user.id) {
+      await invalidateAll();
+      await serial(target, async () => {
+        if (!currentVisit(target, generation)) return;
+        await Promise.all([
+          access.reload(),
+          sessions.reload(),
+          groups.reload(),
+          libs.reload(),
+        ]);
+      });
+    }
   } catch (error) {
     if (currentVisit(target, generation)) groupsFailure = readFailure(error);
   } finally {

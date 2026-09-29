@@ -3,6 +3,7 @@ import { and, eq, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
+  artwork,
   files,
   itemAncestors,
   items,
@@ -10,7 +11,7 @@ import {
   type ScanChange,
   versions,
 } from "../db/schema/index.ts";
-import { deleteItemSubtree } from "../db/tree.ts";
+import { type DeletedArtworkFile, deleteItemSubtree } from "../db/tree.ts";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
@@ -91,11 +92,38 @@ export async function setItemProviderIds(
   }
 }
 
+/** Updates an Item folder and re-keys its colocated artwork atomically. */
+export async function updateItemCanonicalFolder(
+  db: Connection,
+  item: typeof items.$inferSelect,
+  canonicalFolder: string,
+): Promise<void> {
+  if (item.canonicalFolder === canonicalFolder) return;
+  const marker = "/.pendia/artwork/";
+  const rows = await db
+    .select({ id: artwork.id, storageKey: artwork.storageKey })
+    .from(artwork)
+    .where(and(eq(artwork.itemId, item.id), eq(artwork.backend, "colocated")));
+  for (const row of rows) {
+    const index = row.storageKey.lastIndexOf(marker);
+    if (index < 0) throw new Error("Invalid artwork storage key.");
+    await db
+      .update(artwork)
+      .set({ storageKey: `${canonicalFolder}${row.storageKey.slice(index)}` })
+      .where(eq(artwork.id, row.id));
+  }
+  await db
+    .update(items)
+    .set({ canonicalFolder, updatedAt: new Date() })
+    .where(eq(items.id, item.id));
+}
+
 /** Applies queued moves and deletes before a directory scan writes its result. */
 export async function applyScanChanges(
   db: Connection,
   libraryId: string,
   changes: readonly ScanChange[],
+  deletedArtwork: DeletedArtworkFile[] = [],
 ): Promise<string[]> {
   const normalized = changes.map((change) => ({
     change,
@@ -126,9 +154,23 @@ export async function applyScanChanges(
       if (file && destination) {
         if (file.id === destination.id) continue;
         if (destination.itemId === file.itemId) {
-          await db
-            .delete(versions)
-            .where(eq(versions.id, destination.versionId));
+          const [destinationSibling] = await db
+            .select({ id: files.id })
+            .from(files)
+            .where(
+              and(
+                eq(files.versionId, destination.versionId),
+                ne(files.id, destination.id),
+              ),
+            )
+            .limit(1);
+          if (destinationSibling === undefined) {
+            await db
+              .delete(versions)
+              .where(eq(versions.id, destination.versionId));
+          } else {
+            await db.delete(files).where(eq(files.id, destination.id));
+          }
         } else {
           const sourceRootId = await rootItemId(db, file.itemId);
           const destinationRootId = await rootItemId(db, destination.itemId);
@@ -137,6 +179,7 @@ export async function applyScanChanges(
             sourceRootId === destinationRootId
               ? destination.itemId
               : destinationRootId,
+            deletedArtwork,
           );
         }
       }
@@ -147,13 +190,7 @@ export async function applyScanChanges(
           .from(items)
           .where(eq(items.id, file.itemId));
         if (item && item.canonicalFolder === posix.dirname(previousPath)) {
-          await db
-            .update(items)
-            .set({
-              canonicalFolder: posix.dirname(path),
-              updatedAt: new Date(),
-            })
-            .where(eq(items.id, item.id));
+          await updateItemCanonicalFolder(db, item, posix.dirname(path));
         }
         continue;
       }
@@ -163,10 +200,7 @@ export async function applyScanChanges(
         change.providerIds,
       );
       if (item && item.canonicalFolder === posix.dirname(previousPath)) {
-        await db
-          .update(items)
-          .set({ canonicalFolder: posix.dirname(path) })
-          .where(eq(items.id, item.id));
+        await updateItemCanonicalFolder(db, item, posix.dirname(path));
       }
       continue;
     }
@@ -199,7 +233,7 @@ export async function applyScanChanges(
         );
       item = byFolder;
     }
-    if (item) await deleteItemSubtree(db, item.id);
+    if (item) await deleteItemSubtree(db, item.id, deletedArtwork);
   }
   return [...new Set(emptiedItemIds)];
 }

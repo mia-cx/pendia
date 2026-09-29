@@ -144,11 +144,17 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           expect(first.status).toBe(200);
           const etag = first.headers.get("etag") ?? "";
           expect(etag.startsWith('"')).toBe(true);
+          expect(first.headers.get("content-length")).toBe(
+            String(png.byteLength),
+          );
           expect(Buffer.from(await first.arrayBuffer())).toEqual(png);
 
           const second = await fetch(url);
           expect(second.status).toBe(200);
           expect(second.headers.get("etag")).toBe(etag);
+          expect(second.headers.get("content-length")).toBe(
+            String(png.byteLength),
+          );
           expect(Buffer.from(await second.arrayBuffer())).toEqual(png);
           expect(calls).toEqual([4]);
 
@@ -169,7 +175,7 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           const weak = await fetch(url, {
             headers: { "if-none-match": `W/${etag}` },
           });
-          expect(weak.status).toBe(200);
+          expect(weak.status).toBe(304);
           await weak.arrayBuffer();
           expect(calls).toEqual([4]);
 

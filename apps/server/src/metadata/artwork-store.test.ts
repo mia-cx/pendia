@@ -281,6 +281,28 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       });
     }));
 
+  test("a declared geometry outside the bounds leaves no row or file", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const svg = (width: number, height: number) =>
+          Buffer.from(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"></svg>`,
+          );
+        for (const body of [svg(8193, 10), svg(8000, 6000), svg(2100, 100)]) {
+          const { request } = mockRequest(() => new Response(body));
+          await expect(
+            storeArtworkOriginal(db, item.id, poster, request),
+          ).rejects.toThrow("Invalid artwork response.");
+        }
+        expect(await db.select().from(artwork)).toHaveLength(0);
+        await expect(
+          access(join(root, "Alien (1979)", ".pendia")),
+        ).rejects.toThrow();
+      });
+    }));
+
   test("a declared Content-Length over the limit rejects before retaining", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "./client.ts";
 import {
+  artwork,
   episodes,
   itemAncestors,
   items,
@@ -198,11 +199,40 @@ export async function moveItem(
   });
 }
 
+/** One colocated artwork file to remove after its database owner commits deletion. */
+export interface DeletedArtworkFile {
+  rootPath: string;
+  storageKey: string;
+}
+
 /** Deletes an Item and its owned subtree without removing filesystem content. */
-export async function deleteItemSubtree(db: Connection, itemId: string) {
+export async function deleteItemSubtree(
+  db: Connection,
+  itemId: string,
+  deletedArtwork: DeletedArtworkFile[] = [],
+) {
   await db.transaction(async (tx) => {
     const item = await getItem(tx, itemId);
     await lockLibrary(tx, item.libraryId);
+    const orphaned = await tx
+      .select({
+        rootPath: libraries.rootPath,
+        storageKey: artwork.storageKey,
+      })
+      .from(artwork)
+      .innerJoin(items, eq(artwork.itemId, items.id))
+      .innerJoin(
+        itemAncestors,
+        and(
+          eq(itemAncestors.descendantId, items.id),
+          eq(itemAncestors.ancestorId, itemId),
+        ),
+      )
+      .innerJoin(libraries, eq(items.libraryId, libraries.id))
+      .where(eq(artwork.backend, "colocated"));
+    for (const row of orphaned) {
+      deletedArtwork.push(row);
+    }
     await tx.delete(items).where(eq(items.id, itemId));
   });
 }

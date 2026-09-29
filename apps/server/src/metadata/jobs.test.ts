@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -456,6 +456,66 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         await queue.complete(retried ?? job);
         expect(await db.select().from(artwork)).toHaveLength(1);
         expect(await db.select().from(events)).toHaveLength(3);
+      });
+    }));
+
+  test("a matched fetch with no poster removes the stored poster", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        await db
+          .insert(providerIds)
+          .values({ provider: "tmdb", value: "550", itemId: item.id });
+        await db.insert(settings).values({
+          key: "metadata",
+          value: { tmdb: { apiKey: "test-key" } },
+        });
+        let posterless = false;
+        const { calls, request } = mockRequest((url) => {
+          if (url.hostname === "api.themoviedb.org")
+            return Response.json(
+              posterless ? { ...tmdbDetail, poster_path: null } : tmdbDetail,
+            );
+          if (url.hostname === "image.tmdb.org") return new Response(png);
+          throw new Error(`Unexpected request to ${url.hostname}.`);
+        });
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request);
+        const first = await queue.enqueue({
+          type: "provider-fetch",
+          itemId: item.id,
+        });
+        const claimedFirst = await queue.claim(["provider-fetch"]);
+        await registry.run(claimedFirst ?? first);
+        await queue.complete(claimedFirst ?? first);
+        const [stored] = await db.select().from(artwork);
+        if (!stored) throw new Error("Stored artwork missing.");
+        const storedPath = join(root, stored.storageKey);
+        expect(await readFile(storedPath)).toEqual(png);
+
+        posterless = true;
+        const second = await queue.enqueue({
+          type: "provider-fetch",
+          itemId: item.id,
+        });
+        const claimedSecond = await queue.claim(["provider-fetch"]);
+        await registry.run(claimedSecond ?? second);
+        await queue.complete(claimedSecond ?? second);
+
+        expect(await db.select().from(artwork)).toHaveLength(0);
+        await expect(access(storedPath)).rejects.toThrow();
+        expect(
+          calls.filter((url) => url.hostname === "image.tmdb.org"),
+        ).toHaveLength(1);
+        expect(calls).toHaveLength(3);
+        expect(await db.select().from(events)).toMatchObject([
+          { kind: "library.changed" },
+          { kind: "library.changed" },
+          { kind: "library.changed" },
+          { kind: "library.changed" },
+        ]);
       });
     }));
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
@@ -7,6 +7,7 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
+  artwork,
   files,
   items,
   libraries,
@@ -23,6 +24,10 @@ import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
+import {
+  readArtworkOriginal,
+  storeArtworkOriginal,
+} from "../metadata/artwork-store.ts";
 import { setItemProviderIds } from "./changes.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
@@ -31,6 +36,21 @@ import { MissingLibraryPathError } from "./walker.ts";
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
 const file2160 = `${folder}/Alien.2160p {edition-Director's Cut}.mkv`;
+
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
+  "base64",
+);
+
+const poster = {
+  type: "poster",
+  url: "https://image.example/poster.png",
+} as const;
+
+function respondWith(bytes: Uint8Array): typeof fetch {
+  return (async (_input: string | URL | Request, _init?: RequestInit) =>
+    new Response(Buffer.from(bytes))) as typeof fetch;
+}
 
 async function insertLibrary(
   db: Database,
@@ -188,6 +208,12 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           playCount: 4,
         });
         await setItemProviderIds(db, itemId, { tmdb: "348" });
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
         const progressBefore = await db.select().from(progress);
 
         const movedFolder = "Alien Remastered (1979)";
@@ -227,6 +253,15 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
           ["tmdb", itemId],
         ]);
+        const artworkRows = await db.select().from(artwork);
+        expect(artworkRows).toHaveLength(1);
+        expect(artworkRows[0]?.id).toBe(stored.id);
+        expect(artworkRows[0]?.storageKey).toBe(
+          `${movedFolder}${stored.storageKey.slice(folder.length)}`,
+        );
+        const original = await readArtworkOriginal(db, stored.id);
+        expect(original?.artwork.id).toBe(stored.id);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
       });
     }));
 
@@ -607,6 +642,37 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
+  test("a reconcile-missing scan removes colocated artwork after the Item delete commits", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
+        const target = join(root, stored.storageKey);
+        expect(await readFile(target)).toEqual(png);
+
+        await rm(join(root, file1080));
+        await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
+
+        expect(await db.select().from(items)).toEqual([]);
+        expect(await db.select().from(artwork)).toEqual([]);
+        await expect(access(target)).rejects.toThrow();
+      });
+    }));
+
   test("provider ids conflicting with an occupied folder reject the scan", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -869,6 +935,91 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(fileRows.map((row) => row.id)).toEqual([keptFile.id]);
         expect(fileRows[0]?.path).toBe(keptPath);
         expect(fileRows[0]?.order).toBe(0);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+      });
+    }));
+
+  test("a move over one File in a split Version keeps the Version and sibling", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const seasonDir = join(root, "Foundation", "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const part1Path = "Foundation/Season 01/Foundation S01E01 - part1.mkv";
+        const part2Path = "Foundation/Season 01/Foundation S01E01 - part2.mkv";
+        const part3Path = "Foundation/Season 01/Foundation S01E01 - part3.mkv";
+        await createVideoFixture(join(root, part1Path));
+        await createVideoFixture(join(root, part2Path));
+        await createVideoFixture(join(root, part3Path));
+        const library = await insertLibrary(db, root, "shows");
+        const scanned = await scanShowDirectory(db, library.id, "Foundation");
+        const showId = scanned.itemId;
+        if (!showId) throw new Error("Initial scan produced no Show.");
+        const initialFiles = await db
+          .select()
+          .from(files)
+          .orderBy(asc(files.order));
+        const [part1File, part2File, part3File] = initialFiles;
+        if (
+          !part1File ||
+          !part2File ||
+          !part3File ||
+          part1File.versionId !== part2File.versionId ||
+          part1File.versionId !== part3File.versionId
+        ) {
+          throw new Error("Initial scan produced no split Episode Files.");
+        }
+        const episodeId = part1File.itemId;
+        const versionId = part1File.versionId;
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: episodeId,
+          versionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        const progressBefore = await db.select().from(progress);
+
+        await rename(join(root, part3Path), join(root, part2Path));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: part2Path,
+            previousPath: part3Path,
+            providerIds: {},
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows.map((row) => row.kind).sort()).toEqual([
+          "episode",
+          "season",
+          "show",
+        ]);
+        expect(itemRows.find((row) => row.kind === "show")?.id).toBe(showId);
+        expect(itemRows.find((row) => row.kind === "episode")?.id).toBe(
+          episodeId,
+        );
+        const versionRows = await db.select().from(versions);
+        expect(versionRows.map((row) => row.id)).toEqual([versionId]);
+        const fileRows = await db
+          .select()
+          .from(files)
+          .orderBy(asc(files.order));
+        expect(
+          fileRows.map((row) => ({
+            id: row.id,
+            path: row.path,
+            order: row.order,
+          })),
+        ).toEqual([
+          { id: part1File.id, path: part1Path, order: 0 },
+          { id: part3File.id, path: part2Path, order: 1 },
+        ]);
         expect(await db.select().from(progress)).toEqual(progressBefore);
       });
     }));

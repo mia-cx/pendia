@@ -12,6 +12,13 @@ export type ArtworkResize = (
   width: number,
 ) => Promise<{ bytes: Uint8Array; contentType: string }>;
 
+type ArtworkResult = {
+  body: Blob;
+  byteLength: number;
+  contentType: string;
+  etag: string;
+};
+
 const routePrefix = "/api/artwork/";
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -55,7 +62,8 @@ function matchesIfNoneMatch(header: string | null, etag: string): boolean {
   if (header === null) return false;
   for (const part of header.split(",")) {
     const tag = part.trim();
-    if (tag === "*" || tag === etag) return true;
+    const opaqueTag = tag.startsWith("W/") ? tag.slice(2) : tag;
+    if (tag === "*" || opaqueTag === etag) return true;
   }
   return false;
 }
@@ -102,19 +110,8 @@ export function createArtworkHandler(
     };
   };
   const resize = options.resize ?? sharpResize;
-  const cache = new Map<
-    string,
-    { bytes: Uint8Array; body: Blob; contentType: string; etag: string }
-  >();
-  const inFlight = new Map<
-    string,
-    Promise<{
-      bytes: Uint8Array;
-      body: Blob;
-      contentType: string;
-      etag: string;
-    }>
-  >();
+  const cache = new Map<string, ArtworkResult>();
+  const inFlight = new Map<string, Promise<ArtworkResult>>();
   let cacheBytes = 0;
 
   return async (request) => {
@@ -183,8 +180,9 @@ export function createArtworkHandler(
               etagHasher.update(":");
               etagHasher.update(resized.bytes);
               return {
-                ...resized,
                 body: new Blob([new Uint8Array(resized.bytes)]),
+                byteLength: resized.bytes.byteLength,
+                contentType: resized.contentType,
                 etag: `"${etagHasher.digest("hex")}"`,
               };
             });
@@ -202,9 +200,9 @@ export function createArtworkHandler(
             cache.set(sourceKey, result);
           } else {
             result = resized;
-            if (result.bytes.byteLength <= maxCacheBytes) {
+            if (result.byteLength <= maxCacheBytes) {
               cache.set(sourceKey, result);
-              cacheBytes += result.bytes.byteLength;
+              cacheBytes += result.byteLength;
               while (
                 cache.size > maxCacheEntries ||
                 cacheBytes > maxCacheBytes
@@ -213,8 +211,7 @@ export function createArtworkHandler(
                 if (oldest === undefined) break;
                 const evicted = cache.get(oldest);
                 cache.delete(oldest);
-                if (evicted !== undefined)
-                  cacheBytes -= evicted.bytes.byteLength;
+                if (evicted !== undefined) cacheBytes -= evicted.byteLength;
               }
             }
           }
@@ -233,7 +230,7 @@ export function createArtworkHandler(
           headers: {
             ...headers,
             "Content-Type": result.contentType,
-            "Content-Length": String(result.bytes.byteLength),
+            "Content-Length": String(result.byteLength),
           },
         });
       } finally {

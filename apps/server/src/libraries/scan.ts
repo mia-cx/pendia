@@ -12,16 +12,22 @@ import {
   streams,
   versions,
 } from "../db/schema/index.ts";
-import { deleteItemSubtree, insertItem } from "../db/tree.ts";
+import {
+  type DeletedArtworkFile,
+  deleteItemSubtree,
+  insertItem,
+} from "../db/tree.ts";
 import type { ScanRules } from "../mediums/medium.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
+import { removeColocatedArtworkFiles } from "../metadata/artwork-store.ts";
 import {
   applyScanChanges,
   findItemByProviderIds,
   setItemProviderIds,
+  updateItemCanonicalFolder,
 } from "./changes.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import { persistScanTimelines } from "./timelines.ts";
@@ -90,35 +96,46 @@ async function upsertFileStreams(
   }
 }
 
-/** Re-walks the requested scope inside the write lock before an empty result deletes rows. */
-async function confirmScopeEmpty(
+/** Re-walks the requested scope inside the write lock and rejects on any drift. */
+async function revalidateScope(
   rootPath: string,
   rules: ScanRules,
   path: string,
   recursive: boolean,
+  expected: readonly string[],
 ): Promise<void> {
+  const current = new Set<string>();
   try {
     for await (const file of walkLibrary(rootPath, rules, {
       path,
       recursive,
     })) {
-      if (file.path !== "") {
-        throw new Error("Library directory changed before scan write.");
-      }
+      current.add(file.path);
     }
   } catch (error) {
     if (
-      error instanceof MissingLibraryPathError &&
-      error.scope === "requested"
+      !(error instanceof MissingLibraryPathError) ||
+      error.scope !== "requested"
     ) {
-      return;
+      throw error;
     }
-    throw error;
+  }
+  if (current.size !== expected.length) {
+    throw new Error("Library directory changed before scan write.");
+  }
+  for (const walked of expected) {
+    if (!current.has(walked)) {
+      throw new Error("Library directory changed before scan write.");
+    }
   }
 }
 
 /** Deletes leaf Items still holding no Versions after queued file deletes. */
-async function deleteEmptiedItems(tx: Transaction, itemIds: readonly string[]) {
+async function deleteEmptiedItems(
+  tx: Transaction,
+  itemIds: readonly string[],
+  deletedArtwork: DeletedArtworkFile[],
+) {
   for (const itemId of new Set(itemIds)) {
     const [item] = await tx.select().from(items).where(eq(items.id, itemId));
     if (!item || item.kind === "show" || item.kind === "season") continue;
@@ -127,7 +144,8 @@ async function deleteEmptiedItems(tx: Transaction, itemIds: readonly string[]) {
       .from(versions)
       .where(eq(versions.itemId, itemId))
       .limit(1);
-    if (version === undefined) await deleteItemSubtree(tx, item.id);
+    if (version === undefined)
+      await deleteItemSubtree(tx, item.id, deletedArtwork);
   }
 }
 
@@ -190,6 +208,7 @@ export async function scanDirectory(
     Object.assign(mergedProviderIds, change.providerIds);
   }
 
+  const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select()
@@ -198,7 +217,12 @@ export async function scanDirectory(
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
 
-    const emptiedItemIds = await applyScanChanges(tx, libraryId, changes);
+    const emptiedItemIds = await applyScanChanges(
+      tx,
+      libraryId,
+      changes,
+      deletedArtwork,
+    );
 
     for (const member of members) {
       const current = await readLibraryFile(library.rootPath, member.path);
@@ -210,15 +234,19 @@ export async function scanDirectory(
       }
     }
 
+    if (options.reconcileMissing === true) {
+      await revalidateScope(
+        library.rootPath,
+        moviesMedium.scan,
+        path,
+        false,
+        walked,
+      );
+    }
+
     if (!group) {
-      await deleteEmptiedItems(tx, emptiedItemIds);
+      await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
       if (options.reconcileMissing === true) {
-        await confirmScopeEmpty(
-          library.rootPath,
-          moviesMedium.scan,
-          path,
-          false,
-        );
         const [item] = await tx
           .select()
           .from(items)
@@ -228,7 +256,7 @@ export async function scanDirectory(
               eq(items.canonicalFolder, path),
             ),
           );
-        if (item) await deleteItemSubtree(tx, item.id);
+        if (item) await deleteItemSubtree(tx, item.id, deletedArtwork);
       }
       return { itemId: null, versionIds: [] as string[] };
     }
@@ -251,13 +279,7 @@ export async function scanDirectory(
       itemId = existingItem.id;
     } else if (found) {
       if (found.kind !== "movie") throw new AuthError("CONFLICT");
-      await tx
-        .update(items)
-        .set({
-          canonicalFolder: group.canonicalFolder,
-          updatedAt: new Date(),
-        })
-        .where(eq(items.id, found.id));
+      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       itemId = found.id;
     } else {
       const created = await insertItem(tx, {
@@ -367,11 +389,12 @@ export async function scanDirectory(
       }
     }
 
-    await deleteEmptiedItems(tx, emptiedItemIds);
+    await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
     await setItemProviderIds(tx, itemId, mergedProviderIds);
     await persistScanTimelines(tx, itemId);
     return { itemId, versionIds };
   });
+  await removeColocatedArtworkFiles(deletedArtwork);
   return { ...written, probed };
 }
 
@@ -439,6 +462,7 @@ export async function scanShowDirectory(
     Object.assign(mergedProviderIds, change.providerIds);
   }
 
+  const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select()
@@ -447,7 +471,12 @@ export async function scanShowDirectory(
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
 
-    const emptiedItemIds = await applyScanChanges(tx, libraryId, changes);
+    const emptiedItemIds = await applyScanChanges(
+      tx,
+      libraryId,
+      changes,
+      deletedArtwork,
+    );
 
     for (const member of memberByPath.values()) {
       const current = await readLibraryFile(library.rootPath, member.path);
@@ -459,10 +488,13 @@ export async function scanShowDirectory(
       }
     }
 
+    if (options.reconcileMissing === true) {
+      await revalidateScope(library.rootPath, showsScan, path, true, walked);
+    }
+
     if (!group) {
-      await deleteEmptiedItems(tx, emptiedItemIds);
+      await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
       if (options.reconcileMissing === true) {
-        await confirmScopeEmpty(library.rootPath, showsScan, path, true);
         const [show] = await tx
           .select()
           .from(items)
@@ -473,7 +505,7 @@ export async function scanShowDirectory(
               eq(items.kind, "show"),
             ),
           );
-        if (show) await deleteItemSubtree(tx, show.id);
+        if (show) await deleteItemSubtree(tx, show.id, deletedArtwork);
       }
       return { itemId: null, versionIds: [] as string[] };
     }
@@ -496,13 +528,7 @@ export async function scanShowDirectory(
       showId = existingShow.id;
     } else if (found) {
       if (found.kind !== "show") throw new AuthError("CONFLICT");
-      await tx
-        .update(items)
-        .set({
-          canonicalFolder: group.canonicalFolder,
-          updatedAt: new Date(),
-        })
-        .where(eq(items.id, found.id));
+      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       showId = found.id;
     } else {
       const created = await insertItem(tx, {
@@ -538,17 +564,11 @@ export async function scanShowDirectory(
           throw new AuthError("CONFLICT");
         }
         seasonId = existingSeason.item.id;
-        if (
-          existingSeason.item.canonicalFolder !== seasonGroup.canonicalFolder
-        ) {
-          await tx
-            .update(items)
-            .set({
-              canonicalFolder: seasonGroup.canonicalFolder,
-              updatedAt: new Date(),
-            })
-            .where(eq(items.id, seasonId));
-        }
+        await updateItemCanonicalFolder(
+          tx,
+          existingSeason.item,
+          seasonGroup.canonicalFolder,
+        );
       } else {
         const created = await insertItem(tx, {
           libraryId,
@@ -613,17 +633,11 @@ export async function scanShowDirectory(
             throw new AuthError("CONFLICT");
           }
           episodeId = existingEpisode.item.id;
-          if (
-            existingEpisode.item.canonicalFolder !== seasonGroup.canonicalFolder
-          ) {
-            await tx
-              .update(items)
-              .set({
-                canonicalFolder: seasonGroup.canonicalFolder,
-                updatedAt: new Date(),
-              })
-              .where(eq(items.id, episodeId));
-          }
+          await updateItemCanonicalFolder(
+            tx,
+            existingEpisode.item,
+            seasonGroup.canonicalFolder,
+          );
           const existingEnd =
             existingEpisode.episode.episodeEndNumber ??
             existingEpisode.episode.episodeNumber;
@@ -820,7 +834,7 @@ export async function scanShowDirectory(
       }
     }
 
-    await deleteEmptiedItems(tx, emptiedItemIds);
+    await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
 
     if (options.reconcileMissing === true) {
       const showFiles = await tx
@@ -877,7 +891,8 @@ export async function scanShowDirectory(
           .from(versions)
           .where(eq(versions.itemId, item.id))
           .limit(1);
-        if (version === undefined) await deleteItemSubtree(tx, item.id);
+        if (version === undefined)
+          await deleteItemSubtree(tx, item.id, deletedArtwork);
       }
       for (const item of descendants) {
         if (item.kind !== "season") continue;
@@ -886,12 +901,14 @@ export async function scanShowDirectory(
           .from(items)
           .where(eq(items.parentId, item.id))
           .limit(1);
-        if (child === undefined) await deleteItemSubtree(tx, item.id);
+        if (child === undefined)
+          await deleteItemSubtree(tx, item.id, deletedArtwork);
       }
     }
 
     await setItemProviderIds(tx, showId, mergedProviderIds);
     return { itemId: showId, versionIds };
   });
+  await removeColocatedArtworkFiles(deletedArtwork);
   return { ...written, probed };
 }

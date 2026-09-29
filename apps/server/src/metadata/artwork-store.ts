@@ -23,8 +23,13 @@ import sharp from "sharp";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, libraries } from "../db/schema/index.ts";
+import type { DeletedArtworkFile } from "../db/tree.ts";
 
 type ArtworkCandidate = MetadataResult["artwork"][number];
+
+const maxArtworkDimension = 8192;
+const maxArtworkPixels = 40_000_000;
+const maxArtworkAspectRatio = 20;
 
 function resolveStoragePath(
   rootPath: string,
@@ -152,7 +157,7 @@ export async function storeArtworkOriginal(
   const bytes = await readBoundedBody(response, maxDownloadBytes);
   let dimensions: { width: number; height: number };
   try {
-    const image = sharp(bytes);
+    const image = sharp(bytes, { limitInputPixels: maxArtworkPixels });
     const meta = await image.metadata();
     const width = meta.width ?? 0;
     const height = meta.height ?? 0;
@@ -161,6 +166,13 @@ export async function storeArtworkOriginal(
       width < 1 ||
       !Number.isInteger(height) ||
       height < 1
+    )
+      throw new Error("Invalid artwork response.");
+    if (
+      width > maxArtworkDimension ||
+      height > maxArtworkDimension ||
+      width * height > maxArtworkPixels ||
+      Math.max(width, height) / Math.min(width, height) > maxArtworkAspectRatio
     )
       throw new Error("Invalid artwork response.");
     await image.stats();
@@ -282,6 +294,65 @@ export async function storeArtworkOriginal(
   )
     await rm(stored.previousTarget, { force: true }).catch(() => {});
   return stored.row;
+}
+
+/** Removes committed colocated artwork files without failing the database operation. */
+export async function removeColocatedArtworkFiles(
+  files: readonly DeletedArtworkFile[],
+): Promise<void> {
+  for (const entry of files) {
+    try {
+      const { root, target } = resolveStoragePath(
+        entry.rootPath,
+        entry.storageKey,
+      );
+      await walkStorageDirectory(root, dirname(target), false);
+      await rm(target, { force: true });
+    } catch {
+      // Best effort: a committed database delete is never reported as rolled back.
+    }
+  }
+}
+
+/** Removes selected artwork after committing its database row deletion. */
+export async function removeSelectedArtwork(
+  db: Database,
+  itemId: string,
+  type: ArtworkCandidate["type"],
+): Promise<boolean> {
+  const removed = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(items)
+      .where(eq(items.id, itemId))
+      .for("update");
+    if (!locked) throw new AuthError("NOT_FOUND");
+    const [library] = await tx
+      .select()
+      .from(libraries)
+      .where(eq(libraries.id, locked.libraryId));
+    if (!library) throw new AuthError("NOT_FOUND");
+    const [selected] = await tx
+      .select()
+      .from(artwork)
+      .where(
+        and(
+          eq(artwork.itemId, itemId),
+          eq(artwork.type, type),
+          eq(artwork.selected, true),
+        ),
+      );
+    if (!selected) return undefined;
+    await tx.delete(artwork).where(eq(artwork.id, selected.id));
+    if (selected.backend !== "colocated") return true;
+    return {
+      rootPath: library.rootPath,
+      storageKey: selected.storageKey,
+    };
+  });
+  if (removed === undefined) return false;
+  if (removed !== true) await removeColocatedArtworkFiles([removed]);
+  return true;
 }
 
 /** A stored artwork original: exact bytes plus its artwork row. */

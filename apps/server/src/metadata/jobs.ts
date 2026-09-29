@@ -5,7 +5,10 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { items } from "../db/schema/index.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
-import { storeArtworkOriginal } from "./artwork-store.ts";
+import {
+  removeSelectedArtwork,
+  storeArtworkOriginal,
+} from "./artwork-store.ts";
 import { applyMetadata } from "./service.ts";
 import { readMetadataSettings } from "./settings.ts";
 import { createTmdbMetadataProvider } from "./tmdb.ts";
@@ -36,7 +39,11 @@ export function registerMetadataJobs(
     const poster = application.artwork.find(
       (candidate) => candidate.type === "poster",
     );
-    if (poster === undefined) return;
+    if (poster === undefined) {
+      const removed = await removeSelectedArtwork(db, payload.itemId, "poster");
+      if (removed) await publishLibraryChanged(db, payload.itemId);
+      return;
+    }
     await storeArtworkOriginal(db, payload.itemId, poster, request);
     await publishLibraryChanged(db, payload.itemId);
   });

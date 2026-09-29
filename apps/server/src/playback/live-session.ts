@@ -75,18 +75,7 @@ export function segmentsReady(
   };
 }
 
-/** Records the run's end; a clean exit means every segment from its start is complete. */
-export function runEnded(
-  state: LiveState,
-  clean: boolean,
-  count: number,
-): LiveState {
-  if (!clean || state.run === null) {
-    return { ready: state.ready, run: null };
-  }
-  const ready = new Set(state.ready);
-  for (let index = state.run.startIndex; index < count; index += 1) {
-    ready.add(index);
-  }
-  return { ready, run: null };
+/** Records the run's end; readiness comes only from segments ffmpeg reported. */
+export function runEnded(state: LiveState): LiveState {
+  return { ready: state.ready, run: null };
 }

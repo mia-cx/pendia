@@ -8,7 +8,12 @@ import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { events, sessionRegistry, versions } from "../db/schema/index.ts";
+import {
+  events,
+  segmentTimelines,
+  sessionRegistry,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
@@ -304,6 +309,41 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   );
 
   test(
+    "a seek answers the waiter it leaves behind at once",
+    () =>
+      withSession(
+        async ({ manager, scope }) => {
+          await manager.serve(scope, hlsName("master.m3u8"), "");
+          const first = await manager.serve(scope, hlsName("0.m4s"), "");
+          expect(first.status).toBe(200);
+          // Segment 1 is inside the look-ahead, so this request parks on a
+          // waiter that the seek to segment 3 leaves behind.
+          let answeredAt = 0;
+          const pending = manager
+            .serve(scope, hlsName("1.m4s"), "")
+            .then((response) => {
+              answeredAt = Date.now();
+              return response;
+            });
+          const seekAt = Date.now();
+          const seeked = await manager.serve(scope, hlsName("3.m4s"), "");
+          expect(seeked.status).toBe(200);
+          const response = await pending;
+          expect(response.status).toBe(503);
+          const body = (await response.json()) as {
+            error?: { code?: string };
+          };
+          expect(body.error?.code).toBe("SEGMENT_NOT_READY");
+          expect(answeredAt - seekAt).toBeLessThan(1_000);
+          expect((await manager.inspect(scope.sessionId))?.runs).toBe(2);
+        },
+        // Keep idle cleanup from answering the waiter before the seek can.
+        { waitMs: 5_000, idleMs: 10_000 },
+      ),
+    30_000,
+  );
+
+  test(
     "parallel requests after a seek restart once and both are served",
     () =>
       withSession(
@@ -429,6 +469,81 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         }
         expect(matching).toContain(0);
       }),
+    30_000,
+  );
+
+  test(
+    "a timeline past the media's end does not mark missing segments ready",
+    () =>
+      withSession(
+        async ({ db, manager, scope, versionId }) => {
+          // Boundaries are immutable, so a timeline one segment past the
+          // media's end needs a new row; alignment must clear to repoint.
+          const last = boundaries.at(-1);
+          if (last === undefined) {
+            throw new Error("Expected timeline boundaries.");
+          }
+          const [inserted] = await db
+            .insert(segmentTimelines)
+            .values({
+              itemId: scope.itemId,
+              cutKey: "extended",
+              boundariesSeconds: [...boundaries, last + 3],
+            })
+            .returning({ id: segmentTimelines.id });
+          if (inserted === undefined) {
+            throw new Error("Timeline insertion returned no row.");
+          }
+          await db
+            .update(versions)
+            .set({ segmentTimelineId: inserted.id, timelineAligned: false })
+            .where(eq(versions.id, versionId));
+          await db
+            .update(versions)
+            .set({ timelineAligned: true })
+            .where(eq(versions.id, versionId));
+
+          const master = await manager.serve(
+            scope,
+            hlsName("master.m3u8"),
+            "",
+          );
+          expect(master.status).toBe(200);
+          const first = await manager.serve(scope, hlsName("0.m4s"), "");
+          expect(first.status).toBe(200);
+          // The run is throttled: request 4 while the frontier sits at 2 so
+          // it parks on a waiter. The run writes 0-3 and never 4, so the run's
+          // end must reject the waiter instead of resolving it.
+          const deadline = Date.now() + 20_000;
+          let info = await manager.inspect(scope.sessionId);
+          while (
+            Date.now() < deadline &&
+            !(info?.running === true && info.ready.includes(2))
+          ) {
+            await Bun.sleep(100);
+            info = await manager.inspect(scope.sessionId);
+          }
+          if (info?.running !== true || !info.ready.includes(2)) {
+            throw new Error("The run ended before the frontier reached 2.");
+          }
+          const pending = manager.serve(scope, hlsName("4.m4s"), "");
+          while (Date.now() < deadline && info.running) {
+            await Bun.sleep(100);
+            info = await manager.inspect(scope.sessionId);
+            if (info === undefined) break;
+          }
+          expect(info?.running).toBe(false);
+          expect(info?.ready).toEqual([0, 1, 2, 3]);
+
+          const missing = await pending;
+          expect(missing.status).toBe(503);
+          const body = (await missing.json()) as {
+            error?: { code?: string };
+          };
+          expect(body.error?.code).toBe("SEGMENT_NOT_READY");
+        },
+        { idleMs: 20_000, waitMs: 20_000 },
+      ),
     30_000,
   );
 

@@ -223,25 +223,14 @@ export function createSessionManager(
     }
   };
 
-  const onExit = (
-    session: LiveSession,
-    handle: RunHandle,
-    directory: string,
-    code: number | null,
-  ) => {
+  const onExit = (session: LiveSession, handle: RunHandle) => {
     // A run superseded by a restart or a stop is cleaned up by its killer.
     if (session.current?.handle !== handle) return;
-    const startIndex = session.current.startIndex;
     session.current = null;
-    session.state = runEnded(session.state, code === 0, count(session));
-    if (code === 0) {
-      for (let index = startIndex; index < count(session); index += 1) {
-        session.paths.set(index, join(directory, `${index}.m4s`));
-        resolveWaiters(session, index);
-      }
-    } else {
-      rejectWaiters(session);
-    }
+    session.state = runEnded(session.state);
+    // Every written segment was reported through the final list; a waiter
+    // left here asked for one this run never wrote.
+    rejectWaiters(session);
   };
 
   const startRun = async (session: LiveSession, index: number) => {
@@ -269,7 +258,7 @@ export function createSessionManager(
     session.state = runStarted(session.state, index);
     session.current = { handle, startIndex: index };
     handle.exited
-      .then((code) => onExit(session, handle, directory, code))
+      .then(() => onExit(session, handle))
       .catch((error: unknown) =>
         log("error", "remux.exit_failed", {
           sessionId: session.scope.sessionId,
@@ -296,7 +285,15 @@ export function createSessionManager(
       session.current = null;
       if (run !== null) {
         await run.handle.kill();
-        session.state = runEnded(session.state, false, count(session));
+        session.state = runEnded(session.state);
+      }
+      // The new run starts at the seek. Waiters behind it get their 503 now, not at waitMs.
+      for (const [waiting, waiters] of session.segmentWaiters) {
+        if (waiting >= index) continue;
+        session.segmentWaiters.delete(waiting);
+        for (const waiter of waiters) {
+          waiter(false);
+        }
       }
       await startRun(session, index);
     });
@@ -353,7 +350,9 @@ export function createSessionManager(
           profile: source.video.profile ?? null,
           level: source.video.level ?? null,
         },
-        audio === undefined ? undefined : { codec: audio.codec },
+        audio === undefined
+          ? undefined
+          : { codec: audio.codec, profile: audio.profile ?? null },
       ),
     };
     return {

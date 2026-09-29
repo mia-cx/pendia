@@ -91,20 +91,14 @@ describe("segmentsReady", () => {
 });
 
 describe("runEnded", () => {
-  test("a clean exit completes every segment from the run start", () => {
-    const next = runEnded(running, true, 10);
-    expect(next.run).toBeNull();
-    expect(next.ready).toEqual(new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
-  });
-
-  test("an unclean exit only clears the run", () => {
-    const next = runEnded(running, false, 10);
+  test("an ended run clears the run and keeps the reported ready set", () => {
+    const next = runEnded(running);
     expect(next.run).toBeNull();
     expect(next.ready).toEqual(new Set([0, 1, 2]));
   });
 
-  test("an unclean exit without a run stays empty", () => {
-    expect(runEnded(initialState, false, 10)).toEqual(initialState);
+  test("an ended run without a run stays empty", () => {
+    expect(runEnded(initialState)).toEqual(initialState);
   });
 });
 
@@ -116,7 +110,7 @@ test("transitions never mutate their input", () => {
   const snapshot = structuredClone(state);
   runStarted(state, 5);
   segmentsReady(state, [3, 4]);
-  runEnded(state, true, 10);
+  runEnded(state);
   expect(state.ready).toEqual(snapshot.ready);
   expect(state.run).toEqual(snapshot.run);
 });

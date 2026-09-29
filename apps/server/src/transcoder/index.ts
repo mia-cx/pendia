@@ -17,6 +17,7 @@ export type TranscoderOptions = {
   scratchDir?: string; // PENDIA_SCRATCH_DIR, else join(tmpdir(), "pendia-scratch")
   port?: number; // PENDIA_TRANSCODER_PORT, else 3001
   address?: string; // PENDIA_TRANSCODER_URL, else `http://127.0.0.1:${server.port}`
+  ready?: () => Promise<boolean>; // answers the Postgres half of /readyz; startPendia passes probeDatabase
   idleMs?: number;
   waitMs?: number;
   readRate?: SessionManagerOptions["readRate"];
@@ -25,7 +26,7 @@ export type TranscoderOptions = {
 /** The running transcoder role: its node id, address, session manager and shutdown. */
 export type Transcoder = Awaited<ReturnType<typeof startTranscoder>>;
 
-/** Starts the transcoder role: registers the node, serves the internal HLS route and owns live sessions. */
+/** Starts the transcoder role: registers the node, serves /healthz, /readyz and the internal HLS route, and owns live sessions. */
 export async function startTranscoder(
   db: Database,
   options: TranscoderOptions = {},
@@ -50,6 +51,14 @@ export async function startTranscoder(
       const url = new URL(request.url);
       if (url.pathname === "/healthz") {
         return Response.json({ status: "ok" });
+      }
+      if (url.pathname === "/readyz") {
+        if (nodeId === null) {
+          return Response.json({ status: "starting" }, { status: 503 });
+        }
+        return (await (options.ready?.() ?? Promise.resolve(true)))
+          ? Response.json({ status: "ready" })
+          : Response.json({ status: "database unavailable" }, { status: 503 });
       }
       const hls = parseHlsPath(url.pathname, "/internal/playback");
       if (hls === null) {

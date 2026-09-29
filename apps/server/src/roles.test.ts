@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { migrateDatabase } from "./db/migrate.ts";
 import { type JobPayload, transcoderCapabilities } from "./db/schema/index.ts";
 import { databaseUrl, withDatabase } from "./db/testing.ts";
 import { type Role, startPendia } from "./index.ts";
 import { createJobQueue, type Job, listJobs } from "./jobs/queue.ts";
 import { createJobRegistry } from "./jobs/registry.ts";
+import { startTranscoder } from "./transcoder/index.ts";
 
 function probePayload(): Extract<JobPayload, { type: "probe" }> {
   return { type: "probe", fileId: Bun.randomUUIDv7() };
@@ -103,6 +107,10 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
         const health = await fetch(`${transcoder.address}/healthz`);
         expect(health.status).toBe(200);
 
+        const ready = await fetch(`${transcoder.address}/readyz`);
+        expect(ready.status).toBe(200);
+        expect(await ready.json()).toMatchObject({ status: "ready" });
+
         const scope = `${transcoder.address}/internal/playback/${Bun.randomUUIDv7()}/${Bun.randomUUIDv7()}/hls`;
         const badToken = await fetch(`${scope}/master.m3u8?token=bad`);
         expect(badToken.status).toBe(401);
@@ -125,6 +133,27 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
       await expect(
         fetch(`http://127.0.0.1:${server.transcoder?.port}/healthz`),
       ).rejects.toThrow();
+    }));
+
+  test("a transcoder without a database answer reports not ready", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const scratchDir = await mkdtemp(join(tmpdir(), "pendia-readyz-"));
+      const transcoder = await startTranscoder(db, {
+        port: 0,
+        scratchDir,
+        ready: async () => false,
+      });
+      try {
+        const ready = await fetch(`${transcoder.address}/readyz`);
+        expect(ready.status).toBe(503);
+        expect(await ready.json()).toMatchObject({
+          status: "database unavailable",
+        });
+      } finally {
+        await transcoder.stop();
+        await rm(scratchDir, { recursive: true, force: true });
+      }
     }));
 
   test("a trailing slash on the transcoder address is stripped", () =>

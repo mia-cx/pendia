@@ -241,7 +241,12 @@ export async function startPendia(
       });
     }
     if (runsTranscoder && database) {
-      transcoder = await startTranscoder(database.db, transcoderOptions);
+      transcoder = await startTranscoder(
+        database.db,
+        databaseUrl === undefined
+          ? transcoderOptions
+          : { ...transcoderOptions, ready: () => probeDatabase(databaseUrl) },
+      );
     }
     if (
       servesApi &&

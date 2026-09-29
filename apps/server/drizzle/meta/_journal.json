@@ -43,6 +43,13 @@
       "when": 1790706854126,
       "tag": "0005_past_nuke",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790711462241,
+      "tag": "0006_far_dazzler",
+      "breakpoints": true
     }
   ]
 }

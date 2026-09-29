@@ -395,6 +395,9 @@ export const providerIds = pgTable(
       () => contributors.id,
       owned,
     ),
+    // True when a provider fetch wrote the id; false for explicit scan or
+    // caller input, which a match result must never overwrite.
+    metadataDerived: boolean("metadata_derived").notNull().default(false),
   },
   (table) => [
     check(

@@ -5,11 +5,16 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import sharp from "sharp";
 import { startApiServer } from "../api.ts";
-import { setupAdmin } from "../auth/accounts.ts";
+import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { artwork, libraries, settings } from "../db/schema/index.ts";
+import {
+  artwork,
+  libraries,
+  libraryAccess,
+  settings,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { type ArtworkResize, createArtworkHandler } from "./artwork-http.ts";
@@ -722,6 +727,55 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           expect(authed304.headers.get("cache-control")).toBe(
             "private, max-age=0, must-revalidate",
           );
+        });
+      });
+    }));
+
+  test("a denied authenticated caller cannot view artwork", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item, row } = await seed(db, root, png);
+        await db.insert(settings).values({
+          key: "auth",
+          value: { artworkRequiresAuth: true },
+        });
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "secret",
+        });
+        const viewer = await createLocalUser(db, admin.id, {
+          username: "viewer",
+          password: "viewer-pass",
+        });
+        await db.insert(libraryAccess).values({
+          libraryId: item.libraryId,
+          userId: viewer.id,
+          allowed: false,
+        });
+        const denied = await createApiKey(db, viewer.id, "denied");
+        const allowed = await createApiKey(db, admin.id, "allowed");
+        const resizes: number[] = [];
+        const resize: ArtworkResize = async (input, width) => {
+          resizes.push(width);
+          return { bytes: input, contentType: "image/x-artwork" };
+        };
+        await withServer(db, { resize }, async (base) => {
+          const url = `${base}/api/artwork/${row.id}?width=4`;
+          const forbidden = await fetch(url, {
+            headers: { authorization: `Bearer ${denied.token}` },
+          });
+          expect(forbidden.status).toBe(403);
+          expect(await forbidden.json()).toEqual({
+            error: { code: "FORBIDDEN", message: "Permission denied." },
+          });
+          expect(resizes).toEqual([]);
+          const granted = await fetch(url, {
+            headers: { authorization: `Bearer ${allowed.token}` },
+          });
+          expect(granted.status).toBe(200);
+          await granted.arrayBuffer();
+          expect(resizes).toEqual([4]);
         });
       });
     }));

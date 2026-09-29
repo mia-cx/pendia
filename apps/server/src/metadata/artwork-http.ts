@@ -1,9 +1,12 @@
+import { eq } from "drizzle-orm";
 import sharp from "sharp";
 import { AuthError } from "../auth/errors.ts";
 import { readSessionToken } from "../auth/http.ts";
+import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import { readAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
+import { artwork, items, versions } from "../db/schema/index.ts";
 import { readArtworkOriginal } from "./artwork-store.ts";
 
 // Bun retains substantial libvips memory across sequential resizes with this enabled.
@@ -186,8 +189,9 @@ export function createArtworkHandler(
             },
           },
         );
+      let caller: { user: { id: string } } | undefined;
       if (config.artworkRequiresAuth)
-        await authenticate(db, readSessionToken(request));
+        caller = await authenticate(db, readSessionToken(request));
       const widths = url.searchParams.getAll("width");
       const value = widths.length === 1 ? widths[0] : undefined;
       const width =
@@ -196,6 +200,33 @@ export function createArtworkHandler(
           : Number(value);
       if (!Number.isSafeInteger(width) || width < 1 || width > maxWidth)
         return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
+      if (caller !== undefined) {
+        // Auth enabled: the caller needs view on the artwork owner's Library.
+        const [row] = await db
+          .select({ itemId: artwork.itemId, versionId: artwork.versionId })
+          .from(artwork)
+          .where(eq(artwork.id, id))
+          .limit(1);
+        let libraryId: string | null = null;
+        if (row?.itemId) {
+          const [owner] = await db
+            .select({ libraryId: items.libraryId })
+            .from(items)
+            .where(eq(items.id, row.itemId))
+            .limit(1);
+          libraryId = owner?.libraryId ?? null;
+        } else if (row?.versionId) {
+          const [owner] = await db
+            .select({ libraryId: versions.libraryId })
+            .from(versions)
+            .where(eq(versions.id, row.versionId))
+            .limit(1);
+          libraryId = owner?.libraryId ?? null;
+        }
+        if (libraryId === null)
+          return jsonError(404, "NOT_FOUND", "Artwork not found.");
+        await requirePermission(db, caller.user.id, "view", libraryId);
+      }
       const release = await acquireSlot(request.signal);
       if (release === undefined)
         return jsonError(

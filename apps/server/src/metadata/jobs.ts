@@ -32,7 +32,8 @@ export function registerMetadataJobs(
   registry.register("provider-fetch", async (payload) => {
     const config = await readMetadataSettings(db);
     const providers: MetadataProvider[] = [];
-    const tmdbKey = (await readProviderKey(db, "tmdb")) ?? config.tmdb?.apiKey;
+    const storedTmdbKey = (await readProviderKey(db, "tmdb"))?.trim();
+    const tmdbKey = storedTmdbKey || config.tmdb?.apiKey;
     if (tmdbKey !== undefined)
       providers.push(createTmdbMetadataProvider(tmdbKey, request));
     const application = await applyMetadata(db, payload.itemId, providers);

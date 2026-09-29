@@ -255,6 +255,71 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
       });
     }));
 
+  test("a pending rescan behind a running fetch enqueues one successor", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const oldFolder = "Alien (1979) {tmdb-550}";
+        await mkdir(join(root, oldFolder));
+        const oldPath = `${oldFolder}/Alien.mkv`;
+        await createVideoFixture(join(root, oldPath));
+        const library = await insertLibrary(db, "Movies", root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: oldFolder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const first = await queue.claim();
+        if (!first) throw new Error("Scan job was not claimed.");
+        await registry.run(first);
+        await queue.complete(first);
+        const [item] = await db.select().from(items);
+        if (!item) throw new Error("Scanned item missing.");
+        // Claim the fetch but never finish it: it stays running.
+        const running = await queue.claim(["provider-fetch"]);
+        if (!running) throw new Error("Fetch job was not claimed.");
+
+        await queue.enqueue(
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: oldFolder,
+            changes: [
+              {
+                kind: "add",
+                path: oldPath,
+                providerIds: { tmdb: "551" },
+              },
+            ],
+          },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const second = await queue.claim(["scan"]);
+        if (!second) throw new Error("Rescan job was not claimed.");
+        await registry.run(second);
+        await queue.complete(second);
+        // The changed provider id marks the Item pending, and the running
+        // fetch cannot suppress the queued successor.
+        expect(
+          (await listJobs(db, { state: "queued" })).map((job) => job.payload),
+        ).toEqual([{ type: "provider-fetch", itemId: item.id }]);
+
+        // A further pending scan coalesces onto the queued successor.
+        await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: oldFolder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const third = await queue.claim(["scan"]);
+        if (!third) throw new Error("Second rescan job was not claimed.");
+        await registry.run(third);
+        expect(
+          (await listJobs(db, { state: "queued" })).map((job) => job.payload),
+        ).toEqual([{ type: "provider-fetch", itemId: item.id }]);
+      });
+    }));
+
   test("a pending rescan does not duplicate a queued provider-fetch job", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

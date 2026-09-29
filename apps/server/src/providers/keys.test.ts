@@ -156,7 +156,7 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
         await expect(
           setProviderKey(db, admin.id, name, "secret"),
         ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-      for (const value of ["", "x".repeat(4097), "has\0nul"])
+      for (const value of ["", "   ", "x".repeat(4097), "has\0nul"])
         await expect(
           setProviderKey(db, admin.id, "tmdb", value),
         ).rejects.toMatchObject({ code: "INVALID_INPUT" });

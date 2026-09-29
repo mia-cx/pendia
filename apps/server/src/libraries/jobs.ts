@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -47,6 +47,8 @@ export function registerLibraryJobs(
           if (!item) throw new AuthError("NOT_FOUND");
           if (item.metadataState === "pending") {
             const concurrencyKey = `provider:${result.itemId}`;
+            // A running fetch never blocks: a pending Item after a provider
+            // change earns one queued successor that replays the fetch.
             const [existing] = await db
               .select({ id: jobs.id })
               .from(jobs)
@@ -54,7 +56,7 @@ export function registerLibraryJobs(
                 and(
                   eq(jobs.type, "provider-fetch"),
                   eq(jobs.concurrencyKey, concurrencyKey),
-                  inArray(jobs.state, ["queued", "running"]),
+                  eq(jobs.state, "queued"),
                 ),
               )
               .limit(1);

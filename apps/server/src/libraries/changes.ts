@@ -74,7 +74,10 @@ export async function setItemProviderIds(
   let changed = false;
   for (const [provider, value] of providerIdPairs(providerIds)) {
     const [existing] = await db
-      .select({ value: providerIdRows.value })
+      .select({
+        value: providerIdRows.value,
+        metadataDerived: providerIdRows.metadataDerived,
+      })
       .from(providerIdRows)
       .where(
         and(
@@ -82,14 +85,20 @@ export async function setItemProviderIds(
           eq(providerIdRows.provider, provider),
         ),
       );
-    if (existing?.value === value) continue;
+    // Scan input is explicit: an equal derived value still becomes owned.
+    if (
+      existing !== undefined &&
+      existing.value === value &&
+      !existing.metadataDerived
+    )
+      continue;
     await db
       .insert(providerIdRows)
-      .values({ provider, value, itemId })
+      .values({ provider, value, itemId, metadataDerived: false })
       .onConflictDoUpdate({
         target: [providerIdRows.itemId, providerIdRows.provider],
         targetWhere: sql`${providerIdRows.itemId} is not null`,
-        set: { value },
+        set: { value, metadataDerived: false },
       });
     changed = true;
   }

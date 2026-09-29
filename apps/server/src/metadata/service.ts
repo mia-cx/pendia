@@ -1,5 +1,5 @@
 import type { MetadataProvider, MetadataResult } from "@pendia/plugin-api";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -119,6 +119,20 @@ async function persistMatch(
         updatedAt: new Date(),
       })
       .where(eq(items.id, itemId));
+    // Result ids replace only provider-derived rows; explicit scan-owned ids
+    // keep their value and provenance.
+    const returnedProviders = [...idEntries.keys()];
+    await tx
+      .delete(providerIds)
+      .where(
+        and(
+          eq(providerIds.itemId, itemId),
+          eq(providerIds.metadataDerived, true),
+          returnedProviders.length > 0
+            ? notInArray(providerIds.provider, returnedProviders)
+            : undefined,
+        ),
+      );
     for (const [provider, value] of idEntries) {
       const [existing] = await tx
         .select()
@@ -130,13 +144,16 @@ async function persistMatch(
           ),
         );
       if (existing) {
+        if (!existing.metadataDerived) continue;
         if (existing.value !== value)
           await tx
             .update(providerIds)
             .set({ value })
             .where(eq(providerIds.id, existing.id));
       } else {
-        await tx.insert(providerIds).values({ itemId, provider, value });
+        await tx
+          .insert(providerIds)
+          .values({ itemId, provider, value, metadataDerived: true });
       }
     }
     await tx.delete(credits).where(eq(credits.itemId, itemId));
@@ -193,17 +210,71 @@ async function persistMatch(
   });
 }
 
+type OwnedProviderId = {
+  provider: string;
+  value: string;
+  metadataDerived: boolean;
+};
+
+type Connection =
+  | Database
+  | Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** Reads the Item's provider ids in a deterministic order for comparisons. */
+async function itemProviderIdSnapshot(
+  db: Connection,
+  itemId: string,
+): Promise<OwnedProviderId[]> {
+  const rows = await db
+    .select({
+      provider: providerIds.provider,
+      value: providerIds.value,
+      metadataDerived: providerIds.metadataDerived,
+    })
+    .from(providerIds)
+    .where(eq(providerIds.itemId, itemId));
+  rows.sort(
+    (a, b) =>
+      a.provider.localeCompare(b.provider) || a.value.localeCompare(b.value),
+  );
+  return rows;
+}
+
 async function persistUnmatched(
   db: Database,
   itemId: string,
+  libraryId: string,
+  expectedIds: readonly OwnedProviderId[],
 ): Promise<MetadataApplication> {
   return db.transaction(async (tx) => {
+    const [lockedLibrary] = await tx
+      .select({ id: libraries.id })
+      .from(libraries)
+      .where(eq(libraries.id, libraryId))
+      .for("update");
+    if (!lockedLibrary) throw new AuthError("NOT_FOUND");
     const [locked] = await tx
       .select()
       .from(items)
       .where(eq(items.id, itemId))
       .for("update");
-    if (!locked) throw new AuthError("NOT_FOUND");
+    if (!locked || locked.libraryId !== lockedLibrary.id)
+      throw new AuthError("NOT_FOUND");
+    const current = await itemProviderIdSnapshot(tx, itemId);
+    const unchanged =
+      current.length === expectedIds.length &&
+      current.every((row, index) => {
+        const expected = expectedIds[index];
+        return (
+          expected !== undefined &&
+          row.provider === expected.provider &&
+          row.value === expected.value &&
+          row.metadataDerived === expected.metadataDerived
+        );
+      });
+    if (!unchanged) {
+      throw new Error("Provider ids changed during metadata fetch.");
+    }
     await tx
       .update(items)
       .set({ metadataState: "unmatched", updatedAt: new Date() })
@@ -225,22 +296,17 @@ export async function applyMetadata(
     .limit(1);
   if (!item) throw new AuthError("NOT_FOUND");
   const config = await readMetadataSettings(db);
+  const idSnapshot = await itemProviderIdSnapshot(db, item.id);
+  const snapshotByProvider = new Map(
+    idSnapshot.map((row) => [row.provider, row.value]),
+  );
   for (const providerId of providersForLibrary(config, item.libraryId)) {
     const provider = providers.find((candidate) => candidate.id === providerId);
     if (provider === undefined || !provider.kinds.includes(item.kind)) continue;
-    const [existing] = await db
-      .select()
-      .from(providerIds)
-      .where(
-        and(
-          eq(providerIds.itemId, item.id),
-          eq(providerIds.provider, provider.id),
-        ),
-      )
-      .limit(1);
-    if (existing) {
+    const existingValue = snapshotByProvider.get(provider.id);
+    if (existingValue !== undefined) {
       const result = await provider.fetch({
-        providerId: existing.value,
+        providerId: existingValue,
         kind: item.kind,
       });
       return persistMatch(
@@ -248,10 +314,10 @@ export async function applyMetadata(
         item.id,
         item.libraryId,
         provider.id,
-        existing.value,
+        existingValue,
         1,
         result,
-        existing.value,
+        existingValue,
       );
     }
     const matches = await provider.search({
@@ -276,5 +342,5 @@ export async function applyMetadata(
       null,
     );
   }
-  return persistUnmatched(db, item.id);
+  return persistUnmatched(db, item.id, item.libraryId, idSnapshot);
 }

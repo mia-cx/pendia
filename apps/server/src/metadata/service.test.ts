@@ -19,6 +19,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { setItemProviderIds } from "../libraries/changes.ts";
 import { applyMetadata } from "./service.ts";
 
 type SearchQuery = Parameters<MetadataProvider["search"]>[0];
@@ -820,5 +821,221 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       expect(fallback.calls.search).toHaveLength(0);
       expect(fallback.calls.fetch).toHaveLength(0);
       expect((await storedItem(db, item.id)).metadataState).toBe("pending");
+    }));
+
+  test("an unmatched result rejects when provider ids changed during search", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      let searchStarted: () => void = () => {};
+      let releaseSearch: (matches: MetadataMatch[]) => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        searchStarted = resolve;
+      });
+      const released = new Promise<MetadataMatch[]>((resolve) => {
+        releaseSearch = resolve;
+      });
+      const { provider } = mockProvider("tmdb", {
+        search: () => {
+          searchStarted();
+          return released;
+        },
+      });
+      const pending = applyMetadata(db, item.id, [provider]);
+      await started;
+      // A scan-written id mid-flight makes the no-match result stale.
+      await setItemProviderIds(db, item.id, { tmdb: "550" });
+      await db
+        .update(items)
+        .set({ metadataState: "pending" })
+        .where(eq(items.id, item.id));
+      releaseSearch([]);
+      await expect(pending).rejects.toThrow(
+        "Provider ids changed during metadata fetch.",
+      );
+      expect(await storedItem(db, item.id)).toMatchObject({
+        metadataState: "pending",
+      });
+      expect(await itemProviderIds(db, item.id)).toEqual([
+        { provider: "tmdb", value: "550" },
+      ]);
+    }));
+
+  test("a replacement result removes only provider-derived ids", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      const { provider } = mockProvider("tmdb", {
+        search: async () => [
+          {
+            providerId: "550",
+            title: "Inception",
+            year: 2010,
+            confidence: 0.99,
+          },
+        ],
+        fetch: async () =>
+          fetchedResult({
+            providerIds: { tmdb: "550", imdb: "tt1375666" },
+          }),
+      });
+      const first = await applyMetadata(db, item.id, [provider]);
+      expect(first.state).toBe("matched");
+      expect(
+        (
+          await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, item.id))
+        )
+          .map((row) => ({
+            provider: row.provider,
+            value: row.value,
+            metadataDerived: row.metadataDerived,
+          }))
+          .sort((a, b) => a.provider.localeCompare(b.provider)),
+      ).toEqual([
+        { provider: "imdb", value: "tt1375666", metadataDerived: true },
+        { provider: "tmdb", value: "550", metadataDerived: true },
+      ]);
+
+      const { provider: replacement } = mockProvider("tmdb", {
+        fetch: async () => fetchedResult({ providerIds: { tmdb: "551" } }),
+      });
+      const second = await applyMetadata(db, item.id, [replacement]);
+      expect(second.state).toBe("matched");
+      expect(
+        await db
+          .select()
+          .from(providerIds)
+          .where(eq(providerIds.itemId, item.id)),
+      ).toEqual([
+        expect.objectContaining({
+          provider: "tmdb",
+          value: "551",
+          metadataDerived: true,
+        }),
+      ]);
+    }));
+
+  test("provider results preserve explicit scan-owned ids", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      await setItemProviderIds(db, item.id, { imdb: "tt0000000" });
+      const { provider } = mockProvider("tmdb", {
+        search: async () => [
+          {
+            providerId: "550",
+            title: "Inception",
+            year: 2010,
+            confidence: 0.99,
+          },
+        ],
+        fetch: async () => fetchedResult(),
+      });
+      const application = await applyMetadata(db, item.id, [provider]);
+      expect(application.state).toBe("matched");
+      expect(
+        (
+          await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, item.id))
+        )
+          .map((row) => ({
+            provider: row.provider,
+            value: row.value,
+            metadataDerived: row.metadataDerived,
+          }))
+          .sort((a, b) => a.provider.localeCompare(b.provider)),
+      ).toEqual([
+        { provider: "imdb", value: "tt0000000", metadataDerived: false },
+        { provider: "tmdb", value: "550", metadataDerived: true },
+      ]);
+    }));
+
+  test("a scan upsert of the same value makes a derived id explicit", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      const { provider } = mockProvider("tmdb", {
+        search: async () => [
+          {
+            providerId: "550",
+            title: "Inception",
+            year: 2010,
+            confidence: 0.99,
+          },
+        ],
+        fetch: async () => fetchedResult(),
+      });
+      await applyMetadata(db, item.id, [provider]);
+      expect(await setItemProviderIds(db, item.id, { tmdb: "550" })).toBe(true);
+      const rows = await db
+        .select()
+        .from(providerIds)
+        .where(eq(providerIds.itemId, item.id));
+      expect(rows.find((row) => row.provider === "tmdb")).toMatchObject({
+        value: "550",
+        metadataDerived: false,
+      });
+      expect(rows.find((row) => row.provider === "imdb")).toMatchObject({
+        value: "tt1375666",
+        metadataDerived: true,
+      });
+    }));
+
+  test("a provenance-only id change during search rejects unmatched", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      // A provider-derived IMDb id exists while the searched provider (tmdb)
+      // has none, so the snapshot does not short-circuit into a fetch.
+      await db.insert(providerIds).values({
+        provider: "imdb",
+        value: "tt1375666",
+        itemId: item.id,
+        metadataDerived: true,
+      });
+      let searchStarted: () => void = () => {};
+      let releaseSearch: (matches: MetadataMatch[]) => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        searchStarted = resolve;
+      });
+      const released = new Promise<MetadataMatch[]>((resolve) => {
+        releaseSearch = resolve;
+      });
+      const { provider } = mockProvider("tmdb", {
+        search: () => {
+          searchStarted();
+          return released;
+        },
+      });
+      const pending = applyMetadata(db, item.id, [provider]);
+      await started;
+      // The scan reasserts the same value: provenance flips to explicit.
+      expect(await setItemProviderIds(db, item.id, { imdb: "tt1375666" })).toBe(
+        true,
+      );
+      await db
+        .update(items)
+        .set({ metadataState: "pending" })
+        .where(eq(items.id, item.id));
+      releaseSearch([]);
+      await expect(pending).rejects.toThrow(
+        "Provider ids changed during metadata fetch.",
+      );
+      expect(await storedItem(db, item.id)).toMatchObject({
+        metadataState: "pending",
+      });
+      expect(
+        await db
+          .select()
+          .from(providerIds)
+          .where(eq(providerIds.itemId, item.id)),
+      ).toMatchObject([
+        { provider: "imdb", value: "tt1375666", metadataDerived: false },
+      ]);
     }));
 });

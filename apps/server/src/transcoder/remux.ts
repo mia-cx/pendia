@@ -6,6 +6,7 @@ export type RemuxRun = {
   boundariesSeconds: readonly number[]; // the Item's timeline, first element 0, last the duration
   startIndex: number; // segment index to start at
   directory: string; // the run directory, created by the caller
+  videoCodec: string; // probed codec name, "hevc" gets -tag:v hvc1
   readRate?: { rate: number; initialBurstSeconds: number }; // optional throttle, tests only
   /** The engine decided the client plays the HDR10 base layer of a profile 7 or 8 source. */
   stripDolbyVision?: boolean;
@@ -49,6 +50,10 @@ export function remuxArguments(run: RemuxRun) {
     "-c",
     "copy",
   );
+  if (run.videoCodec === "hevc") {
+    // The muxer writes hev1 on a stream copy; Apple clients need hvc1.
+    args.push("-tag:v", "hvc1");
+  }
   if (run.stripDolbyVision === true) {
     args.push("-bsf:v", "dovi_rpu=strip=1");
   }

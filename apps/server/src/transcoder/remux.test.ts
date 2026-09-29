@@ -78,6 +78,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 0,
         directory: "/run",
+        videoCodec: "h264",
       });
       expect(args).not.toContain("-ss");
       expect(args).not.toContain("-readrate");
@@ -100,6 +101,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 2,
         directory: "/run",
+        videoCodec: "h264",
       });
       const seek = args.indexOf("-ss");
       expect(args[seek - 2]).toBe("-seek_timestamp");
@@ -118,6 +120,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 0,
         directory: "/run",
+        videoCodec: "h264",
         stripDolbyVision: true,
       });
       const copy = args.indexOf("-c");
@@ -133,6 +136,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 0,
         directory: "/run",
+        videoCodec: "h264",
       });
       expect(args).not.toContain("-bsf:v");
     });
@@ -143,6 +147,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 0,
         directory: "/run",
+        videoCodec: "h264",
         readRate: { rate: 1, initialBurstSeconds: 3.5 },
       });
       const rate = args.indexOf("-readrate");
@@ -152,12 +157,40 @@ describe("remux", () => {
       expect(rate).toBeLessThan(args.indexOf("-i"));
     });
 
+    test("a hevc run tags the video hvc1 between -c copy and -bsf:v", () => {
+      const args = remuxArguments({
+        inputPath,
+        boundariesSeconds: boundaries,
+        startIndex: 0,
+        directory: "/run",
+        videoCodec: "hevc",
+        stripDolbyVision: true,
+      });
+      const copy = args.indexOf("-c");
+      expect(args[copy + 1]).toBe("copy");
+      expect(args[copy + 2]).toBe("-tag:v");
+      expect(args[copy + 3]).toBe("hvc1");
+      expect(args[copy + 4]).toBe("-bsf:v");
+    });
+
+    test("an h264 run leaves the video tag out", () => {
+      const args = remuxArguments({
+        inputPath,
+        boundariesSeconds: boundaries,
+        startIndex: 0,
+        directory: "/run",
+        videoCodec: "h264",
+      });
+      expect(args).not.toContain("-tag:v");
+    });
+
     test("a one segment timeline omits cut times", () => {
       const args = remuxArguments({
         inputPath,
         boundariesSeconds: [0, 5],
         startIndex: 0,
         directory: "/run",
+        videoCodec: "h264",
       });
       expect(args).not.toContain("-segment_times");
     });
@@ -169,6 +202,7 @@ describe("remux", () => {
           boundariesSeconds: boundaries,
           startIndex,
           directory: "/run",
+          videoCodec: "h264",
         }),
       ).toThrow(RangeError);
     });
@@ -180,6 +214,7 @@ describe("remux", () => {
           boundariesSeconds: [0],
           startIndex: 0,
           directory: "/run",
+          videoCodec: "h264",
         }),
       ).toThrow(RangeError);
     });
@@ -212,6 +247,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 0,
         directory: runDir,
+        videoCodec: "h264",
       },
       (indexes) => batches.push(indexes),
     );
@@ -247,6 +283,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 2,
         directory: runDir,
+        videoCodec: "h264",
       },
       (indexes) => batches.push(indexes),
     );
@@ -273,62 +310,76 @@ describe("remux", () => {
     expect(keyframes[0]).toBeCloseTo(6, 3);
   }, 30_000);
 
+  const hasLibx265 = Bun.spawnSync(["ffmpeg", "-hide_banner", "-encoders"])
+    .stdout.toString()
+    .includes("libx265");
+  const hevcTest = test.skipIf(!hasLibx265);
+
   // The dovi_rpu bitstream filter arrived in ffmpeg 7.1; the runtime image has
   // it, the CI runner's apt ffmpeg 6.1 does not.
   const hasDoviFilter = Bun.spawnSync(["ffmpeg", "-hide_banner", "-bsfs"])
     .stdout.toString()
     .includes("dovi_rpu");
-  const doviTest = test.skipIf(!hasDoviFilter);
+  const doviTest = test.skipIf(!hasDoviFilter || !hasLibx265);
 
-  doviTest("a Dolby Vision strip runs on a hevc source", async () => {
-    // The source carries no RPU, so the filter is a no-op; the run proves
-    // ffmpeg accepts dovi_rpu=strip=1 in copy mode.
+  const hevcFixture = async () => {
     const hevcPath = join(dir, "hevc.mkv");
-    const proc = Bun.spawn(
-      [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc2=s=160x90:r=25:d=8",
-        "-c:v",
-        "libx265",
-        "-preset",
-        "ultrafast",
-        "-x265-params",
-        "log-level=error",
-        "-g",
-        "50",
-        "-keyint_min",
-        "50",
-        "-sc_threshold",
-        "0",
-        "-pix_fmt",
-        "yuv420p",
-        "-tag:v",
-        "hvc1",
-        hevcPath,
-      ],
-      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-    );
-    const [stderr, code] = await Promise.all([
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    if (code !== 0) {
-      throw new Error(`ffmpeg failed (${code}): ${stderr.trim()}`);
+    if (!(await Bun.file(hevcPath).exists())) {
+      const proc = Bun.spawn(
+        [
+          "ffmpeg",
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=s=160x90:r=25:d=8",
+          "-c:v",
+          "libx265",
+          "-preset",
+          "ultrafast",
+          "-x265-params",
+          "log-level=error",
+          "-g",
+          "50",
+          "-keyint_min",
+          "50",
+          "-sc_threshold",
+          "0",
+          "-pix_fmt",
+          "yuv420p",
+          "-tag:v",
+          "hvc1",
+          hevcPath,
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      );
+      const [stderr, code] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      if (code !== 0) {
+        throw new Error(`ffmpeg failed (${code}): ${stderr.trim()}`);
+      }
     }
     const probe = await probeVideo(hevcPath);
     if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
       throw new Error("HEVC probe returned no duration or keyframes.");
     }
-    const hevcBoundaries = deriveSegmentTimeline(
-      probe.keyframesSeconds,
-      probe.durationSeconds,
-    );
+    return {
+      path: hevcPath,
+      boundaries: deriveSegmentTimeline(
+        probe.keyframesSeconds,
+        probe.durationSeconds,
+      ),
+    };
+  };
+
+  doviTest("a Dolby Vision strip runs on a hevc source", async () => {
+    // The source carries no RPU, so the filter is a no-op; the run proves
+    // ffmpeg accepts dovi_rpu=strip=1 in copy mode.
+    const { path: hevcPath, boundaries: hevcBoundaries } = await hevcFixture();
     const runDir = join(dir, "run-hevc");
     await mkdir(runDir);
     const batches: number[][] = [];
@@ -338,6 +389,7 @@ describe("remux", () => {
         boundariesSeconds: hevcBoundaries,
         startIndex: 0,
         directory: runDir,
+        videoCodec: "hevc",
         stripDolbyVision: true,
       },
       (indexes) => batches.push(indexes),
@@ -350,6 +402,53 @@ describe("remux", () => {
     }
   });
 
+  hevcTest(
+    "a hevc run writes hvc1 sample entries in init.mp4",
+    async () => {
+      const { path: hevcPath, boundaries: hevcBoundaries } =
+        await hevcFixture();
+      const runDir = join(dir, "run-hvc1");
+      await mkdir(runDir);
+      const handle = startRemuxRun(
+        {
+          inputPath: hevcPath,
+          boundariesSeconds: hevcBoundaries,
+          startIndex: 0,
+          directory: runDir,
+          videoCodec: "hevc",
+        },
+        () => {},
+      );
+      expect(await handle.exited).toBe(0);
+      const proc = Bun.spawn(
+        [
+          "ffprobe",
+          "-v",
+          "error",
+          "-select_streams",
+          "v",
+          "-show_entries",
+          "stream=codec_tag_string",
+          "-of",
+          "csv=p=0",
+          "-i",
+          join(runDir, "init.mp4"),
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      );
+      const [output, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      if (exitCode !== 0) {
+        throw new Error(`ffprobe failed (${exitCode}): ${stderr.trim()}`);
+      }
+      expect(output.trim()).toBe("hvc1");
+    },
+    30_000,
+  );
+
   test("a throttled run reports the first segment and goes quiet after kill", async () => {
     const runDir = join(dir, "run-throttled");
     await mkdir(runDir);
@@ -361,6 +460,7 @@ describe("remux", () => {
         boundariesSeconds: boundaries,
         startIndex: 0,
         directory: runDir,
+        videoCodec: "h264",
         readRate: { rate: 1, initialBurstSeconds: 3.5 },
       },
       (indexes) => batches.push(indexes),
@@ -389,6 +489,7 @@ describe("remux", () => {
           boundariesSeconds: boundaries,
           startIndex: 0,
           directory: runDir,
+          videoCodec: "h264",
         },
         (indexes) => batches.push(indexes),
       );

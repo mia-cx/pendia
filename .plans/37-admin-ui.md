@@ -240,6 +240,29 @@ One finding, in the scan-status code `4a7d04d` had just touched.
   underneath it. The settle-time clear went with it: nothing can put a failure
   back on a row whose scan holds the ticket.
 
+### Codex round at `30638e9`
+
+Four findings. Three were real and are fixed; one is rejected.
+
+- `3f33faf`: the libraries scan cell reads the run's counts instead of
+  `latest.state`. `libraryScanStatus` picks `latest` by descending job id and
+  job ids are UUIDv7, so `latest` is the newest child of a fanned-out run while
+  the worker claims the oldest first. The cell said "Queued" for almost the
+  whole scan.
+- `f1ca568`: the wizard offers Check again when a status request fails
+  mid-scan. The poller stops on that failure, but the screen kept saying
+  "Scanning the library." and the only retry was in a branch that needs no
+  status at all.
+- `258fde5`: a failed invite no longer erases the token already on screen. The
+  token is shown once and cannot be read again, so clearing it before the next
+  request could take a live invite's only copy.
+- Rejected: a session row keeps saying "Live" once its expiry passes with the
+  page left open. The Expires column beside it carries the exact instant, so
+  the fact is on screen rather than hidden, and revoking a session that has
+  expired but not been revoked is an ordinary successful revoke
+  (`apps/server/src/auth/sessions.ts:245-261`), not an error. A ticking clock
+  for one derived label is surface this screen does not need.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

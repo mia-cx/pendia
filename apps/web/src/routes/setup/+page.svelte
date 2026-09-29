@@ -125,6 +125,15 @@ async function resumeWatch() {
     busy = false;
   }
 }
+
+/** Follows the run that was started, or starts one when no run id came back. */
+async function retryScan() {
+  if (runId === undefined) {
+    await rescan();
+    return;
+  }
+  await resumeWatch();
+}
 </script>
 
 <svelte:head>
@@ -249,8 +258,8 @@ async function resumeWatch() {
           <p class="muted">Scanning the library.</p>
         {/if}
       {:else if failure}
-        <button type="button" onclick={rescan} disabled={busy}>
-          Scan again
+        <button type="button" onclick={retryScan} disabled={busy}>
+          {runId === undefined ? "Scan again" : "Check again"}
         </button>
       {:else}
         <p class="muted">Starting the scan.</p>

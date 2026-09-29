@@ -21,6 +21,7 @@ let addName = $state("");
 let addPerms = $state<Permission[]>([]);
 let addBusy = $state(false);
 let addFailure = $state<FailureShape | undefined>(undefined);
+let addNotice = $state("");
 
 let editingId = $state<string | null>(null);
 let editPerms = $state<Permission[]>([]);
@@ -39,12 +40,14 @@ async function addGroup(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  addNotice = "";
   const name = addName;
   const perms = [...addPerms];
   try {
-    await client.groups.create({ name, permissions: perms });
+    const created = await client.groups.create({ name, permissions: perms });
     if (addName === name) addName = "";
     if (samePermissions(addPerms, perms)) addPerms = [];
+    addNotice = `Added ${created.name}.`;
     await list.reload();
   } catch (error) {
     addFailure = readFailure(error);
@@ -168,6 +171,9 @@ async function saveEdit(row: GroupRow) {
   <h3>Create a group</h3>
   {#if addFailure}
     <Failure failure={addFailure} />
+  {/if}
+  {#if addNotice}
+    <p class="muted">{addNotice}</p>
   {/if}
   {#if adminLocked}
     <p class="muted">Only a built-in admin can change this.</p>

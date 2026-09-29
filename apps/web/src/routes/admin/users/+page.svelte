@@ -19,6 +19,7 @@ let addPassword = $state("");
 let addDisplayName = $state("");
 let addBusy = $state(false);
 let addFailure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
+let addNotice = $state("");
 
 let inviteEmail = $state("");
 let inviteDays = $state("7");
@@ -32,11 +33,12 @@ async function addUser(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  addNotice = "";
   const username = addUsername;
   const password = addPassword;
   const displayName = addDisplayName;
   try {
-    await client.users.create({
+    const created = await client.users.create({
       username,
       password,
       displayName: displayName.trim() === "" ? undefined : displayName,
@@ -44,6 +46,7 @@ async function addUser(event: SubmitEvent) {
     if (addUsername === username) addUsername = "";
     if (addPassword === password) addPassword = "";
     if (addDisplayName === displayName) addDisplayName = "";
+    addNotice = `Added ${created.username}.`;
     await list.reload();
   } catch (error) {
     addFailure = readFailure(error);
@@ -118,6 +121,9 @@ async function sendInvite(event: SubmitEvent) {
     <p class="muted">A new account joins the built-in users group.</p>
     {#if addFailure}
       <Failure failure={addFailure} />
+    {/if}
+    {#if addNotice}
+      <p class="muted">{addNotice}</p>
     {/if}
     <label for="addUsername">Username</label>
     <input

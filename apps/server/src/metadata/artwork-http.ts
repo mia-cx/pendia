@@ -134,11 +134,12 @@ export function createArtworkHandler(
   const acquireSlot = async (
     signal: AbortSignal,
   ): Promise<(() => void) | undefined> => {
+    if (signal.aborted) return undefined;
     if (active < maxConcurrentResizes) {
       active += 1;
       return makeRelease();
     }
-    if (signal.aborted || waiters.length >= maxQueuedResizes) return undefined;
+    if (waiters.length >= maxQueuedResizes) return undefined;
     return new Promise<(() => void) | undefined>((resolvePromise) => {
       const waiter: ResizeWaiter = {
         signal,

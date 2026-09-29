@@ -731,6 +731,41 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
       });
     }));
 
+  test("an already-aborted request does not consume a resize slot", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { row } = await seed(db, root, png);
+        const resizes: number[] = [];
+        const resize: ArtworkResize = async (input, width) => {
+          resizes.push(width);
+          return { bytes: input, contentType: "image/x-artwork" };
+        };
+        const handler = createArtworkHandler(db, { resize });
+        const controller = new AbortController();
+        controller.abort();
+        const aborted = await handler(
+          new Request(`http://local/api/artwork/${row.id}?width=4`, {
+            signal: controller.signal,
+          }),
+        );
+        expect(aborted?.status).toBe(503);
+        expect(await aborted?.json()).toEqual({
+          error: {
+            code: "SERVICE_UNAVAILABLE",
+            message: "Artwork service is busy.",
+          },
+        });
+        expect(resizes).toEqual([]);
+        const normal = await handler(
+          new Request(`http://local/api/artwork/${row.id}?width=4`),
+        );
+        expect(normal?.status).toBe(200);
+        await normal?.arrayBuffer();
+        expect(resizes).toEqual([4]);
+      });
+    }));
+
   test("a denied authenticated caller cannot view artwork", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

@@ -931,6 +931,44 @@ describe("decidePlayback audio", () => {
     },
   );
 
+  test("vorbis transcodes to aac over hls even when the client accepts it", () => {
+    const vorbisClient: ClientProfile = {
+      ...client,
+      audioCodecs: [
+        { codec: "aac", maxChannels: 2 },
+        { codec: "vorbis", maxChannels: 2 },
+      ],
+    };
+    const result = decidePlayback(
+      { ...source, container: "mkv", audio: [{ codec: "vorbis", channels: 2 }] },
+      vorbisClient,
+      { isLan: false },
+    );
+    expect(result.method).toBe("transcode");
+    expect(result.audio).toEqual([
+      { action: "transcode", codec: "aac", channels: 2 },
+    ]);
+  });
+
+  test("vorbis copies on direct play", () => {
+    const vorbisClient: ClientProfile = {
+      ...client,
+      audioCodecs: [
+        { codec: "aac", maxChannels: 2 },
+        { codec: "vorbis", maxChannels: 2 },
+      ],
+    };
+    const result = decidePlayback(
+      { ...source, audio: [{ codec: "vorbis", channels: 2 }] },
+      vorbisClient,
+      { isLan: false },
+    );
+    expect(result.method).toBe("direct-play");
+    expect(result.audio).toEqual([
+      { action: "copy", codec: "vorbis", channels: 2 },
+    ]);
+  });
+
   test.each(["truehd", "dts-hd"])(
     "dv stripping re-evaluates %s for hls",
     (codec) => {

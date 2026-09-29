@@ -25,6 +25,7 @@ export type VideoStream = {
 /** A normalized audio Stream: codec, channel count and probed bitrate. */
 export type AudioStream = {
   codec: string;
+  profile?: string | null;
   channels: number;
   bitrate?: number | null;
 };
@@ -183,6 +184,18 @@ function decideVideo(
   throw new Error("No backend supports the required video output.");
 }
 
+/** Audio codecs the fMP4 muxer takes on a stream copy; anything else transcodes over HLS. */
+const hlsCopyAudio = new Set([
+  "aac",
+  "ac3",
+  "eac3",
+  "opus",
+  "flac",
+  "mp3",
+  "alac",
+  "dts",
+]);
+
 function decideAudio(audio: AudioStream, client: ClientProfile, hls: boolean) {
   const accepts = (codec: string, channels: number) =>
     client.audioCodecs.some(
@@ -191,7 +204,7 @@ function decideAudio(audio: AudioStream, client: ClientProfile, hls: boolean) {
     );
   if (
     accepts(audio.codec, audio.channels) &&
-    !(hls && ["truehd", "dts-hd"].includes(audio.codec))
+    (!hls || hlsCopyAudio.has(audio.codec))
   ) {
     return {
       action: "copy" as const,

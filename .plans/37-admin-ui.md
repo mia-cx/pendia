@@ -381,6 +381,26 @@ Four findings. Three fixed, one already filed.
   settings screen's guards could never be false, and `listProviderKeys` lost
   its last caller when the read-back stopped checking twice. Both are gone.
 
+### Codex round at `881f94d`
+
+Four findings. Three fixed, one filed.
+
+- `e7b5265`: the groups screen hides its create form on a denied read. Leaving
+  it out of `1b57ccd` covered forbidden and missed unauthorized: a built-in
+  admin whose session lapses still reads `me.admin` as true from the layout
+  load.
+- `9c2c56f`: the user and group create forms say what they created, like the
+  library form since `c1c7364`. Neither can duplicate a record, since both
+  answer CONFLICT on a retry, so the defect was only that the admin could not
+  tell the write had landed.
+- `694ab77`: `prepareLocalAccount` rejects a NUL in a display name. The
+  username was already safe, because its pattern rejects one. With this, every
+  text field this slice exposes carries the same guard.
+- Filed as a follow-up: the web app has no screen where an invited user
+  redeems a token, so the invite this slice creates can only be accepted by
+  calling the API. That is an unauthenticated onboarding screen rather than an
+  admin one, the same family as the OIDC login button in #64.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

@@ -6,7 +6,6 @@ import type { Database } from "../db/client.ts";
 import {
   artwork,
   files,
-  itemAncestors,
   items,
   libraries,
   providerIds as providerIdRows,
@@ -17,16 +16,6 @@ import { type DeletedArtworkFile, deleteItemSubtree } from "../db/tree.ts";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
-
-const rootItemId = async (db: Connection, itemId: string): Promise<string> => {
-  const [root] = await db
-    .select({ id: items.id })
-    .from(itemAncestors)
-    .innerJoin(items, eq(itemAncestors.ancestorId, items.id))
-    .where(and(eq(itemAncestors.descendantId, itemId), eq(items.kind, "show")))
-    .limit(1);
-  return root?.id ?? itemId;
-};
 
 const requireRelativePath = (path: string, allowDot: boolean): string => {
   if (
@@ -165,13 +154,28 @@ async function removeMoveCollision(
     }
     return;
   }
-  const sourceRootId = await rootItemId(db, survivor.itemId);
-  const destinationRootId = await rootItemId(db, displaced.itemId);
-  await deleteItemSubtree(
-    db,
-    sourceRootId === destinationRootId ? displaced.itemId : destinationRootId,
-    deletedArtwork,
-  );
+  const [displacedItem] = await db
+    .select({ parentId: items.parentId })
+    .from(items)
+    .where(eq(items.id, displaced.itemId));
+  await deleteItemSubtree(db, displaced.itemId, deletedArtwork);
+  // Prune only emptied containers; a populated Season or Show stays.
+  let ancestorId = displacedItem?.parentId ?? null;
+  while (ancestorId !== null) {
+    const [ancestor] = await db
+      .select({ parentId: items.parentId })
+      .from(items)
+      .where(eq(items.id, ancestorId));
+    if (!ancestor) break;
+    const [child] = await db
+      .select({ id: items.id })
+      .from(items)
+      .where(eq(items.parentId, ancestorId))
+      .limit(1);
+    if (child !== undefined) break;
+    await deleteItemSubtree(db, ancestorId, deletedArtwork);
+    ancestorId = ancestor.parentId;
+  }
 }
 
 /** Applies queued moves and deletes before a directory scan writes its result. */

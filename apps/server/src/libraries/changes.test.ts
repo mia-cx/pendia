@@ -1026,6 +1026,105 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
+  test("a move onto another item's file removes only the displaced leaf", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const foundationDir = join(root, "Foundation", "Season 01");
+        const severanceDir = join(root, "Severance", "Season 01");
+        await mkdir(foundationDir, { recursive: true });
+        await mkdir(severanceDir, { recursive: true });
+        const displacedPath = "Foundation/Season 01/Foundation S01E01.mkv";
+        const siblingPath = "Foundation/Season 01/Foundation S01E02.mkv";
+        const sourcePath = "Severance/Season 01/Severance S01E01.mkv";
+        await createVideoFixture(join(root, displacedPath));
+        await createVideoFixture(join(root, siblingPath));
+        await createVideoFixture(join(root, sourcePath));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        await scanShowDirectory(db, library.id, "Severance");
+
+        const [displacedFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, displacedPath));
+        const [siblingFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, siblingPath));
+        const [sourceFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, sourcePath));
+        if (!displacedFile || !siblingFile || !sourceFile) {
+          throw new Error("Initial scan produced no Episode Files.");
+        }
+        const beforeItems = await db.select().from(items);
+        const showRoot = beforeItems.find(
+          (row) => row.kind === "show" && row.canonicalFolder === "Foundation",
+        );
+        const season = beforeItems.find(
+          (row) =>
+            row.kind === "season" &&
+            row.canonicalFolder === "Foundation/Season 01",
+        );
+        if (!showRoot || !season) {
+          throw new Error("Initial scan produced no Show or Season.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: siblingFile.itemId,
+          versionId: siblingFile.versionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        const progressBefore = await db.select().from(progress);
+
+        await db.transaction(async (tx) => {
+          await applyScanChanges(tx, library.id, [
+            {
+              kind: "move",
+              path: displacedPath,
+              previousPath: sourcePath,
+              providerIds: {},
+            },
+          ]);
+        });
+
+        const itemRows = await db.select().from(items);
+        expect(
+          itemRows.find((row) => row.id === displacedFile.itemId),
+        ).toBeUndefined();
+        expect(itemRows.find((row) => row.id === showRoot.id)).toBeDefined();
+        expect(itemRows.find((row) => row.id === season.id)).toBeDefined();
+        expect(
+          itemRows.find((row) => row.id === siblingFile.itemId),
+        ).toBeDefined();
+        expect(
+          itemRows.find((row) => row.id === sourceFile.itemId),
+        ).toBeDefined();
+        const afterFiles = await db.select().from(files);
+        expect(
+          afterFiles.find((row) => row.path === displacedPath),
+        ).toMatchObject({ id: sourceFile.id, itemId: sourceFile.itemId });
+        expect(
+          afterFiles.find((row) => row.path === siblingPath),
+        ).toMatchObject({
+          id: siblingFile.id,
+          versionId: siblingFile.versionId,
+          itemId: siblingFile.itemId,
+        });
+        expect(
+          afterFiles.find((row) => row.id === displacedFile.id),
+        ).toBeUndefined();
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+      });
+    }));
+
   test("a scan job fails without deleting rows when the root vanished", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

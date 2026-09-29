@@ -1,4 +1,5 @@
-import { posix } from "node:path";
+import { lstat } from "node:fs/promises";
+import { join, posix } from "node:path";
 import { and, eq, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -7,6 +8,7 @@ import {
   files,
   itemAncestors,
   items,
+  libraries,
   providerIds as providerIdRows,
   type ScanChange,
   versions,
@@ -92,7 +94,17 @@ export async function setItemProviderIds(
   }
 }
 
-/** Updates an Item folder and re-keys its colocated artwork atomically. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Updates an Item folder and re-keys colocated artwork that moved with it. */
 export async function updateItemCanonicalFolder(
   db: Connection,
   item: typeof items.$inferSelect,
@@ -100,6 +112,11 @@ export async function updateItemCanonicalFolder(
 ): Promise<void> {
   if (item.canonicalFolder === canonicalFolder) return;
   const marker = "/.pendia/artwork/";
+  const [library] = await db
+    .select({ rootPath: libraries.rootPath })
+    .from(libraries)
+    .where(eq(libraries.id, item.libraryId));
+  if (!library) throw new AuthError("NOT_FOUND");
   const rows = await db
     .select({ id: artwork.id, storageKey: artwork.storageKey })
     .from(artwork)
@@ -107,10 +124,16 @@ export async function updateItemCanonicalFolder(
   for (const row of rows) {
     const index = row.storageKey.lastIndexOf(marker);
     if (index < 0) throw new Error("Invalid artwork storage key.");
-    await db
-      .update(artwork)
-      .set({ storageKey: `${canonicalFolder}${row.storageKey.slice(index)}` })
-      .where(eq(artwork.id, row.id));
+    const nextStorageKey = `${canonicalFolder}${row.storageKey.slice(index)}`;
+    if (
+      (await pathExists(join(library.rootPath, nextStorageKey))) ||
+      !(await pathExists(join(library.rootPath, row.storageKey)))
+    ) {
+      await db
+        .update(artwork)
+        .set({ storageKey: nextStorageKey })
+        .where(eq(artwork.id, row.id));
+    }
   }
   await db
     .update(items)

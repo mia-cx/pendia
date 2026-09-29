@@ -301,6 +301,94 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
+  test("a file-only move keeps readable artwork at its old storage key", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const [file] = await db.select().from(files);
+        const [version] = await db.select().from(versions);
+        if (!file || !version) {
+          throw new Error("Initial scan produced no File.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 9,
+          playCount: 4,
+        });
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
+        const progressBefore = await db.select().from(progress);
+
+        // A file-only move leaves .pendia behind in the old folder.
+        const destinationFolder = "Moved Copies";
+        const movedPath = `${destinationFolder}/Alien.1080p.mkv`;
+        await mkdir(join(root, destinationFolder), { recursive: true });
+        await rename(join(root, file1080), join(root, movedPath));
+
+        await runScanJob(db, library.id, destinationFolder, [
+          {
+            kind: "move",
+            path: movedPath,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows).toHaveLength(1);
+        expect(itemRows[0]).toMatchObject({
+          id: itemId,
+          canonicalFolder: destinationFolder,
+        });
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(1);
+        expect(fileRows[0]).toMatchObject({
+          id: file.id,
+          versionId: version.id,
+          itemId,
+          path: movedPath,
+        });
+        expect((await db.select().from(versions)).map((row) => row.id)).toEqual(
+          [version.id],
+        );
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+
+        const artworkRows = await db.select().from(artwork);
+        expect(artworkRows).toHaveLength(1);
+        expect(artworkRows[0]).toMatchObject({
+          id: stored.id,
+          storageKey: stored.storageKey,
+          selected: true,
+        });
+        const original = await readArtworkOriginal(db, stored.id);
+        expect(original?.artwork.id).toBe(stored.id);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+        const basename = stored.storageKey.split("/").pop();
+        if (basename === undefined) throw new Error("Basename missing.");
+        await expect(
+          access(join(root, destinationFolder, ".pendia", "artwork", basename)),
+        ).rejects.toThrow();
+      });
+    }));
+
   test("a scan job fails without deleting rows when the root vanished", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

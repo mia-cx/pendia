@@ -6,6 +6,7 @@ import {
   contributors,
   credits,
   items,
+  libraries,
   providerIds,
 } from "../db/schema/index.ts";
 import { providersForLibrary, readMetadataSettings } from "./settings.ts";
@@ -44,6 +45,7 @@ function bestMatch(
 async function persistMatch(
   db: Database,
   itemId: string,
+  libraryId: string,
   provider: string,
   providerId: string,
   confidence: number,
@@ -59,12 +61,19 @@ async function persistMatch(
     idEntries.set(trimmedName, trimmedValue);
   }
   return db.transaction(async (tx) => {
+    const [lockedLibrary] = await tx
+      .select({ id: libraries.id })
+      .from(libraries)
+      .where(eq(libraries.id, libraryId))
+      .for("update");
+    if (!lockedLibrary) throw new AuthError("NOT_FOUND");
     const [locked] = await tx
       .select()
       .from(items)
       .where(eq(items.id, itemId))
       .for("update");
-    if (!locked) throw new AuthError("NOT_FOUND");
+    if (!locked || locked.libraryId !== lockedLibrary.id)
+      throw new AuthError("NOT_FOUND");
     const [current] = await tx
       .select({ value: providerIds.value })
       .from(providerIds)
@@ -212,6 +221,7 @@ export async function applyMetadata(
       return persistMatch(
         db,
         item.id,
+        item.libraryId,
         provider.id,
         existing.value,
         1,
@@ -233,6 +243,7 @@ export async function applyMetadata(
     return persistMatch(
       db,
       item.id,
+      item.libraryId,
       provider.id,
       best.providerId,
       best.confidence,

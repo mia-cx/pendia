@@ -5,9 +5,9 @@ import type {
   MetadataProvider,
   MetadataResult,
 } from "@pendia/plugin-api";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
-import type { Database } from "../db/client.ts";
+import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   contributors,
@@ -96,6 +96,21 @@ async function itemProviderIds(db: Database, itemId: string) {
     .from(providerIds)
     .where(eq(providerIds.itemId, itemId))
     .orderBy(providerIds.provider);
+}
+
+async function waitForLibraryLockWait(db: Database) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const rows = await db.execute(sql`
+      select 1 from pg_stat_activity
+      where wait_event_type = 'Lock'
+        and state = 'active'
+        and query like '%from "libraries"%for update%'
+    `);
+    if (rows.length > 0) return;
+    await Bun.sleep(10);
+  }
+  throw new Error("Timed out waiting for the library lock wait.");
 }
 
 describe.skipIf(!databaseUrl)("applyMetadata", () => {
@@ -411,6 +426,79 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         metadataState: "pending",
       });
       expect(await db.select().from(credits)).toEqual([]);
+    }));
+
+  test("a scan-held library lock serializes a stale provider id change", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { library, item } = await fixture(db);
+      await db
+        .insert(providerIds)
+        .values({ provider: "tmdb", value: "old", itemId: item.id });
+      let fetchStarted: () => void = () => {};
+      let releaseFetch: (result: MetadataResult) => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        fetchStarted = resolve;
+      });
+      const released = new Promise<MetadataResult>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const { provider } = mockProvider("tmdb", {
+        fetch: () => {
+          fetchStarted();
+          return released;
+        },
+      });
+      const pending = applyMetadata(db, item.id, [provider]);
+      await started;
+
+      const second = createDatabase(url);
+      try {
+        let lockAcquired: () => void = () => {};
+        let releaseLock: () => void = () => {};
+        const acquired = new Promise<void>((resolve) => {
+          lockAcquired = resolve;
+        });
+        const held = new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+        const blocker = second.db.transaction(async (tx) => {
+          await tx
+            .select({ id: libraries.id })
+            .from(libraries)
+            .where(eq(libraries.id, library.id))
+            .for("update");
+          await tx
+            .update(providerIds)
+            .set({ value: "new" })
+            .where(
+              and(
+                eq(providerIds.itemId, item.id),
+                eq(providerIds.provider, "tmdb"),
+              ),
+            );
+          lockAcquired();
+          await held;
+        });
+        await acquired;
+        releaseFetch(fetchedResult({ providerIds: { tmdb: "old" } }));
+        await waitForLibraryLockWait(db);
+        releaseLock();
+        await blocker;
+        await expect(pending).rejects.toThrow(
+          "Provider id changed during metadata fetch.",
+        );
+        expect(await itemProviderIds(db, item.id)).toEqual([
+          { provider: "tmdb", value: "new" },
+        ]);
+        expect(await storedItem(db, item.id)).toMatchObject({
+          title: "Inception",
+          metadataState: "pending",
+        });
+        expect(await db.select().from(credits)).toEqual([]);
+      } finally {
+        await second.close();
+      }
     }));
 
   test("a missing item throws NOT_FOUND", () =>

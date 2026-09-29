@@ -6,6 +6,9 @@ import { readAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import { readArtworkOriginal } from "./artwork-store.ts";
 
+// Bun retains substantial libvips memory across sequential resizes with this enabled.
+sharp.cache(false);
+
 /** A resize operation used by the process-local artwork cache. */
 export type ArtworkResize = (
   input: Uint8Array,

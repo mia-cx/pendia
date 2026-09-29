@@ -86,6 +86,14 @@ async function withServer<T>(
   }
 }
 
+test("disables the native sharp cache for the artwork worker", () => {
+  expect(sharp.cache()).toMatchObject({
+    memory: { max: 0 },
+    files: { max: 0 },
+    items: { max: 0 },
+  });
+});
+
 describe.skipIf(!databaseUrl)("artwork http", () => {
   test("serves a real sharp resize of a stored original", () =>
     withDatabase(async (db) => {

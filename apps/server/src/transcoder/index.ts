@@ -44,6 +44,7 @@ export async function startTranscoder(
   });
   const port = options.port ?? readPort("PENDIA_TRANSCODER_PORT", 3001);
   let nodeId: string | null = null;
+  let stopping: Promise<void> | undefined;
 
   const server = Bun.serve({
     port,
@@ -55,6 +56,10 @@ export async function startTranscoder(
       if (url.pathname === "/readyz") {
         if (nodeId === null) {
           return Response.json({ status: "starting" }, { status: 503 });
+        }
+        // The drain keeps the server up; a balancer must stop routing here.
+        if (stopping !== undefined) {
+          return Response.json({ status: "stopping" }, { status: 503 });
         }
         return (await (options.ready?.() ?? Promise.resolve(true)))
           ? Response.json({ status: "ready" })
@@ -139,7 +144,6 @@ export async function startTranscoder(
   }
   nodeId = node.id;
 
-  let stopping: Promise<void> | undefined;
   return {
     nodeId: node.id,
     address,

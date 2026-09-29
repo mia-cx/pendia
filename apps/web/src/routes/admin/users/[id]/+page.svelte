@@ -63,6 +63,7 @@ let revokeFailures = $state<Record<string, FailureShape>>({});
 let routeGeneration = 0;
 let pending: Promise<unknown> = Promise.resolve();
 
+/** Orders one visit's writes so the newest answer is the newest state. */
 function serial<T>(run: () => Promise<T>) {
   const next = pending.then(run, run);
   pending = next.catch(() => {});
@@ -75,6 +76,7 @@ function currentVisit(target: string, generation: number) {
 
 function resetRouteState() {
   routeGeneration += 1;
+  pending = Promise.resolve();
   capInput = null;
   ratingInput = null;
   settingsFailure = undefined;

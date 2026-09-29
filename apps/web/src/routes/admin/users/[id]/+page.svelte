@@ -23,7 +23,9 @@ $effect(() => {
   access.clear();
   sessions.clear();
   const target = id;
+  const generation = routeGeneration;
   void serial(target, async () => {
+    if (!currentVisit(target, generation)) return;
     await Promise.all([access.reload(), sessions.reload()]);
   });
 });

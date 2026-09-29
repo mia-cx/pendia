@@ -112,15 +112,22 @@ export async function requirePermission(
 
 const builtInNames = ["admins", "users"];
 
+/** Reports whether the user is an enabled member of the built-in admins group. */
+export async function isBuiltInAdmin(
+  db: Queryable,
+  userId: string,
+): Promise<boolean> {
+  if (!(await enabledUser(db, userId))) return false;
+  const memberGroups = await memberships(db, userId);
+  return memberGroups.some((group) => group.builtIn && group.name === "admins");
+}
+
 /** Throws FORBIDDEN unless the user is an enabled built-in admin. */
 export async function requireAdmin(
   db: Queryable,
   userId: string,
 ): Promise<void> {
-  if (!(await enabledUser(db, userId))) throw new AuthError("FORBIDDEN");
-  const memberGroups = await memberships(db, userId);
-  if (!memberGroups.some((group) => group.builtIn && group.name === "admins"))
-    throw new AuthError("FORBIDDEN");
+  if (!(await isBuiltInAdmin(db, userId))) throw new AuthError("FORBIDDEN");
 }
 
 /** Creates a custom permission group; the actor must be a built-in admin. */

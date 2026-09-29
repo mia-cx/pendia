@@ -7,6 +7,9 @@ import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { type Permission, permissionNames } from "$lib/permissions.ts";
 import { resource } from "$lib/resource.svelte.ts";
+import type { PageProps } from "./$types";
+
+const { data }: PageProps = $props();
 
 const id = $derived(page.params.id ?? "");
 
@@ -110,6 +113,7 @@ const ratingValue = $derived(
 const groupsLocked = $derived(
   access.data !== undefined && access.data.user.disabledAt !== null,
 );
+const adminLocked = $derived(!data.me.admin);
 
 async function saveSettings(event: SubmitEvent) {
   const target = id;
@@ -428,7 +432,7 @@ async function revoke(sessionId: string) {
           false}
           onchange={(event) =>
             (groupSel[group.id] = event.currentTarget.checked)}
-          disabled={groupsBusy || !access.data || groupsLocked}
+          disabled={groupsBusy || !access.data || groupsLocked || adminLocked}
         />
         <label for={`group-${group.id}`}
           >{group.name}{#if group.builtIn}
@@ -439,6 +443,9 @@ async function revoke(sessionId: string) {
     {#if groupsFailure}
       <Failure failure={groupsFailure} />
     {/if}
+    {#if adminLocked}
+      <p class="muted">Only a built-in admin can change this.</p>
+    {/if}
     {#if groupsLocked}
       <p class="muted">
         Group membership cannot change while the account is disabled.
@@ -447,7 +454,11 @@ async function revoke(sessionId: string) {
     <button
       type="button"
       onclick={saveGroups}
-      disabled={groupsBusy || !groups.data || !access.data || groupsLocked}
+      disabled={groupsBusy ||
+      !groups.data ||
+      !access.data ||
+      groupsLocked ||
+      adminLocked}
       >Save</button
     >
   {/if}
@@ -456,6 +467,9 @@ async function revoke(sessionId: string) {
 <section>
   <h3>Permission overrides</h3>
   <p class="muted">A group grant applies when the override is Inherit.</p>
+  {#if adminLocked}
+    <p class="muted">Only a built-in admin can change this.</p>
+  {/if}
   {#if access.failure}
     <Failure failure={access.failure} />
     <button
@@ -475,7 +489,9 @@ async function revoke(sessionId: string) {
                 value={overrideSel[permission] ?? overrideValue(permission)}
                 onchange={(event) =>
                   setOverride(permission, event.currentTarget.value)}
-                disabled={overrideBusy[permission] === true || !access.data}
+                disabled={overrideBusy[permission] === true ||
+                !access.data ||
+                adminLocked}
               >
                 <option value="inherit">Inherit</option>
                 <option value="allow">Allow</option>
@@ -495,6 +511,9 @@ async function revoke(sessionId: string) {
 <section>
   <h3>Library access</h3>
   <p class="muted">An explicit Deny wins over a group grant.</p>
+  {#if adminLocked}
+    <p class="muted">Only a built-in admin can change this.</p>
+  {/if}
   {#if libs.failure}
     <Failure failure={libs.failure} />
     <button
@@ -521,7 +540,9 @@ async function revoke(sessionId: string) {
                 value={accessSel[library.id] ?? accessValue(library.id)}
                 onchange={(event) =>
                   setAccess(library.id, event.currentTarget.value)}
-                disabled={libraryBusy[library.id] === true || !access.data}
+                disabled={libraryBusy[library.id] === true ||
+                !access.data ||
+                adminLocked}
               >
                 <option value="inherit">Inherit</option>
                 <option value="allow">Allow</option>

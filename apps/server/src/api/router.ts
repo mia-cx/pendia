@@ -1,5 +1,6 @@
 import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
+import { isBuiltInAdmin } from "../auth/permissions.ts";
 import {
   groupProcedures,
   settingsProcedures,
@@ -25,7 +26,10 @@ import {
 const me = authenticated
   .route({ method: "GET", path: "/me" })
   .output(Schema.standardSchemaV1(Me))
-  .handler(async ({ context }) => context.caller);
+  .handler(async ({ context }) => ({
+    ...context.caller,
+    admin: await isBuiltInAdmin(context.db, context.caller.user.id),
+  }));
 
 const listItems = authenticated
   .route({ method: "GET", path: "/items" })

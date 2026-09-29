@@ -4,6 +4,10 @@ import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { type Permission, permissionNames } from "$lib/permissions.ts";
 import { resource } from "$lib/resource.svelte.ts";
+import type { PageProps } from "./$types";
+
+const { data }: PageProps = $props();
+const adminLocked = $derived(!data.me.admin);
 
 const list = resource(() => client.groups.list());
 type GroupRow = NonNullable<typeof list.data>[number];
@@ -78,6 +82,9 @@ async function saveEdit(row: GroupRow) {
   The built-in admins and users groups cannot be edited, because admins bypass
   every permission check and users is the default group.
 </p>
+{#if adminLocked}
+  <p class="muted">Only a built-in admin can change this.</p>
+{/if}
 
 <p>
   <button
@@ -142,7 +149,7 @@ async function saveEdit(row: GroupRow) {
                 <button
                   type="button"
                   onclick={() => startEdit(row)}
-                  disabled={editingId !== null}>Edit</button
+                  disabled={editingId !== null || adminLocked}>Edit</button
                 >
               {/if}
             {/if}
@@ -158,8 +165,17 @@ async function saveEdit(row: GroupRow) {
   {#if addFailure}
     <Failure failure={addFailure} />
   {/if}
+  {#if adminLocked}
+    <p class="muted">Only a built-in admin can change this.</p>
+  {/if}
   <label for="addName">Name</label>
-  <input id="addName" name="name" required bind:value={addName} />
+  <input
+    id="addName"
+    name="name"
+    required
+    bind:value={addName}
+    disabled={adminLocked}
+  />
   <fieldset>
     <legend>Permissions</legend>
     {#each permissionNames as permission (permission)}
@@ -169,12 +185,13 @@ async function saveEdit(row: GroupRow) {
           type="checkbox"
           bind:group={addPerms}
           value={permission}
+          disabled={adminLocked}
         />
         <label for={`add-${permission}`}>{permission}</label>
       </span>
     {/each}
   </fieldset>
-  <button type="submit" disabled={addBusy}>Create group</button>
+  <button type="submit" disabled={addBusy || adminLocked}>Create group</button>
 </form>
 
 <style>

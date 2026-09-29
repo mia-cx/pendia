@@ -64,6 +64,42 @@ describe.skipIf(!databaseUrl)("admin api", () => {
       }
     }));
 
+  test("me reports whether the caller is a built-in admin", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin, token } = await seed(db);
+      const manager = await createLocalUser(db, admin.id, {
+        username: "manager",
+        password: "manager-pass",
+      });
+      const managers = await createGroup(db, admin.id, {
+        name: "managers",
+        permissions: ["manage-users"],
+      });
+      await setUserGroups(db, admin.id, manager.id, [managers.id]);
+      const { token: managerToken } = await login(
+        db,
+        { username: "manager", password: "manager-pass", ...device },
+        "127.0.0.1",
+      );
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const adminClient = createPendiaClient({
+          origin: base,
+          headers: { authorization: `Bearer ${token}` },
+        });
+        const managerClient = createPendiaClient({
+          origin: base,
+          headers: { authorization: `Bearer ${managerToken}` },
+        });
+        expect((await adminClient.me()).admin).toBe(true);
+        expect((await managerClient.me()).admin).toBe(false);
+      } finally {
+        await server.stop();
+      }
+    }));
+
   test("admin procedures reject missing and powerless credentials", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);

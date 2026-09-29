@@ -52,6 +52,7 @@ export const Me = Schema.Struct({
     kind: Schema.Literal("session", "api-key"),
     id: Schema.UUID,
   }),
+  admin: Schema.Boolean,
 });
 
 /** The page size input: REST sends a query string, RPC a number. */

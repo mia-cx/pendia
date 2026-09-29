@@ -207,7 +207,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 
 | Procedure | REST route | Input | Output |
 | --- | --- | --- | --- |
-| `me` | GET `/api/me` | None | `user` and `credential` |
+| `me` | GET `/api/me` | None | `user`, `credential`, and `admin` saying whether the caller is a built-in admin |
 | `items.list` | GET `/api/items` | `libraryId`, `kind`, `limit`, `cursor` | `{ items, cursor }` of cards |
 | `items.get` | GET `/api/items/{id}` | `id` in the path | the detail shape |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |

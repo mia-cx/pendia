@@ -13,6 +13,7 @@ docker compose -p pendia-db-test -f compose.yaml -f compose.test.yaml down -v
 Tests create and drop unique databases on that server. They leave the database named in DATABASE_URL intact.
 The test role needs CREATEDB and permission to install pg_trgm and btree_gist. The Compose role has these permissions.
 Missing DATABASE_URL skips database tests locally and fails in CI. Connection errors always fail.
+The browser playback test runs when a Chromium binary is on PATH or PENDIA_BROWSER points at one, and skips otherwise.
 
 After changing the Drizzle schema, generate the next migration:
 
@@ -60,6 +61,14 @@ A local timer wakes the worker when its failed job becomes eligible again.
 On SIGTERM, shutdown stops new claim loops and drains active handlers before closing Postgres.
 Abrupt process loss does not recover running jobs in this slice. Handlers must be safe to retry after a reported failure.
 Plugin cron scheduling belongs to the plugin host, not this queue.
+
+## Transcoder
+
+The transcoder and all roles run live remux sessions. When the playback engine decides remux, `playback.plan` returns `/api/playback/{sessionId}/{itemId}/hls/master.m3u8?token=...`. The api serves `media.m3u8`, `init.mp4` and `N.m4s` under the same path, and every HLS URL carries the playback token.
+One ffmpeg remuxes each session into transcoder-local scratch, cutting segments on the Item's segment timeline. A segment that is not ready yet waits up to twenty seconds, then answers 503. A seek restarts ffmpeg at that segment; segments already in scratch serve without a restart. Sixty seconds idle stops ffmpeg and deletes scratch while the session row stays live; the next request revives it.
+`PENDIA_SCRATCH_DIR` chooses the scratch root, default `pendia-scratch` under the OS temp dir. Use local disk, never NFS. `PENDIA_TRANSCODER_PORT` defaults to 3001. `PENDIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
+The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `PENDIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
+This slice is remux only. Live transcoding, subtitles and the admission cap are #34; stored Versions are #35. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
 
 ## Auth
 

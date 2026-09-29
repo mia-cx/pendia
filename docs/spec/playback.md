@@ -18,7 +18,7 @@ How Pendia decides what a client receives for an Item. Every rule here is meant 
 | Text subtitles | client renders the format | convert to WebVTT, delivered on the side, never burned in |
 | Bitmap subtitles | client renders PGS or VobSub | burn in, which forces a video re-encode |
 
-Dolby Vision profiles 7 and 8 carry an HDR10 base layer and play as HDR10 on clients without DV. Profile 5 has none and tone maps on the CPU path. TrueHD and DTS-HD pass only on direct play; in HLS they follow the audio rule.
+Dolby Vision profiles 7 and 8 carry an HDR10 base layer and play as HDR10 on clients without DV. Profile 5 has none and tone maps on the CPU path. An HLS stream copy takes only the fMP4-safe codecs (H.264, HEVC, AV1, VP9, MPEG-4 and MPEG-2 video; AAC, AC-3, E-AC-3, Opus, FLAC, MP3, ALAC and DTS audio); anything else follows the video or audio rule.
 
 ## Play method
 

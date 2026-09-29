@@ -931,6 +931,88 @@ describe("decidePlayback audio", () => {
     },
   );
 
+  test("vorbis transcodes to aac over hls even when the client accepts it", () => {
+    const vorbisClient: ClientProfile = {
+      ...client,
+      audioCodecs: [
+        { codec: "aac", maxChannels: 2 },
+        { codec: "vorbis", maxChannels: 2 },
+      ],
+    };
+    const result = decidePlayback(
+      {
+        ...source,
+        container: "mkv",
+        audio: [{ codec: "vorbis", channels: 2 }],
+      },
+      vorbisClient,
+      { isLan: false },
+    );
+    expect(result.method).toBe("transcode");
+    expect(result.audio).toEqual([
+      { action: "transcode", codec: "aac", channels: 2 },
+    ]);
+  });
+
+  test("vorbis copies on direct play", () => {
+    const vorbisClient: ClientProfile = {
+      ...client,
+      audioCodecs: [
+        { codec: "aac", maxChannels: 2 },
+        { codec: "vorbis", maxChannels: 2 },
+      ],
+    };
+    const result = decidePlayback(
+      { ...source, audio: [{ codec: "vorbis", channels: 2 }] },
+      vorbisClient,
+      { isLan: false },
+    );
+    expect(result.method).toBe("direct-play");
+    expect(result.audio).toEqual([
+      { action: "copy", codec: "vorbis", channels: 2 },
+    ]);
+  });
+
+  const vp8Video: VideoStream = {
+    ...source.video,
+    codec: "vp8",
+    profile: null,
+    level: null,
+  };
+  const vp8Client: ClientProfile = {
+    ...client,
+    videoCodecs: [
+      { codec: "vp8" },
+      {
+        codec: "h264",
+        profiles: ["high"],
+        maxLevel: 41,
+        maxWidth: 1920,
+        maxHeight: 1080,
+      },
+    ],
+  };
+
+  test("vp8 transcodes to h264 over hls even when the client accepts it", () => {
+    const result = decidePlayback(
+      { ...source, container: "mkv", video: vp8Video },
+      vp8Client,
+      { isLan: false },
+    );
+    expect(result.method).toBe("transcode");
+    expect(result.video.action).toBe("transcode");
+    expect(result.video.codec).toBe("h264");
+  });
+
+  test("vp8 copies on direct play", () => {
+    const result = decidePlayback({ ...source, video: vp8Video }, vp8Client, {
+      isLan: false,
+    });
+    expect(result.method).toBe("direct-play");
+    expect(result.video.action).toBe("copy");
+    expect(result.video.codec).toBe("vp8");
+  });
+
   test.each(["truehd", "dts-hd"])(
     "dv stripping re-evaluates %s for hls",
     (codec) => {

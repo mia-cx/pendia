@@ -1,0 +1,1 @@
+ALTER TABLE "session_registry" ADD COLUMN "decision" jsonb;

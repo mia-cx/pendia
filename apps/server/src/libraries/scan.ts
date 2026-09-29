@@ -7,8 +7,10 @@ import {
   itemAncestors,
   items,
   libraries,
+  progress,
   type ScanChange,
   seasons,
+  sessionRegistry,
   streams,
   versions,
 } from "../db/schema/index.ts";
@@ -190,8 +192,26 @@ async function deleteEmptiedItems(
       .from(versions)
       .where(eq(versions.itemId, itemId))
       .limit(1);
-    if (version === undefined)
-      await deleteItemSubtree(tx, item.id, deletedArtwork);
+    if (version !== undefined) continue;
+    const { parentId } = item;
+    await deleteItemSubtree(tx, item.id, deletedArtwork);
+    // Prune only emptied containers; a populated Season or Show stays.
+    let ancestorId = parentId;
+    while (ancestorId !== null) {
+      const [ancestor] = await tx
+        .select({ parentId: items.parentId })
+        .from(items)
+        .where(eq(items.id, ancestorId));
+      if (!ancestor) break;
+      const [child] = await tx
+        .select({ id: items.id })
+        .from(items)
+        .where(eq(items.parentId, ancestorId))
+        .limit(1);
+      if (child !== undefined) break;
+      await deleteItemSubtree(tx, ancestorId, deletedArtwork);
+      ancestorId = ancestor.parentId;
+    }
   }
 }
 
@@ -788,11 +808,51 @@ export async function scanShowDirectory(
           if (existingFile) {
             for (const file of existingFiles) {
               if (
-                file.itemId !== episodeId ||
+                file.itemId !== existingFile.itemId ||
                 file.versionId !== existingFile.versionId
               ) {
                 throw new AuthError("CONFLICT");
               }
+            }
+            if (existingFile.itemId !== episodeId) {
+              const allVersionFiles = await tx
+                .select({ id: files.id })
+                .from(files)
+                .where(eq(files.versionId, existingFile.versionId));
+              const destinationFileIds = new Set(
+                existingFiles.map((file) => file.id),
+              );
+              if (
+                allVersionFiles.length !== destinationFileIds.size ||
+                allVersionFiles.some((file) => !destinationFileIds.has(file.id))
+              ) {
+                throw new AuthError("CONFLICT");
+              }
+              const sourceEpisodeId = existingFile.itemId;
+              // files.(version_id, item_id), progress.(version_id, item_id,
+              // format) and session_registry.(version_id, item_id) reference
+              // versions.(id, item_id) non-deferrably, so all four tables must
+              // move in one statement. The source Episode's segment timeline
+              // cannot follow, so the Version re-establishes one under the
+              // destination Episode in persistScanTimelines.
+              await tx.execute(sql`
+                with moved_files as (
+                  update ${files} set item_id = ${episodeId}
+                  where version_id = ${existingFile.versionId}
+                ), moved_progress as (
+                  update ${progress} set item_id = ${episodeId}
+                  where version_id = ${existingFile.versionId}
+                ), moved_sessions as (
+                  update ${sessionRegistry} set item_id = ${episodeId}
+                  where version_id = ${existingFile.versionId}
+                )
+                update ${versions}
+                set item_id = ${episodeId},
+                  segment_timeline_id = null,
+                  timeline_aligned = false
+                where id = ${existingFile.versionId}
+              `);
+              emptiedItemIds.push(sourceEpisodeId);
             }
             const [version] = await tx
               .select()

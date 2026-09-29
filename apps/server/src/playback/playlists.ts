@@ -41,11 +41,16 @@ const hevcProfiles: Record<string, string> = {
 };
 
 const audioCodecs: Record<string, string> = {
-  aac: "mp4a.40.2",
   ac3: "ac-3",
   eac3: "ec-3",
   opus: "opus",
   flac: "flac",
+};
+
+const aacProfiles: Record<string, string> = {
+  lc: "mp4a.40.2",
+  heaac: "mp4a.40.5",
+  heaacv2: "mp4a.40.29",
 };
 
 /** Returns the RFC 6381 codec string for a probed Stream, or null when unknown. */
@@ -71,20 +76,25 @@ export function codecString(stream: {
     }
     return `${prefix}.L${stream.level}.B0`;
   }
+  if (stream.codec === "aac") {
+    return stream.profile === null
+      ? "mp4a.40.2"
+      : (aacProfiles[stream.profile] ?? null);
+  }
   return audioCodecs[stream.codec] ?? null;
 }
 
 /** Returns the CODECS list for a variant; empty when any chosen codec is unknown, which omits the attribute. */
 export function variantCodecs(
   video: { codec: string; profile: string | null; level: number | null },
-  audio: { codec: string } | undefined,
+  audio: { codec: string; profile: string | null } | undefined,
 ) {
   const videoCodec = codecString(video);
   if (videoCodec === null) return [];
   if (audio === undefined) return [videoCodec];
   const audioCodec = codecString({
     codec: audio.codec,
-    profile: null,
+    profile: audio.profile,
     level: null,
   });
   if (audioCodec === null) return [];

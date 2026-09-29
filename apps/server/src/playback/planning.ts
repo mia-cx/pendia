@@ -82,6 +82,7 @@ function toAudioStream(row: StreamRow): AudioStream {
         ? "dts-hd"
         : row.codec,
     channels: row.channels,
+    profile: row.profile,
     bitrate: row.bitrate === null ? null : Number(row.bitrate),
   };
 }

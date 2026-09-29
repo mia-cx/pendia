@@ -130,6 +130,10 @@ describe("codecString", () => {
     ],
     [{ codec: "hevc", profile: "main10", level: 120 }, "hvc1.2.4.L120.B0"],
     [{ codec: "aac", profile: "lc", level: null }, "mp4a.40.2"],
+    [{ codec: "aac", profile: "heaac", level: null }, "mp4a.40.5"],
+    [{ codec: "aac", profile: "heaacv2", level: null }, "mp4a.40.29"],
+    [{ codec: "aac", profile: null, level: null }, "mp4a.40.2"],
+    [{ codec: "aac", profile: "main", level: null }, null],
     [{ codec: "h264", profile: "high", level: null }, null],
     [{ codec: "vp9", profile: null, level: null }, null],
   ];
@@ -142,9 +146,20 @@ describe("variantCodecs", () => {
   const h264 = { codec: "h264", profile: "high", level: 40 };
 
   test("lists video and audio when both are known", () => {
-    expect(variantCodecs(h264, { codec: "aac" })).toEqual([
+    expect(variantCodecs(h264, { codec: "aac", profile: "lc" })).toEqual([
       "avc1.640028",
       "mp4a.40.2",
+    ]);
+  });
+
+  test("advertises the aac profile the stream carries", () => {
+    expect(variantCodecs(h264, { codec: "aac", profile: "heaac" })).toEqual([
+      "avc1.640028",
+      "mp4a.40.5",
+    ]);
+    expect(variantCodecs(h264, { codec: "aac", profile: "heaacv2" })).toEqual([
+      "avc1.640028",
+      "mp4a.40.29",
     ]);
   });
 
@@ -154,13 +169,18 @@ describe("variantCodecs", () => {
         { codec: "vp9", profile: null, level: null },
         {
           codec: "aac",
+          profile: "lc",
         },
       ),
     ).toEqual([]);
   });
 
   test("returns empty when the audio codec is unknown", () => {
-    expect(variantCodecs(h264, { codec: "dts-hd" })).toEqual([]);
+    expect(variantCodecs(h264, { codec: "dts-hd", profile: null })).toEqual([]);
+  });
+
+  test("returns empty when the aac profile is unknown", () => {
+    expect(variantCodecs(h264, { codec: "aac", profile: "main" })).toEqual([]);
   });
 
   test("lists only the video when there is no audio", () => {

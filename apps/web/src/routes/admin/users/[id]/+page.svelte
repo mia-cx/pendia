@@ -61,12 +61,16 @@ let revoking = $state<Record<string, boolean>>({});
 let revokeFailures = $state<Record<string, FailureShape>>({});
 
 let routeGeneration = 0;
-let pending: Promise<unknown> = Promise.resolve();
+const queues = new Map<string, Promise<unknown>>();
 
-/** Orders one visit's writes so the newest answer is the newest state. */
-function serial<T>(run: () => Promise<T>) {
-  const next = pending.then(run, run);
-  pending = next.catch(() => {});
+/** Orders writes to one user so the last answer is the last word. */
+function serial<T>(target: string, run: () => Promise<T>) {
+  const previous = queues.get(target) ?? Promise.resolve();
+  const next = previous.then(run, run);
+  queues.set(
+    target,
+    next.catch(() => {}),
+  );
   return next;
 }
 
@@ -76,7 +80,6 @@ function currentVisit(target: string, generation: number) {
 
 function resetRouteState() {
   routeGeneration += 1;
-  pending = Promise.resolve();
   capInput = null;
   ratingInput = null;
   settingsFailure = undefined;
@@ -126,7 +129,7 @@ async function saveSettings(event: SubmitEvent) {
       return;
     }
     const rating = submittedRating.trim();
-    const updated = await serial(() =>
+    const updated = await serial(target, () =>
       client.users.setSettings({
         id: target,
         bitrateCapBps: capNumber,
@@ -158,7 +161,7 @@ async function saveGroups() {
           false,
       )
       .map((group) => group.id);
-    const updated = await serial(() =>
+    const updated = await serial(target, () =>
       client.users.setGroups({
         id: target,
         groupIds: checked,
@@ -189,7 +192,7 @@ async function setOverride(permission: Permission, value: string) {
   overrideBusy[permission] = true;
   delete overrideFailures[permission];
   try {
-    const updated = await serial(() =>
+    const updated = await serial(target, () =>
       client.users.setOverride({
         id: target,
         permission,
@@ -224,7 +227,7 @@ async function setAccess(libraryId: string, value: string) {
   libraryBusy[libraryId] = true;
   delete libraryFailures[libraryId];
   try {
-    const updated = await serial(() =>
+    const updated = await serial(target, () =>
       client.users.setLibraryAccess({
         id: target,
         libraryId,
@@ -250,7 +253,7 @@ async function revoke(sessionId: string) {
   revoking[sessionId] = true;
   delete revokeFailures[sessionId];
   try {
-    await serial(() => client.users.revokeSession({ id: sessionId }));
+    await serial(target, () => client.users.revokeSession({ id: sessionId }));
     if (!currentVisit(target, generation)) return;
     await sessions.reload();
     if (!currentVisit(target, generation)) return;

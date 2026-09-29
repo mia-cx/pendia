@@ -153,14 +153,17 @@ export async function startTranscoder(
     address,
     port: server.port,
     sessions,
-    /** Stops sessions and the server, then removes the node row, once. */
+    /** Removes the node row so new sessions pick another node, then stops sessions and the server, once. */
     stop() {
       stopping ??= (async () => {
-        await sessions.stop();
-        await server.stop();
-        await db
-          .delete(transcoderCapabilities)
-          .where(eq(transcoderCapabilities.id, node.id));
+        try {
+          await db
+            .delete(transcoderCapabilities)
+            .where(eq(transcoderCapabilities.id, node.id));
+        } finally {
+          await sessions.stop();
+          await server.stop();
+        }
       })();
       return stopping;
     },

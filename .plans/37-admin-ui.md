@@ -263,6 +263,20 @@ Four findings. Three were real and are fixed; one is rejected.
   (`apps/server/src/auth/sessions.ts:245-261`), not an error. A ticking clock
   for one derived label is surface this screen does not need.
 
+### Codex round at `50d5ef5`
+
+Two findings. One fixed, one already filed.
+
+- `6d6fce7`: revisiting a user reads behind that user's queue. A → B → A while a
+  write to A was in flight let the revisit read pre-mutation state, and the
+  write's own continuation was then dropped by the visit check, so the screen
+  stayed older than the database until a manual reload.
+- Deferred to #65: expression indexes on `jobs` for the `payload->>'libraryId'`
+  and `payload->>'runId'` scan-status reads. That issue was filed out of this
+  slice for the reason it repeats here, that the index strategy for the queue
+  table belongs with the queue rather than with a screen, and a migration on
+  this branch would collide with the other slices in flight.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

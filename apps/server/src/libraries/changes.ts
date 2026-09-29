@@ -160,16 +160,38 @@ export async function applyScanChanges(
         : undefined,
   }));
   const emptiedItemIds: string[] = [];
+  // A batch of moves maps sources to destinations one-to-one. Snapshot every
+  // source row and park it at a transaction-local placeholder so a later
+  // destination that is itself a source does not pick up the mutated row.
+  const moveSources = new Map<string, typeof files.$inferSelect>();
+  const moveSourcePaths = new Set<string>();
+  const moveDestinationPaths = new Set<string>();
+  for (const { change, path, previousPath } of normalized) {
+    if (change.kind !== "move" || previousPath === undefined) continue;
+    if (moveSourcePaths.has(previousPath) || moveDestinationPaths.has(path)) {
+      throw new AuthError("INVALID_INPUT");
+    }
+    moveSourcePaths.add(previousPath);
+    moveDestinationPaths.add(path);
+  }
+  for (const { change, previousPath } of normalized) {
+    if (change.kind !== "move" || previousPath === undefined) continue;
+    const [file] = await db
+      .select()
+      .from(files)
+      .where(and(eq(files.libraryId, libraryId), eq(files.path, previousPath)));
+    if (!file) continue;
+    moveSources.set(previousPath, file);
+    await db
+      .update(files)
+      .set({ path: `.pendia-move/${Bun.randomUUIDv7()}` })
+      .where(eq(files.id, file.id));
+  }
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
     if (change.kind === "move") {
       if (previousPath === undefined) throw new AuthError("INVALID_INPUT");
-      const [file] = await db
-        .select()
-        .from(files)
-        .where(
-          and(eq(files.libraryId, libraryId), eq(files.path, previousPath)),
-        );
+      const file = moveSources.get(previousPath);
       const [destination] = await db
         .select()
         .from(files)

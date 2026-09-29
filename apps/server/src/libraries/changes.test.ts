@@ -22,6 +22,7 @@ import {
   providerIds,
   type ScanChange,
   streams,
+  users,
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
@@ -35,7 +36,7 @@ import {
   readArtworkOriginal,
   storeArtworkOriginal,
 } from "../metadata/artwork-store.ts";
-import { setItemProviderIds } from "./changes.ts";
+import { applyScanChanges, setItemProviderIds } from "./changes.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { MissingLibraryPathError } from "./walker.ts";
@@ -386,6 +387,155 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await expect(
           access(join(root, destinationFolder, ".pendia", "artwork", basename)),
         ).rejects.toThrow();
+      });
+    }));
+
+  test("a batched file swap preserves File, Version, and Progress identity", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        const fileA = file1080;
+        const fileB = `${folder}/Alien.720p.mkv`;
+        await createVideoFixture(join(root, fileA));
+        await createVideoFixture(join(root, fileB));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const fileRows = await db.select().from(files);
+        const versionRows = await db.select().from(versions);
+        const rowA = fileRows.find((row) => row.path === fileA);
+        const rowB = fileRows.find((row) => row.path === fileB);
+        if (!rowA || !rowB || versionRows.length !== 2) {
+          throw new Error("Initial scan produced no split Files.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const [viewer] = await db
+          .insert(users)
+          .values({
+            username: "viewer",
+            displayName: "Viewer",
+            passwordHash: "fixture",
+          })
+          .returning();
+        if (!viewer) throw new Error("Viewer fixture missing.");
+        const watchers = [admin.id, viewer.id];
+        for (const [index, version] of versionRows.entries()) {
+          await db.insert(progress).values({
+            userId: watchers[index] ?? "",
+            itemId,
+            versionId: version.id,
+            format: "video",
+            positionSeconds: 9,
+            playCount: 4,
+          });
+        }
+        const progressBefore = await db.select().from(progress);
+
+        const temporary = join(dir, "swap.temporary.mkv");
+        await rename(join(root, fileA), temporary);
+        await rename(join(root, fileB), join(root, fileA));
+        await rename(temporary, join(root, fileB));
+
+        await runScanJob(db, library.id, folder, [
+          {
+            kind: "move",
+            path: fileB,
+            previousPath: fileA,
+            providerIds: { tmdb: "348" },
+          },
+          {
+            kind: "move",
+            path: fileA,
+            previousPath: fileB,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const afterFiles = await db.select().from(files);
+        expect(afterFiles).toHaveLength(2);
+        expect(afterFiles.find((row) => row.path === fileA)?.id).toBe(rowB.id);
+        expect(afterFiles.find((row) => row.path === fileB)?.id).toBe(rowA.id);
+        expect(afterFiles.find((row) => row.id === rowA.id)).toMatchObject({
+          versionId: rowA.versionId,
+          itemId,
+        });
+        expect(afterFiles.find((row) => row.id === rowB.id)).toMatchObject({
+          versionId: rowB.versionId,
+          itemId,
+        });
+        expect(
+          (await db.select().from(versions)).map((row) => row.id).sort(),
+        ).toEqual(versionRows.map((row) => row.id).sort());
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+        expect(
+          afterFiles.some((row) => row.path.startsWith(".pendia-move/")),
+        ).toBe(false);
+
+        const rescanned = await scanDirectory(db, library.id, folder);
+        expect(rescanned.itemId).toBe(itemId);
+        expect(
+          (await db.select().from(files))
+            .map((row) => [row.id, row.path])
+            .sort(),
+        ).toEqual(afterFiles.map((row) => [row.id, row.path]).sort());
+      });
+    }));
+
+  test("duplicate move sources or destinations reject INVALID_INPUT", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        await createVideoFixture(join(root, file2160));
+        const library = await insertLibrary(db, root);
+        await scanDirectory(db, library.id, folder);
+        const filesBefore = await db.select().from(files);
+        const batches: ScanChange[][] = [
+          [
+            {
+              kind: "move",
+              path: `${folder}/copy-one.mkv`,
+              previousPath: file1080,
+              providerIds: {},
+            },
+            {
+              kind: "move",
+              path: `${folder}/copy-two.mkv`,
+              previousPath: file1080,
+              providerIds: {},
+            },
+          ],
+          [
+            {
+              kind: "move",
+              path: `${folder}/copy-one.mkv`,
+              previousPath: file1080,
+              providerIds: {},
+            },
+            {
+              kind: "move",
+              path: `${folder}/copy-one.mkv`,
+              previousPath: file2160,
+              providerIds: {},
+            },
+          ],
+        ];
+        for (const changes of batches) {
+          const error = await applyScanChanges(db, library.id, changes).catch(
+            (cause: unknown) => cause,
+          );
+          expect(error).toBeInstanceOf(AuthError);
+          expect((error as AuthError).code).toBe("INVALID_INPUT");
+        }
+        expect(await db.select().from(files)).toEqual(filesBefore);
       });
     }));
 

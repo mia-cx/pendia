@@ -201,6 +201,7 @@ export async function applyScanChanges(
     if (change.kind === "move") {
       if (previousPath === undefined) throw new AuthError("INVALID_INPUT");
       let file = moveSources.get(previousPath);
+      if (file !== undefined) moveSources.delete(previousPath);
       if (file === undefined) {
         file = producedMoves.get(previousPath);
         if (file !== undefined) producedMoves.delete(previousPath);

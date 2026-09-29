@@ -148,7 +148,7 @@ export async function applyScanChanges(
   changes: readonly ScanChange[],
   deletedArtwork: DeletedArtworkFile[] = [],
 ): Promise<string[]> {
-  const normalized = changes.map((change) => ({
+  const normalizedChanges = changes.map((change) => ({
     change,
     path: requireRelativePath(
       change.path,
@@ -159,6 +159,17 @@ export async function applyScanChanges(
         ? requireRelativePath(change.previousPath, false)
         : undefined,
   }));
+  // Retried webhook deliveries can append an exact move pair; keep the first.
+  const seenMovePairs = new Set<string>();
+  const normalized = normalizedChanges.filter(
+    ({ change, path, previousPath }) => {
+      if (change.kind !== "move" || previousPath === undefined) return true;
+      const key = JSON.stringify([previousPath, path]);
+      if (seenMovePairs.has(key)) return false;
+      seenMovePairs.add(key);
+      return true;
+    },
+  );
   const emptiedItemIds: string[] = [];
   // A batch of moves maps sources to destinations one-to-one. Snapshot every
   // source row and park it at a transaction-local placeholder so a later
@@ -187,11 +198,17 @@ export async function applyScanChanges(
       .set({ path: `.pendia-move/${Bun.randomUUIDv7()}` })
       .where(eq(files.id, file.id));
   }
+  // Ordered chains land an earlier move's row at a later move's source path.
+  const producedMoves = new Map<string, typeof files.$inferSelect>();
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
     if (change.kind === "move") {
       if (previousPath === undefined) throw new AuthError("INVALID_INPUT");
-      const file = moveSources.get(previousPath);
+      let file = moveSources.get(previousPath);
+      if (file === undefined) {
+        file = producedMoves.get(previousPath);
+        if (file !== undefined) producedMoves.delete(previousPath);
+      }
       const [destination] = await db
         .select()
         .from(files)
@@ -230,6 +247,7 @@ export async function applyScanChanges(
       }
       if (file) {
         await db.update(files).set({ path }).where(eq(files.id, file.id));
+        producedMoves.set(path, file);
         const [item] = await db
           .select()
           .from(items)

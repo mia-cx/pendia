@@ -487,6 +487,150 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
+  test("an ordered move chain routes the original File through intermediates", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        const fileC = `${folder}/Alien.720p.mkv`;
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const [file] = await db.select().from(files);
+        const [version] = await db.select().from(versions);
+        if (!file || !version) {
+          throw new Error("Initial scan produced no File.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 9,
+          playCount: 4,
+        });
+        const progressBefore = await db.select().from(progress);
+
+        const intermediate = `${folder}/Alien.intermediate.mkv`;
+        await rename(join(root, file1080), join(root, fileC));
+
+        await runScanJob(db, library.id, folder, [
+          {
+            kind: "move",
+            path: intermediate,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+          {
+            kind: "move",
+            path: fileC,
+            previousPath: intermediate,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const afterFiles = await db.select().from(files);
+        expect(afterFiles).toHaveLength(1);
+        expect(afterFiles[0]).toMatchObject({
+          id: file.id,
+          versionId: version.id,
+          itemId,
+          path: fileC,
+        });
+        expect((await db.select().from(versions)).map((row) => row.id)).toEqual(
+          [version.id],
+        );
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+        expect(
+          afterFiles.some(
+            (row) =>
+              row.path === intermediate || row.path.startsWith(".pendia-move/"),
+          ),
+        ).toBe(false);
+
+        const rescanned = await scanDirectory(db, library.id, folder);
+        expect(rescanned.itemId).toBe(itemId);
+        expect(await db.select().from(files)).toEqual(afterFiles);
+      });
+    }));
+
+  test("an exact repeated move delivery applies once", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        const fileB = `${folder}/Alien.720p.mkv`;
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const [file] = await db.select().from(files);
+        const [version] = await db.select().from(versions);
+        if (!file || !version) {
+          throw new Error("Initial scan produced no File.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 9,
+          playCount: 4,
+        });
+        const progressBefore = await db.select().from(progress);
+
+        await rename(join(root, file1080), join(root, fileB));
+
+        await runScanJob(db, library.id, folder, [
+          {
+            kind: "move",
+            path: fileB,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+          {
+            kind: "move",
+            path: fileB,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const afterFiles = await db.select().from(files);
+        expect(afterFiles).toHaveLength(1);
+        expect(afterFiles[0]).toMatchObject({
+          id: file.id,
+          versionId: version.id,
+          itemId,
+          path: fileB,
+        });
+        expect((await db.select().from(versions)).map((row) => row.id)).toEqual(
+          [version.id],
+        );
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+        expect(
+          afterFiles.some((row) => row.path.startsWith(".pendia-move/")),
+        ).toBe(false);
+
+        const rescanned = await scanDirectory(db, library.id, folder);
+        expect(rescanned.itemId).toBe(itemId);
+        expect(await db.select().from(files)).toEqual(afterFiles);
+      });
+    }));
+
   test("duplicate move sources or destinations reject INVALID_INPUT", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -536,6 +680,72 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           expect((error as AuthError).code).toBe("INVALID_INPUT");
         }
         expect(await db.select().from(files)).toEqual(filesBefore);
+        const repeated = await applyScanChanges(db, library.id, [
+          {
+            kind: "move",
+            path: `${folder}/repeated.mkv`,
+            previousPath: file1080,
+            providerIds: {},
+          },
+          {
+            kind: "move",
+            path: `${folder}/repeated.mkv`,
+            previousPath: file1080,
+            providerIds: {},
+          },
+        ]);
+        expect(Array.isArray(repeated)).toBe(true);
+        const afterFiles = await db.select().from(files);
+        expect(
+          afterFiles.find((row) => row.id === filesBefore[0]?.id)?.path,
+        ).toBe(`${folder}/repeated.mkv`);
+      });
+    }));
+
+  test("move pairs with colliding concatenations keep distinct destinations", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        const short = `${folder}/x.mkv`;
+        const long = `${folder}/x.mkv2.mkv`;
+        // `${long}` + `${folder}/done.mkv` and
+        // `${short}` + `2.mkv${folder}/done.mkv` produce the same raw string.
+        const longDestination = `${folder}/done.mkv`;
+        const shortDestination = `2.mkv${folder}/done.mkv`;
+        expect(`${long}${longDestination}`).toBe(`${short}${shortDestination}`);
+        await createVideoFixture(join(root, short));
+        await createVideoFixture(join(root, long));
+        const library = await insertLibrary(db, root);
+        await scanDirectory(db, library.id, folder);
+        const fileRows = await db.select().from(files);
+        const rowShort = fileRows.find((row) => row.path === short);
+        const rowLong = fileRows.find((row) => row.path === long);
+        if (!rowShort || !rowLong) {
+          throw new Error("Initial scan produced no split Files.");
+        }
+        await applyScanChanges(db, library.id, [
+          {
+            kind: "move",
+            path: longDestination,
+            previousPath: long,
+            providerIds: {},
+          },
+          {
+            kind: "move",
+            path: shortDestination,
+            previousPath: short,
+            providerIds: {},
+          },
+        ]);
+        const afterFiles = await db.select().from(files);
+        expect(afterFiles.find((row) => row.id === rowLong.id)?.path).toBe(
+          longDestination,
+        );
+        expect(afterFiles.find((row) => row.id === rowShort.id)?.path).toBe(
+          shortDestination,
+        );
       });
     }));
 

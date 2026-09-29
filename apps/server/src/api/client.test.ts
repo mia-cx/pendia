@@ -36,6 +36,7 @@ type PlainList = { items: readonly PlainCard[]; cursor: string | null };
 type PlainMe = {
   user: { id: string; username: string; displayName: string };
   credential: { kind: "session" | "api-key"; id: string };
+  admin: boolean;
 };
 
 async function seed(db: Database) {

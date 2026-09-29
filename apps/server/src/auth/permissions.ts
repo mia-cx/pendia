@@ -112,24 +112,36 @@ export async function requirePermission(
 
 const builtInNames = ["admins", "users"];
 
-async function requireAdmin(db: Queryable, userId: string): Promise<void> {
-  if (!(await enabledUser(db, userId))) throw new AuthError("FORBIDDEN");
+/** Reports whether the user is an enabled member of the built-in admins group. */
+export async function isBuiltInAdmin(
+  db: Queryable,
+  userId: string,
+): Promise<boolean> {
+  if (!(await enabledUser(db, userId))) return false;
   const memberGroups = await memberships(db, userId);
-  if (!memberGroups.some((group) => group.builtIn && group.name === "admins"))
-    throw new AuthError("FORBIDDEN");
+  return memberGroups.some((group) => group.builtIn && group.name === "admins");
+}
+
+/** Throws FORBIDDEN unless the user is an enabled built-in admin. */
+export async function requireAdmin(
+  db: Queryable,
+  userId: string,
+): Promise<void> {
+  if (!(await isBuiltInAdmin(db, userId))) throw new AuthError("FORBIDDEN");
 }
 
 /** Creates a custom permission group; the actor must be a built-in admin. */
 export async function createGroup(
   db: Database,
   actorId: string,
-  input: { name: string; permissions: Permission[] },
+  input: { name: string; permissions: readonly Permission[] },
 ) {
   await requireAdmin(db, actorId);
   const name = input.name.trim();
   if (
     !name ||
     name.length > 80 ||
+    name.includes("\0") ||
     builtInNames.includes(name.toLowerCase()) ||
     input.permissions.some(
       (p) => !(permissions as readonly string[]).includes(p),
@@ -155,7 +167,7 @@ export async function setUserGroups(
   db: Database,
   actorId: string,
   userId: string,
-  groupIds: string[],
+  groupIds: readonly string[],
 ): Promise<void> {
   const unique = [...new Set(groupIds)];
   await db.transaction(async (tx) => {

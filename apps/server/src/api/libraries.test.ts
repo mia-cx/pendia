@@ -186,8 +186,9 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
           });
 
           const stream = await openEvents(base, token);
+          let jobId = "";
           try {
-            const { jobId } = await client.libraries.scan({ id: created.id });
+            ({ jobId } = await client.libraries.scan({ id: created.id }));
             const jobs = await waitForLibraryJobs(db, created.id);
             expect(jobs.map((job) => job.id)).toContain(jobId);
             expect(
@@ -205,6 +206,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
                 libraryId: created.id,
                 path: "Alien (1979)",
                 reconcileMissing: true,
+                runId: jobId,
               },
             ]);
             for (const job of jobs)
@@ -223,6 +225,22 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
           } finally {
             await stream.close();
           }
+
+          const scopedStatus = await fetch(
+            `${base}/api/libraries/${created.id}/scan-status?runId=${jobId}`,
+            { headers: { authorization: `Bearer ${token}` } },
+          );
+          expect(scopedStatus.status).toBe(200);
+          const scopedBody = await scopedStatus.json();
+          expect(scopedBody).toMatchObject({
+            runId: jobId,
+            counts: { queued: 0, running: 0, completed: 2, failed: 0 },
+          });
+          const unknownRun = await fetch(
+            `${base}/api/libraries/${created.id}/scan-status?runId=${Bun.randomUUIDv7()}`,
+            { headers: { authorization: `Bearer ${token}` } },
+          );
+          expect(unknownRun.status).toBe(404);
 
           const scanned = await db
             .select()
@@ -366,7 +384,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
             rootPath: root,
           });
 
-          await client.libraries.scan({ id: library.id });
+          const { jobId } = await client.libraries.scan({ id: library.id });
           const jobs = await waitForLibraryJobs(db, library.id);
           expect(jobs).toHaveLength(2);
           expect(
@@ -384,6 +402,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
               libraryId: library.id,
               path: "Show (2020)",
               reconcileMissing: true,
+              runId: jobId,
             },
           ]);
           for (const job of jobs) {

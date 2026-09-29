@@ -82,12 +82,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
               libraryId: libraryA.id,
               path: "Blade Runner (1982)",
               reconcileMissing: true,
+              runId: rootJob.id,
             },
             {
               type: "scan",
               libraryId: libraryA.id,
               path: "Alien (1979)",
               reconcileMissing: true,
+              runId: rootJob.id,
             },
           ]);
           for (const job of fanned) {
@@ -110,6 +112,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             libraryId: libraryA.id,
             path: "Alien (1979)",
             reconcileMissing: true,
+            runId: rootJob.id,
           });
           expect(await queue.claim()).toBeUndefined();
           await queue.complete(first ?? rootJob);
@@ -119,6 +122,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             libraryId: libraryA.id,
             path: "Blade Runner (1982)",
             reconcileMissing: true,
+            runId: rootJob.id,
           });
         }),
       );
@@ -136,7 +140,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         const queue = createJobQueue(db);
         const registry = createJobRegistry();
         registerLibraryJobs(db, registry);
-        await queue.enqueue(
+        const rootJob = await queue.enqueue(
           { type: "scan", libraryId: library.id, path: "." },
           { concurrencyKey: libraryConcurrencyKey(library.id) },
         );
@@ -158,12 +162,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             libraryId: library.id,
             path: "Blade Runner (1982)",
             reconcileMissing: true,
+            runId: rootJob.id,
           },
           {
             type: "scan",
             libraryId: library.id,
             path: "Alien (1979)",
             reconcileMissing: true,
+            runId: rootJob.id,
           },
         ]);
         expect(
@@ -257,12 +263,14 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             libraryId: library.id,
             path: "B Show",
             reconcileMissing: true,
+            runId: rootJob.id,
           },
           {
             type: "scan",
             libraryId: library.id,
             path: "A Show (2020)",
             reconcileMissing: true,
+            runId: rootJob.id,
           },
         ]);
         for (const job of fanned) {

@@ -29,6 +29,9 @@ export const settings = pgTable("settings", {
   updatedAt: instant("updated_at").notNull().defaultNow(),
 });
 
+/** The advisory lock class serialising read-modify-write of one settings row. */
+export const settingsLockClass = 0x70656e64;
+
 // Plugin approval and enabled state belong to settings keyed by plugin name.
 export const pluginLockfile = pgTable("plugin_lockfile", {
   id: id(),
@@ -55,12 +58,14 @@ export type ScanChange =
     };
 
 export type JobPayload =
+  // A directory scan's runId is the id of the root job that fanned it out.
   | {
       type: "scan";
       libraryId: string;
       path: string;
       changes?: ScanChange[];
       reconcileMissing?: boolean;
+      runId?: string;
     }
   | { type: "probe"; fileId: string }
   | { type: "provider-fetch"; itemId: string; provider: string }

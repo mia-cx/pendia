@@ -1,5 +1,12 @@
 import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
+import { isBuiltInAdmin } from "../auth/permissions.ts";
+import {
+  groupProcedures,
+  settingsProcedures,
+  setupProcedures,
+  userProcedures,
+} from "./admin.ts";
 import { authenticated, authenticateRequest } from "./context.ts";
 import { runApi } from "./errors.ts";
 import { getItemDetail, listItemCards } from "./items.ts";
@@ -19,7 +26,10 @@ import {
 const me = authenticated
   .route({ method: "GET", path: "/me" })
   .output(Schema.standardSchemaV1(Me))
-  .handler(async ({ context }) => context.caller);
+  .handler(async ({ context }) => ({
+    ...context.caller,
+    admin: await isBuiltInAdmin(context.db, context.caller.user.id),
+  }));
 
 const listItems = authenticated
   .route({ method: "GET", path: "/items" })
@@ -67,5 +77,9 @@ export const pendiaRouter = {
   playback: playbackProcedures,
   marks: markProcedures,
   shelves: shelfProcedures,
+  setup: setupProcedures,
+  users: userProcedures,
+  groups: groupProcedures,
+  settings: settingsProcedures,
   events: { stream: streamEvents },
 };

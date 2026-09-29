@@ -128,6 +128,7 @@ describe.skipIf(!databaseUrl)("auth accounts", () => {
       for (const input of [
         { username: "bad name!", password: "pass" },
         { username: "valid", password: "" },
+        { username: "valid", password: "pass", displayName: "A\u0000lice" },
       ]) {
         const before = await db.select().from(users);
         await expect(

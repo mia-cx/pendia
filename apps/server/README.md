@@ -255,7 +255,7 @@ Group permission edits apply to custom groups only. The built-in `admins` and `u
 `settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured and the provider key names. No read returns a provider key value or the OIDC client secret; provider keys are write-only over the API.
 Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `settings.update`. OIDC stays read-only in this slice.
 
-Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}`.
+Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}?width=<pixels>`; `width` is required and accepts an integer from 1 through 4096.
 Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.

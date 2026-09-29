@@ -15,11 +15,14 @@ import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   artwork,
+  episodes,
+  favourites,
   files,
   items,
   libraries,
   progress,
   providerIds,
+  ratings,
   type ScanChange,
   sessionRegistry,
   streams,
@@ -1420,10 +1423,14 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             row.kind === "season" &&
             row.canonicalFolder === "Foundation/Season 01",
         );
-        const severanceItems = beforeItems
-          .filter((row) => row.canonicalFolder.startsWith("Severance"))
+        const severanceContainers = beforeItems
+          .filter(
+            (row) =>
+              row.kind !== "episode" &&
+              row.canonicalFolder.startsWith("Severance"),
+          )
           .map((row) => row.id);
-        if (!showRoot || !season || severanceItems.length === 0) {
+        if (!showRoot || !season || severanceContainers.length === 0) {
           throw new Error("Initial scan produced no Show hierarchies.");
         }
         const admin = await setupAdmin(db, {
@@ -1518,8 +1525,10 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(
           itemRows.find((row) => row.id === displacedFile.itemId),
         ).toBeUndefined();
+        // The emptied Severance containers are pruned, but its Episode Item
+        // itself is preserved as the destination Episode.
         expect(
-          severanceItems.filter(
+          severanceContainers.filter(
             (id) => itemRows.find((row) => row.id === id) !== undefined,
           ),
         ).toEqual([]);
@@ -1534,6 +1543,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             row.parentId === season.id &&
             row.id !== siblingFile.itemId,
         );
+        expect(destinationEpisode?.id).toBe(sourceFile.itemId);
         const afterFiles = await db.select().from(files);
         const movedFile = afterFiles.find((row) => row.path === displacedPath);
         if (!destinationEpisode || !movedFile) {
@@ -1580,7 +1590,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         ).toBeUndefined();
         expect(
           afterVersions.find((row) => row.id === storedVersion.id),
-        ).toBeUndefined();
+        ).toMatchObject({ itemId: sourceFile.itemId });
 
         const rescanned = await scanShowDirectory(db, library.id, "Foundation");
         expect(rescanned.itemId).toBe(showRoot.id);
@@ -1705,6 +1715,175 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         const rescanned = await scanShowDirectory(db, library.id, "Foundation");
         expect(rescanned.itemId).toBe(showRoot.id);
         expect(await db.select().from(files)).toEqual(afterFiles);
+      });
+    }));
+
+  test("a move into an absent Episode preserves the source Item and its state", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const foundationDir = join(root, "Foundation", "Season 01");
+        const severanceDir = join(root, "Severance", "Season 01");
+        await mkdir(foundationDir, { recursive: true });
+        await mkdir(severanceDir, { recursive: true });
+        const siblingPath = "Foundation/Season 01/Foundation S01E02.mkv";
+        const destinationPath = "Foundation/Season 01/Foundation S01E01.mkv";
+        const sourcePath = "Severance/Season 01/Severance S01E01.mkv";
+        await createVideoFixture(join(root, siblingPath));
+        await createVideoFixture(join(root, sourcePath));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Foundation");
+        await scanShowDirectory(db, library.id, "Severance");
+
+        const [siblingFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, siblingPath));
+        const [sourceFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, sourcePath));
+        if (!siblingFile || !sourceFile) {
+          throw new Error("Initial scan produced no Episode Files.");
+        }
+        const sourceEpisodeId = sourceFile.itemId;
+        const beforeItems = await db.select().from(items);
+        const showRoot = beforeItems.find(
+          (row) => row.kind === "show" && row.canonicalFolder === "Foundation",
+        );
+        const season = beforeItems.find(
+          (row) =>
+            row.kind === "season" &&
+            row.canonicalFolder === "Foundation/Season 01",
+        );
+        const severanceContainers = beforeItems
+          .filter(
+            (row) =>
+              row.kind !== "episode" &&
+              row.canonicalFolder.startsWith("Severance"),
+          )
+          .map((row) => row.id);
+        if (!showRoot || !season || severanceContainers.length === 0) {
+          throw new Error("Initial scan produced no Show hierarchies.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db
+          .update(items)
+          .set({
+            title: "Curated Severance Episode",
+            year: 2022,
+            overview: "A curated overview.",
+            metadataState: "matched",
+          })
+          .where(eq(items.id, sourceEpisodeId));
+        const [favourite] = await db
+          .insert(favourites)
+          .values({ userId: admin.id, itemId: sourceEpisodeId })
+          .returning();
+        const [rating] = await db
+          .insert(ratings)
+          .values({
+            userId: admin.id,
+            itemId: sourceEpisodeId,
+            value: "8.5",
+          })
+          .returning();
+        const [poster] = await db
+          .insert(artwork)
+          .values({
+            itemId: sourceEpisodeId,
+            versionId: null,
+            type: "poster",
+            backend: "configured-path",
+            storageKey: "posters/severance-e01.jpg",
+            sourceUrl: "https://image.example/poster.png",
+            selected: true,
+          })
+          .returning();
+        if (!favourite || !rating || !poster) {
+          throw new Error("Item state fixture missing.");
+        }
+        const beforeItem = beforeItems.find(
+          (row) => row.id === sourceEpisodeId,
+        );
+        if (!beforeItem) throw new Error("Source Episode missing.");
+
+        await rename(join(root, sourcePath), join(root, destinationPath));
+        await runScanJob(db, library.id, "Foundation", [
+          {
+            kind: "move",
+            path: destinationPath,
+            previousPath: sourcePath,
+            providerIds: {},
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        const preserved = itemRows.find((row) => row.id === sourceEpisodeId);
+        expect(preserved).toMatchObject({
+          parentId: season.id,
+          canonicalFolder: "Foundation/Season 01",
+          title: "Curated Severance Episode",
+          year: 2022,
+          overview: "A curated overview.",
+          metadataState: "matched",
+        });
+        expect(
+          severanceContainers.filter(
+            (id) => itemRows.find((row) => row.id === id) !== undefined,
+          ),
+        ).toEqual([]);
+        expect(itemRows.find((row) => row.id === showRoot.id)).toBeDefined();
+        expect(itemRows.find((row) => row.id === season.id)).toBeDefined();
+        expect(
+          itemRows.find((row) => row.id === siblingFile.itemId),
+        ).toBeDefined();
+        const [episodeRow] = await db
+          .select()
+          .from(episodes)
+          .where(eq(episodes.itemId, sourceEpisodeId));
+        expect(episodeRow).toMatchObject({
+          seasonId: season.id,
+          episodeNumber: 1,
+          episodeEndNumber: null,
+        });
+        expect(await db.select().from(favourites)).toEqual([favourite]);
+        expect(await db.select().from(ratings)).toEqual([rating]);
+        expect(await db.select().from(artwork)).toEqual([poster]);
+        const afterFiles = await db.select().from(files);
+        expect(
+          afterFiles.find((row) => row.path === destinationPath),
+        ).toMatchObject({
+          id: sourceFile.id,
+          versionId: sourceFile.versionId,
+          itemId: sourceEpisodeId,
+        });
+        expect(
+          afterFiles.find((row) => row.path === siblingPath),
+        ).toMatchObject({
+          id: siblingFile.id,
+          versionId: siblingFile.versionId,
+          itemId: siblingFile.itemId,
+        });
+        expect(
+          (
+            await db
+              .select({ itemId: versions.itemId })
+              .from(versions)
+              .where(eq(versions.id, sourceFile.versionId))
+          )[0]?.itemId,
+        ).toBe(sourceEpisodeId);
+
+        const rescanned = await scanShowDirectory(db, library.id, "Foundation");
+        expect(rescanned.itemId).toBe(showRoot.id);
+        expect(await db.select().from(files)).toEqual(afterFiles);
+        const rescanItems = await db.select().from(items);
+        expect(rescanItems.map((row) => row.id).sort()).toEqual(
+          itemRows.map((row) => row.id).sort(),
+        );
       });
     }));
 

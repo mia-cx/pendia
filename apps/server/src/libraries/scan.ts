@@ -19,6 +19,7 @@ import {
   type DeletedArtworkFile,
   deleteItemSubtree,
   insertItem,
+  moveItem,
 } from "../db/tree.ts";
 import type { ScanRules } from "../mediums/medium.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
@@ -196,23 +197,30 @@ async function deleteEmptiedItems(
     if (version !== undefined) continue;
     const { parentId } = item;
     await deleteItemSubtree(tx, item.id, deletedArtwork);
-    // Prune only emptied containers; a populated Season or Show stays.
-    let ancestorId = parentId;
-    while (ancestorId !== null) {
-      const [ancestor] = await tx
-        .select({ parentId: items.parentId })
-        .from(items)
-        .where(eq(items.id, ancestorId));
-      if (!ancestor) break;
-      const [child] = await tx
-        .select({ id: items.id })
-        .from(items)
-        .where(eq(items.parentId, ancestorId))
-        .limit(1);
-      if (child !== undefined) break;
-      await deleteItemSubtree(tx, ancestorId, deletedArtwork);
-      ancestorId = ancestor.parentId;
-    }
+    await pruneEmptiedContainers(tx, parentId, deletedArtwork);
+  }
+}
+
+async function pruneEmptiedContainers(
+  tx: Transaction,
+  parentId: string | null,
+  deletedArtwork: DeletedArtworkFile[],
+): Promise<void> {
+  let ancestorId = parentId;
+  while (ancestorId !== null) {
+    const [ancestor] = await tx
+      .select({ parentId: items.parentId })
+      .from(items)
+      .where(eq(items.id, ancestorId));
+    if (!ancestor) break;
+    const [child] = await tx
+      .select({ id: items.id })
+      .from(items)
+      .where(eq(items.parentId, ancestorId))
+      .limit(1);
+    if (child !== undefined) break;
+    await deleteItemSubtree(tx, ancestorId, deletedArtwork);
+    ancestorId = ancestor.parentId;
   }
 }
 
@@ -757,18 +765,72 @@ export async function scanShowDirectory(
               .where(eq(episodes.itemId, episodeId));
           }
         } else {
-          const created = await insertItem(tx, {
-            libraryId,
-            kind: "episode",
-            parentId: seasonId,
-            title: episodeGroup.title,
-            canonicalFolder: seasonGroup.canonicalFolder,
-            extension: {
-              episodeNumber: episodeGroup.episodeNumber,
-              episodeEndNumber: episodeGroup.episodeEndNumber,
-            },
-          });
-          episodeId = created.id;
+          const episodePaths = new Set(
+            episodeGroup.versions.flatMap((version) => version.paths),
+          );
+          const candidateRows = await tx
+            .select({ item: items })
+            .from(files)
+            .innerJoin(items, eq(files.itemId, items.id))
+            .where(
+              and(
+                eq(files.libraryId, libraryId),
+                inArray(files.path, [...episodePaths]),
+              ),
+            );
+          const candidateIds = new Set(candidateRows.map((row) => row.item.id));
+          let preservedEpisode: typeof items.$inferSelect | undefined;
+          if (candidateIds.size > 1) throw new AuthError("CONFLICT");
+          const candidate = candidateRows[0]?.item;
+          if (candidate !== undefined) {
+            if (
+              candidate.libraryId !== libraryId ||
+              candidate.kind !== "episode"
+            ) {
+              throw new AuthError("CONFLICT");
+            }
+            const sourceFiles = await tx
+              .select({ path: files.path })
+              .from(files)
+              .where(eq(files.itemId, candidate.id));
+            if (sourceFiles.every((file) => episodePaths.has(file.path))) {
+              preservedEpisode = candidate;
+            }
+          }
+          if (preservedEpisode === undefined) {
+            const created = await insertItem(tx, {
+              libraryId,
+              kind: "episode",
+              parentId: seasonId,
+              title: episodeGroup.title,
+              canonicalFolder: seasonGroup.canonicalFolder,
+              extension: {
+                episodeNumber: episodeGroup.episodeNumber,
+                episodeEndNumber: episodeGroup.episodeEndNumber,
+              },
+            });
+            episodeId = created.id;
+          } else {
+            // Every File on the source Episode is moving into this group, so
+            // the Item itself moves and keeps all Item-owned state.
+            const oldParentId = preservedEpisode.parentId;
+            const movedItem = await moveItem(tx, preservedEpisode.id, seasonId);
+            if (!movedItem) throw new Error("Episode move returned no row.");
+            await updateItemCanonicalFolder(
+              tx,
+              movedItem,
+              seasonGroup.canonicalFolder,
+            );
+            await tx
+              .update(episodes)
+              .set({
+                episodeNumber: episodeGroup.episodeNumber,
+                episodeEndNumber: episodeGroup.episodeEndNumber,
+              })
+              .where(eq(episodes.itemId, movedItem.id));
+            episodeId = movedItem.id;
+            await pruneEmptiedContainers(tx, oldParentId, deletedArtwork);
+          }
         }
 
         for (const versionGroup of episodeGroup.versions) {

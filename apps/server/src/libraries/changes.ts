@@ -141,6 +141,39 @@ export async function updateItemCanonicalFolder(
     .where(eq(items.id, item.id));
 }
 
+async function removeMoveCollision(
+  db: Connection,
+  survivor: typeof files.$inferSelect,
+  displaced: typeof files.$inferSelect,
+  deletedArtwork: DeletedArtworkFile[],
+): Promise<void> {
+  if (displaced.itemId === survivor.itemId) {
+    const [destinationSibling] = await db
+      .select({ id: files.id })
+      .from(files)
+      .where(
+        and(
+          eq(files.versionId, displaced.versionId),
+          ne(files.id, displaced.id),
+        ),
+      )
+      .limit(1);
+    if (destinationSibling === undefined) {
+      await db.delete(versions).where(eq(versions.id, displaced.versionId));
+    } else {
+      await db.delete(files).where(eq(files.id, displaced.id));
+    }
+    return;
+  }
+  const sourceRootId = await rootItemId(db, survivor.itemId);
+  const destinationRootId = await rootItemId(db, displaced.itemId);
+  await deleteItemSubtree(
+    db,
+    sourceRootId === destinationRootId ? displaced.itemId : destinationRootId,
+    deletedArtwork,
+  );
+}
+
 /** Applies queued moves and deletes before a directory scan writes its result. */
 export async function applyScanChanges(
   db: Connection,
@@ -196,13 +229,46 @@ export async function applyScanChanges(
   }
   // Ordered chains land an earlier move's row at a later move's source path.
   const producedMoves = new Map<string, typeof files.$inferSelect>();
+  // Consumed originals stay identifiable so a repeated event for an already
+  // moved row can displace whichever produced row now occupies its source.
+  const consumedMoveSources = new Map<string, typeof files.$inferSelect>();
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
     if (change.kind === "move") {
       if (previousPath === undefined) throw new AuthError("INVALID_INPUT");
       let file = moveSources.get(previousPath);
-      if (file !== undefined) moveSources.delete(previousPath);
+      if (file !== undefined) {
+        moveSources.delete(previousPath);
+        consumedMoveSources.set(previousPath, file);
+      }
       if (file === undefined) {
+        const consumedOriginal = consumedMoveSources.get(previousPath);
+        if (consumedOriginal !== undefined) {
+          const [currentConsumed] = await db
+            .select({ path: files.path })
+            .from(files)
+            .where(eq(files.id, consumedOriginal.id));
+          if (currentConsumed === undefined) continue;
+          if (currentConsumed.path === path) {
+            const producedAtSource = producedMoves.get(previousPath);
+            if (
+              producedAtSource !== undefined &&
+              producedAtSource.id !== consumedOriginal.id
+            ) {
+              await removeMoveCollision(
+                db,
+                consumedOriginal,
+                producedAtSource,
+                deletedArtwork,
+              );
+              producedMoves.delete(previousPath);
+            }
+            continue;
+          }
+          if (currentConsumed.path !== previousPath) continue;
+          // The original row moved back to this source path; resolve it
+          // through producedMoves below like any other pending move.
+        }
         file = producedMoves.get(previousPath);
         if (file !== undefined) producedMoves.delete(previousPath);
       }
@@ -212,35 +278,7 @@ export async function applyScanChanges(
         .where(and(eq(files.libraryId, libraryId), eq(files.path, path)));
       if (file && destination) {
         if (file.id === destination.id) continue;
-        if (destination.itemId === file.itemId) {
-          const [destinationSibling] = await db
-            .select({ id: files.id })
-            .from(files)
-            .where(
-              and(
-                eq(files.versionId, destination.versionId),
-                ne(files.id, destination.id),
-              ),
-            )
-            .limit(1);
-          if (destinationSibling === undefined) {
-            await db
-              .delete(versions)
-              .where(eq(versions.id, destination.versionId));
-          } else {
-            await db.delete(files).where(eq(files.id, destination.id));
-          }
-        } else {
-          const sourceRootId = await rootItemId(db, file.itemId);
-          const destinationRootId = await rootItemId(db, destination.itemId);
-          await deleteItemSubtree(
-            db,
-            sourceRootId === destinationRootId
-              ? destination.itemId
-              : destinationRootId,
-            deletedArtwork,
-          );
-        }
+        await removeMoveCollision(db, file, destination, deletedArtwork);
       }
       if (file) {
         await db.update(files).set({ path }).where(eq(files.id, file.id));

@@ -22,8 +22,10 @@ $effect(() => {
   resetRouteState();
   access.clear();
   sessions.clear();
-  void access.reload();
-  void sessions.reload();
+  const target = id;
+  void serial(target, async () => {
+    await Promise.all([access.reload(), sessions.reload()]);
+  });
 });
 
 type FailureShape = ReturnType<typeof readFailure>;

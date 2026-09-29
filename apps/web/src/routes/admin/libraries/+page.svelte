@@ -48,6 +48,7 @@ let deleteFailure = $state<ReturnType<typeof readFailure> | undefined>(
 
 let scanBusy = $state<Record<string, boolean>>({});
 let scanFailures = $state<Record<string, string>>({});
+let scanRuns = $state<Record<string, string>>({});
 
 const controller = new AbortController();
 onDestroy(() => controller.abort());
@@ -120,13 +121,16 @@ async function saveRename(row: LibraryRow) {
   }
 }
 
+/** Starts a scan and follows it, or follows the run this row already started. */
 async function scanNow(row: LibraryRow) {
   scanBusy[row.id] = true;
   delete scanFailures[row.id];
   delete statusFailures[row.id];
   const ticket = claimStatus(row.id);
   try {
-    const { jobId } = await client.libraries.scan({ id: row.id });
+    const jobId =
+      scanRuns[row.id] ?? (await client.libraries.scan({ id: row.id })).jobId;
+    scanRuns[row.id] = jobId;
     const settled = await waitForScan(client, row.id, {
       signal: controller.signal,
       runId: jobId,
@@ -135,6 +139,7 @@ async function scanNow(row: LibraryRow) {
       },
     });
     if (holdsStatus(row.id, ticket)) statuses[row.id] = settled;
+    delete scanRuns[row.id];
   } catch (error) {
     scanFailures[row.id] =
       error instanceof Error
@@ -263,7 +268,10 @@ function scanCell(row: LibraryRow): string {
               <button
                 type="button"
                 onclick={() => scanNow(row)}
-                disabled={scanBusy[row.id] === true}>Scan now</button
+                disabled={scanBusy[row.id] === true}
+                >{scanRuns[row.id] === undefined
+                  ? "Scan now"
+                  : "Check again"}</button
               >
               <button type="button" onclick={() => startRename(row)}
                 >Rename</button

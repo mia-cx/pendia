@@ -1,5 +1,5 @@
 <script lang="ts">
-import { onDestroy } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
@@ -16,7 +16,18 @@ const mediumNames: Record<LibraryRow["medium"], string> = {
 
 let statuses = $state<Record<string, ScanStatus>>({});
 let statusFailures = $state<Record<string, string>>({});
-let statusTicket = 0;
+
+const statusTickets = new Map<string, number>();
+
+function claimStatus(id: string): number {
+  const ticket = (statusTickets.get(id) ?? 0) + 1;
+  statusTickets.set(id, ticket);
+  return ticket;
+}
+
+function holdsStatus(id: string, ticket: number): boolean {
+  return statusTickets.get(id) === ticket;
+}
 
 let addName = $state("");
 let addRoot = $state("");
@@ -48,34 +59,25 @@ $effect(() => {
 });
 
 async function loadStatuses(rows: readonly LibraryRow[]) {
-  const ticket = ++statusTicket;
-  statuses = {};
-  statusFailures = {};
-  const results = await Promise.all(
-    rows.map(async (row) => {
+  const targets = untrack(() =>
+    rows.filter((row) => scanBusy[row.id] !== true),
+  );
+  await Promise.all(
+    targets.map(async (row) => {
+      const ticket = claimStatus(row.id);
       try {
-        return {
-          id: row.id,
-          status: await client.libraries.scanStatus({ id: row.id }),
-        };
+        const status = await client.libraries.scanStatus({ id: row.id });
+        if (!holdsStatus(row.id, ticket)) return;
+        statuses[row.id] = status;
+        delete statusFailures[row.id];
+        delete scanFailures[row.id];
       } catch {
-        return { id: row.id, status: undefined };
+        if (!holdsStatus(row.id, ticket)) return;
+        delete statuses[row.id];
+        statusFailures[row.id] = "The scan status could not be read.";
       }
     }),
   );
-  if (ticket !== statusTicket) return;
-  const next: Record<string, ScanStatus> = {};
-  const failed: Record<string, string> = {};
-  for (const result of results) {
-    if (result.status) {
-      next[result.id] = result.status;
-      delete scanFailures[result.id];
-    } else {
-      failed[result.id] = "The scan status could not be read.";
-    }
-  }
-  statuses = next;
-  statusFailures = failed;
 }
 
 async function addLibrary(event: SubmitEvent) {
@@ -121,15 +123,20 @@ async function saveRename(row: LibraryRow) {
 async function scanNow(row: LibraryRow) {
   scanBusy[row.id] = true;
   delete scanFailures[row.id];
+  const ticket = claimStatus(row.id);
   try {
     const { jobId } = await client.libraries.scan({ id: row.id });
-    statuses[row.id] = await waitForScan(client, row.id, {
+    const settled = await waitForScan(client, row.id, {
       signal: controller.signal,
       runId: jobId,
       onStatus: (reading) => {
-        statuses[row.id] = reading;
+        if (holdsStatus(row.id, ticket)) statuses[row.id] = reading;
       },
     });
+    if (holdsStatus(row.id, ticket)) {
+      statuses[row.id] = settled;
+      delete statusFailures[row.id];
+    }
   } catch (error) {
     scanFailures[row.id] =
       error instanceof Error

@@ -311,6 +311,25 @@ One finding, on the libraries add form.
   swallow a reload failure the same way and keep it: re-running a rename is
   harmless and re-running a delete answers NOT_FOUND.
 
+### Codex round at `9c8a3cc`
+
+Three findings, all real.
+
+- `5918ff0`: a queued read is guarded on its visit. `6d6fce7` queued the
+  revisit reads by target, but the resources read the reactive route id when
+  they run, so a callback queued for one user could fetch another outside that
+  user's queue and land a pre-write snapshot.
+- `51028ef`: `deviceInfo` tolerates a browser that denies storage. The old
+  guard covered a missing `localStorage`, not a denied one, and the throw took
+  the whole sign-in with it because it runs before the login request. The
+  session itself is a cookie, so this rescues a storage-denied context rather
+  than a cookie-denied one.
+- `d8c4e54`: `writeUserSettings` rejects a NUL in the ceiling instead of
+  letting Postgres turn it into a 500. The repository already guards its other
+  text inputs this way, in `normalizeName`, `normalizeRoot` and
+  `setProviderKey`. This one carries a test: the existing rejection loop in
+  `admin.test.ts` gained the value, and it fails against the unfixed writer.
+
 ### Gate after the Codex round, from the repository root
 
 Run at `b354609`, against the baseline recorded at `87d57fa`. The gate at

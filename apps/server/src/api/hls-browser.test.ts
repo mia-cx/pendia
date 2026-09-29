@@ -57,9 +57,11 @@ async function seed(db: Database) {
   return { admin, owner, accountToken, keyToken };
 }
 
+// Google Chrome comes first: Chromium builds without proprietary codecs cannot
+// decode the H.264 and AAC fixture and fail with manifestIncompatibleCodecsError.
 const browser =
   Bun.env.PENDIA_BROWSER ??
-  ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"]
+  ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
     .map((name) => Bun.which(name))
     .find((path) => path !== null) ??
   undefined;
@@ -68,6 +70,8 @@ if (databaseUrl && browser === undefined)
   console.info(
     "Skipping browser playback test: no Chromium found; set PENDIA_BROWSER.",
   );
+if (databaseUrl && browser !== undefined)
+  console.info(`Browser playback test uses ${browser}.`);
 
 type Report = {
   errors: string[];

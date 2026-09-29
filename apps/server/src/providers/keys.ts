@@ -72,12 +72,6 @@ export async function readProviderKeyNames(db: Database) {
   return Object.keys(storedKeys(row?.value)).sort();
 }
 
-/** Lists the provider key names for a caller holding manage-server; values never leave the server. */
-export async function listProviderKeys(db: Database, actorId: string) {
-  await requirePermission(db, actorId, "manage-server");
-  return readProviderKeyNames(db);
-}
-
 /** Stores one provider key for a caller holding manage-server and returns the sorted names. */
 export async function setProviderKey(
   db: Database,

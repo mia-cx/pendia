@@ -5,10 +5,6 @@ import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
 const settings = resource(() => client.settings.get());
-const denied = $derived(
-  settings.failure?.code === "FORBIDDEN" ||
-    settings.failure?.code === "UNAUTHORIZED",
-);
 
 type FailureShape = ReturnType<typeof readFailure>;
 
@@ -141,22 +137,20 @@ async function removeKey(name: string) {
       Trust is by exact IP address, not CIDR or hostname. No proxy is trusted
       by default.
     </p>
-    {#if !denied}
-      <form onsubmit={saveProxies} class="stack">
-        {#if proxyFailure}
-          <Failure failure={proxyFailure} />
-        {/if}
-        <label for="proxyList">One address per line</label>
-        <textarea
-          id="proxyList"
-          name="proxies"
-          rows="4"
-          value={proxyValue}
-          oninput={(event) => (proxyInput = event.currentTarget.value)}
-        ></textarea>
-        <button type="submit" disabled={proxyBusy}>Save</button>
-      </form>
-    {/if}
+    <form onsubmit={saveProxies} class="stack">
+      {#if proxyFailure}
+        <Failure failure={proxyFailure} />
+      {/if}
+      <label for="proxyList">One address per line</label>
+      <textarea
+        id="proxyList"
+        name="proxies"
+        rows="4"
+        value={proxyValue}
+        oninput={(event) => (proxyInput = event.currentTarget.value)}
+      ></textarea>
+      <button type="submit" disabled={proxyBusy}>Save</button>
+    </form>
   </section>
 
   <section>
@@ -165,21 +159,19 @@ async function removeKey(name: string) {
       Artwork routes accept anonymous requests by default, and nothing enforces
       this toggle yet because no artwork route exists in this build.
     </p>
-    {#if !denied}
-      <div class="check">
-        <input
-          id="artworkAuth"
-          type="checkbox"
-          checked={artChecked ?? settings.data.artworkRequiresAuth}
-          onchange={(event) => {
-            artChecked = event.currentTarget.checked;
-            void saveArtwork(artChecked);
-          }}
-          disabled={artBusy}
-        />
-        <label for="artworkAuth">Require auth for artwork</label>
-      </div>
-    {/if}
+    <div class="check">
+      <input
+        id="artworkAuth"
+        type="checkbox"
+        checked={artChecked ?? settings.data.artworkRequiresAuth}
+        onchange={(event) => {
+          artChecked = event.currentTarget.checked;
+          void saveArtwork(artChecked);
+        }}
+        disabled={artBusy}
+      />
+      <label for="artworkAuth">Require auth for artwork</label>
+    </div>
     {#if artFailure}
       <Failure failure={artFailure} />
     {/if}
@@ -203,13 +195,11 @@ async function removeKey(name: string) {
           <tr>
             <td class="name">{name}</td>
             <td class="actions">
-              {#if !denied}
-                <button
-                  type="button"
-                  onclick={() => removeKey(name)}
-                  disabled={removeBusy[name] === true}>Remove</button
-                >
-              {/if}
+              <button
+                type="button"
+                onclick={() => removeKey(name)}
+                disabled={removeBusy[name] === true}>Remove</button
+              >
               {#if Object.hasOwn(removeFailures, name)}
                 <Failure failure={removeFailures[name]} />
               {/if}
@@ -221,25 +211,23 @@ async function removeKey(name: string) {
     {#if settings.data.providerKeys.length === 0}
       <p class="muted">No provider keys set.</p>
     {/if}
-    {#if !denied}
-      <form onsubmit={addKey} class="stack keys">
-        {#if keyFailure}
-          <Failure failure={keyFailure} />
-        {/if}
-        <label for="keyName">Name</label>
-        <input id="keyName" name="name" required bind:value={keyName} />
-        <label for="keyValue">Value</label>
-        <input
-          id="keyValue"
-          name="value"
-          type="password"
-          autocomplete="off"
-          required
-          bind:value={keyValue}
-        />
-        <button type="submit" disabled={keyBusy}>Set key</button>
-      </form>
-    {/if}
+    <form onsubmit={addKey} class="stack keys">
+      {#if keyFailure}
+        <Failure failure={keyFailure} />
+      {/if}
+      <label for="keyName">Name</label>
+      <input id="keyName" name="name" required bind:value={keyName} />
+      <label for="keyValue">Value</label>
+      <input
+        id="keyValue"
+        name="value"
+        type="password"
+        autocomplete="off"
+        required
+        bind:value={keyValue}
+      />
+      <button type="submit" disabled={keyBusy}>Set key</button>
+    </form>
   </section>
 
   <section>

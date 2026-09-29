@@ -3,7 +3,11 @@ import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { listProviderKeys, removeProviderKey, setProviderKey } from "./keys.ts";
+import {
+  readProviderKeyNames,
+  removeProviderKey,
+  setProviderKey,
+} from "./keys.ts";
 
 async function seed(db: Database) {
   const admin = await setupAdmin(db, {
@@ -22,17 +26,14 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const { admin } = await seed(db);
-      expect(await listProviderKeys(db, admin.id)).toEqual([]);
+      expect(await readProviderKeyNames(db)).toEqual([]);
       expect(
         await setProviderKey(db, admin.id, " TMDB ", "secret-one"),
       ).toEqual(["tmdb"]);
       expect(
         await setProviderKey(db, admin.id, "OpenSubtitles", "secret-two"),
       ).toEqual(["opensubtitles", "tmdb"]);
-      expect(await listProviderKeys(db, admin.id)).toEqual([
-        "opensubtitles",
-        "tmdb",
-      ]);
+      expect(await readProviderKeyNames(db)).toEqual(["opensubtitles", "tmdb"]);
       expect(await setProviderKey(db, admin.id, "tmdb", "rotated")).toEqual([
         "opensubtitles",
         "tmdb",
@@ -40,7 +41,7 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       expect(await removeProviderKey(db, admin.id, "TMDB")).toEqual([
         "opensubtitles",
       ]);
-      expect(await listProviderKeys(db, admin.id)).toEqual(["opensubtitles"]);
+      expect(await readProviderKeyNames(db)).toEqual(["opensubtitles"]);
     }));
 
   test("concurrent sets on a missing row keep both keys", () =>
@@ -51,7 +52,7 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
         setProviderKey(db, admin.id, "tmdb", "secret-one"),
         setProviderKey(db, admin.id, "tvdb", "secret-two"),
       ]);
-      expect(await listProviderKeys(db, admin.id)).toEqual(["tmdb", "tvdb"]);
+      expect(await readProviderKeyNames(db)).toEqual(["tmdb", "tvdb"]);
     }));
 
   test("removing an unknown key is NOT_FOUND", () =>
@@ -77,9 +78,9 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       expect(
         await setProviderKey(db, admin.id, "constructor", "secret"),
       ).toEqual(["constructor"]);
-      expect(await listProviderKeys(db, admin.id)).toEqual(["constructor"]);
+      expect(await readProviderKeyNames(db)).toEqual(["constructor"]);
       expect(await removeProviderKey(db, admin.id, "constructor")).toEqual([]);
-      expect(await listProviderKeys(db, admin.id)).toEqual([]);
+      expect(await readProviderKeyNames(db)).toEqual([]);
     }));
 
   test("invalid names and values are INVALID_INPUT", () =>
@@ -105,7 +106,7 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       await expect(
         removeProviderKey(db, admin.id, "bad name"),
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-      expect(await listProviderKeys(db, admin.id)).toEqual([]);
+      expect(await readProviderKeyNames(db)).toEqual([]);
     }));
 
   test("callers without manage-server are FORBIDDEN", () =>
@@ -113,9 +114,6 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       await migrateDatabase(db);
       const { admin, viewer } = await seed(db);
       await setProviderKey(db, admin.id, "tmdb", "secret");
-      await expect(listProviderKeys(db, viewer.id)).rejects.toMatchObject({
-        code: "FORBIDDEN",
-      });
       await expect(
         setProviderKey(db, viewer.id, "tvdb", "secret"),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -130,7 +128,7 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       const { admin } = await seed(db);
       const secret = "super-secret-token-9f8e7d";
       const afterSet = await setProviderKey(db, admin.id, "tmdb", secret);
-      const listed = await listProviderKeys(db, admin.id);
+      const listed = await readProviderKeyNames(db);
       const afterRemove = await removeProviderKey(db, admin.id, "tmdb");
       for (const result of [afterSet, listed, afterRemove])
         expect(JSON.stringify(result)).not.toContain(secret);

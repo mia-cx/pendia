@@ -10,6 +10,9 @@ const { data }: PageProps = $props();
 const adminLocked = $derived(!data.me.admin);
 
 const list = resource(() => client.groups.list());
+const denied = $derived(
+  list.failure?.code === "FORBIDDEN" || list.failure?.code === "UNAUTHORIZED",
+);
 type GroupRow = NonNullable<typeof list.data>[number];
 
 type FailureShape = ReturnType<typeof readFailure>;
@@ -160,6 +163,7 @@ async function saveEdit(row: GroupRow) {
   </table>
 {/if}
 
+{#if !denied}
 <form onsubmit={addGroup}>
   <h3>Create a group</h3>
   {#if addFailure}
@@ -193,6 +197,7 @@ async function saveEdit(row: GroupRow) {
   </fieldset>
   <button type="submit" disabled={addBusy || adminLocked}>Create group</button>
 </form>
+{/if}
 
 <style>
 table {

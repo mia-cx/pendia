@@ -281,7 +281,7 @@ The walker skips symlinks, excluded extras directories, extra filename suffixes,
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 
-Scans persist container keyframe indexes on Versions. The first imported Version establishes each cut's immutable segment timeline through the playback module. Later Versions reuse it and record their own alignment. Missing or unsupported indexes set lazyIndexPending for first-play indexing. Nonzero-start indexes remain stored but cannot establish a timeline under the current playback contract. Missing-file reconciliation and change signals are covered below. Metadata providers belong to a later slice.
+Scans persist container keyframe indexes on Versions. The first imported Version establishes each cut's immutable segment timeline through the playback module. Later Versions reuse it and record their own alignment. Missing or unsupported indexes set lazyIndexPending for first-play indexing. Nonzero-start indexes remain stored but cannot establish a timeline under the current playback contract. Missing-file reconciliation and change signals are covered below. Metadata provider configuration is covered under Metadata and artwork settings.
 
 Scan tests generate short MKV fixtures with ffmpeg and compare their stream lists with ffprobe. Both commands must be on PATH. Database-backed scan tests use the disposable database helper described above.
 
@@ -296,3 +296,52 @@ Absolute writer paths become library-relative paths and debounce for 10 seconds 
 A rename updates the stored File and Item paths before the scan writes, so Item, Version, File and Progress identity survive. A delete removes the missing Version, and the Item goes only when no Version remains. Provider ids from Servarr persist on the Item. Sonarr and Radarr changes both queue scans through their matching medium.
 
 The `api` and `all` roles run a directory-mtime repair pass after startup and every 24 hours. It walks movie and show Library directories without statting files, compares each directory mtime with a snapshot kept in process memory, and queues a directory scan for every changed canonical folder and every Item folder missing on disk. Repair and manual fan-out scans carry the reconcileMissing flag, so a scan removes imported Versions whose files disappeared and the emptied movie Items, show Episodes and Seasons they leave behind. An unavailable root is skipped without deleting rows. A restart rebuilds the snapshot, so every reachable directory is checked once after boot. `POST /api/libraries/{id}/scan` remains the manual full scan.
+
+### Metadata and artwork settings
+
+The `settings` row with key `metadata` holds one JSON object. Missing fields use these defaults:
+
+```json
+{
+  "providerOrder": ["tmdb"],
+  "confidenceThreshold": 0.9,
+  "libraries": {},
+  "tmdb": null
+}
+```
+
+`providerOrder` sets the enabled providers in priority order. Only `tmdb` is built in today. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
+
+`libraries` maps a Library id to its provider list. A missing entry uses `providerOrder`, an explicit `[]` disables metadata for that Library, and an explicit `["tmdb"]` enables only TMDB:
+
+```json
+{
+  "libraries": {
+    "<movies-library-id>": ["tmdb"],
+    "<shows-library-id>": []
+  }
+}
+```
+
+`tmdb` must be `{ "apiKey": "..." }` before the TMDB provider is constructed. Keep the key out of source control and logs. A missing or null value means no TMDB provider, and scanned movies stay unmatched.
+
+Settings apply to the next provider-fetch job, and rescanning queues enrichment. `artworkRequiresAuth` stays in the separate `auth` settings row and defaults to false.
+
+The admin settings screen is a later issue. Until then, configure metadata with this PostgreSQL 18 upsert, replacing the `<tmdb-api-key>` placeholder:
+
+```sql
+INSERT INTO settings (id, key, value)
+VALUES (
+  uuidv7(),
+  'metadata',
+  jsonb_build_object(
+    'providerOrder', jsonb_build_array('tmdb'),
+    'confidenceThreshold', 0.9,
+    'libraries', jsonb_build_object(),
+    'tmdb', jsonb_build_object('apiKey', '<tmdb-api-key>')
+  )
+)
+ON CONFLICT (key) DO UPDATE
+SET value = EXCLUDED.value,
+    updated_at = clock_timestamp();
+```

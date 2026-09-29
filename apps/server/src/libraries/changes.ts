@@ -236,14 +236,43 @@ export async function applyScanChanges(
   // Consumed originals stay identifiable so a repeated event for an already
   // moved row can displace whichever produced row now occupies its source.
   const consumedMoveSources = new Map<string, typeof files.$inferSelect>();
+  const originalMoveSourcePaths = new Set(moveSources.keys());
+  const firstMoveSource = normalized.find(
+    (entry) => entry.change.kind === "move",
+  )?.previousPath;
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
     if (change.kind === "move") {
       if (previousPath === undefined) throw new AuthError("INVALID_INPUT");
-      let file = moveSources.get(previousPath);
-      if (file !== undefined) {
+      const producedAtSource = producedMoves.get(previousPath);
+      const parkedOriginal = moveSources.get(previousPath);
+      let file: typeof files.$inferSelect | undefined;
+      if (
+        parkedOriginal !== undefined &&
+        producedAtSource !== undefined &&
+        producedAtSource.id !== parkedOriginal.id
+      ) {
         moveSources.delete(previousPath);
-        consumedMoveSources.set(previousPath, file);
+        if (originalMoveSourcePaths.has(path)) {
+          // Simultaneous swap: the parked original still owns this transition.
+          consumedMoveSources.set(previousPath, parkedOriginal);
+          file = parkedOriginal;
+        } else {
+          // Ordered overwrite: the produced row holds the surviving bytes and
+          // the parked original was overwritten.
+          await removeMoveCollision(
+            db,
+            producedAtSource,
+            parkedOriginal,
+            deletedArtwork,
+          );
+          producedMoves.delete(previousPath);
+          file = producedAtSource;
+        }
+      } else if (parkedOriginal !== undefined) {
+        moveSources.delete(previousPath);
+        consumedMoveSources.set(previousPath, parkedOriginal);
+        file = parkedOriginal;
       }
       if (file === undefined) {
         const consumedOriginal = consumedMoveSources.get(previousPath);
@@ -254,27 +283,48 @@ export async function applyScanChanges(
             .where(eq(files.id, consumedOriginal.id));
           if (currentConsumed === undefined) continue;
           if (currentConsumed.path === path) {
-            const producedAtSource = producedMoves.get(previousPath);
+            const producedRow = producedMoves.get(previousPath);
             if (
-              producedAtSource !== undefined &&
-              producedAtSource.id !== consumedOriginal.id
+              producedRow === undefined ||
+              producedRow.id === consumedOriginal.id
             ) {
+              continue;
+            }
+            if (previousPath === firstMoveSource) {
               await removeMoveCollision(
                 db,
                 consumedOriginal,
-                producedAtSource,
+                producedRow,
                 deletedArtwork,
               );
               producedMoves.delete(previousPath);
+              continue;
             }
+            // A repeated reverse event for a later source: the produced row
+            // carries the first surviving identity and the consumed original
+            // at the destination is stale.
+            await removeMoveCollision(
+              db,
+              producedRow,
+              consumedOriginal,
+              deletedArtwork,
+            );
+            consumedMoveSources.delete(previousPath);
+            producedMoves.delete(previousPath);
+            file = producedRow;
+          } else if (currentConsumed.path !== previousPath) {
             continue;
           }
-          if (currentConsumed.path !== previousPath) continue;
-          // The original row moved back to this source path; resolve it
-          // through producedMoves below like any other pending move.
+          if (file === undefined) {
+            // The original row moved back to this source path; resolve it
+            // through producedMoves like any other pending move.
+            file = producedMoves.get(previousPath);
+            if (file !== undefined) producedMoves.delete(previousPath);
+          }
+        } else {
+          file = producedMoves.get(previousPath);
+          if (file !== undefined) producedMoves.delete(previousPath);
         }
-        file = producedMoves.get(previousPath);
-        if (file !== undefined) producedMoves.delete(previousPath);
       }
       const [destination] = await db
         .select()

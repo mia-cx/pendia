@@ -123,6 +123,14 @@ describe("TMDB metadata provider", () => {
     ]);
   });
 
+  test("fetch resolves null for a movie TMDB does not know", async () => {
+    const { request } = jsonRequest({ status_code: 34 }, 404);
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    expect(await provider.fetch({ providerId: "348", kind: "movie" })).toBe(
+      null,
+    );
+  });
+
   test("fetch rejects a record for a different movie", async () => {
     const { request } = jsonRequest({ id: 550, title: "Fight Club" });
     const provider = createTmdbMetadataProvider(apiKey, request);

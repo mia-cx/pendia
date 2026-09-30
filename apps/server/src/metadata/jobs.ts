@@ -56,6 +56,7 @@ export function registerMetadataJobs(
         .update(items)
         .set({ metadataState: "pending", updatedAt: new Date() })
         .where(eq(items.id, payload.itemId));
+      await publishLibraryChanged(db, payload.itemId);
       throw error;
     }
     await publishLibraryChanged(db, payload.itemId);

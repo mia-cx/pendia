@@ -6,7 +6,9 @@ const imageBaseUrl = "https://image.tmdb.org/t/p/original";
 type SearchQuery = Parameters<MetadataProvider["search"]>[0];
 type FetchQuery = Parameters<MetadataProvider["fetch"]>[0];
 type MetadataMatch = Awaited<ReturnType<MetadataProvider["search"]>>[number];
-type MetadataResult = Awaited<ReturnType<MetadataProvider["fetch"]>>;
+type MetadataResult = NonNullable<
+  Awaited<ReturnType<MetadataProvider["fetch"]>>
+>;
 type Credit = MetadataResult["credits"][number];
 type Artwork = MetadataResult["artwork"][number];
 
@@ -102,17 +104,25 @@ async function readJsonBody(
   }
 }
 
+const notFoundStatus = 404;
+
+/** Reads one TMDB JSON body; with `allowMissing`, a 404 resolves undefined, which no JSON body can produce. */
 async function requestJson(
   request: typeof fetch,
   url: URL,
   timeoutMs: number,
   maxResponseBytes: number,
+  allowMissing = false,
 ): Promise<unknown> {
   const signal = AbortSignal.timeout(timeoutMs);
   const response = await request(url, {
     headers: { accept: "application/json" },
     signal,
   });
+  if (allowMissing && response.status === notFoundStatus) {
+    await response.body?.cancel();
+    return undefined;
+  }
   if (!response.ok)
     throw new Error(`TMDB request failed with status ${response.status}.`);
   return readJsonBody(response, signal, maxResponseBytes);
@@ -294,7 +304,7 @@ async function fetchMovie(
   match: FetchQuery,
   timeoutMs: number,
   maxResponseBytes: number,
-): Promise<MetadataResult> {
+): Promise<MetadataResult | null> {
   if (match.kind !== "movie") throw new Error("TMDB only supports movies.");
   if (!/^\d+$/.test(match.providerId) || Number(match.providerId) <= 0)
     throw new Error("Invalid TMDB provider id.");
@@ -304,9 +314,16 @@ async function fetchMovie(
     "append_to_response",
     "credits,release_dates,external_ids,images",
   );
-  const data = asObject(
-    await requestJson(request, url, timeoutMs, maxResponseBytes),
+  // TMDB answers 404 for deleted or merged movies.
+  const body = await requestJson(
+    request,
+    url,
+    timeoutMs,
+    maxResponseBytes,
+    true,
   );
+  if (body === undefined) return null;
+  const data = asObject(body);
   const id = requiredId(data.id);
   // A record for another movie must never land on this Item.
   if (id !== Number(match.providerId)) invalid();

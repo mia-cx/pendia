@@ -550,10 +550,12 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
             .where(eq(providerIds.itemId, item.id)),
         ).toHaveLength(2);
         expect(await db.select().from(artwork)).toHaveLength(0);
+        // One event for the committed metadata, one for the reset to pending.
         expect(await db.select().from(events)).toMatchObject([
           { kind: "library.changed" },
+          { kind: "library.changed" },
         ]);
-        expect(await db.select().from(events)).toHaveLength(1);
+        expect(await db.select().from(events)).toHaveLength(2);
 
         imageFails = false;
         await db
@@ -565,7 +567,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         await registry.run(retried ?? job);
         await queue.complete(retried ?? job);
         expect(await db.select().from(artwork)).toHaveLength(1);
-        expect(await db.select().from(events)).toHaveLength(3);
+        expect(await db.select().from(events)).toHaveLength(4);
         expect((await storedItem(db, item.id)).metadataState).toBe("matched");
       });
     }));

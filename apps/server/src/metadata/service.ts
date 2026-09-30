@@ -315,6 +315,9 @@ export async function applyMetadata(
         providerId: existingValue,
         kind: item.kind,
       });
+      // The provider no longer knows the stored id: an admin has to fix it.
+      if (result === null)
+        return persistUnmatched(db, item.id, item.libraryId, idSnapshot);
       return persistMatch(
         db,
         item.id,
@@ -338,6 +341,8 @@ export async function applyMetadata(
       providerId: best.providerId,
       kind: item.kind,
     });
+    // The match vanished between search and fetch; try the next provider.
+    if (result === null) continue;
     return persistMatch(
       db,
       item.id,

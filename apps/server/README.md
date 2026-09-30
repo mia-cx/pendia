@@ -256,7 +256,7 @@ Group permission edits apply to custom groups only. The built-in `admins` and `u
 Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `settings.update`. OIDC stays read-only in this slice.
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}?width=<pixels>`; `width` is required and accepts an integer from 1 through 4096.
-Details add `parentId`, `overview`, `contentRating`, `genres`, `tags`, `metadataState` and `updatedAt`. `metadataState` is `pending` until an enabled provider looks at the Item, `matched` after a confident match, and `unmatched` when a provider searched and found none, which is the state an admin needs to resolve by hand. Instants are the database's own UTC text at microsecond precision.
+Details add `parentId`, `overview`, `contentRating`, `genres`, `tags`, `metadataState` and `updatedAt`. `metadataState` is `pending` until an enabled provider looks at the Item, and again while a failed poster download waits for the next scan to retry it. It is `matched` after a confident match. It is `unmatched` when a provider searched and found no confident match, or has no record for the Item's stored id; that is the state an admin resolves by hand. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.
 `cursor` is opaque, bound to that order and carries the microsecond instant, so a row that shares a millisecond with its predecessor still pages.

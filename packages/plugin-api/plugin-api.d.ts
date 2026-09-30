@@ -174,7 +174,8 @@ export interface MetadataProvider {
   id: string;
   kinds: ItemKind[];
   search(query: { title: string; year?: number; kind: ItemKind }): Promise<MetadataMatch[]>;
-  fetch(match: { providerId: string; kind: ItemKind }): Promise<MetadataResult>;
+  /** Resolves null when the provider has no record for `providerId`, so the host can mark the Item unmatched. */
+  fetch(match: { providerId: string; kind: ItemKind }): Promise<MetadataResult | null>;
 }
 
 export interface MetadataMatch {

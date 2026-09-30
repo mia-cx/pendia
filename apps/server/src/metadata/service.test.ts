@@ -30,7 +30,9 @@ function mockProvider(
   behavior: {
     kinds?: ItemKind[];
     search?: (query: SearchQuery) => MetadataMatch[] | Promise<MetadataMatch[]>;
-    fetch?: (match: FetchQuery) => MetadataResult | Promise<MetadataResult>;
+    fetch?: (
+      match: FetchQuery,
+    ) => MetadataResult | null | Promise<MetadataResult | null>;
   } = {},
 ) {
   const calls = { search: [] as SearchQuery[], fetch: [] as FetchQuery[] };
@@ -350,6 +352,25 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       });
       expect(beta.calls.search).toHaveLength(0);
       expect(beta.calls.fetch).toHaveLength(0);
+    }));
+
+  test("a stored id the provider no longer knows stores unmatched", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      await db
+        .insert(providerIds)
+        .values({ provider: "tmdb", value: "348", itemId: item.id });
+      const { calls, provider } = mockProvider("tmdb", {
+        fetch: async () => null,
+      });
+      const application = await applyMetadata(db, item.id, [provider]);
+      expect(application).toEqual({ state: "unmatched", artwork: [] });
+      expect(calls.search).toHaveLength(0);
+      expect(await storedItem(db, item.id)).toMatchObject({
+        title: "Inception",
+        metadataState: "unmatched",
+      });
     }));
 
   test("an explicit empty library list makes no calls and leaves the Item pending", () =>

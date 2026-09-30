@@ -13,7 +13,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq, sql } from "drizzle-orm";
-import sharp from "sharp";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -119,16 +118,9 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
         const { item } = await fixture(db, root);
-        const replacement = await sharp({
-          create: {
-            width: 4,
-            height: 4,
-            channels: 3,
-            background: { r: 255, g: 0, b: 0 },
-          },
-        })
-          .png()
-          .toBuffer();
+        const replacement = Buffer.from(
+          await new Bun.Image(png).resize(4).png().bytes(),
+        );
         const { calls, request } = mockRequest((url) =>
           url.endsWith("new.jpg")
             ? new Response(replacement)
@@ -269,7 +261,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const { request } = mockRequest(() => new Response(png));
         const first = await storeArtworkOriginal(db, item.id, poster, request);
         const truncated = png.subarray(0, 70);
-        const meta = await sharp(truncated).metadata();
+        const meta = await new Bun.Image(truncated).metadata();
         expect({ width: meta.width, height: meta.height }).toEqual({
           width: 8,
           height: 8,
@@ -674,16 +666,10 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
         const { item } = await fixture(db, root);
         const { request } = mockRequest(() => new Response(png));
         const first = await storeArtworkOriginal(db, item.id, poster, request);
+        // Two distinct valid PNGs for the two racing replacements.
         const replacements = await Promise.all(
-          [
-            { r: 0, g: 0, b: 255 },
-            { r: 0, g: 255, b: 0 },
-          ].map((background) =>
-            sharp({
-              create: { width: 4, height: 4, channels: 3, background },
-            })
-              .png()
-              .toBuffer(),
+          [4, 6].map(async (width) =>
+            Buffer.from(await new Bun.Image(png).resize(width).png().bytes()),
           ),
         );
         const paths: string[] = [];

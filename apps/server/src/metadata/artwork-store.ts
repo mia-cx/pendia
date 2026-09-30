@@ -19,7 +19,6 @@ import {
 } from "node:path";
 import type { MetadataResult } from "@pendia/plugin-api";
 import { and, eq } from "drizzle-orm";
-import sharp from "sharp";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, libraries } from "../db/schema/index.ts";
@@ -178,10 +177,9 @@ export async function storeArtworkOriginal(
   const bytes = await readBoundedBody(response, maxDownloadBytes);
   let dimensions: { width: number; height: number };
   try {
-    const image = sharp(bytes, { limitInputPixels: maxArtworkPixels });
-    const meta = await image.metadata();
-    const width = meta.width ?? 0;
-    const height = meta.height ?? 0;
+    // metadata() reads the header only, so the size limits apply before decoding.
+    const image = new Bun.Image(bytes);
+    const { width, height } = await image.metadata();
     if (
       !Number.isInteger(width) ||
       width < 1 ||
@@ -196,7 +194,8 @@ export async function storeArtworkOriginal(
       Math.max(width, height) / Math.min(width, height) > maxArtworkAspectRatio
     )
       throw new Error("Invalid artwork response.");
-    await image.stats();
+    // A full decode rejects a truncated or corrupt file before it is stored.
+    await image.resize(1).bytes();
     dimensions = { width, height };
   } catch {
     throw new Error("Invalid artwork response.");

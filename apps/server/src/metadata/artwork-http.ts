@@ -1,5 +1,4 @@
 import { eq } from "drizzle-orm";
-import sharp from "sharp";
 import { AuthError } from "../auth/errors.ts";
 import { readSessionToken } from "../auth/http.ts";
 import { requirePermission } from "../auth/permissions.ts";
@@ -8,9 +7,6 @@ import { readAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, versions } from "../db/schema/index.ts";
 import { readArtworkOriginal } from "./artwork-store.ts";
-
-// Bun retains substantial libvips memory across sequential resizes with this enabled.
-sharp.cache(false);
 
 /** A resize operation used by the process-local artwork cache. */
 export type ArtworkResize = (
@@ -33,21 +29,24 @@ const maxWidth = 4096;
 
 const imageTypes: Record<string, string> = {
   avif: "image/avif",
+  bmp: "image/bmp",
   gif: "image/gif",
+  heic: "image/heic",
   jpeg: "image/jpeg",
   png: "image/png",
-  svg: "image/svg+xml",
   tiff: "image/tiff",
   webp: "image/webp",
 };
 
-const sharpResize: ArtworkResize = async (input, width) => {
-  const output = await sharp(input)
-    .resize({ width, withoutEnlargement: true })
-    .toBuffer({ resolveWithObject: true });
+// Bun.Image needs no native addon, so it works inside the compiled binary.
+const bunResize: ArtworkResize = async (input, width) => {
+  const image = new Bun.Image(input);
+  const source = await image.metadata();
+  // Never enlarge: a small original is served at its own width.
+  const bytes = await image.resize(Math.min(width, source.width)).bytes();
   return {
-    bytes: new Uint8Array(output.data),
-    contentType: imageTypes[output.info.format] ?? "application/octet-stream",
+    bytes,
+    contentType: imageTypes[source.format] ?? "application/octet-stream",
   };
 };
 
@@ -157,7 +156,7 @@ export function createArtworkHandler(
       waiters.push(waiter);
     });
   };
-  const resize = options.resize ?? sharpResize;
+  const resize = options.resize ?? bunResize;
   const cache = new Map<string, ArtworkResult>();
   const inFlight = new Map<string, Promise<ArtworkResult>>();
   let cacheBytes = 0;

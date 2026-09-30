@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import sharp from "sharp";
 import { startApiServer } from "../api.ts";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
@@ -91,16 +90,8 @@ async function withServer<T>(
   }
 }
 
-test("disables the native sharp cache for the artwork worker", () => {
-  expect(sharp.cache()).toMatchObject({
-    memory: { max: 0 },
-    files: { max: 0 },
-    items: { max: 0 },
-  });
-});
-
 describe.skipIf(!databaseUrl)("artwork http", () => {
-  test("serves a real sharp resize of a stored original", () =>
+  test("serves a real resize of a stored original", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
@@ -122,7 +113,7 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           expect(Number(response.headers.get("content-length"))).toBe(
             bytes.byteLength,
           );
-          const meta = await sharp(bytes).metadata();
+          const meta = await new Bun.Image(bytes).metadata();
           expect({ width: meta.width, height: meta.height }).toEqual({
             width: 4,
             height: 4,
@@ -132,7 +123,7 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
             `${base}/api/artwork/${row.id}?width=20`,
           );
           expect(enlarged.status).toBe(200);
-          const big = await sharp(
+          const big = await new Bun.Image(
             Buffer.from(await enlarged.arrayBuffer()),
           ).metadata();
           expect({ width: big.width, height: big.height }).toEqual({
@@ -194,16 +185,9 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           await weak.arrayBuffer();
           expect(calls).toEqual([4]);
 
-          const replacement = await sharp({
-            create: {
-              width: 4,
-              height: 4,
-              channels: 3,
-              background: { r: 0, g: 255, b: 0 },
-            },
-          })
-            .png()
-            .toBuffer();
+          const replacement = Buffer.from(
+            await new Bun.Image(png).resize(4).png().bytes(),
+          );
           await storeArtworkOriginal(
             db,
             item.id,
@@ -889,7 +873,7 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
       await withTempRoot(async (root) => {
         const { row } = await seed(db, root, png);
         const resize: ArtworkResize = async () => {
-          throw new Error("sharp internal detail must stay hidden");
+          throw new Error("resize internal detail must stay hidden");
         };
         await withServer(db, { resize }, async (base) => {
           const failed = await fetch(`${base}/api/artwork/${row.id}?width=4`);
@@ -899,7 +883,7 @@ describe.skipIf(!databaseUrl)("artwork http", () => {
           };
           expect(body.error.code).toBe("INTERNAL_ERROR");
           expect(body.error.message).toBe("Artwork request failed.");
-          expect(JSON.stringify(body)).not.toContain("sharp internal");
+          expect(JSON.stringify(body)).not.toContain("resize internal");
         });
         await db
           .update(artwork)

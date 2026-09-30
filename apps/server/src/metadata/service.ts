@@ -11,6 +11,8 @@ import {
 } from "../db/schema/index.ts";
 import { providersForLibrary, readMetadataSettings } from "./settings.ts";
 
+const contributorsLockKey = 0x70656e646374n;
+
 export type MetadataApplication =
   | {
       state: "matched";
@@ -157,9 +159,11 @@ async function persistMatch(
     const names = [
       ...new Set(result.credits.map((credit) => credit.name)),
     ].sort();
-    for (const name of names)
+    // One lock serializes Contributor creation. A lock per name would let a
+    // response with many credits exhaust Postgres's shared lock table.
+    if (names.length > 0)
       await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtextextended(${name}, 0))`,
+        sql`select pg_advisory_xact_lock(${contributorsLockKey})`,
       );
     if (names.length > 0) {
       const existing = await tx

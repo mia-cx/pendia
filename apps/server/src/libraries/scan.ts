@@ -527,13 +527,7 @@ export async function scanShowDirectory(
       showId = existingShow.id;
     } else if (found) {
       if (found.kind !== "show") throw new AuthError("CONFLICT");
-      await tx
-        .update(items)
-        .set({
-          canonicalFolder: group.canonicalFolder,
-          updatedAt: new Date(),
-        })
-        .where(eq(items.id, found.id));
+      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       showId = found.id;
     } else {
       const created = await insertItem(tx, {

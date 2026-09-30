@@ -229,6 +229,12 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           playCount: 4,
         });
         await setItemProviderIds(db, itemId, { tmdb: "348" });
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
         const progressBefore = await db.select().from(progress);
 
         const movedFolder = "Alien Remastered (1979)";
@@ -268,6 +274,13 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
           ["tmdb", itemId],
         ]);
+        const [posterRow] = await db.select().from(artwork);
+        expect(posterRow?.storageKey).toBe(
+          stored.storageKey.replace(folder, movedFolder),
+        );
+        expect(
+          Buffer.from((await readArtworkOriginal(db, stored.id))?.bytes ?? []),
+        ).toEqual(png);
       });
     }));
 

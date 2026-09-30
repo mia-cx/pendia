@@ -285,6 +285,20 @@ describe("groupMoviePaths", () => {
     ]);
   });
 
+  test("extracts Jellyfin and Emby bracket ids", () => {
+    const jellyfin = "The Movie (2010) [tmdbid-1520211] [imdbid-tt1375666]";
+    const emby = "The Movie (2010) [tmdb-1520211]";
+    const [fromJellyfin] = groupMoviePaths([`${jellyfin}/The.Movie.mkv`]);
+    const [fromEmby] = groupMoviePaths([`${emby}/The.Movie.mkv`]);
+    expect(fromJellyfin?.providerIds).toEqual({
+      tmdb: "1520211",
+      imdb: "tt1375666",
+    });
+    expect(fromJellyfin?.title).toBe("The Movie");
+    expect(fromEmby?.providerIds).toEqual({ tmdb: "1520211" });
+    expect(fromEmby?.title).toBe("The Movie");
+  });
+
   test("lowercases providers, trims values and keeps the first duplicate", () => {
     const folder = "Alien (1979) {TMDB- 348 } {tmdb-999} {Imdb=TT0078748}";
     const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);

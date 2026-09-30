@@ -68,7 +68,9 @@ function identify(
   return { kind: "movie", canonicalFolder };
 }
 
-const providerSuffixSource = "\\{(tmdb|imdb|tvdb)[-=]([^}]*)\\}";
+// Radarr writes {tmdb-348}; Jellyfin writes [tmdbid-348] and Emby [tmdb-348].
+const providerSuffixSource =
+  "\\{(tmdb|imdb|tvdb)[-=]([^}]*)\\}|\\[(tmdb|imdb|tvdb)(?:id)?-([^\\]]*)\\]";
 
 const providerValuePatterns: Record<string, RegExp> = {
   imdb: /^tt0*[1-9][0-9]*$/i,
@@ -80,8 +82,8 @@ function folderProviderIds(canonicalFolder: string): Record<string, string> {
   const ids: Record<string, string> = {};
   const pattern = new RegExp(providerSuffixSource, "gi");
   for (const match of posix.basename(canonicalFolder).matchAll(pattern)) {
-    const provider = (match[1] ?? "").toLowerCase();
-    const value = (match[2] ?? "").trim();
+    const provider = (match[1] ?? match[3] ?? "").toLowerCase();
+    const value = (match[2] ?? match[4] ?? "").trim();
     if (provider in ids || !providerValuePatterns[provider]?.test(value))
       continue;
     ids[provider] = provider === "imdb" ? value.toLowerCase() : value;
@@ -95,7 +97,7 @@ function parse(canonicalFolder: string): {
 } {
   const folder = posix
     .basename(canonicalFolder)
-    .replace(new RegExp(`\\s*${providerSuffixSource}`, "gi"), "")
+    .replace(new RegExp(`\\s*(?:${providerSuffixSource})`, "gi"), "")
     .trim();
   const match = /^(.*?)\s*\((\d{4})\)(?:\s.*)?$/.exec(folder);
   const rawTitle = (match?.[1] ?? folder).trim();

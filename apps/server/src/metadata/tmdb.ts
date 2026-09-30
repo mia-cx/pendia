@@ -270,8 +270,13 @@ async function searchMovies(
     const result = asObject(entry);
     const id = requiredId(result.id);
     const title = requiredString(result.title);
+    const originalTitle = optionalString(result.original_title);
     const year = releaseYear(result.release_date);
-    let confidence = normalizeTitle(title) === wanted ? 0.8 : 0.5;
+    // `title` follows the request language; folders often use the original.
+    const titleMatches =
+      normalizeTitle(title) === wanted ||
+      (originalTitle !== null && normalizeTitle(originalTitle) === wanted);
+    let confidence = titleMatches ? 0.8 : 0.5;
     if (query.year === undefined) confidence += 0.1;
     else if (year === query.year) confidence += 0.2;
     return {
@@ -303,6 +308,8 @@ async function fetchMovie(
     await requestJson(request, url, timeoutMs, maxResponseBytes),
   );
   const id = requiredId(data.id);
+  // A record for another movie must never land on this Item.
+  if (id !== Number(match.providerId)) invalid();
   const overview = optionalString(data.overview);
   return {
     title: requiredString(data.title),

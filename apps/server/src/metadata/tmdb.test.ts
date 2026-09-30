@@ -95,6 +95,42 @@ describe("TMDB metadata provider", () => {
     ]);
   });
 
+  test("search matches a folder named with the original title", async () => {
+    const { request } = jsonRequest({
+      results: [
+        {
+          id: 582,
+          title: "The Lives of Others",
+          original_title: "Das Leben der Anderen",
+          release_date: "2006-03-15",
+        },
+      ],
+    });
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    expect(
+      await provider.search({
+        title: "Das Leben der Anderen",
+        year: 2006,
+        kind: "movie",
+      }),
+    ).toEqual([
+      {
+        providerId: "582",
+        title: "The Lives of Others",
+        year: 2006,
+        confidence: 1,
+      },
+    ]);
+  });
+
+  test("fetch rejects a record for a different movie", async () => {
+    const { request } = jsonRequest({ id: 550, title: "Fight Club" });
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    await expect(
+      provider.fetch({ providerId: "348", kind: "movie" }),
+    ).rejects.toThrow("Invalid TMDB response.");
+  });
+
   test("fetch requests movie details with appended blocks", async () => {
     const { calls, request } = jsonRequest({ id: 27205, title: "Inception" });
     const provider = createTmdbMetadataProvider(apiKey, request);

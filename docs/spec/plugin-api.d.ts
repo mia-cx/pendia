@@ -173,8 +173,15 @@ export interface PluginResponse {
 export interface MetadataProvider {
   id: string;
   kinds: ItemKind[];
-  search(query: { title: string; year?: number; kind: ItemKind }): Promise<MetadataMatch[]>;
-  fetch(match: { providerId: string; kind: ItemKind }): Promise<MetadataResult>;
+  /** `providerIds` carries ids other providers already assert, such as an IMDb id from the folder name. */
+  search(query: {
+    title: string;
+    year?: number;
+    kind: ItemKind;
+    providerIds?: Record<string, string>;
+  }): Promise<MetadataMatch[]>;
+  /** Resolves null when the provider has no record for `providerId`, so the host can mark the Item unmatched. */
+  fetch(match: { providerId: string; kind: ItemKind }): Promise<MetadataResult | null>;
 }
 
 export interface MetadataMatch {

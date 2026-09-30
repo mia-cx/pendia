@@ -1,12 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, rename, rm } from "node:fs/promises";
-import { join } from "node:path";
+import {
+  access,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
-import type { Database } from "../db/client.ts";
+import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
+  artwork,
   files,
   items,
   libraries,
@@ -23,7 +31,11 @@ import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
-import { setItemProviderIds } from "./changes.ts";
+import {
+  readArtworkOriginal,
+  storeArtworkOriginal,
+} from "../metadata/artwork-store.ts";
+import { findItemByProviderIds, setItemProviderIds } from "./changes.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { MissingLibraryPathError } from "./walker.ts";
@@ -31,6 +43,35 @@ import { MissingLibraryPathError } from "./walker.ts";
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
 const file2160 = `${folder}/Alien.2160p {edition-Director's Cut}.mkv`;
+
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
+  "base64",
+);
+
+const poster = {
+  type: "poster",
+  url: "https://image.example/poster.png",
+} as const;
+
+function respondWith(bytes: Uint8Array): typeof fetch {
+  return (async (_input: string | URL | Request, _init?: RequestInit) =>
+    new Response(Buffer.from(bytes))) as typeof fetch;
+}
+
+async function waitForBlockedUpdate(db: Database) {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const rows = await db.$client<{ count: number }[]>`
+      select count(*)::integer as count from pg_stat_activity
+      where wait_event_type = 'Lock'`;
+    if ((rows[0]?.count ?? 0) > 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error("A blocked update was not observed.");
+    }
+    await Bun.sleep(10);
+  }
+}
 
 async function insertLibrary(
   db: Database,
@@ -188,9 +229,15 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           playCount: 4,
         });
         await setItemProviderIds(db, itemId, { tmdb: "348" });
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
         const progressBefore = await db.select().from(progress);
 
-        const movedFolder = "Alien Remastered (1979) {tmdb-348}";
+        const movedFolder = "Alien Remastered (1979)";
         const movedPath = `${movedFolder}/Alien.1080p.mkv`;
         await rename(dir, join(root, movedFolder));
         const temporary = await scanDirectory(db, library.id, movedFolder);
@@ -227,6 +274,13 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
           ["tmdb", itemId],
         ]);
+        const [posterRow] = await db.select().from(artwork);
+        expect(posterRow?.storageKey).toBe(
+          stored.storageKey.replace(folder, movedFolder),
+        );
+        expect(
+          Buffer.from((await readArtworkOriginal(db, stored.id))?.bytes ?? []),
+        ).toEqual(png);
       });
     }));
 
@@ -647,6 +701,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         ]);
         const idRows = await db.select().from(providerIds);
         expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
+          ["tmdb", first.itemId],
           ["tmdb", second.itemId],
         ]);
       });
@@ -955,6 +1010,304 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           ["tmdb", showId],
           ["tvdb", showId],
         ]);
+      });
+    }));
+
+  test("a file-only move keeps readable artwork at its old storage key", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const [file] = await db.select().from(files);
+        const [version] = await db.select().from(versions);
+        if (!file || !version) {
+          throw new Error("Initial scan produced no File.");
+        }
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 9,
+          playCount: 4,
+        });
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
+        const progressBefore = await db.select().from(progress);
+
+        // A file-only move leaves .pendia behind in the old folder.
+        const destinationFolder = "Moved Copies";
+        const movedPath = `${destinationFolder}/Alien.1080p.mkv`;
+        await mkdir(join(root, destinationFolder), { recursive: true });
+        await rename(join(root, file1080), join(root, movedPath));
+
+        await runScanJob(db, library.id, destinationFolder, [
+          {
+            kind: "move",
+            path: movedPath,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const itemRows = await db.select().from(items);
+        expect(itemRows).toHaveLength(1);
+        expect(itemRows[0]).toMatchObject({
+          id: itemId,
+          canonicalFolder: destinationFolder,
+        });
+        const fileRows = await db.select().from(files);
+        expect(fileRows).toHaveLength(1);
+        expect(fileRows[0]).toMatchObject({
+          id: file.id,
+          versionId: version.id,
+          itemId,
+          path: movedPath,
+        });
+        expect((await db.select().from(versions)).map((row) => row.id)).toEqual(
+          [version.id],
+        );
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+
+        const artworkRows = await db.select().from(artwork);
+        expect(artworkRows).toHaveLength(1);
+        expect(artworkRows[0]).toMatchObject({
+          id: stored.id,
+          storageKey: stored.storageKey,
+          selected: true,
+        });
+        const original = await readArtworkOriginal(db, stored.id);
+        expect(original?.artwork.id).toBe(stored.id);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+        const basename = stored.storageKey.split("/").pop();
+        if (basename === undefined) throw new Error("Basename missing.");
+        await expect(
+          access(join(root, destinationFolder, ".pendia", "artwork", basename)),
+        ).rejects.toThrow();
+      });
+    }));
+
+  test("a folder rename carries colocated artwork keys along", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
+
+        // Radarr renames the whole folder, so .pendia moves with the file.
+        const renamedFolder = "Alien (1979) {tmdb-348} Renamed";
+        const movedPath = `${renamedFolder}/Alien.1080p.mkv`;
+        await rename(join(root, folder), join(root, renamedFolder));
+        await runScanJob(db, library.id, renamedFolder, [
+          {
+            kind: "move",
+            path: movedPath,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const [row] = await db.select().from(artwork);
+        expect(row?.storageKey.startsWith(`${renamedFolder}/.pendia/`)).toBe(
+          true,
+        );
+        const original = await readArtworkOriginal(db, stored.id);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+      });
+    }));
+
+  test("two folders with the same tag keep separate Items", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const copy = "Alien Directors Cut (1979) {tmdb-348}";
+        await mkdir(join(root, folder), { recursive: true });
+        await mkdir(join(root, copy), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        await createVideoFixture(join(root, copy, "Alien.1080p.mkv"));
+        const library = await insertLibrary(db, root);
+        const first = await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
+        const second = await scanDirectory(db, library.id, copy, {
+          reconcileMissing: true,
+        });
+        // A rescan of the first folder must not take the Item back.
+        const again = await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
+        expect(second.itemId).not.toBe(first.itemId);
+        expect(again.itemId).toBe(first.itemId);
+        const rows = await db
+          .select({ id: items.id, canonicalFolder: items.canonicalFolder })
+          .from(items)
+          .orderBy(asc(items.canonicalFolder));
+        expect(rows.map((row) => row.canonicalFolder)).toEqual([folder, copy]);
+        expect(await db.select().from(files)).toHaveLength(2);
+      });
+    }));
+
+  test("a rescan keeps a webhook's id correction over the folder tag", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const { itemId } = await scanDirectory(db, library.id, folder);
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        // Radarr corrects the movie; the folder keeps its old {tmdb-348} tag.
+        await scanDirectory(db, library.id, folder, {
+          changes: [
+            { kind: "add", path: file1080, providerIds: { tmdb: "349" } },
+          ],
+        });
+        await scanDirectory(db, library.id, folder);
+        const [row] = await db
+          .select({ value: providerIds.value })
+          .from(providerIds)
+          .where(eq(providerIds.provider, "tmdb"));
+        expect(row?.value).toBe("349");
+      });
+    }));
+
+  test("provider-derived ids never identify an Item", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const { itemId } = await scanDirectory(db, library.id, folder);
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        // TMDB derived this IMDb id; an arr never asserted it.
+        await db.insert(providerIds).values({
+          provider: "imdb",
+          value: "tt0078748",
+          itemId,
+          metadataDerived: true,
+        });
+        expect(
+          await findItemByProviderIds(db, library.id, { imdb: "tt0078748" }),
+        ).toBeUndefined();
+        expect(
+          (await findItemByProviderIds(db, library.id, { tmdb: "348" }))?.id,
+        ).toBe(itemId);
+      });
+    }));
+
+  test("a reconcile-missing scan removes colocated artwork after the Item delete commits", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
+        const target = join(root, stored.storageKey);
+        expect(await readFile(target)).toEqual(png);
+
+        await rm(join(root, file1080));
+        await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
+
+        expect(await db.select().from(items)).toEqual([]);
+        expect(await db.select().from(artwork)).toEqual([]);
+        await expect(access(target)).rejects.toThrow();
+      });
+    }));
+
+  test("a reconcile delete collects artwork committed under the subtree lock", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        await rm(join(root, file1080));
+
+        const second = createDatabase(url);
+        try {
+          let markLocked = () => {};
+          const lockHeld = new Promise<void>((resolve) => {
+            markLocked = resolve;
+          });
+          const writer = second.db.transaction(async (tx) => {
+            const [item] = await tx
+              .select({ id: items.id })
+              .from(items)
+              .where(eq(items.id, itemId))
+              .for("update");
+            if (!item) throw new Error("Fixture Item missing.");
+            markLocked();
+            await waitForBlockedUpdate(db);
+            const storageKey = `${folder}/.pendia/artwork/${Bun.randomUUIDv7()}`;
+            await tx.insert(artwork).values({
+              itemId,
+              versionId: null,
+              type: "poster",
+              sourceUrl: poster.url,
+              backend: "colocated",
+              storageKey,
+              selected: true,
+            });
+            await mkdir(dirname(join(root, storageKey)), {
+              recursive: true,
+            });
+            await writeFile(join(root, storageKey), png);
+            return storageKey;
+          });
+          await lockHeld;
+          const scanning = scanDirectory(db, library.id, folder, {
+            reconcileMissing: true,
+          });
+          const storageKey = await writer;
+          await scanning;
+
+          expect(await db.select().from(items)).toEqual([]);
+          expect(await db.select().from(artwork)).toEqual([]);
+          await expect(access(join(root, storageKey))).rejects.toThrow();
+        } finally {
+          await second.close();
+        }
       });
     }));
 });

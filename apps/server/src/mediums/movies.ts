@@ -68,13 +68,36 @@ function identify(
   return { kind: "movie", canonicalFolder };
 }
 
+// Radarr writes {tmdb-348}; Jellyfin writes [tmdbid-348] and Emby [tmdb-348].
+const providerSuffixSource =
+  "\\{(tmdb|imdb|tvdb)[-=]([^}]*)\\}|\\[(tmdb|imdb|tvdb)(?:id)?-([^\\]]*)\\]";
+
+const providerValuePatterns: Record<string, RegExp> = {
+  imdb: /^tt0*[1-9][0-9]*$/i,
+  tmdb: /^[1-9][0-9]*$/,
+  tvdb: /^[1-9][0-9]*$/,
+};
+
+function folderProviderIds(canonicalFolder: string): Record<string, string> {
+  const ids: Record<string, string> = {};
+  const pattern = new RegExp(providerSuffixSource, "gi");
+  for (const match of posix.basename(canonicalFolder).matchAll(pattern)) {
+    const provider = (match[1] ?? match[3] ?? "").toLowerCase();
+    const value = (match[2] ?? match[4] ?? "").trim();
+    if (provider in ids || !providerValuePatterns[provider]?.test(value))
+      continue;
+    ids[provider] = provider === "imdb" ? value.toLowerCase() : value;
+  }
+  return ids;
+}
+
 function parse(canonicalFolder: string): {
   title: string;
   year: number | null;
 } {
   const folder = posix
     .basename(canonicalFolder)
-    .replace(/\s*\{(?:tmdb|imdb|tvdb)[-=][^}]+\}/gi, "")
+    .replace(new RegExp(`\\s*(?:${providerSuffixSource})`, "gi"), "")
     .trim();
   const match = /^(.*?)\s*\((\d{4})\)(?:\s.*)?$/.exec(folder);
   const rawTitle = (match?.[1] ?? folder).trim();
@@ -89,6 +112,7 @@ export interface MoviePathGroup {
   canonicalFolder: string;
   title: string;
   year: number | null;
+  providerIds: Record<string, string>;
   paths: string[];
 }
 
@@ -111,6 +135,7 @@ export function groupMoviePaths(paths: Iterable<string>): MoviePathGroup[] {
     .map(([canonicalFolder, members]) => ({
       canonicalFolder,
       ...parse(canonicalFolder),
+      providerIds: folderProviderIds(canonicalFolder),
       paths: [...members].sort(),
     }))
     .sort((a, b) => a.canonicalFolder.localeCompare(b.canonicalFolder));

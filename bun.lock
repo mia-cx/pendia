@@ -18,6 +18,7 @@
         "@orpc/client": "1.15.0",
         "@orpc/openapi": "1.15.0",
         "@orpc/server": "1.15.0",
+        "@pendia/plugin-api": "workspace:*",
         "drizzle-orm": "0.45.2",
         "effect": "3.22.1",
         "oauth4webapi": "3.8.7",

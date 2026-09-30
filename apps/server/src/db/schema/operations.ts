@@ -69,7 +69,7 @@ export type JobPayload =
       runId?: string;
     }
   | { type: "probe"; fileId: string }
-  | { type: "provider-fetch"; itemId: string; provider: string }
+  | { type: "provider-fetch"; itemId: string }
   | { type: "store"; sourceFileId: string; rung: string }
   | { type: "plugin"; pluginName: string; jobId: string; data: JsonObject };
 

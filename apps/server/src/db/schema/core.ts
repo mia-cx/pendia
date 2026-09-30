@@ -33,6 +33,11 @@ export const artworkBackend = pgEnum("artwork_backend", [
   "configured-path",
   "s3",
 ]);
+export const metadataState = pgEnum("metadata_state", [
+  "pending",
+  "matched",
+  "unmatched",
+]);
 
 export const libraries = pgTable("libraries", {
   id: id(),
@@ -60,6 +65,7 @@ export const items = pgTable(
     contentRating: text("content_rating"),
     genres: text("genres").array().notNull().default(sql`'{}'::text[]`),
     tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
+    metadataState: metadataState("metadata_state").notNull().default("pending"),
     canonicalFolder: text("canonical_folder").notNull(),
     addedAt: instant("added_at").notNull().defaultNow(),
     updatedAt: instant("updated_at").notNull().defaultNow(),
@@ -389,6 +395,9 @@ export const providerIds = pgTable(
       () => contributors.id,
       owned,
     ),
+    // True when a provider fetch wrote the id; false for explicit scan or
+    // caller input, which a match result must never overwrite.
+    metadataDerived: boolean("metadata_derived").notNull().default(false),
   },
   (table) => [
     check(

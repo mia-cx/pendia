@@ -13,6 +13,7 @@ export const ItemCard = Schema.Struct({
   title: Schema.String,
   year: Schema.NullOr(Schema.Int),
   addedAt: Schema.String,
+  posterArtworkId: Schema.NullOr(Schema.UUID),
 });
 
 /** The item shape returned by detail endpoints. */
@@ -23,6 +24,7 @@ export const ItemDetail = Schema.Struct({
   contentRating: Schema.NullOr(Schema.String),
   genres: Schema.Array(Schema.String),
   tags: Schema.Array(Schema.String),
+  metadataState: Schema.Literal("pending", "matched", "unmatched"),
   updatedAt: Schema.String,
 });
 

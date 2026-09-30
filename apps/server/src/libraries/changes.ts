@@ -1,16 +1,19 @@
-import { posix } from "node:path";
+import { lstat } from "node:fs/promises";
+import { join, posix } from "node:path";
 import { and, eq, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
+  artwork,
   files,
   itemAncestors,
   items,
+  libraries,
   providerIds as providerIdRows,
   type ScanChange,
   versions,
 } from "../db/schema/index.ts";
-import { deleteItemSubtree } from "../db/tree.ts";
+import { type DeletedArtworkFile, deleteItemSubtree } from "../db/tree.ts";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
@@ -43,7 +46,7 @@ const providerIdPairs = (providerIds: Record<string, string>) =>
     ([provider, value]) => provider !== "" && value !== "",
   );
 
-/** Finds one Item from a consistent set of provider ids. */
+/** Finds one Item from a consistent set of explicit provider ids; ids a metadata provider derived never identify an Item. */
 export async function findItemByProviderIds(
   db: Connection,
   libraryId: string,
@@ -58,6 +61,7 @@ export async function findItemByProviderIds(
     .where(
       and(
         eq(items.libraryId, libraryId),
+        eq(providerIdRows.metadataDerived, false),
         or(
           ...pairs.map(([provider, value]) =>
             and(
@@ -73,22 +77,96 @@ export async function findItemByProviderIds(
   return matched.values().next().value;
 }
 
-/** Upserts provider ids owned by one Item. */
+/**
+ * Upserts explicit provider ids on one Item and reports whether any changed.
+ * With `fillOnly`, an id already asserted explicitly keeps its value: folder
+ * tags fill gaps but never undo a webhook's correction.
+ */
 export async function setItemProviderIds(
   db: Connection,
   itemId: string,
   providerIds: Record<string, string>,
-): Promise<void> {
+  { fillOnly = false }: { fillOnly?: boolean } = {},
+): Promise<boolean> {
+  let changed = false;
   for (const [provider, value] of providerIdPairs(providerIds)) {
+    const [existing] = await db
+      .select({
+        value: providerIdRows.value,
+        metadataDerived: providerIdRows.metadataDerived,
+      })
+      .from(providerIdRows)
+      .where(
+        and(
+          eq(providerIdRows.itemId, itemId),
+          eq(providerIdRows.provider, provider),
+        ),
+      );
+    // Scan input is explicit: an equal derived value still becomes owned.
+    if (
+      existing !== undefined &&
+      !existing.metadataDerived &&
+      (fillOnly || existing.value === value)
+    )
+      continue;
     await db
       .insert(providerIdRows)
-      .values({ provider, value, itemId })
+      .values({ provider, value, itemId, metadataDerived: false })
       .onConflictDoUpdate({
         target: [providerIdRows.itemId, providerIdRows.provider],
         targetWhere: sql`${providerIdRows.itemId} is not null`,
-        set: { value },
+        set: { value, metadataDerived: false },
       });
+    changed = true;
   }
+  return changed;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Updates an Item folder and re-keys colocated artwork that moved with it. */
+export async function updateItemCanonicalFolder(
+  db: Connection,
+  item: typeof items.$inferSelect,
+  canonicalFolder: string,
+): Promise<void> {
+  if (item.canonicalFolder === canonicalFolder) return;
+  const marker = "/.pendia/artwork/";
+  const [library] = await db
+    .select({ rootPath: libraries.rootPath })
+    .from(libraries)
+    .where(eq(libraries.id, item.libraryId));
+  if (!library) throw new AuthError("NOT_FOUND");
+  const rows = await db
+    .select({ id: artwork.id, storageKey: artwork.storageKey })
+    .from(artwork)
+    .where(and(eq(artwork.itemId, item.id), eq(artwork.backend, "colocated")));
+  for (const row of rows) {
+    const index = row.storageKey.lastIndexOf(marker);
+    if (index < 0) throw new Error("Invalid artwork storage key.");
+    const nextStorageKey = `${canonicalFolder}${row.storageKey.slice(index)}`;
+    if (
+      (await pathExists(join(library.rootPath, nextStorageKey))) ||
+      !(await pathExists(join(library.rootPath, row.storageKey)))
+    ) {
+      await db
+        .update(artwork)
+        .set({ storageKey: nextStorageKey })
+        .where(eq(artwork.id, row.id));
+    }
+  }
+  await db
+    .update(items)
+    .set({ canonicalFolder, updatedAt: new Date() })
+    .where(eq(items.id, item.id));
 }
 
 /** Applies queued moves and deletes before a directory scan writes its result. */
@@ -96,6 +174,7 @@ export async function applyScanChanges(
   db: Connection,
   libraryId: string,
   changes: readonly ScanChange[],
+  deletedArtwork: DeletedArtworkFile[] = [],
 ): Promise<string[]> {
   const normalized = changes.map((change) => ({
     change,
@@ -137,6 +216,7 @@ export async function applyScanChanges(
             sourceRootId === destinationRootId
               ? destination.itemId
               : destinationRootId,
+            deletedArtwork,
           );
         }
       }
@@ -147,13 +227,7 @@ export async function applyScanChanges(
           .from(items)
           .where(eq(items.id, file.itemId));
         if (item && item.canonicalFolder === posix.dirname(previousPath)) {
-          await db
-            .update(items)
-            .set({
-              canonicalFolder: posix.dirname(path),
-              updatedAt: new Date(),
-            })
-            .where(eq(items.id, item.id));
+          await updateItemCanonicalFolder(db, item, posix.dirname(path));
         }
         continue;
       }
@@ -163,10 +237,7 @@ export async function applyScanChanges(
         change.providerIds,
       );
       if (item && item.canonicalFolder === posix.dirname(previousPath)) {
-        await db
-          .update(items)
-          .set({ canonicalFolder: posix.dirname(path) })
-          .where(eq(items.id, item.id));
+        await updateItemCanonicalFolder(db, item, posix.dirname(path));
       }
       continue;
     }
@@ -199,7 +270,7 @@ export async function applyScanChanges(
         );
       item = byFolder;
     }
-    if (item) await deleteItemSubtree(db, item.id);
+    if (item) await deleteItemSubtree(db, item.id, deletedArtwork);
   }
   return [...new Set(emptiedItemIds)];
 }

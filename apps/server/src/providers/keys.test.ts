@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { eq } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
+import { items, libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertItem } from "../db/tree.ts";
 import {
   readProviderKeyNames,
   removeProviderKey,
@@ -42,6 +45,60 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
         "opensubtitles",
       ]);
       expect(await readProviderKeyNames(db)).toEqual(["opensubtitles"]);
+    }));
+
+  test("storing a tmdb key marks only unmatched movies pending", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const [movieLibrary] = await db
+        .insert(libraries)
+        .values({ name: "Movies", medium: "movies", rootPath: "/m" })
+        .returning();
+      const [showLibrary] = await db
+        .insert(libraries)
+        .values({ name: "Shows", medium: "shows", rootPath: "/s" })
+        .returning();
+      if (!movieLibrary || !showLibrary) {
+        throw new Error("Fixture libraries missing.");
+      }
+      const movie = await insertItem(db, {
+        libraryId: movieLibrary.id,
+        kind: "movie",
+        title: "Unmatched Movie",
+        canonicalFolder: "/m/unmatched",
+        extension: {},
+      });
+      const show = await insertItem(db, {
+        libraryId: showLibrary.id,
+        kind: "show",
+        title: "Unmatched Show",
+        canonicalFolder: "/s/unmatched",
+        extension: {},
+      });
+      await db
+        .update(items)
+        .set({ metadataState: "unmatched" })
+        .where(eq(items.id, movie.id));
+      await db
+        .update(items)
+        .set({ metadataState: "unmatched" })
+        .where(eq(items.id, show.id));
+
+      await setProviderKey(db, admin.id, "opensubtitles", "other-key");
+      expect(
+        (await db.select().from(items).where(eq(items.id, movie.id)))[0]
+          ?.metadataState,
+      ).toBe("unmatched");
+
+      await setProviderKey(db, admin.id, "TMDB", "api-key");
+      const rows = await db.select().from(items);
+      expect(rows.find((row) => row.id === movie.id)?.metadataState).toBe(
+        "pending",
+      );
+      expect(rows.find((row) => row.id === show.id)?.metadataState).toBe(
+        "unmatched",
+      );
     }));
 
   test("concurrent sets on a missing row keep both keys", () =>
@@ -99,7 +156,7 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
         await expect(
           setProviderKey(db, admin.id, name, "secret"),
         ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-      for (const value of ["", "x".repeat(4097), "has\0nul"])
+      for (const value of ["", "   ", "x".repeat(4097), "has\0nul"])
         await expect(
           setProviderKey(db, admin.id, "tmdb", value),
         ).rejects.toMatchObject({ code: "INVALID_INPUT" });

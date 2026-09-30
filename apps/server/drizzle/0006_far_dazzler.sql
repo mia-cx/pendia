@@ -1,0 +1,1 @@
+ALTER TABLE "provider_ids" ADD COLUMN "metadata_derived" boolean DEFAULT false NOT NULL;

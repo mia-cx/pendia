@@ -20,6 +20,7 @@ import {
   libraries,
   movies,
   progress,
+  providerIds,
   seasons,
   shows,
   streams,
@@ -151,6 +152,9 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
               depth: 0,
             },
           ]);
+          expect(await db.select().from(providerIds)).toMatchObject([
+            { provider: "tmdb", value: "348", itemId: result.itemId },
+          ]);
 
           const versionRows = await db
             .select()
@@ -240,6 +244,15 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           const streamIds = (await db.select().from(streams))
             .map((stream) => stream.id)
             .sort();
+          const [initialId] = await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, first.itemId ?? ""));
+          expect(initialId).toMatchObject({
+            provider: "tmdb",
+            value: "348",
+            itemId: first.itemId,
+          });
 
           const second = await scanDirectory(db, library.id, folder, {
             probe,
@@ -284,6 +297,12 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           expect(
             (await db.select().from(streams)).map((stream) => stream.id).sort(),
           ).toEqual(streamIds);
+          expect(
+            await db
+              .select()
+              .from(providerIds)
+              .where(eq(providerIds.itemId, first.itemId ?? "")),
+          ).toEqual([expect.objectContaining({ id: initialId?.id })]);
         });
       });
     }));

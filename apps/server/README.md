@@ -152,6 +152,7 @@ The issuer, clientId and clientSecret fields are required. `openid` must be incl
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
 `artworkRequiresAuth` is a boolean defaulting to false. `settings.update` writes `trustedProxyAddresses` and `artworkRequiresAuth` only.
 Settings apply on the next request. Invalid stored settings fail closed.
+`artworkRequiresAuth` false keeps artwork anonymous for clients such as Findroid. True requires the existing bearer token or session cookie.
 A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
 
 Login attempts share independent address and normalized-account windows across API replicas. Successful logins consume an attempt too.
@@ -253,10 +254,9 @@ Group permission edits apply to custom groups only. The built-in `admins` and `u
 
 `settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured and the provider key names. No read returns a provider key value or the OIDC client secret; provider keys are write-only over the API.
 Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `settings.update`. OIDC stays read-only in this slice.
-`artworkRequiresAuth` is stored and editable, but nothing enforces it yet because no artwork route exists in tree.
 
-Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year` and `addedAt`.
-Details add `parentId`, `overview`, `contentRating`, `genres`, `tags` and `updatedAt`. Instants are the database's own UTC text at microsecond precision.
+Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}?width=<pixels>`; `width` is required and accepts an integer from 1 through 4096.
+Details add `parentId`, `overview`, `contentRating`, `genres`, `tags`, `metadataState` and `updatedAt`. `metadataState` is `pending` until an enabled provider looks at the Item, and again while a failed poster download waits for the next scan to retry it. It is `matched` after a confident match. It is `unmatched` when a provider searched and found no confident match, or has no record for the Item's stored id; that is the state an admin resolves by hand. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.
 `cursor` is opaque, bound to that order and carries the microsecond instant, so a row that shares a millisecond with its predecessor still pages.
@@ -323,7 +323,7 @@ The walker skips symlinks, excluded extras directories, extra filename suffixes,
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 
-Scans persist container keyframe indexes on Versions. The first imported Version establishes each cut's immutable segment timeline through the playback module. Later Versions reuse it and record their own alignment. Missing or unsupported indexes set lazyIndexPending for first-play indexing. Nonzero-start indexes remain stored but cannot establish a timeline under the current playback contract. Missing-file reconciliation and change signals are covered below. Metadata providers belong to a later slice.
+Scans persist container keyframe indexes on Versions. The first imported Version establishes each cut's immutable segment timeline through the playback module. Later Versions reuse it and record their own alignment. Missing or unsupported indexes set lazyIndexPending for first-play indexing. Nonzero-start indexes remain stored but cannot establish a timeline under the current playback contract. Missing-file reconciliation and change signals are covered below. Metadata provider configuration is covered under Metadata and artwork settings.
 
 Scan tests generate short MKV fixtures with ffmpeg and compare their stream lists with ffprobe. Both commands must be on PATH. Database-backed scan tests use the disposable database helper described above.
 
@@ -338,3 +338,62 @@ Absolute writer paths become library-relative paths and debounce for 10 seconds 
 A rename updates the stored File and Item paths before the scan writes, so Item, Version, File and Progress identity survive. A delete removes the missing Version, and the Item goes only when no Version remains. Provider ids from Servarr persist on the Item. Sonarr and Radarr changes both queue scans through their matching medium.
 
 The `api` and `all` roles run a directory-mtime repair pass after startup and every 24 hours. It walks movie and show Library directories without statting files, compares each directory mtime with a snapshot kept in process memory, and queues a directory scan for every changed canonical folder and every Item folder missing on disk. Repair and manual fan-out scans carry the reconcileMissing flag, so a scan removes imported Versions whose files disappeared and the emptied movie Items, show Episodes and Seasons they leave behind. An unavailable root is skipped without deleting rows. A restart rebuilds the snapshot, so every reachable directory is checked once after boot. `POST /api/libraries/{id}/scan` remains the manual full scan.
+
+### Metadata and artwork settings
+
+The `settings` row with key `metadata` holds one JSON object. Missing fields use these defaults:
+
+```json
+{
+  "providerOrder": ["tmdb"],
+  "confidenceThreshold": 0.9,
+  "libraries": {},
+  "tmdb": null
+}
+```
+
+`providerOrder` sets the enabled providers in priority order. Only `tmdb` is built in today. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
+
+`libraries` maps a Library id to its provider list. A missing entry uses `providerOrder`, an explicit `[]` disables metadata for that Library, and an explicit `["tmdb"]` enables only TMDB:
+
+```json
+{
+  "libraries": {
+    "<movies-library-id>": ["tmdb"],
+    "<shows-library-id>": []
+  }
+}
+```
+
+The TMDB API key lives in the separate `providers` settings row, written by the admin Provider keys screen or `settings.setProviderKey` with the name `tmdb`. Key values are write-only: `settings.get` returns names, never secrets. Storing or rotating `tmdb` marks every unmatched movie `pending`, so the next rescan queues a provider-fetch for each of them; a missing key means no TMDB provider, and scanned movies stay `pending` until a key arrives. A Library whose provider list is `[]` leaves its Items `pending` the same way. The embedded `metadata.tmdb.apiKey` field is still read as a backward-compatible fallback when no provider key is stored, but new deployments should use the provider key store.
+
+Settings apply to the next provider-fetch job. A rescan enqueues enrichment only while an Item is `pending`: matched rescans stay quiet, a changed provider ID marks the Item `pending` again, and scans coalesce onto an already queued fetch for the same Item while a fetch still running earns exactly one queued successor. `artworkRequiresAuth` stays in the separate `auth` settings row and defaults to false.
+
+Configure the `providers` row with this PostgreSQL 18 transaction, replacing the `<tmdb-api-key>` placeholder. The admin UI and `settings.setProviderKey` remain the preferred path and perform the same reset; this is the manual fallback. The conflict clause merges with any keys already stored rather than replacing them, and the `UPDATE` requeues unmatched movies the same way the API does:
+
+```sql
+BEGIN;
+
+INSERT INTO settings (id, key, value)
+VALUES (
+  uuidv7(),
+  'providers',
+  jsonb_build_object('keys', jsonb_build_object('tmdb', '<tmdb-api-key>'))
+)
+ON CONFLICT (key) DO UPDATE
+SET value = jsonb_build_object(
+      'keys',
+      coalesce(settings.value->'keys', '{}'::jsonb) || (EXCLUDED.value->'keys')
+    ),
+    updated_at = clock_timestamp();
+
+UPDATE items
+SET metadata_state = 'pending',
+    updated_at = clock_timestamp()
+WHERE kind = 'movie'
+  AND metadata_state = 'unmatched';
+
+COMMIT;
+```
+
+Provider order, the confidence threshold and per-Library overrides remain independently configurable in the `metadata` row with the documented default JSON.

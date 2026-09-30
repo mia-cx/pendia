@@ -29,6 +29,7 @@ type PlainCard = {
   title: string;
   year: number | null;
   addedAt: string;
+  posterArtworkId: string | null;
 };
 
 type PlainList = { items: readonly PlainCard[]; cursor: string | null };

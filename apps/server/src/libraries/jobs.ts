@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { items, libraries } from "../db/schema/index.ts";
+import { items, jobs, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
@@ -35,10 +35,38 @@ export function registerLibraryJobs(
       throw new AuthError("INVALID_INPUT");
     if (payload.path !== ".") {
       if (library.medium === "movies") {
-        await scanDirectory(db, library.id, payload.path, {
+        const result = await scanDirectory(db, library.id, payload.path, {
           changes: payload.changes,
           reconcileMissing: payload.reconcileMissing,
         });
+        if (result.itemId !== null) {
+          const [item] = await db
+            .select({ metadataState: items.metadataState })
+            .from(items)
+            .where(eq(items.id, result.itemId));
+          if (!item) throw new AuthError("NOT_FOUND");
+          if (item.metadataState === "pending") {
+            const concurrencyKey = `provider:${result.itemId}`;
+            // A running fetch never blocks: a pending Item after a provider
+            // change earns one queued successor that replays the fetch.
+            const [existing] = await db
+              .select({ id: jobs.id })
+              .from(jobs)
+              .where(
+                and(
+                  eq(jobs.type, "provider-fetch"),
+                  eq(jobs.concurrencyKey, concurrencyKey),
+                  eq(jobs.state, "queued"),
+                ),
+              )
+              .limit(1);
+            if (existing === undefined)
+              await createJobQueue(db).enqueue(
+                { type: "provider-fetch", itemId: result.itemId },
+                { concurrencyKey },
+              );
+          }
+        }
       } else {
         await scanShowDirectory(db, library.id, payload.path, {
           changes: payload.changes,

@@ -396,6 +396,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
         ).toBeNull();
         const detail = await client.items.get({ id: rows[0]?.id ?? "" });
         expect(detail.posterArtworkId).toBe(poster.id);
+        expect(detail.metadataState).toBe("pending");
         const rest = await fetch(`${base}/api/items/${rows[0]?.id}`, {
           headers: { authorization: `Bearer ${token}` },
         });

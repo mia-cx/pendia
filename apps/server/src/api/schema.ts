@@ -24,6 +24,7 @@ export const ItemDetail = Schema.Struct({
   contentRating: Schema.NullOr(Schema.String),
   genres: Schema.Array(Schema.String),
   tags: Schema.Array(Schema.String),
+  metadataState: Schema.Literal("pending", "matched", "unmatched"),
   updatedAt: Schema.String,
 });
 

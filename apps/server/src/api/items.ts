@@ -50,6 +50,7 @@ const detailFields = {
   contentRating: items.contentRating,
   genres: items.genres,
   tags: items.tags,
+  metadataState: items.metadataState,
   updatedAt: instantText(items.updatedAt),
 };
 

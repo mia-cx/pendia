@@ -136,23 +136,11 @@ export async function moveItem(
   db: Connection,
   itemId: string,
   parentId: string | null,
-  placement?: {
-    episodeNumber: number;
-    episodeEndNumber: number | null;
-  },
 ) {
   return db.transaction(async (tx) => {
     const original = await getItem(tx, itemId);
     const library = await lockLibrary(tx, original.libraryId);
     const item = await getItem(tx, itemId);
-    if (
-      placement !== undefined &&
-      (item.kind !== "episode" || parentId === null)
-    ) {
-      throw new Error(
-        "Episode placement requires an Episode Item and a parent.",
-      );
-    }
     if (parentId !== null) {
       const [cycle] = await tx
         .select()
@@ -166,27 +154,7 @@ export async function moveItem(
       if (cycle) throw new Error("Cannot move an item into its subtree.");
     }
     await validateParent(tx, item, parentId, library.medium);
-    if (item.parentId === parentId) {
-      // Same-parent placement only renumbers: no closure rewrite needed.
-      if (placement === undefined) return item;
-      if (parentId === null) {
-        throw new Error("Episode placement requires a parent.");
-      }
-      await tx
-        .update(episodes)
-        .set({
-          seasonId: parentId,
-          episodeNumber: placement.episodeNumber,
-          episodeEndNumber: placement.episodeEndNumber,
-        })
-        .where(eq(episodes.itemId, itemId));
-      const [renumbered] = await tx
-        .update(items)
-        .set({ updatedAt: new Date() })
-        .where(eq(items.id, itemId))
-        .returning();
-      return renumbered ?? item;
-    }
+    if (item.parentId === parentId) return item;
 
     // Keep internal ancestry and replace only paths entering the subtree.
     await tx.execute(sql`
@@ -220,15 +188,7 @@ export async function moveItem(
       if (item.kind === "episode")
         await tx
           .update(episodes)
-          .set(
-            placement === undefined
-              ? { seasonId: parentId }
-              : {
-                  seasonId: parentId,
-                  episodeNumber: placement.episodeNumber,
-                  episodeEndNumber: placement.episodeEndNumber,
-                },
-          )
+          .set({ seasonId: parentId })
           .where(eq(episodes.itemId, itemId));
     }
     const [moved] = await tx

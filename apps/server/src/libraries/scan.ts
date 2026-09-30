@@ -2,20 +2,13 @@ import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
-  artwork,
-  credits,
   episodes,
-  favourites,
   files,
   itemAncestors,
   items,
   libraries,
-  progress,
-  providerIds,
-  ratings,
   type ScanChange,
   seasons,
-  sessionRegistry,
   streams,
   versions,
 } from "../db/schema/index.ts";
@@ -23,7 +16,6 @@ import {
   type DeletedArtworkFile,
   deleteItemSubtree,
   insertItem,
-  moveItem,
 } from "../db/tree.ts";
 import type { ScanRules } from "../mediums/medium.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
@@ -35,7 +27,6 @@ import {
   applyScanChanges,
   findItemByProviderIds,
   setItemProviderIds,
-  updateItemCanonicalFolder,
 } from "./changes.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import { persistScanTimelines } from "./timelines.ts";
@@ -104,297 +95,30 @@ async function upsertFileStreams(
   }
 }
 
-/** Re-walks the requested scope inside the write lock and rejects on any drift. */
-async function revalidateScope(
+/** Re-walks the requested scope inside the write lock before an empty result deletes rows. */
+async function confirmScopeEmpty(
   rootPath: string,
   rules: ScanRules,
   path: string,
   recursive: boolean,
-  expected: readonly string[],
 ): Promise<void> {
-  const current = new Set<string>();
   try {
     for await (const file of walkLibrary(rootPath, rules, {
       path,
       recursive,
     })) {
-      current.add(file.path);
+      if (file.path !== "") {
+        throw new Error("Library directory changed before scan write.");
+      }
     }
-  } catch (error) {
-    if (
-      !(error instanceof MissingLibraryPathError) ||
-      error.scope !== "requested"
-    ) {
-      throw error;
-    }
-  }
-  if (current.size !== expected.length) {
-    throw new Error("Library directory changed before scan write.");
-  }
-  for (const walked of expected) {
-    if (!current.has(walked)) {
-      throw new Error("Library directory changed before scan write.");
-    }
-  }
-}
-
-/** Returns whether any descendant of the Item still owns an indexed File under the folder. */
-async function itemHasFilesInScope(
-  tx: Transaction,
-  itemId: string,
-  canonicalFolder: string,
-): Promise<boolean> {
-  const [file] = await tx
-    .select({ id: files.id })
-    .from(files)
-    .innerJoin(itemAncestors, eq(files.itemId, itemAncestors.descendantId))
-    .where(
-      and(
-        eq(itemAncestors.ancestorId, itemId),
-        sql`starts_with(${files.path}, ${`${canonicalFolder}/`})`,
-      ),
-    )
-    .limit(1);
-  return file !== undefined;
-}
-
-/** Returns whether the requested scope still holds recognized media. */
-async function scopeHasMedia(
-  rootPath: string,
-  rules: ScanRules,
-  path: string,
-  recursive: boolean,
-): Promise<boolean> {
-  try {
-    for await (const file of walkLibrary(rootPath, rules, {
-      path,
-      recursive,
-    })) {
-      if (file.path !== "") return true;
-    }
-    return false;
   } catch (error) {
     if (
       error instanceof MissingLibraryPathError &&
       error.scope === "requested"
     ) {
-      return false;
+      return;
     }
     throw error;
-  }
-}
-
-/** Combines ordered member keyframes into one Version index offset by duration. */
-function combineKeyframes(
-  members: readonly ProbedLibraryFile[],
-): number[] | null {
-  const combined: number[] = [];
-  let offset = 0;
-  for (const member of members) {
-    const duration = member.probe.durationSeconds;
-    const keyframes = member.probe.keyframesSeconds;
-    if (duration === null || keyframes === null) return null;
-    for (const keyframe of keyframes) {
-      const shifted = keyframe + offset;
-      const last = combined[combined.length - 1];
-      if (last === undefined || shifted > last) combined.push(shifted);
-    }
-    offset += duration;
-  }
-  return combined;
-}
-
-/** Moves surviving Item-owned state from an emptied source Episode to its destination. */
-async function mergeEmptiedEpisodeState(
-  tx: Transaction,
-  sourceEpisodeId: string,
-  episodeId: string,
-): Promise<void> {
-  const [sourceItem] = await tx
-    .select()
-    .from(items)
-    .where(eq(items.id, sourceEpisodeId));
-  const [destinationItem] = await tx
-    .select()
-    .from(items)
-    .where(eq(items.id, episodeId));
-  if (!sourceItem || !destinationItem) {
-    throw new Error("Merge participants missing.");
-  }
-
-  // Descriptive metadata winner: state rank, then freshness, then id.
-  const stateRank = (state: string) =>
-    state === "matched" ? 3 : state === "unmatched" ? 2 : 1;
-  const sourceWins =
-    stateRank(sourceItem.metadataState) !==
-    stateRank(destinationItem.metadataState)
-      ? stateRank(sourceItem.metadataState) >
-        stateRank(destinationItem.metadataState)
-      : sourceItem.updatedAt.getTime() !== destinationItem.updatedAt.getTime()
-        ? sourceItem.updatedAt.getTime() > destinationItem.updatedAt.getTime()
-        : sourceItem.id > destinationItem.id;
-  if (sourceWins) {
-    await tx
-      .update(items)
-      .set({
-        title: sourceItem.title,
-        year: sourceItem.year,
-        overview: sourceItem.overview,
-        contentRating: sourceItem.contentRating,
-        genres: sourceItem.genres,
-        tags: sourceItem.tags,
-        metadataState: sourceItem.metadataState,
-        updatedAt: new Date(),
-      })
-      .where(eq(items.id, episodeId));
-  }
-
-  // Favourites merge as a user set.
-  const heldFavourites = new Set(
-    (
-      await tx
-        .select({ userId: favourites.userId })
-        .from(favourites)
-        .where(eq(favourites.itemId, episodeId))
-    ).map((row) => row.userId),
-  );
-  const sourceFavourites = await tx
-    .select()
-    .from(favourites)
-    .where(eq(favourites.itemId, sourceEpisodeId));
-  for (const favourite of sourceFavourites) {
-    if (heldFavourites.has(favourite.userId)) {
-      await tx.delete(favourites).where(eq(favourites.id, favourite.id));
-    } else {
-      await tx
-        .update(favourites)
-        .set({ itemId: episodeId })
-        .where(eq(favourites.id, favourite.id));
-    }
-  }
-
-  // Same-user Ratings keep the fresher row, like Progress.
-  const sourceRatings = await tx
-    .select()
-    .from(ratings)
-    .where(eq(ratings.itemId, sourceEpisodeId));
-  for (const rating of sourceRatings) {
-    const [existing] = await tx
-      .select()
-      .from(ratings)
-      .where(
-        and(eq(ratings.itemId, episodeId), eq(ratings.userId, rating.userId)),
-      )
-      .limit(1);
-    if (existing === undefined) {
-      await tx
-        .update(ratings)
-        .set({ itemId: episodeId })
-        .where(eq(ratings.id, rating.id));
-      continue;
-    }
-    const sourceNewer =
-      rating.updatedAt.getTime() !== existing.updatedAt.getTime()
-        ? rating.updatedAt.getTime() > existing.updatedAt.getTime()
-        : rating.id > existing.id;
-    if (sourceNewer) {
-      await tx.delete(ratings).where(eq(ratings.id, existing.id));
-      await tx
-        .update(ratings)
-        .set({ itemId: episodeId })
-        .where(eq(ratings.id, rating.id));
-    } else {
-      await tx.delete(ratings).where(eq(ratings.id, rating.id));
-    }
-  }
-
-  // Explicit provider ids outrank derived ones; equal provenance follows the
-  // descriptive metadata winner.
-  const sourceProviderIds = await tx
-    .select()
-    .from(providerIds)
-    .where(eq(providerIds.itemId, sourceEpisodeId));
-  for (const row of sourceProviderIds) {
-    const [existing] = await tx
-      .select()
-      .from(providerIds)
-      .where(
-        and(
-          eq(providerIds.itemId, episodeId),
-          eq(providerIds.provider, row.provider),
-        ),
-      )
-      .limit(1);
-    if (existing === undefined) {
-      await tx
-        .update(providerIds)
-        .set({ itemId: episodeId })
-        .where(eq(providerIds.id, row.id));
-      continue;
-    }
-    const keepSource =
-      row.metadataDerived !== existing.metadataDerived
-        ? !row.metadataDerived
-        : sourceWins;
-    if (keepSource) {
-      await tx.delete(providerIds).where(eq(providerIds.id, existing.id));
-      await tx
-        .update(providerIds)
-        .set({ itemId: episodeId })
-        .where(eq(providerIds.id, row.id));
-    } else {
-      await tx.delete(providerIds).where(eq(providerIds.id, row.id));
-    }
-  }
-
-  // Credits follow the descriptive metadata winner as a set.
-  if (sourceWins) {
-    await tx.delete(credits).where(eq(credits.itemId, episodeId));
-    await tx
-      .update(credits)
-      .set({ itemId: episodeId })
-      .where(eq(credits.itemId, sourceEpisodeId));
-  } else {
-    await tx.delete(credits).where(eq(credits.itemId, sourceEpisodeId));
-  }
-
-  // All artwork rows move so bytes stay referenced; the descriptive winner's
-  // selection wins per type.
-  const sourceArtwork = await tx
-    .select()
-    .from(artwork)
-    .where(eq(artwork.itemId, sourceEpisodeId));
-  for (const row of sourceArtwork) {
-    if (row.selected) {
-      const [held] = await tx
-        .select({ id: artwork.id })
-        .from(artwork)
-        .where(
-          and(
-            eq(artwork.itemId, episodeId),
-            eq(artwork.type, row.type),
-            eq(artwork.selected, true),
-          ),
-        )
-        .limit(1);
-      if (held !== undefined) {
-        if (sourceWins) {
-          await tx
-            .update(artwork)
-            .set({ selected: false })
-            .where(eq(artwork.id, held.id));
-        } else {
-          await tx
-            .update(artwork)
-            .set({ selected: false })
-            .where(eq(artwork.id, row.id));
-        }
-      }
-    }
-    await tx
-      .update(artwork)
-      .set({ itemId: episodeId })
-      .where(eq(artwork.id, row.id));
   }
 }
 
@@ -412,33 +136,8 @@ async function deleteEmptiedItems(
       .from(versions)
       .where(eq(versions.itemId, itemId))
       .limit(1);
-    if (version !== undefined) continue;
-    const { parentId } = item;
-    await deleteItemSubtree(tx, item.id, deletedArtwork);
-    await pruneEmptiedContainers(tx, parentId, deletedArtwork);
-  }
-}
-
-async function pruneEmptiedContainers(
-  tx: Transaction,
-  parentId: string | null,
-  deletedArtwork: DeletedArtworkFile[],
-): Promise<void> {
-  let ancestorId = parentId;
-  while (ancestorId !== null) {
-    const [ancestor] = await tx
-      .select({ parentId: items.parentId })
-      .from(items)
-      .where(eq(items.id, ancestorId));
-    if (!ancestor) break;
-    const [child] = await tx
-      .select({ id: items.id })
-      .from(items)
-      .where(eq(items.parentId, ancestorId))
-      .limit(1);
-    if (child !== undefined) break;
-    await deleteItemSubtree(tx, ancestorId, deletedArtwork);
-    ancestorId = ancestor.parentId;
+    if (version === undefined)
+      await deleteItemSubtree(tx, item.id, deletedArtwork);
   }
 }
 
@@ -501,6 +200,7 @@ export async function scanDirectory(
     Object.assign(mergedProviderIds, change.providerIds);
   }
 
+  // Colocated artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -527,19 +227,15 @@ export async function scanDirectory(
       }
     }
 
-    if (options.reconcileMissing === true) {
-      await revalidateScope(
-        library.rootPath,
-        moviesMedium.scan,
-        path,
-        false,
-        walked,
-      );
-    }
-
     if (!group) {
       await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
       if (options.reconcileMissing === true) {
+        await confirmScopeEmpty(
+          library.rootPath,
+          moviesMedium.scan,
+          path,
+          false,
+        );
         const [item] = await tx
           .select()
           .from(items)
@@ -572,17 +268,13 @@ export async function scanDirectory(
       itemId = existingItem.id;
     } else if (found) {
       if (found.kind !== "movie") throw new AuthError("CONFLICT");
-      if (
-        (await scopeHasMedia(
-          library.rootPath,
-          moviesMedium.scan,
-          found.canonicalFolder,
-          false,
-        )) ||
-        (await itemHasFilesInScope(tx, found.id, found.canonicalFolder))
-      )
-        throw new AuthError("CONFLICT");
-      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
+      await tx
+        .update(items)
+        .set({
+          canonicalFolder: group.canonicalFolder,
+          updatedAt: new Date(),
+        })
+        .where(eq(items.id, found.id));
       itemId = found.id;
     } else {
       const created = await insertItem(tx, {
@@ -693,6 +385,7 @@ export async function scanDirectory(
     }
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
+    // A changed provider id invalidates the match, so metadata re-fetches.
     if (await setItemProviderIds(tx, itemId, mergedProviderIds)) {
       await tx
         .update(items)
@@ -770,6 +463,7 @@ export async function scanShowDirectory(
     Object.assign(mergedProviderIds, change.providerIds);
   }
 
+  // Colocated artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -796,13 +490,10 @@ export async function scanShowDirectory(
       }
     }
 
-    if (options.reconcileMissing === true) {
-      await revalidateScope(library.rootPath, showsScan, path, true, walked);
-    }
-
     if (!group) {
       await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
       if (options.reconcileMissing === true) {
+        await confirmScopeEmpty(library.rootPath, showsScan, path, true);
         const [show] = await tx
           .select()
           .from(items)
@@ -836,17 +527,13 @@ export async function scanShowDirectory(
       showId = existingShow.id;
     } else if (found) {
       if (found.kind !== "show") throw new AuthError("CONFLICT");
-      if (
-        (await scopeHasMedia(
-          library.rootPath,
-          showsScan,
-          found.canonicalFolder,
-          true,
-        )) ||
-        (await itemHasFilesInScope(tx, found.id, found.canonicalFolder))
-      )
-        throw new AuthError("CONFLICT");
-      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
+      await tx
+        .update(items)
+        .set({
+          canonicalFolder: group.canonicalFolder,
+          updatedAt: new Date(),
+        })
+        .where(eq(items.id, found.id));
       showId = found.id;
     } else {
       const created = await insertItem(tx, {
@@ -861,7 +548,6 @@ export async function scanShowDirectory(
     }
 
     const versionIds: string[] = [];
-    const processedEpisodeIds = new Set<string>();
     for (const seasonGroup of group.seasons) {
       const [existingSeason] = await tx
         .select({ item: items, season: seasons })
@@ -883,11 +569,17 @@ export async function scanShowDirectory(
           throw new AuthError("CONFLICT");
         }
         seasonId = existingSeason.item.id;
-        await updateItemCanonicalFolder(
-          tx,
-          existingSeason.item,
-          seasonGroup.canonicalFolder,
-        );
+        if (
+          existingSeason.item.canonicalFolder !== seasonGroup.canonicalFolder
+        ) {
+          await tx
+            .update(items)
+            .set({
+              canonicalFolder: seasonGroup.canonicalFolder,
+              updatedAt: new Date(),
+            })
+            .where(eq(items.id, seasonId));
+        }
       } else {
         const created = await insertItem(tx, {
           libraryId,
@@ -952,11 +644,17 @@ export async function scanShowDirectory(
             throw new AuthError("CONFLICT");
           }
           episodeId = existingEpisode.item.id;
-          await updateItemCanonicalFolder(
-            tx,
-            existingEpisode.item,
-            seasonGroup.canonicalFolder,
-          );
+          if (
+            existingEpisode.item.canonicalFolder !== seasonGroup.canonicalFolder
+          ) {
+            await tx
+              .update(items)
+              .set({
+                canonicalFolder: seasonGroup.canonicalFolder,
+                updatedAt: new Date(),
+              })
+              .where(eq(items.id, episodeId));
+          }
           const existingEnd =
             existingEpisode.episode.episodeEndNumber ??
             existingEpisode.episode.episodeNumber;
@@ -967,19 +665,12 @@ export async function scanShowDirectory(
               candidate.episodeNumber > discoveredEnd &&
               candidate.episodeNumber <= existingEnd,
           );
-          const blocksWidening =
-            persistedEpisodes.some(
-              (candidate) =>
-                candidate.itemId !== episodeId &&
-                candidate.episodeNumber > existingEnd &&
-                candidate.episodeNumber <= discoveredEnd,
-            ) ||
-            seasonGroup.episodes.some(
-              (candidate) =>
-                candidate.episodeNumber !== episodeGroup.episodeNumber &&
-                candidate.episodeNumber > existingEnd &&
-                candidate.episodeNumber <= discoveredEnd,
-            );
+          const blocksWidening = persistedEpisodes.some(
+            (candidate) =>
+              candidate.itemId !== episodeId &&
+              candidate.episodeNumber > existingEnd &&
+              candidate.episodeNumber <= discoveredEnd,
+          );
           if (
             (discoveredEnd > existingEnd && !blocksWidening) ||
             (discoveredEnd < existingEnd && overlapsDiscoveredEpisode)
@@ -990,109 +681,21 @@ export async function scanShowDirectory(
               .where(eq(episodes.itemId, episodeId));
           }
         } else {
-          const episodePaths = new Set(
-            episodeGroup.versions.flatMap((version) => version.paths),
-          );
-          const candidateRows = await tx
-            .select({ item: items })
-            .from(files)
-            .innerJoin(items, eq(files.itemId, items.id))
-            .where(
-              and(
-                eq(files.libraryId, libraryId),
-                inArray(files.path, [...episodePaths]),
-              ),
-            );
-          for (const row of candidateRows) {
-            if (
-              row.item.libraryId !== libraryId ||
-              row.item.kind !== "episode"
-            ) {
-              throw new AuthError("CONFLICT");
-            }
-          }
-          const candidateIds = new Set(candidateRows.map((row) => row.item.id));
-          let preservedEpisode: typeof items.$inferSelect | undefined;
-          if (candidateIds.size === 1) {
-            const candidate = candidateRows[0]?.item;
-            if (!candidate) throw new Error("Candidate row missing.");
-            const sourceFiles = await tx
-              .select({ path: files.path })
-              .from(files)
-              .where(eq(files.itemId, candidate.id));
-            if (sourceFiles.every((file) => episodePaths.has(file.path))) {
-              preservedEpisode = candidate;
-            }
-          }
-          // More than one complete source Episode merges through the Version
-          // reparent path instead of preserving a single Item.
-          // Clamp the discovered range before the earliest blocker inside it,
-          // matching the existing-Episode truncation policy.
-          const requestedEnd =
-            episodeGroup.episodeEndNumber ?? episodeGroup.episodeNumber;
-          let blockerStart: number | null = null;
-          for (const persisted of persistedEpisodes) {
-            if (
-              persisted.episodeNumber > episodeGroup.episodeNumber &&
-              persisted.episodeNumber <= requestedEnd &&
-              (blockerStart === null || persisted.episodeNumber < blockerStart)
-            ) {
-              blockerStart = persisted.episodeNumber;
-            }
-          }
-          for (const candidate of seasonGroup.episodes) {
-            if (
-              candidate.episodeNumber !== episodeGroup.episodeNumber &&
-              candidate.episodeNumber > episodeGroup.episodeNumber &&
-              candidate.episodeNumber <= requestedEnd &&
-              (blockerStart === null || candidate.episodeNumber < blockerStart)
-            ) {
-              blockerStart = candidate.episodeNumber;
-            }
-          }
-          const clampedEnd =
-            blockerStart === null ? requestedEnd : blockerStart - 1;
-          const placement = {
-            episodeNumber: episodeGroup.episodeNumber,
-            episodeEndNumber:
-              clampedEnd === episodeGroup.episodeNumber ? null : clampedEnd,
-          };
-          if (preservedEpisode === undefined) {
-            const created = await insertItem(tx, {
-              libraryId,
-              kind: "episode",
-              parentId: seasonId,
-              title: episodeGroup.title,
-              canonicalFolder: seasonGroup.canonicalFolder,
-              extension: {
-                episodeNumber: placement.episodeNumber,
-                episodeEndNumber: placement.episodeEndNumber,
-              },
-            });
-            episodeId = created.id;
-          } else {
-            // Every File on the source Episode is moving into this group, so
-            // the Item itself moves and keeps all Item-owned state.
-            const oldParentId = preservedEpisode.parentId;
-            const movedItem = await moveItem(
-              tx,
-              preservedEpisode.id,
-              seasonId,
-              placement,
-            );
-            if (!movedItem) throw new Error("Episode move returned no row.");
-            await updateItemCanonicalFolder(
-              tx,
-              movedItem,
-              seasonGroup.canonicalFolder,
-            );
-            episodeId = movedItem.id;
-            await pruneEmptiedContainers(tx, oldParentId, deletedArtwork);
-          }
+          const created = await insertItem(tx, {
+            libraryId,
+            kind: "episode",
+            parentId: seasonId,
+            title: episodeGroup.title,
+            canonicalFolder: seasonGroup.canonicalFolder,
+            extension: {
+              episodeNumber: episodeGroup.episodeNumber,
+              episodeEndNumber: episodeGroup.episodeEndNumber,
+            },
+          });
+          episodeId = created.id;
         }
 
         for (const versionGroup of episodeGroup.versions) {
-          processedEpisodeIds.add(episodeId);
           const members = versionGroup.paths.map((memberPath) => {
             const member = memberByPath.get(memberPath);
             if (!member) throw new Error(`Unprobed member: ${memberPath}`);
@@ -1110,7 +713,6 @@ export async function scanShowDirectory(
                 0,
               )
             : null;
-          const combinedKeyframes = combineKeyframes(members);
           const first = members[0];
           if (!first) throw new Error("Show Version has no Files.");
           const label = videoVersionLabel(first.path, first.probe);
@@ -1129,160 +731,10 @@ export async function scanShowDirectory(
           if (existingFile) {
             for (const file of existingFiles) {
               if (
-                file.itemId !== existingFile.itemId ||
+                file.itemId !== episodeId ||
                 file.versionId !== existingFile.versionId
               ) {
                 throw new AuthError("CONFLICT");
-              }
-            }
-            if (existingFile.itemId !== episodeId) {
-              const allVersionFiles = await tx
-                .select({ id: files.id })
-                .from(files)
-                .where(eq(files.versionId, existingFile.versionId));
-              const allVersionFileIds = allVersionFiles.map((file) => file.id);
-              const destinationFileIds = new Set(
-                existingFiles.map((file) => file.id),
-              );
-              if (
-                allVersionFileIds.length !== destinationFileIds.size ||
-                allVersionFileIds.some(
-                  (fileId) => !destinationFileIds.has(fileId),
-                )
-              ) {
-                throw new AuthError("CONFLICT");
-              }
-              // Stored Versions derived from the moved Files retire with the
-              // source Item; keep their colocated artwork for byte cleanup.
-              const dependentStoredVersions =
-                allVersionFileIds.length === 0
-                  ? []
-                  : await tx
-                      .select({ id: versions.id })
-                      .from(versions)
-                      .where(
-                        and(
-                          eq(versions.origin, "stored"),
-                          inArray(versions.sourceFileId, allVersionFileIds),
-                        ),
-                      );
-              const sourceEpisodeId = existingFile.itemId;
-              const retiredVersionIds = new Set([
-                existingFile.versionId,
-                ...dependentStoredVersions.map((version) => version.id),
-              ]);
-              const remainingSourceVersions = await tx
-                .select({ id: versions.id })
-                .from(versions)
-                .where(
-                  and(
-                    eq(versions.itemId, sourceEpisodeId),
-                    notInArray(versions.id, [...retiredVersionIds]),
-                  ),
-                );
-              const sourceEpisodeWillEmpty =
-                remainingSourceVersions.length === 0;
-              if (dependentStoredVersions.length > 0) {
-                const storedIds = dependentStoredVersions.map(
-                  (version) => version.id,
-                );
-                const orphanedArtwork = await tx
-                  .select({
-                    rootPath: libraries.rootPath,
-                    storageKey: artwork.storageKey,
-                  })
-                  .from(artwork)
-                  .innerJoin(versions, eq(artwork.versionId, versions.id))
-                  .innerJoin(libraries, eq(versions.libraryId, libraries.id))
-                  .where(
-                    and(
-                      eq(artwork.backend, "colocated"),
-                      inArray(artwork.versionId, storedIds),
-                    ),
-                  );
-                deletedArtwork.push(...orphanedArtwork);
-                await tx
-                  .delete(versions)
-                  .where(inArray(versions.id, storedIds));
-              }
-              // Same-user Progress: the freshest persisted playback state
-              // wins. When the source Episode empties, detached rows follow
-              // the surviving media too.
-              const sourceProgress = await tx
-                .select()
-                .from(progress)
-                .where(
-                  sourceEpisodeWillEmpty
-                    ? eq(progress.itemId, sourceEpisodeId)
-                    : eq(progress.versionId, existingFile.versionId),
-                );
-              const progressByUser = new Map<string, typeof sourceProgress>();
-              for (const row of sourceProgress) {
-                const rows = progressByUser.get(row.userId) ?? [];
-                rows.push(row);
-                progressByUser.set(row.userId, rows);
-              }
-              for (const [userId, sourceRows] of progressByUser) {
-                const destinationRows = await tx
-                  .select()
-                  .from(progress)
-                  .where(
-                    and(
-                      eq(progress.userId, userId),
-                      eq(progress.itemId, episodeId),
-                    ),
-                  );
-                const contenders = [...sourceRows, ...destinationRows];
-                let winner = contenders[0];
-                if (winner === undefined) continue;
-                for (const row of contenders) {
-                  if (
-                    row.updatedAt.getTime() > winner.updatedAt.getTime() ||
-                    (row.updatedAt.getTime() === winner.updatedAt.getTime() &&
-                      row.id > winner.id)
-                  )
-                    winner = row;
-                }
-                for (const row of contenders) {
-                  if (row.id === winner.id) continue;
-                  await tx.delete(progress).where(eq(progress.id, row.id));
-                }
-                if (
-                  winner.itemId !== episodeId &&
-                  winner.versionId !== existingFile.versionId
-                ) {
-                  await tx
-                    .update(progress)
-                    .set({ itemId: episodeId })
-                    .where(eq(progress.id, winner.id));
-                }
-              }
-              // files.(version_id, item_id), progress.(version_id, item_id,
-              // format) and session_registry.(version_id, item_id) reference
-              // versions.(id, item_id) non-deferrably, so all four tables must
-              // move in one statement. The source Episode's segment timeline
-              // cannot follow, so the Version re-establishes one under the
-              // destination Episode in persistScanTimelines.
-              await tx.execute(sql`
-                with moved_files as (
-                  update ${files} set item_id = ${episodeId}
-                  where version_id = ${existingFile.versionId}
-                ), moved_progress as (
-                  update ${progress} set item_id = ${episodeId}
-                  where version_id = ${existingFile.versionId}
-                ), moved_sessions as (
-                  update ${sessionRegistry} set item_id = ${episodeId}
-                  where version_id = ${existingFile.versionId}
-                )
-                update ${versions}
-                set item_id = ${episodeId},
-                  segment_timeline_id = null,
-                  timeline_aligned = false
-                where id = ${existingFile.versionId}
-              `);
-              if (sourceEpisodeWillEmpty) {
-                await mergeEmptiedEpisodeState(tx, sourceEpisodeId, episodeId);
-                emptiedItemIds.push(sourceEpisodeId);
               }
             }
             const [version] = await tx
@@ -1299,13 +751,7 @@ export async function scanShowDirectory(
             }
             await tx
               .update(versions)
-              .set({
-                label,
-                bytes,
-                durationSeconds,
-                keyframesSeconds: combinedKeyframes,
-                lazyIndexPending: combinedKeyframes === null,
-              })
+              .set({ label, bytes, durationSeconds })
               .where(eq(versions.id, version.id));
             versionId = version.id;
           } else {
@@ -1319,8 +765,6 @@ export async function scanShowDirectory(
                 format: "video",
                 bytes,
                 durationSeconds,
-                keyframesSeconds: combinedKeyframes,
-                lazyIndexPending: combinedKeyframes === null,
               })
               .returning();
             if (!version) {
@@ -1479,14 +923,12 @@ export async function scanShowDirectory(
       }
     }
 
+    // A changed provider id invalidates the match, so metadata re-fetches.
     if (await setItemProviderIds(tx, showId, mergedProviderIds)) {
       await tx
         .update(items)
         .set({ metadataState: "pending", updatedAt: new Date() })
         .where(eq(items.id, showId));
-    }
-    for (const episodeId of processedEpisodeIds) {
-      await persistScanTimelines(tx, episodeId);
     }
     return { itemId: showId, versionIds };
   });

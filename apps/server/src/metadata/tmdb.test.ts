@@ -95,6 +95,33 @@ describe("TMDB metadata provider", () => {
     ]);
   });
 
+  test("decodes a body streamed in small chunks past the initial buffer", async () => {
+    const results = Array.from({ length: 2000 }, (_, index) => ({
+      id: index + 1,
+      title: "Alien",
+      release_date: "1979-05-25",
+    }));
+    const bytes = new TextEncoder().encode(JSON.stringify({ results }));
+    expect(bytes.byteLength).toBeGreaterThan(64 * 1024);
+    const chunkBytes = 997;
+    const { request } = mockRequest(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (let at = 0; at < bytes.byteLength; at += chunkBytes)
+                controller.enqueue(bytes.subarray(at, at + chunkBytes));
+              controller.close();
+            },
+          }),
+        ),
+    );
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    const matches = await provider.search({ title: "Alien", kind: "movie" });
+    expect(matches).toHaveLength(2000);
+    expect(matches[1999]?.providerId).toBe("2000");
+  });
+
   test("search matches a folder named with the original title", async () => {
     const { request } = jsonRequest({
       results: [

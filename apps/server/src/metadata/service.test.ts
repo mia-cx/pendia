@@ -352,7 +352,7 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       expect(beta.calls.fetch).toHaveLength(0);
     }));
 
-  test("an explicit empty library list makes no calls and stores unmatched", () =>
+  test("an explicit empty library list makes no calls and leaves the Item pending", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const { library, item } = await fixture(db);
@@ -364,12 +364,12 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         fetch: async () => fetchedResult(),
       });
       const application = await applyMetadata(db, item.id, [provider]);
-      expect(application).toEqual({ state: "unmatched", artwork: [] });
+      expect(application).toEqual({ state: "pending", artwork: [] });
       expect(calls.search).toHaveLength(0);
       expect(calls.fetch).toHaveLength(0);
       expect(await storedItem(db, item.id)).toMatchObject({
         title: "Inception",
-        metadataState: "unmatched",
+        metadataState: "pending",
       });
     }));
 
@@ -472,7 +472,7 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         );
       releaseFetch(fetchedResult({ providerIds: { tmdb: "old" } }));
       await expect(pending).rejects.toThrow(
-        "Provider id changed during metadata fetch.",
+        "Provider ids changed during metadata fetch.",
       );
       expect(await itemProviderIds(db, item.id)).toEqual([
         { provider: "tmdb", value: "new" },
@@ -482,6 +482,49 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         metadataState: "pending",
       });
       expect(await db.select().from(credits)).toEqual([]);
+    }));
+
+  test("another provider's id changing during a search match rejects it", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { item } = await fixture(db);
+      let fetchStarted: () => void = () => {};
+      let releaseFetch: (result: MetadataResult) => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        fetchStarted = resolve;
+      });
+      const released = new Promise<MetadataResult>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const { provider } = mockProvider("tmdb", {
+        search: async () => [
+          {
+            providerId: "550",
+            title: "Inception",
+            year: 2010,
+            confidence: 0.99,
+          },
+        ],
+        fetch: () => {
+          fetchStarted();
+          return released;
+        },
+      });
+      const pending = applyMetadata(db, item.id, [provider]);
+      await started;
+      // A scan corrects the IMDb id while the TMDB fetch is in flight.
+      await setItemProviderIds(db, item.id, { imdb: "tt1375666" });
+      releaseFetch(fetchedResult());
+      await expect(pending).rejects.toThrow(
+        "Provider ids changed during metadata fetch.",
+      );
+      expect(await itemProviderIds(db, item.id)).toEqual([
+        { provider: "imdb", value: "tt1375666" },
+      ]);
+      expect(await storedItem(db, item.id)).toMatchObject({
+        title: "Inception",
+        metadataState: "pending",
+      });
     }));
 
   test("a scan-held library lock serializes a stale provider id change", () =>
@@ -542,7 +585,7 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         releaseLock();
         await blocker;
         await expect(pending).rejects.toThrow(
-          "Provider id changed during metadata fetch.",
+          "Provider ids changed during metadata fetch.",
         );
         expect(await itemProviderIds(db, item.id)).toEqual([
           { provider: "tmdb", value: "new" },

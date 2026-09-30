@@ -47,7 +47,17 @@ export function registerMetadataJobs(
       if (removed) await publishLibraryChanged(db, payload.itemId);
       return;
     }
-    await storeArtworkOriginal(db, payload.itemId, poster, request);
+    try {
+      await storeArtworkOriginal(db, payload.itemId, poster, request);
+    } catch (error) {
+      // Metadata already committed as matched; pending lets the next scan
+      // retry the poster after this job's own attempts run out.
+      await db
+        .update(items)
+        .set({ metadataState: "pending", updatedAt: new Date() })
+        .where(eq(items.id, payload.itemId));
+      throw error;
+    }
     await publishLibraryChanged(db, payload.itemId);
   });
 }

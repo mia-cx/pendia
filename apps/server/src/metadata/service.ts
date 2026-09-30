@@ -19,7 +19,9 @@ export type MetadataApplication =
       confidence: number;
       artwork: MetadataResult["artwork"];
     }
-  | { state: "unmatched"; artwork: [] };
+  | { state: "unmatched"; artwork: [] }
+  // No enabled provider handles the Item, so it stays pending for a later fetch.
+  | { state: "pending"; artwork: [] };
 
 type MetadataMatch = Awaited<ReturnType<MetadataProvider["search"]>>[number];
 
@@ -50,7 +52,8 @@ async function persistMatch(
   providerId: string,
   confidence: number,
   result: MetadataResult,
-  expectedProviderId: string | null,
+  expectedIds: readonly OwnedProviderId[],
+  searched: boolean,
 ): Promise<MetadataApplication> {
   const idEntries = new Map<string, string>();
   for (const [name, value] of Object.entries(result.providerIds)) {
@@ -74,15 +77,8 @@ async function persistMatch(
       .for("update");
     if (!locked || locked.libraryId !== lockedLibrary.id)
       throw new AuthError("NOT_FOUND");
-    const [current] = await tx
-      .select({ value: providerIds.value })
-      .from(providerIds)
-      .where(
-        and(eq(providerIds.itemId, itemId), eq(providerIds.provider, provider)),
-      );
-    if ((current?.value ?? null) !== expectedProviderId)
-      throw new Error("Provider id changed during metadata fetch.");
-    if (expectedProviderId === null) {
+    await assertProviderIdsUnchanged(tx, itemId, expectedIds);
+    if (searched) {
       // Search matches may not collide with another Item's provider id.
       for (const [name, value] of idEntries) {
         const [collision] = await tx
@@ -240,6 +236,28 @@ async function itemProviderIdSnapshot(
   return rows;
 }
 
+/** Rejects a stale fetch when any provider id changed after the job read its snapshot. */
+async function assertProviderIdsUnchanged(
+  tx: Connection,
+  itemId: string,
+  expected: readonly OwnedProviderId[],
+): Promise<void> {
+  const current = await itemProviderIdSnapshot(tx, itemId);
+  const unchanged =
+    current.length === expected.length &&
+    current.every((row, index) => {
+      const snapshot = expected[index];
+      return (
+        snapshot !== undefined &&
+        row.provider === snapshot.provider &&
+        row.value === snapshot.value &&
+        row.metadataDerived === snapshot.metadataDerived
+      );
+    });
+  if (!unchanged)
+    throw new Error("Provider ids changed during metadata fetch.");
+}
+
 async function persistUnmatched(
   db: Database,
   itemId: string,
@@ -260,21 +278,7 @@ async function persistUnmatched(
       .for("update");
     if (!locked || locked.libraryId !== lockedLibrary.id)
       throw new AuthError("NOT_FOUND");
-    const current = await itemProviderIdSnapshot(tx, itemId);
-    const unchanged =
-      current.length === expectedIds.length &&
-      current.every((row, index) => {
-        const expected = expectedIds[index];
-        return (
-          expected !== undefined &&
-          row.provider === expected.provider &&
-          row.value === expected.value &&
-          row.metadataDerived === expected.metadataDerived
-        );
-      });
-    if (!unchanged) {
-      throw new Error("Provider ids changed during metadata fetch.");
-    }
+    await assertProviderIdsUnchanged(tx, itemId, expectedIds);
     await tx
       .update(items)
       .set({ metadataState: "unmatched", updatedAt: new Date() })
@@ -300,9 +304,11 @@ export async function applyMetadata(
   const snapshotByProvider = new Map(
     idSnapshot.map((row) => [row.provider, row.value]),
   );
+  let consulted = false;
   for (const providerId of providersForLibrary(config, item.libraryId)) {
     const provider = providers.find((candidate) => candidate.id === providerId);
     if (provider === undefined || !provider.kinds.includes(item.kind)) continue;
+    consulted = true;
     const existingValue = snapshotByProvider.get(provider.id);
     if (existingValue !== undefined) {
       const result = await provider.fetch({
@@ -317,7 +323,8 @@ export async function applyMetadata(
         existingValue,
         1,
         result,
-        existingValue,
+        idSnapshot,
+        false,
       );
     }
     const matches = await provider.search({
@@ -339,8 +346,12 @@ export async function applyMetadata(
       best.providerId,
       best.confidence,
       result,
-      null,
+      idSnapshot,
+      true,
     );
   }
+  // Unmatched means a provider looked and found no confident match. Without
+  // one, the Item stays pending so a later key or settings change can fetch it.
+  if (!consulted) return { state: "pending", artwork: [] };
   return persistUnmatched(db, item.id, item.libraryId, idSnapshot);
 }

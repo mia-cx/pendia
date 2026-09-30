@@ -409,7 +409,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
       });
     }));
 
-  test("an explicit empty library list makes no HTTP call and stays unmatched", () =>
+  test("an explicit empty library list makes no HTTP call and stays pending", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
@@ -435,7 +435,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         await registry.run(claimed ?? job);
         await queue.complete(claimed ?? job);
         expect(calls).toHaveLength(0);
-        expect((await storedItem(db, item.id)).metadataState).toBe("unmatched");
+        expect((await storedItem(db, item.id)).metadataState).toBe("pending");
         expect(await db.select().from(artwork)).toHaveLength(0);
         expect(await db.select().from(events)).toMatchObject([
           {
@@ -534,10 +534,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         );
         await queue.fail(claimed, new Error("Artwork request failed."));
 
+        // Metadata stays, and pending lets a later scan retry the poster.
         expect(await storedItem(db, item.id)).toMatchObject({
           title: "Fight Club",
           year: 1999,
-          metadataState: "matched",
+          metadataState: "pending",
         });
         expect(
           await db.select().from(credits).where(eq(credits.itemId, item.id)),
@@ -565,6 +566,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         await queue.complete(retried ?? job);
         expect(await db.select().from(artwork)).toHaveLength(1);
         expect(await db.select().from(events)).toHaveLength(3);
+        expect((await storedItem(db, item.id)).metadataState).toBe("matched");
       });
     }));
 

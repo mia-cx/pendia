@@ -107,7 +107,9 @@ describe.skipIf(!databaseUrl)("startPendia job registration", () => {
           .select()
           .from(items)
           .where(eq(items.id, item.id));
-        expect(stored?.metadataState).toBe("unmatched");
+        // The built-in handler completed the job; with no TMDB key configured,
+        // no provider looked at the Item, so it stays pending.
+        expect(stored?.metadataState).toBe("pending");
       } finally {
         await server.stop();
       }

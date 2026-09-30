@@ -77,11 +77,16 @@ export async function findItemByProviderIds(
   return matched.values().next().value;
 }
 
-/** Upserts provider ids owned by one Item. */
+/**
+ * Upserts explicit provider ids on one Item and reports whether any changed.
+ * With `fillOnly`, an id already asserted explicitly keeps its value: folder
+ * tags fill gaps but never undo a webhook's correction.
+ */
 export async function setItemProviderIds(
   db: Connection,
   itemId: string,
   providerIds: Record<string, string>,
+  { fillOnly = false }: { fillOnly?: boolean } = {},
 ): Promise<boolean> {
   let changed = false;
   for (const [provider, value] of providerIdPairs(providerIds)) {
@@ -100,8 +105,8 @@ export async function setItemProviderIds(
     // Scan input is explicit: an equal derived value still becomes owned.
     if (
       existing !== undefined &&
-      existing.value === value &&
-      !existing.metadataDerived
+      !existing.metadataDerived &&
+      (fillOnly || existing.value === value)
     )
       continue;
     await db

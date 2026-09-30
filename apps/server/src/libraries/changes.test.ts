@@ -1171,6 +1171,30 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
       });
     }));
 
+  test("a rescan keeps a webhook's id correction over the folder tag", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const { itemId } = await scanDirectory(db, library.id, folder);
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        // Radarr corrects the movie; the folder keeps its old {tmdb-348} tag.
+        await scanDirectory(db, library.id, folder, {
+          changes: [
+            { kind: "add", path: file1080, providerIds: { tmdb: "349" } },
+          ],
+        });
+        await scanDirectory(db, library.id, folder);
+        const [row] = await db
+          .select({ value: providerIds.value })
+          .from(providerIds)
+          .where(eq(providerIds.provider, "tmdb"));
+        expect(row?.value).toBe("349");
+      });
+    }));
+
   test("provider-derived ids never identify an Item", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

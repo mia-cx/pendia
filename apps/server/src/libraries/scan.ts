@@ -200,10 +200,6 @@ export async function scanDirectory(
   for (const change of changes) {
     Object.assign(changeProviderIds, change.providerIds);
   }
-  const mergedProviderIds: Record<string, string> = {
-    ...group?.providerIds,
-    ...changeProviderIds,
-  };
 
   // Colocated artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
@@ -386,7 +382,19 @@ export async function scanDirectory(
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
     // A changed provider id invalidates the match, so metadata re-fetches.
-    if (await setItemProviderIds(tx, itemId, mergedProviderIds)) {
+    // Webhook ids assert; folder tags only fill ids nothing asserted yet.
+    const assertedChanged = await setItemProviderIds(
+      tx,
+      itemId,
+      changeProviderIds,
+    );
+    const filledChanged = await setItemProviderIds(
+      tx,
+      itemId,
+      group.providerIds,
+      { fillOnly: true },
+    );
+    if (assertedChanged || filledChanged) {
       await tx
         .update(items)
         .set({ metadataState: "pending", updatedAt: new Date() })

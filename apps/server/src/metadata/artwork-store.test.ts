@@ -35,6 +35,34 @@ const poster = {
   url: "https://image.example/poster.jpg",
 } as const;
 
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const typed = new Uint8Array(4 + data.byteLength);
+  typed.set(new TextEncoder().encode(type));
+  typed.set(data, 4);
+  const out = new Uint8Array(12 + data.byteLength);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, data.byteLength);
+  out.set(typed, 4);
+  view.setUint32(8 + data.byteLength, Bun.hash.crc32(typed));
+  return out;
+}
+
+/** A PNG that declares its geometry in the header and carries no pixels. */
+function pngHeader(width: number, height: number): Uint8Array<ArrayBuffer> {
+  const ihdr = new Uint8Array(13);
+  const view = new DataView(ihdr.buffer);
+  view.setUint32(0, width);
+  view.setUint32(4, height);
+  ihdr.set([8, 2, 0, 0, 0], 8);
+  return new Uint8Array(
+    Buffer.concat([
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+      pngChunk("IHDR", ihdr),
+      pngChunk("IEND", new Uint8Array(0)),
+    ]),
+  );
+}
+
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "pendia-library-"));
   try {
@@ -295,11 +323,13 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
         const { item } = await fixture(db, root);
-        const svg = (width: number, height: number) =>
-          Buffer.from(
-            `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"></svg>`,
-          );
-        for (const body of [svg(8193, 10), svg(8000, 6000), svg(2100, 100)]) {
+        // Header-only PNGs: the limits must reject them before any decode.
+        // Each trips one limit: width, pixel count, aspect ratio.
+        for (const body of [
+          pngHeader(8193, 500),
+          pngHeader(8000, 6000),
+          pngHeader(2100, 100),
+        ]) {
           const { request } = mockRequest(() => new Response(body));
           await expect(
             storeArtworkOriginal(db, item.id, poster, request),

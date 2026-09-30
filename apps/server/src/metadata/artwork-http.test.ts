@@ -91,6 +91,25 @@ async function withServer<T>(
 }
 
 describe.skipIf(!databaseUrl)("artwork http", () => {
+  test("labels a re-encoded GIF with the output type", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const gif = Buffer.from(
+          "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+          "base64",
+        );
+        const { row } = await seed(db, root, gif);
+        await withServer(db, {}, async (base) => {
+          const response = await fetch(`${base}/api/artwork/${row.id}?width=4`);
+          expect(response.status).toBe(200);
+          const bytes = Buffer.from(await response.arrayBuffer());
+          const { format } = await new Bun.Image(bytes).metadata();
+          expect(response.headers.get("content-type")).toBe(`image/${format}`);
+        });
+      });
+    }));
+
   test("serves a real resize of a stored original", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

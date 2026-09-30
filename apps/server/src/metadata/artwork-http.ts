@@ -44,9 +44,12 @@ const bunResize: ArtworkResize = async (input, width) => {
   const source = await image.metadata();
   // Never enlarge: a small original is served at its own width.
   const bytes = await image.resize(Math.min(width, source.width)).bytes();
+  // Some formats re-encode differently (GIF becomes PNG), so the type
+  // comes from the output header, not the original.
+  const output = await new Bun.Image(bytes).metadata();
   return {
     bytes,
-    contentType: imageTypes[source.format] ?? "application/octet-stream",
+    contentType: imageTypes[output.format] ?? "application/octet-stream",
   };
 };
 

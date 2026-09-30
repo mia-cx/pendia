@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   access,
   mkdir,
@@ -323,17 +323,26 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
         const { item } = await fixture(db, root);
-        // Header-only PNGs: the limits must reject them before any decode.
-        // Each trips one limit: width, pixel count, aspect ratio.
-        for (const body of [
-          pngHeader(8193, 500),
-          pngHeader(8000, 6000),
-          pngHeader(2100, 100),
-        ]) {
-          const { request } = mockRequest(() => new Response(body));
-          await expect(
-            storeArtworkOriginal(db, item.id, poster, request),
-          ).rejects.toThrow("Invalid artwork response.");
+        const decode = spyOn(Bun.Image.prototype, "resize").mockImplementation(
+          () => {
+            throw new Error("Unexpected image decode.");
+          },
+        );
+        try {
+          // Each header trips one limit: width, pixel count, aspect ratio.
+          for (const body of [
+            pngHeader(8193, 500),
+            pngHeader(8000, 6000),
+            pngHeader(2100, 100),
+          ]) {
+            const { request } = mockRequest(() => new Response(body));
+            await expect(
+              storeArtworkOriginal(db, item.id, poster, request),
+            ).rejects.toThrow("Invalid artwork response.");
+          }
+          expect(decode).not.toHaveBeenCalled();
+        } finally {
+          decode.mockRestore();
         }
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(

@@ -1,4 +1,5 @@
 import type { MetadataProvider } from "@pendia/plugin-api";
+import { readBoundedBytes } from "./bounded-body.ts";
 
 const baseUrl = "https://api.themoviedb.org/3";
 const imageBaseUrl = "https://image.tmdb.org/t/p/original";
@@ -59,8 +60,6 @@ function normalizeTitle(title: string): string {
     .trim();
 }
 
-const initialBodyBytes = 64 * 1024;
-
 async function readJsonBody(
   response: Response,
   signal: AbortSignal,
@@ -72,40 +71,19 @@ async function readJsonBody(
     throw new Error("TMDB response too large.");
   }
   if (response.body === null) invalid();
-  const reader = response.body.getReader();
-  // Chunks are copied into one growing buffer as they arrive, so a body
-  // streamed in tiny pieces never holds more than the buffer itself.
-  let buffer = new Uint8Array(initialBodyBytes);
-  let total = 0;
+  let bytes: Uint8Array;
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (total + value.byteLength > maxResponseBytes) {
-        await reader.cancel().catch(() => {});
-        throw new Error("TMDB response too large.");
-      }
-      if (total + value.byteLength > buffer.byteLength) {
-        const grown = new Uint8Array(
-          Math.min(
-            maxResponseBytes,
-            Math.max(buffer.byteLength * 2, total + value.byteLength),
-          ),
-        );
-        grown.set(buffer.subarray(0, total));
-        buffer = grown;
-      }
-      buffer.set(value, total);
-      total += value.byteLength;
-    }
+    bytes = await readBoundedBytes(
+      response.body,
+      maxResponseBytes,
+      () => new Error("TMDB response too large."),
+    );
   } catch (error) {
     if (signal.aborted) throw signal.reason;
     throw error;
-  } finally {
-    reader.releaseLock();
   }
   try {
-    return JSON.parse(new TextDecoder().decode(buffer.subarray(0, total)));
+    return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     if (signal.aborted) throw signal.reason;
     invalid();

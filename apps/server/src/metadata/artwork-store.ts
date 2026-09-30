@@ -23,6 +23,7 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, libraries } from "../db/schema/index.ts";
 import type { DeletedArtworkFile } from "../db/tree.ts";
+import { readBoundedBytes } from "./bounded-body.ts";
 
 type ArtworkCandidate = MetadataResult["artwork"][number];
 
@@ -103,30 +104,11 @@ async function readBoundedBody(
     throw new Error("Artwork response too large.");
   }
   if (response.body === null) return new Uint8Array(0);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxDownloadBytes) {
-        await reader.cancel().catch(() => {});
-        throw new Error("Artwork response too large.");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return readBoundedBytes(
+    response.body,
+    maxDownloadBytes,
+    () => new Error("Artwork response too large."),
+  );
 }
 
 /** Stores one selected artwork original in the Item's colocated backend. */

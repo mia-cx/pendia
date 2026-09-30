@@ -52,12 +52,17 @@ function releaseYear(value: unknown): number | null {
 }
 
 function normalizeTitle(title: string): string {
-  return title
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/\p{M}/gu, "")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
+  return (
+    title
+      .normalize("NFKD")
+      .toLowerCase()
+      .replace(/\p{M}/gu, "")
+      // Radarr's CleanTitle writes "&" as "and" and drops apostrophes.
+      .replace(/&/g, " and ")
+      .replace(/['’]/g, "")
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim()
+  );
 }
 
 async function readJsonBody(
@@ -244,6 +249,33 @@ function readArtwork(
   return artwork;
 }
 
+const imdbIdPattern = /^tt[0-9]+$/;
+
+/** Resolves an IMDb id through /find; a single movie result is a certain match. */
+async function findByImdb(
+  request: typeof fetch,
+  key: string,
+  imdbId: string,
+  timeoutMs: number,
+  maxResponseBytes: number,
+): Promise<MetadataMatch | undefined> {
+  const url = new URL(`${baseUrl}/find/${imdbId}`);
+  url.searchParams.set("api_key", key);
+  url.searchParams.set("external_source", "imdb_id");
+  const data = asObject(
+    await requestJson(request, url, timeoutMs, maxResponseBytes),
+  );
+  if (!Array.isArray(data.movie_results)) invalid();
+  if (data.movie_results.length !== 1) return undefined;
+  const result = asObject(data.movie_results[0]);
+  return {
+    providerId: String(requiredId(result.id)),
+    title: requiredString(result.title),
+    year: releaseYear(result.release_date),
+    confidence: 1,
+  };
+}
+
 async function searchMovies(
   request: typeof fetch,
   key: string,
@@ -252,6 +284,18 @@ async function searchMovies(
   maxResponseBytes: number,
 ): Promise<MetadataMatch[]> {
   if (query.kind !== "movie") throw new Error("TMDB only supports movies.");
+  // An IMDb id from the folder or an arr pins the movie before any title guess.
+  const imdbId = query.providerIds?.imdb;
+  if (imdbId !== undefined && imdbIdPattern.test(imdbId)) {
+    const found = await findByImdb(
+      request,
+      key,
+      imdbId,
+      timeoutMs,
+      maxResponseBytes,
+    );
+    if (found !== undefined) return [found];
+  }
   const url = new URL(`${baseUrl}/search/movie`);
   url.searchParams.set("api_key", key);
   url.searchParams.set("query", query.title);

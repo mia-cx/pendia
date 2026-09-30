@@ -182,7 +182,7 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       });
       const application = await applyMetadata(db, item.id, [provider]);
       expect(calls.search).toEqual([
-        { title: "Inception", year: 2010, kind: "movie" },
+        { title: "Inception", year: 2010, kind: "movie", providerIds: {} },
       ]);
       expect(calls.fetch).toEqual([{ providerId: "2", kind: "movie" }]);
       expect(application).toMatchObject({

@@ -150,6 +150,74 @@ describe("TMDB metadata provider", () => {
     ]);
   });
 
+  test("search matches Radarr CleanTitle folder names", async () => {
+    for (const [folderTitle, tmdbTitle] of [
+      ["Oceans Eleven", "Ocean's Eleven"],
+      ["Fast and Furious", "Fast & Furious"],
+    ]) {
+      const { request } = jsonRequest({
+        results: [{ id: 1, title: tmdbTitle, release_date: "2001-12-07" }],
+      });
+      const provider = createTmdbMetadataProvider(apiKey, request);
+      const [match] = await provider.search({
+        title: folderTitle ?? "",
+        year: 2001,
+        kind: "movie",
+      });
+      expect(match?.confidence).toBe(1);
+    }
+  });
+
+  test("search resolves an IMDb id through find before the title", async () => {
+    const { calls, request } = jsonRequest({
+      movie_results: [
+        { id: 13804, title: "Fast & Furious", release_date: "2009-04-02" },
+      ],
+    });
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    expect(
+      await provider.search({
+        title: "Some Other Title",
+        year: 2009,
+        kind: "movie",
+        providerIds: { imdb: "tt1013752" },
+      }),
+    ).toEqual([
+      {
+        providerId: "13804",
+        title: "Fast & Furious",
+        year: 2009,
+        confidence: 1,
+      },
+    ]);
+    const url = calledUrl(calls[0]);
+    expect(url.pathname).toBe("/3/find/tt1013752");
+    expect(url.searchParams.get("external_source")).toBe("imdb_id");
+    expect(calls).toHaveLength(1);
+  });
+
+  test("search falls back to the title when find has no movie", async () => {
+    let call = 0;
+    const { calls, request } = mockRequest(() =>
+      call++ === 0
+        ? Response.json({ movie_results: [] })
+        : Response.json({
+            results: [{ id: 1, title: "Alien", release_date: "1979-05-25" }],
+          }),
+    );
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    const matches = await provider.search({
+      title: "Alien",
+      year: 1979,
+      kind: "movie",
+      providerIds: { imdb: "tt0078748" },
+    });
+    expect(matches).toEqual([
+      { providerId: "1", title: "Alien", year: 1979, confidence: 1 },
+    ]);
+    expect(calledUrl(calls[1]).pathname).toBe("/3/search/movie");
+  });
+
   test("fetch resolves null for a movie TMDB does not know", async () => {
     const { request } = jsonRequest({ status_code: 34 }, 404);
     const provider = createTmdbMetadataProvider(apiKey, request);

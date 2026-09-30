@@ -334,6 +334,7 @@ export async function applyMetadata(
       title: item.title,
       year: item.year ?? undefined,
       kind: item.kind,
+      providerIds: Object.fromEntries(snapshotByProvider),
     });
     const best = bestMatch(matches, config.confidenceThreshold);
     if (best === undefined) continue;

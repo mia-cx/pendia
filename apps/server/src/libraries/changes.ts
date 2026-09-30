@@ -220,13 +220,7 @@ export async function applyScanChanges(
           .from(items)
           .where(eq(items.id, file.itemId));
         if (item && item.canonicalFolder === posix.dirname(previousPath)) {
-          await db
-            .update(items)
-            .set({
-              canonicalFolder: posix.dirname(path),
-              updatedAt: new Date(),
-            })
-            .where(eq(items.id, item.id));
+          await updateItemCanonicalFolder(db, item, posix.dirname(path));
         }
         continue;
       }

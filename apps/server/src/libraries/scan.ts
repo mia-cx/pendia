@@ -27,6 +27,7 @@ import {
   applyScanChanges,
   findItemByProviderIds,
   setItemProviderIds,
+  updateItemCanonicalFolder,
 } from "./changes.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import { persistScanTimelines } from "./timelines.ts";
@@ -268,13 +269,7 @@ export async function scanDirectory(
       itemId = existingItem.id;
     } else if (found) {
       if (found.kind !== "movie") throw new AuthError("CONFLICT");
-      await tx
-        .update(items)
-        .set({
-          canonicalFolder: group.canonicalFolder,
-          updatedAt: new Date(),
-        })
-        .where(eq(items.id, found.id));
+      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       itemId = found.id;
     } else {
       const created = await insertItem(tx, {
@@ -527,13 +522,7 @@ export async function scanShowDirectory(
       showId = existingShow.id;
     } else if (found) {
       if (found.kind !== "show") throw new AuthError("CONFLICT");
-      await tx
-        .update(items)
-        .set({
-          canonicalFolder: group.canonicalFolder,
-          updatedAt: new Date(),
-        })
-        .where(eq(items.id, found.id));
+      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       showId = found.id;
     } else {
       const created = await insertItem(tx, {

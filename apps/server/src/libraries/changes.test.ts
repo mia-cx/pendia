@@ -229,6 +229,12 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           playCount: 4,
         });
         await setItemProviderIds(db, itemId, { tmdb: "348" });
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
         const progressBefore = await db.select().from(progress);
 
         const movedFolder = "Alien Remastered (1979)";
@@ -268,6 +274,44 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         expect(idRows.map((row) => [row.provider, row.itemId])).toEqual([
           ["tmdb", itemId],
         ]);
+        const [posterRow] = await db.select().from(artwork);
+        expect(posterRow?.storageKey).toBe(
+          stored.storageKey.replace(folder, movedFolder),
+        );
+        expect(
+          Buffer.from((await readArtworkOriginal(db, stored.id))?.bytes ?? []),
+        ).toEqual(png);
+      });
+    }));
+
+  test("a provider-id folder match follows relocated artwork without a move event", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const first = await scanDirectory(db, library.id, folder);
+        if (!first.itemId) throw new Error("Initial scan produced no Item.");
+        const stored = await storeArtworkOriginal(
+          db,
+          first.itemId,
+          poster,
+          respondWith(png),
+        );
+
+        const movedFolder = "Alien Remastered (1979) {tmdb-348}";
+        await rename(join(root, folder), join(root, movedFolder));
+        const scanned = await scanDirectory(db, library.id, movedFolder);
+
+        expect(scanned.itemId).toBe(first.itemId);
+        const [posterRow] = await db.select().from(artwork);
+        expect(posterRow?.storageKey).toBe(
+          stored.storageKey.replace(folder, movedFolder),
+        );
+        expect(
+          Buffer.from((await readArtworkOriginal(db, stored.id))?.bytes ?? []),
+        ).toEqual(png);
       });
     }));
 

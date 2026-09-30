@@ -122,13 +122,14 @@ async function requestJson(
 function readGenres(value: unknown): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) invalid();
-  const names: string[] = [];
+  // A Set keeps first-seen order and dedupes in linear time, however many
+  // genres a response carries.
+  const names = new Set<string>();
   for (const entry of value) {
     const genre = asObject(entry);
-    const name = requiredString(genre.name);
-    if (!names.includes(name)) names.push(name);
+    names.add(requiredString(genre.name));
   }
-  return names;
+  return [...names];
 }
 
 function readCredits(value: unknown): Credit[] {

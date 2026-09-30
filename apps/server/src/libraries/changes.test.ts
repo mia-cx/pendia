@@ -35,7 +35,7 @@ import {
   readArtworkOriginal,
   storeArtworkOriginal,
 } from "../metadata/artwork-store.ts";
-import { setItemProviderIds } from "./changes.ts";
+import { findItemByProviderIds, setItemProviderIds } from "./changes.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { MissingLibraryPathError } from "./walker.ts";
@@ -1085,6 +1085,101 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await expect(
           access(join(root, destinationFolder, ".pendia", "artwork", basename)),
         ).rejects.toThrow();
+      });
+    }));
+
+  test("a folder rename carries colocated artwork keys along", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const scanned = await scanDirectory(db, library.id, folder);
+        const itemId = scanned.itemId;
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        const stored = await storeArtworkOriginal(
+          db,
+          itemId,
+          poster,
+          respondWith(png),
+        );
+
+        // Radarr renames the whole folder, so .pendia moves with the file.
+        const renamedFolder = "Alien (1979) {tmdb-348} Renamed";
+        const movedPath = `${renamedFolder}/Alien.1080p.mkv`;
+        await rename(join(root, folder), join(root, renamedFolder));
+        await runScanJob(db, library.id, renamedFolder, [
+          {
+            kind: "move",
+            path: movedPath,
+            previousPath: file1080,
+            providerIds: { tmdb: "348" },
+          },
+        ]);
+
+        const [row] = await db.select().from(artwork);
+        expect(row?.storageKey.startsWith(`${renamedFolder}/.pendia/`)).toBe(
+          true,
+        );
+        const original = await readArtworkOriginal(db, stored.id);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+      });
+    }));
+
+  test("two folders with the same tag keep separate Items", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const copy = "Alien Directors Cut (1979) {tmdb-348}";
+        await mkdir(join(root, folder), { recursive: true });
+        await mkdir(join(root, copy), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        await createVideoFixture(join(root, copy, "Alien.1080p.mkv"));
+        const library = await insertLibrary(db, root);
+        const first = await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
+        const second = await scanDirectory(db, library.id, copy, {
+          reconcileMissing: true,
+        });
+        // A rescan of the first folder must not take the Item back.
+        const again = await scanDirectory(db, library.id, folder, {
+          reconcileMissing: true,
+        });
+        expect(second.itemId).not.toBe(first.itemId);
+        expect(again.itemId).toBe(first.itemId);
+        const rows = await db
+          .select({ id: items.id, canonicalFolder: items.canonicalFolder })
+          .from(items)
+          .orderBy(asc(items.canonicalFolder));
+        expect(rows.map((row) => row.canonicalFolder)).toEqual([folder, copy]);
+        expect(await db.select().from(files)).toHaveLength(2);
+      });
+    }));
+
+  test("provider-derived ids never identify an Item", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const { itemId } = await scanDirectory(db, library.id, folder);
+        if (!itemId) throw new Error("Initial scan produced no Item.");
+        // TMDB derived this IMDb id; an arr never asserted it.
+        await db.insert(providerIds).values({
+          provider: "imdb",
+          value: "tt0078748",
+          itemId,
+          metadataDerived: true,
+        });
+        expect(
+          await findItemByProviderIds(db, library.id, { imdb: "tt0078748" }),
+        ).toBeUndefined();
+        expect(
+          (await findItemByProviderIds(db, library.id, { tmdb: "348" }))?.id,
+        ).toBe(itemId);
       });
     }));
 

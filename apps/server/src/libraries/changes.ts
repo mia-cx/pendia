@@ -46,7 +46,7 @@ const providerIdPairs = (providerIds: Record<string, string>) =>
     ([provider, value]) => provider !== "" && value !== "",
   );
 
-/** Finds one Item from a consistent set of provider ids. */
+/** Finds one Item from a consistent set of explicit provider ids; ids a metadata provider derived never identify an Item. */
 export async function findItemByProviderIds(
   db: Connection,
   libraryId: string,
@@ -61,6 +61,7 @@ export async function findItemByProviderIds(
     .where(
       and(
         eq(items.libraryId, libraryId),
+        eq(providerIdRows.metadataDerived, false),
         or(
           ...pairs.map(([provider, value]) =>
             and(
@@ -210,6 +211,7 @@ export async function applyScanChanges(
             sourceRootId === destinationRootId
               ? destination.itemId
               : destinationRootId,
+            deletedArtwork,
           );
         }
       }
@@ -220,13 +222,7 @@ export async function applyScanChanges(
           .from(items)
           .where(eq(items.id, file.itemId));
         if (item && item.canonicalFolder === posix.dirname(previousPath)) {
-          await db
-            .update(items)
-            .set({
-              canonicalFolder: posix.dirname(path),
-              updatedAt: new Date(),
-            })
-            .where(eq(items.id, item.id));
+          await updateItemCanonicalFolder(db, item, posix.dirname(path));
         }
         continue;
       }

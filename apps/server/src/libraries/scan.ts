@@ -27,6 +27,7 @@ import {
   applyScanChanges,
   findItemByProviderIds,
   setItemProviderIds,
+  updateItemCanonicalFolder,
 } from "./changes.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import { persistScanTimelines } from "./timelines.ts";
@@ -193,12 +194,16 @@ export async function scanDirectory(
     }
   }
 
-  const mergedProviderIds: Record<string, string> = group
-    ? { ...group.providerIds }
-    : {};
+  // Only webhook ids may find an Item elsewhere in the Library. Folder tags
+  // are stored but never relocate: two folders can carry the same tag.
+  const changeProviderIds: Record<string, string> = {};
   for (const change of changes) {
-    Object.assign(mergedProviderIds, change.providerIds);
+    Object.assign(changeProviderIds, change.providerIds);
   }
+  const mergedProviderIds: Record<string, string> = {
+    ...group?.providerIds,
+    ...changeProviderIds,
+  };
 
   // Colocated artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
@@ -259,7 +264,7 @@ export async function scanDirectory(
           eq(items.canonicalFolder, group.canonicalFolder),
         ),
       );
-    const found = await findItemByProviderIds(tx, libraryId, mergedProviderIds);
+    const found = await findItemByProviderIds(tx, libraryId, changeProviderIds);
     if (existingItem && found && existingItem.id !== found.id)
       throw new AuthError("CONFLICT");
     let itemId: string;
@@ -268,13 +273,8 @@ export async function scanDirectory(
       itemId = existingItem.id;
     } else if (found) {
       if (found.kind !== "movie") throw new AuthError("CONFLICT");
-      await tx
-        .update(items)
-        .set({
-          canonicalFolder: group.canonicalFolder,
-          updatedAt: new Date(),
-        })
-        .where(eq(items.id, found.id));
+      // Colocated artwork keys carry the folder, so they move with it.
+      await updateItemCanonicalFolder(tx, found, group.canonicalFolder);
       itemId = found.id;
     } else {
       const created = await insertItem(tx, {

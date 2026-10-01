@@ -200,6 +200,11 @@ note "Skip 'API Read Access Token' (the long one starting eyJ). Pendia doesn't u
 while true; do
   ask_secret TMDB_API_KEY "Paste the API key:"
   TMDB_API_KEY="${TMDB_API_KEY//[[:space:]]/}"
+  # Closed input or a bare Enter gives an empty key: stop instead of looping.
+  if [[ -z "$TMDB_API_KEY" ]]; then
+    warn "No key entered; nothing was written."
+    exit 1
+  fi
   # curl reads the URL from stdin, so the key never shows in the process list.
   status=$(printf 'url = "https://api.themoviedb.org/3/configuration?api_key=%s"\n' "$TMDB_API_KEY" \
     | curl -sS -o /dev/null -w '%{http_code}' -K - || true)

@@ -5,6 +5,9 @@ import { maxPageSize } from "./pagination.ts";
 /** The kinds of library item the API exposes. */
 export const ItemKind = Schema.Literal("movie", "show", "season", "episode");
 
+/** The orders items.list pages through: newest first, or title A to Z. */
+export const ItemSort = Schema.Literal("added", "title");
+
 /** The item shape returned by list endpoints. */
 export const ItemCard = Schema.Struct({
   id: Schema.UUID,

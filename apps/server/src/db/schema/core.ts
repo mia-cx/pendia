@@ -98,6 +98,8 @@ export const items = pgTable(
       table.id.desc(),
     ),
     index("items_folder_idx").on(table.libraryId, table.canonicalFolder),
+    index("items_kind_title_idx").on(table.kind, table.title, table.id),
+    index("items_title_trgm_idx").using("gin", table.title.op("gin_trgm_ops")),
   ],
 );
 

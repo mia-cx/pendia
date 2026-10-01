@@ -15,7 +15,7 @@ The API already has `items.list`, `items.get` (with `metadataState`), `shelves.c
 
 ## TODOs
 
-- [ ] 1. Add title sorting to `items.list` and the indexes browse reads.
+- [x] 1. Add title sorting to `items.list` and the indexes browse reads.
   - `api/items.ts`: `sort: "added" | "title"`, default `added`, so existing callers and cursors keep working. Title order is `title, id` ascending with a `t1.` cursor prefix, following the `cw1.` precedent in `playback/marks.ts`. A cursor from one sort is rejected by the other.
   - `db/schema/core.ts` and migration `0007`: a btree on `(kind, title, id)` for the title grid and a GIN `gin_trgm_ops` index on `title` for search.
   - Validation: `api/browse.test.ts` pages the title sort to the end without gaps or repeats, rejects a cross-sort cursor with 400, and times `listItemCards` for both sorts, first page and a cursor page, at 10,000 generated movies: the median of five warm runs stays under 50 ms. `db.test.ts` passes on the new migration.
@@ -61,3 +61,4 @@ The API already has `items.list`, `items.get` (with `metadataState`), `shelves.c
   - Search covers Movies and Shows. Episode titles are `Episode N` until a provider names them, so including them would flood results.
   - Grids sort by recently added and title. Release year sorting needs a nullable keyset and waits for a request.
   - The perf test times the service function in process, which is the server time the criterion names, rather than a round trip through HTTP.
+- TODO 1 done. `items.list` takes `sort`; title cursors carry a `t1.` prefix and either sort rejects the other's cursor with 400. Migration `0007_hesitant_sandman` adds `items_kind_title_idx` and `items_title_trgm_idx`. `DATABASE_URL=... bun test apps/server/src/api/` 108 pass; the one failure, `hls-browser.test.ts`, needs `apps/web/build` and passes once the web app is built, as under `turbo run test`.

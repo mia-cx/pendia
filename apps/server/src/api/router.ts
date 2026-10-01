@@ -19,6 +19,7 @@ import {
   ItemCard,
   ItemDetail,
   ItemKind,
+  ItemSort,
   Me,
   PageSize,
 } from "./schema.ts";
@@ -38,6 +39,7 @@ const listItems = authenticated
       Schema.Struct({
         libraryId: Schema.optional(Schema.UUID),
         kind: Schema.optional(ItemKind),
+        sort: Schema.optional(ItemSort),
         limit: Schema.optional(PageSize),
         cursor: Schema.optional(Schema.String),
       }),

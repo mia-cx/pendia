@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Schema } from "effect";
 import { Effect } from "effect";
 import { AuthError } from "../auth/errors.ts";
@@ -7,8 +7,17 @@ import type { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items } from "../db/schema/index.ts";
 import { ApiError, fromHost } from "./errors.ts";
-import { after, decodeCursor, defaultPageSize, toPage } from "./pagination.ts";
-import type { ItemKind } from "./schema.ts";
+import {
+  after,
+  afterTitle,
+  decodeCursor,
+  decodeTitleCursor,
+  defaultPageSize,
+  encodeCursor,
+  encodeTitleCursor,
+  toPageBy,
+} from "./pagination.ts";
+import type { ItemKind, ItemSort } from "./schema.ts";
 
 /** The authenticated caller the middleware places in context. */
 export type Caller = Awaited<ReturnType<typeof authenticate>>;
@@ -17,6 +26,7 @@ export type Caller = Awaited<ReturnType<typeof authenticate>>;
 export type ListItemsInput = {
   readonly libraryId?: string;
   readonly kind?: Schema.Schema.Type<typeof ItemKind>;
+  readonly sort?: Schema.Schema.Type<typeof ItemSort>;
   readonly limit?: number;
   readonly cursor?: string;
 };
@@ -54,7 +64,26 @@ const detailFields = {
   updatedAt: instantText(items.updatedAt),
 };
 
-/** Lists item cards newest first, paginated by the opaque cursor. */
+// Each sort owns its order, its keyset predicate and its cursor encoding.
+// An undefined `after` with a cursor means the cursor belongs to another sort.
+function sortPlan(sort: ListItemsInput["sort"], cursor: string | undefined) {
+  if (sort === "title") {
+    const key = cursor === undefined ? undefined : decodeTitleCursor(cursor);
+    return {
+      after: key === undefined ? undefined : afterTitle(key),
+      orderBy: [asc(items.title), asc(items.id)],
+      cursorOf: (row: { title: string; id: string }) => encodeTitleCursor(row),
+    };
+  }
+  const key = cursor === undefined ? undefined : decodeCursor(cursor);
+  return {
+    after: key === undefined ? undefined : after(key),
+    orderBy: [desc(items.addedAt), desc(items.id)],
+    cursorOf: (row: { addedAt: string; id: string }) => encodeCursor(row),
+  };
+}
+
+/** Lists item cards newest first or by title, paginated by the opaque cursor. */
 export function listItemCards(
   db: Database,
   caller: Caller,
@@ -72,9 +101,8 @@ export function listItemCards(
       return inArray(items.libraryId, viewable);
     });
     const limit = input.limit ?? defaultPageSize;
-    const key =
-      input.cursor === undefined ? undefined : decodeCursor(input.cursor);
-    if (input.cursor !== undefined && key === undefined)
+    const plan = sortPlan(input.sort, input.cursor);
+    if (input.cursor !== undefined && plan.after === undefined)
       return yield* new ApiError({
         code: "BAD_REQUEST",
         reason: "Unknown cursor.",
@@ -87,20 +115,13 @@ export function listItemCards(
           and(
             scope,
             input.kind === undefined ? undefined : eq(items.kind, input.kind),
-            key === undefined ? undefined : after(key),
+            plan.after,
           ),
         )
-        .orderBy(desc(items.addedAt), desc(items.id))
+        .orderBy(...plan.orderBy)
         .limit(limit + 1),
     );
-    const page = toPage(rows, limit, (row) => ({
-      addedAt: row.addedAt,
-      id: row.id,
-    }));
-    return {
-      items: page.items,
-      cursor: page.cursor,
-    };
+    return toPageBy(rows, limit, plan.cursorOf);
   });
 }
 

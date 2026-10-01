@@ -12,7 +12,7 @@ Add the two remaining artwork store backends next to the colocated one from #28:
 
 ## TODOs
 
-- [ ] Read the artwork store choice from the environment and validate it when a role starts.
+- [x] Read the artwork store choice from the environment and validate it when a role starts.
   - Validation: unit tests for defaults, each backend and each invalid combination; server typecheck.
 - [ ] Store, read and remove artwork through a backend interface, with the configured path as the first new backend.
   - Validation: disposable Postgres tests round-trip a poster through the path backend; the existing colocated tests stay green.

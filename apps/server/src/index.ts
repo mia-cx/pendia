@@ -13,6 +13,7 @@ import {
   createChangeDebouncer,
   createServarrWebhookHandler,
 } from "./libraries/webhooks.ts";
+import { artworkStoreConfig } from "./metadata/artwork-backends.ts";
 import { createArtworkHandler } from "./metadata/artwork-http.ts";
 import { registerMetadataJobs } from "./metadata/jobs.ts";
 import {
@@ -164,6 +165,8 @@ export async function startPendia(
   const servesApi = role === "api" || role === "all";
   const runsJobs = role === "worker" || role === "all";
   const runsTranscoder = role === "transcoder" || role === "all";
+  // A bad artwork store setting fails startup, not the first poster.
+  if (servesApi || runsJobs) artworkStoreConfig();
   const database =
     servesApi || runsJobs || runsTranscoder
       ? createDatabase(databaseUrl)

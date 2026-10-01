@@ -17,7 +17,7 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
   - Decode every search result first. When none matches by `title` or `original_title`, request `/movie/{id}/translations` for the first five candidates in TMDB order and treat a normalized translated title as a title match.
   - A 404 for one candidate means no translations. Malformed translation bodies reject as `Invalid TMDB response.`
   - Validation: mocked HTTP tests in `tmdb.test.ts` cover the translated match, no lookup when a plain title matches, a nonmatching translation, a shared translated title, the lookup cap, 404 and malformed bodies. Run server typecheck.
-- [ ] 2. Prove an untagged translated folder flows from scan to a match.
+- [x] 2. Prove an untagged translated folder flows from scan to a match.
   - Add a provider-fetch job test with a scanned `Die Verurteilten (1994)` folder and mocked TMDB search, translations and details.
   - Validation: `DATABASE_URL=... bun test apps/server/src/metadata/jobs.test.ts` passes, and the Item ends `matched` with the TMDB id.
 - [ ] 3. Document translated-title matching in `apps/server/README.md`.
@@ -34,4 +34,5 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
 - Lookups run in parallel. Any failed lookup fails the search, and the provider-fetch job retries as it does for other TMDB failures.
 - `service.ts` needs no change: the provider's confidence feeds the existing threshold and tie rules.
 - TODO 1 done. `searchMovies` decodes every result first, then reads `/movie/{id}/translations` through `translatedTitles` for up to five candidates when none matches plainly. The test mock now passes the request URL to its handler so tests can route by path. Red first: the 4 new translation tests failed against the old provider, the no-lookup test passed. `bun test apps/server/src/metadata/tmdb.test.ts` passed 27 of 27; `bun run --cwd apps/server check` clean; `bunx biome check` clean after formatting.
+- TODO 2 done. New job test scans `Die Verurteilten (1994)`, runs provider-fetch, and expects search, translations and details in that order, a `matched` Item titled *The Shawshank Redemption* and a `tmdb` id of 278. Red first against the previous `tmdb.ts`: 1 fail. `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55576/pendia bun test apps/server/src/metadata/jobs.test.ts` passed 10 of 10.
 - Worktree `/home/mia/mia-cx/pendia/.worktrees/translated-titles`, branch `feat/76-translated-titles`. Test Postgres `pendia-test-pg-76` on port 55576.

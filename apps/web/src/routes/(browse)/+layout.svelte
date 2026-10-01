@@ -141,6 +141,7 @@ function submit(event: SubmitEvent) {
     display: flex;
     align-items: center;
     gap: 16px;
+    white-space: nowrap;
   }
 
   main {
@@ -153,6 +154,7 @@ function submit(event: SubmitEvent) {
     }
 
     nav {
+      grid-column: 1 / -1;
       grid-row: 2;
     }
 

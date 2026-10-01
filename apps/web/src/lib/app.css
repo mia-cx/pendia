@@ -150,7 +150,7 @@ fieldset {
 
 .poster-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(140px, 28vw), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(140px, 25vw), 1fr));
   gap: 24px 16px;
   margin: 0;
   padding: 0;

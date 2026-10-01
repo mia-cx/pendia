@@ -1,12 +1,11 @@
 <script lang="ts">
 import {
-  artworkUrl,
   type BrowseCard,
   episodeCode,
   type ItemCard,
   itemHref,
-  posterSrcset,
 } from "$lib/browse.ts";
+import Poster from "$lib/components/Poster.svelte";
 
 const {
   card,
@@ -39,25 +38,17 @@ const fraction = $derived(
 </script>
 
 <svelte:element this={href === null ? "div" : "a"} {href} class="card">
-  <span class="frame">
-    {#if posterId}
-      <img
-        src={artworkUrl(posterId, 320)}
-        srcset={posterSrcset(posterId)}
-        sizes="(max-width: 640px) 33vw, 180px"
-        alt=""
-        loading="lazy"
-        decoding="async"
-      />
-    {:else}
-      <span class="placeholder" aria-hidden="true">{card.title}</span>
-    {/if}
+  <Poster
+    artworkId={posterId}
+    title={card.title}
+    sizes="(max-width: 640px) 33vw, 180px"
+  >
     {#if fraction !== null}
       <span class="progress" aria-hidden="true">
         <span style:width={`${fraction * 100}%`}></span>
       </span>
     {/if}
-  </span>
+  </Poster>
   <span class="title">{card.title}</span>
   {#if fraction !== null}
     <span class="sr-only">{Math.round(fraction * 100)}% watched</span>
@@ -77,39 +68,13 @@ const fraction = $derived(
     text-decoration: none;
   }
 
-  .frame {
-    position: relative;
-    display: block;
-    overflow: hidden;
-    aspect-ratio: 2 / 3;
+  .card > :global(.frame) {
     margin-bottom: 6px;
-    border-radius: var(--radius-poster);
-    background: var(--surface);
   }
 
-  a.card:hover .frame {
+  a.card:hover > :global(.frame) {
     outline: 2px solid var(--signal);
     outline-offset: 2px;
-  }
-
-  img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .placeholder {
-    display: grid;
-    height: 100%;
-    padding: 12px;
-    place-items: center;
-    color: var(--muted);
-    font-size: 15px;
-    font-weight: 600;
-    line-height: 1.25;
-    text-align: center;
-    overflow-wrap: anywhere;
   }
 
   .progress {

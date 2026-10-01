@@ -7,11 +7,20 @@ import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { authenticate, createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { items, libraries } from "../db/schema/index.ts";
+import {
+  artwork,
+  contributors,
+  credits,
+  items,
+  libraries,
+  libraryAccess,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertItem } from "../db/tree.ts";
 import { startPendia } from "../index.ts";
 import { runApi } from "./errors.ts";
-import { type ListItemsInput, listItemCards } from "./items.ts";
+import { getItemDetail, type ListItemsInput, listItemCards } from "./items.ts";
 import type { pendiaRouter } from "./router.ts";
 
 function rpcClient(base: string, token: string) {
@@ -176,4 +185,200 @@ describe.skipIf(!databaseUrl)("browse grids", () => {
       }),
     60_000,
   );
+});
+
+// A Show with Seasons and Episodes inserted out of order, so reads must sort.
+async function seedShow(db: Database, libraryId: string) {
+  const show = await insertItem(db, {
+    libraryId,
+    kind: "show",
+    title: "Severance",
+    canonicalFolder: "Severance",
+    extension: {},
+  });
+  const seasonTwo = await insertItem(db, {
+    libraryId,
+    kind: "season",
+    parentId: show.id,
+    title: "Season 2",
+    canonicalFolder: "Severance",
+    extension: { seasonNumber: 2 },
+  });
+  const seasonOne = await insertItem(db, {
+    libraryId,
+    kind: "season",
+    parentId: show.id,
+    title: "Season 1",
+    canonicalFolder: "Severance",
+    extension: { seasonNumber: 1 },
+  });
+  const episodes = [];
+  for (const episodeNumber of [3, 1, 2]) {
+    episodes[episodeNumber] = await insertItem(db, {
+      libraryId,
+      kind: "episode",
+      parentId: seasonOne.id,
+      title: `Episode ${episodeNumber}`,
+      canonicalFolder: "Severance",
+      extension: { episodeNumber },
+    });
+  }
+  const [poster] = await db
+    .insert(artwork)
+    .values({
+      itemId: show.id,
+      type: "poster",
+      backend: "colocated",
+      storageKey: "Severance/poster.jpg",
+      selected: true,
+    })
+    .returning();
+  const first = episodes[1];
+  if (!first || !poster) throw new Error("Seeding returned no row.");
+  return { show, seasonOne, seasonTwo, first, poster };
+}
+
+describe.skipIf(!databaseUrl)("browse details", () => {
+  test("a detail lists children, credits and Versions in order", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { token } = await seedViewer(db);
+      const library = await addLibrary(db, "Shows", "shows");
+      const seeded = await seedShow(db, library.id);
+      const people = await db
+        .insert(contributors)
+        .values([
+          { name: "Ben Stiller" },
+          { name: "Adam Scott" },
+          { name: "Britt Lower" },
+          { name: "Dan Erickson" },
+        ])
+        .returning();
+      const [director, adam, britt, writer] = people;
+      if (!director || !adam || !britt || !writer)
+        throw new Error("Contributor insert returned no row.");
+      await db.insert(credits).values([
+        {
+          itemId: seeded.first.id,
+          contributorId: director.id,
+          role: "director",
+          order: 0,
+        },
+        {
+          itemId: seeded.first.id,
+          contributorId: writer.id,
+          role: "writer",
+          order: 0,
+        },
+        {
+          itemId: seeded.first.id,
+          contributorId: britt.id,
+          role: "actor",
+          character: "Helly R.",
+          order: 1,
+        },
+        {
+          itemId: seeded.first.id,
+          contributorId: adam.id,
+          role: "actor",
+          character: "Mark S.",
+          order: 0,
+        },
+      ]);
+      await db.insert(versions).values(
+        ["Director's Cut", "Broadcast"].map((label) => ({
+          itemId: seeded.first.id,
+          itemKind: "episode" as const,
+          libraryId: library.id,
+          label,
+          format: "video" as const,
+          bytes: 5_000_000_000n,
+          durationSeconds: 3300,
+        })),
+      );
+      const caller = await authenticate(db, token);
+
+      const show = await runApi(getItemDetail(db, caller, seeded.show.id));
+      expect(show.children.map((child) => child.seasonNumber)).toEqual([1, 2]);
+      expect(show.posterArtworkId).toBe(seeded.poster.id);
+      expect(show.show).toBeNull();
+
+      const season = await runApi(
+        getItemDetail(db, caller, seeded.seasonOne.id),
+      );
+      expect(season.show?.id).toBe(seeded.show.id);
+      expect(season.children.map((child) => child.episodeNumber)).toEqual([
+        1, 2, 3,
+      ]);
+      expect(season.children[0]).toMatchObject({
+        parentId: seeded.seasonOne.id,
+        seasonNumber: 1,
+        show: {
+          id: seeded.show.id,
+          title: "Severance",
+          posterArtworkId: seeded.poster.id,
+        },
+      });
+
+      const episode = await runApi(getItemDetail(db, caller, seeded.first.id));
+      expect(episode).toMatchObject({
+        parentId: seeded.seasonOne.id,
+        seasonNumber: 1,
+        episodeNumber: 1,
+        episodeEndNumber: null,
+        show: { id: seeded.show.id },
+        children: [],
+      });
+      expect(episode.credits).toEqual([
+        {
+          contributorId: adam.id,
+          name: "Adam Scott",
+          role: "actor",
+          character: "Mark S.",
+        },
+        {
+          contributorId: britt.id,
+          name: "Britt Lower",
+          role: "actor",
+          character: "Helly R.",
+        },
+        {
+          contributorId: director.id,
+          name: "Ben Stiller",
+          role: "director",
+          character: null,
+        },
+        {
+          contributorId: writer.id,
+          name: "Dan Erickson",
+          role: "writer",
+          character: null,
+        },
+      ]);
+      expect(episode.versions.map((version) => version.label)).toEqual([
+        "Broadcast",
+        "Director's Cut",
+      ]);
+      expect(episode.versions[0]).toMatchObject({
+        format: "video",
+        durationSeconds: 3300,
+        bytes: 5_000_000_000,
+      });
+    }));
+
+  test("a user denied the library cannot read its details", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { viewer, token } = await seedViewer(db);
+      const library = await addLibrary(db, "Shows", "shows");
+      const seeded = await seedShow(db, library.id);
+      await db
+        .insert(libraryAccess)
+        .values({ libraryId: library.id, userId: viewer.id, allowed: false });
+      const caller = await authenticate(db, token);
+      const error = await capture(
+        runApi(getItemDetail(db, caller, seeded.first.id)),
+      );
+      expect(error.code).toBe("FORBIDDEN");
+    }));
 });

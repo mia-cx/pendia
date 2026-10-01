@@ -1,11 +1,20 @@
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import type { Schema } from "effect";
 import { Effect } from "effect";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission, viewableLibraryIds } from "../auth/permissions.ts";
 import type { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { artwork, items } from "../db/schema/index.ts";
+import {
+  artwork,
+  contributors,
+  credits,
+  episodes,
+  items,
+  seasons,
+  versions,
+} from "../db/schema/index.ts";
 import { ApiError, fromHost } from "./errors.ts";
 import {
   after,
@@ -36,6 +45,18 @@ export type ListItemsInput = {
 const instantText = (column: typeof items.addedAt) =>
   sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
+// A single-table select renders columns unqualified, which would bind to
+// artwork's own id inside the subquery, so the owner is named in full.
+const selectedArtwork = (owner: "items" | "show_item", type: string) =>
+  sql<string | null>`(
+    select ${artwork.id}
+    from ${artwork}
+    where ${artwork.itemId} = ${sql.identifier(owner)}."id"
+      and ${artwork.type} = ${type}
+      and ${artwork.selected} = true
+    limit 1
+  )`;
+
 const cardFields = {
   id: items.id,
   kind: items.kind,
@@ -43,25 +64,79 @@ const cardFields = {
   title: items.title,
   year: items.year,
   addedAt: instantText(items.addedAt),
-  posterArtworkId: sql<string | null>`(
-    select ${artwork.id}
-    from ${artwork}
-    where ${artwork.itemId} = "items"."id"
-      and ${artwork.type} = 'poster'
-      and ${artwork.selected} = true
-    limit 1
-  )`,
+  posterArtworkId: selectedArtwork("items", "poster"),
 };
 
-const detailFields = {
+// A Season names its Show directly; an Episode reaches it through its Season.
+const ownSeason = alias(seasons, "own_season");
+const episodeSeason = alias(seasons, "episode_season");
+const showItem = alias(items, "show_item");
+
+const browseFields = {
   ...cardFields,
   parentId: items.parentId,
+  seasonNumber: sql<
+    number | null
+  >`coalesce(${ownSeason.seasonNumber}, ${episodeSeason.seasonNumber})`,
+  episodeNumber: episodes.episodeNumber,
+  episodeEndNumber: episodes.episodeEndNumber,
+  showId: showItem.id,
+  showTitle: showItem.title,
+  showPosterArtworkId: selectedArtwork("show_item", "poster"),
+};
+
+/** Reads browse cards: item cards with their numbers and owning Show. */
+export async function browseCards(
+  db: Database,
+  where: SQL | undefined,
+  orderBy: SQL[] = [],
+  limit?: number,
+) {
+  const query = db
+    .select(browseFields)
+    .from(items)
+    .leftJoin(ownSeason, eq(ownSeason.itemId, items.id))
+    .leftJoin(episodes, eq(episodes.itemId, items.id))
+    .leftJoin(episodeSeason, eq(episodeSeason.itemId, episodes.seasonId))
+    .leftJoin(
+      showItem,
+      eq(
+        showItem.id,
+        sql`coalesce(${ownSeason.showId}, ${episodeSeason.showId})`,
+      ),
+    )
+    .where(where)
+    .orderBy(...orderBy);
+  const rows = await (limit === undefined ? query : query.limit(limit));
+  return rows.map(({ showId, showTitle, showPosterArtworkId, ...card }) => ({
+    ...card,
+    show:
+      showId === null || showTitle === null
+        ? null
+        : {
+            id: showId,
+            title: showTitle,
+            posterArtworkId: showPosterArtworkId,
+          },
+  }));
+}
+
+/** Reads browse cards for ids the caller may already view, in the order given. */
+export async function browseCardsById(db: Database, ids: readonly string[]) {
+  if (ids.length === 0) return [];
+  const cards = await browseCards(db, inArray(items.id, [...ids]));
+  const byId = new Map(cards.map((card) => [card.id, card]));
+  return ids.flatMap((id) => byId.get(id) ?? []);
+}
+
+const detailFields = {
   overview: items.overview,
   contentRating: items.contentRating,
   genres: items.genres,
   tags: items.tags,
   metadataState: items.metadataState,
   updatedAt: instantText(items.updatedAt),
+  backdropArtworkId: selectedArtwork("items", "backdrop"),
 };
 
 // Each sort owns its order, its keyset predicate and its cursor encoding.
@@ -128,13 +203,63 @@ export function listItemCards(
 /** Reads one item's detail, checking access to the library that holds it. */
 export function getItemDetail(db: Database, caller: Caller, id: string) {
   return Effect.gen(function* () {
-    const [row] = yield* fromHost(() =>
-      db.select(detailFields).from(items).where(eq(items.id, id)).limit(1),
-    );
-    if (!row) return yield* new ApiError({ code: "NOT_FOUND" });
+    const [card] = yield* fromHost(() => browseCards(db, eq(items.id, id)));
+    if (!card) return yield* new ApiError({ code: "NOT_FOUND" });
     yield* fromHost(() =>
-      requirePermission(db, caller.user.id, "view", row.libraryId),
+      requirePermission(db, caller.user.id, "view", card.libraryId),
     );
-    return row;
+    const [[detail], itemCredits, itemVersions, children] = yield* fromHost(
+      () =>
+        Promise.all([
+          db.select(detailFields).from(items).where(eq(items.id, id)),
+          db
+            .select({
+              contributorId: contributors.id,
+              name: contributors.name,
+              role: credits.role,
+              character: credits.character,
+            })
+            .from(credits)
+            .innerJoin(contributors, eq(contributors.id, credits.contributorId))
+            .where(eq(credits.itemId, id))
+            .orderBy(
+              sql`${credits.role} <> 'actor'`,
+              asc(credits.role),
+              asc(credits.order),
+              asc(credits.id),
+            ),
+          db
+            .select({
+              id: versions.id,
+              label: versions.label,
+              format: versions.format,
+              durationSeconds: versions.durationSeconds,
+              bytes: versions.bytes,
+            })
+            .from(versions)
+            .where(
+              and(eq(versions.itemId, id), eq(versions.origin, "imported")),
+            )
+            .orderBy(asc(versions.label), asc(versions.id)),
+          browseCards(db, eq(items.parentId, id), [
+            sql`${ownSeason.seasonNumber} nulls last`,
+            sql`${episodes.episodeNumber} nulls last`,
+            asc(items.title),
+            asc(items.id),
+          ]),
+        ]),
+    );
+    if (!detail) return yield* new ApiError({ code: "NOT_FOUND" });
+    return {
+      ...card,
+      ...detail,
+      credits: itemCredits,
+      // JSON has no bigint; a byte count stays exact below 2^53.
+      versions: itemVersions.map((version) => ({
+        ...version,
+        bytes: Number(version.bytes),
+      })),
+      children,
+    };
   });
 }

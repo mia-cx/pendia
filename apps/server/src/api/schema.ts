@@ -19,16 +19,50 @@ export const ItemCard = Schema.Struct({
   posterArtworkId: Schema.NullOr(Schema.UUID),
 });
 
-/** The item shape returned by detail endpoints. */
-export const ItemDetail = Schema.Struct({
+/** A card that also places a Season or Episode: its numbers and owning Show. */
+export const BrowseCard = Schema.Struct({
   ...ItemCard.fields,
   parentId: Schema.NullOr(Schema.UUID),
+  seasonNumber: Schema.NullOr(Schema.Int),
+  episodeNumber: Schema.NullOr(Schema.Int),
+  episodeEndNumber: Schema.NullOr(Schema.Int),
+  show: Schema.NullOr(
+    Schema.Struct({
+      id: Schema.UUID,
+      title: Schema.String,
+      posterArtworkId: Schema.NullOr(Schema.UUID),
+    }),
+  ),
+});
+
+/** The item shape returned by detail endpoints. */
+export const ItemDetail = Schema.Struct({
+  ...BrowseCard.fields,
   overview: Schema.NullOr(Schema.String),
   contentRating: Schema.NullOr(Schema.String),
   genres: Schema.Array(Schema.String),
   tags: Schema.Array(Schema.String),
   metadataState: Schema.Literal("pending", "matched", "unmatched"),
   updatedAt: Schema.String,
+  backdropArtworkId: Schema.NullOr(Schema.UUID),
+  credits: Schema.Array(
+    Schema.Struct({
+      contributorId: Schema.UUID,
+      name: Schema.String,
+      role: Schema.String,
+      character: Schema.NullOr(Schema.String),
+    }),
+  ),
+  versions: Schema.Array(
+    Schema.Struct({
+      id: Schema.UUID,
+      label: Schema.String,
+      format: Schema.Literal("video", "audio", "ebook", "image"),
+      durationSeconds: Schema.NullOr(Schema.Number),
+      bytes: Schema.Number,
+    }),
+  ),
+  children: Schema.Array(BrowseCard),
 });
 
 /** The library shape returned by library endpoints. */

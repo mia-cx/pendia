@@ -11,6 +11,8 @@ const query = $derived((page.url.searchParams.get("q") ?? "").trim());
 let results = $state<{ query: string; cards: ItemCard[] } | undefined>(
   undefined,
 );
+// Results for an older query stay hidden until the current one answers.
+const shown = $derived(results?.query === query ? results : undefined);
 let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
 let generation = 0;
 
@@ -41,11 +43,11 @@ $effect(() => {
 
 {#if failure}
   <Failure {failure} />
-{:else if results?.cards.length === 0}
-  <p class="muted" role="status">No titles match "{results.query}".</p>
-{:else if results}
+{:else if shown?.cards.length === 0}
+  <p class="muted" role="status">No titles match "{shown.query}".</p>
+{:else if shown}
   <ul class="poster-grid">
-    {#each results.cards as card (card.id)}
+    {#each shown.cards as card (card.id)}
       <li><PosterCard {card} /></li>
     {/each}
   </ul>

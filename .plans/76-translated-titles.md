@@ -6,10 +6,10 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
 
 ## Acceptance criteria
 
-- [ ] An untagged translated folder such as `Die Verurteilten (1994)` matches its TMDB movie.
-- [ ] A search whose plain or original title already matches makes no extra TMDB request.
-- [ ] A translated title shared by two candidates stays ambiguous, and a translation that matches nothing changes no score.
-- [ ] Provider calls are mocked in tests.
+- [x] An untagged translated folder such as `Die Verurteilten (1994)` matches its TMDB movie.
+- [x] A search whose plain or original title already matches makes no extra TMDB request.
+- [x] A translated title shared by two candidates stays ambiguous, and a translation that matches nothing changes no score.
+- [x] Provider calls are mocked in tests.
 
 ## TODOs
 
@@ -22,7 +22,7 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
   - Validation: `DATABASE_URL=... bun test apps/server/src/metadata/jobs.test.ts` passes, and the Item ends `matched` with the TMDB id.
 - [x] 3. Document translated-title matching in `apps/server/README.md`.
   - Validation: the metadata settings section states when translations are read and the five-candidate cap.
-- [ ] 4. Run the full repository gate.
+- [x] 4. Run the full repository gate.
   - From the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55576/pendia bun test`, and `bun test` without `DATABASE_URL`.
   - Validation: all pass, and Notes record the real results.
 
@@ -35,4 +35,6 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
 - `service.ts` needs no change: the provider's confidence feeds the existing threshold and tie rules.
 - TODO 1 done. `searchMovies` decodes every result first, then reads `/movie/{id}/translations` through `translatedTitles` for up to five candidates when none matches plainly. The test mock now passes the request URL to its handler so tests can route by path. Red first: the 4 new translation tests failed against the old provider, the no-lookup test passed. `bun test apps/server/src/metadata/tmdb.test.ts` passed 27 of 27; `bun run --cwd apps/server check` clean; `bunx biome check` clean after formatting.
 - TODO 2 done. New job test scans `Die Verurteilten (1994)`, runs provider-fetch, and expects search, translations and details in that order, a `matched` Item titled *The Shawshank Redemption* and a `tmdb` id of 278. Red first against the previous `tmdb.ts`: 1 fail. `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55576/pendia bun test apps/server/src/metadata/jobs.test.ts` passed 10 of 10.
+- TODO 3 done. One paragraph in the README metadata settings section.
+- TODO 4 done after `git rebase origin/main` (already up to date). `bun install --frozen-lockfile` no changes; `bun run lint` clean (218 files); `bun run check` 6 of 6 tasks; `bun run build` 4 of 4 tasks; `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55576/pendia bun test` 978 pass, 0 fail across 69 files; `env -u DATABASE_URL bun test` 544 pass, 442 skip, 0 fail with the single skip message.
 - Worktree `/home/mia/mia-cx/pendia/.worktrees/translated-titles`, branch `feat/76-translated-titles`. Test Postgres `pendia-test-pg-76` on port 55576.

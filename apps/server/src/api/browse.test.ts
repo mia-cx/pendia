@@ -14,12 +14,14 @@ import {
   items,
   libraries,
   libraryAccess,
+  progress,
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { startPendia } from "../index.ts";
-import { runApi } from "./errors.ts";
+import { homeShelves } from "./browse.ts";
+import { fromHost, runApi } from "./errors.ts";
 import { getItemDetail, type ListItemsInput, listItemCards } from "./items.ts";
 import type { pendiaRouter } from "./router.ts";
 
@@ -380,6 +382,105 @@ describe.skipIf(!databaseUrl)("browse details", () => {
         runApi(getItemDetail(db, caller, seeded.first.id)),
       );
       expect(error.code).toBe("FORBIDDEN");
+    }));
+});
+
+describe.skipIf(!databaseUrl)("browse home", () => {
+  test("home assembles its shelves from a seeded library", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { viewer, token } = await seedViewer(db);
+      const movies = await addLibrary(db, "Movies");
+      const shows = await addLibrary(db, "Shows", "shows");
+      const seeded = await seedShow(db, shows.id);
+      const [arrival, heat] = await db
+        .insert(items)
+        .values(
+          ["Arrival", "Heat"].map((title, index) => ({
+            libraryId: movies.id,
+            kind: "movie" as const,
+            title,
+            canonicalFolder: title,
+            addedAt: new Date(Date.UTC(2030, 0, index + 1)),
+          })),
+        )
+        .returning();
+      if (!arrival || !heat) throw new Error("Item insert returned no row.");
+      const [version] = await db
+        .insert(versions)
+        .values({
+          itemId: arrival.id,
+          itemKind: "movie",
+          libraryId: movies.id,
+          label: "Original",
+          format: "video",
+          bytes: 1n,
+          durationSeconds: 7000,
+        })
+        .returning();
+      if (!version) throw new Error("Version insert returned no row.");
+      await db.insert(progress).values([
+        {
+          userId: viewer.id,
+          itemId: arrival.id,
+          versionId: version.id,
+          format: "video",
+          positionSeconds: 600,
+          playedAt: new Date(),
+        },
+        {
+          userId: viewer.id,
+          itemId: seeded.first.id,
+          format: "video",
+          completed: true,
+          playedAt: new Date(),
+        },
+      ]);
+      const caller = await authenticate(db, token);
+      const home = () =>
+        runApi(fromHost(() => homeShelves(db, caller.user.id)));
+
+      const shelves = await home();
+      expect(shelves.map((shelf) => shelf.id)).toEqual([
+        "continue-watching",
+        "next-up",
+        "recently-added",
+      ]);
+      const [resume, next, added] = shelves;
+      expect(resume?.title).toBe("Continue watching");
+      expect(resume?.entries).toEqual([
+        {
+          item: expect.objectContaining({ id: arrival.id, title: "Arrival" }),
+          progress: { positionSeconds: 600, durationSeconds: 7000 },
+        },
+      ]);
+      expect(next?.title).toBe("Next up");
+      expect(next?.entries.map((entry) => entry.item)).toEqual([
+        expect.objectContaining({
+          title: "Episode 2",
+          seasonNumber: 1,
+          episodeNumber: 2,
+          show: expect.objectContaining({ id: seeded.show.id }),
+        }),
+      ]);
+      expect(added?.entries.map((entry) => entry.item.title)).toEqual([
+        "Heat",
+        "Arrival",
+        "Severance",
+      ]);
+
+      await db
+        .insert(libraryAccess)
+        .values({ libraryId: shows.id, userId: viewer.id, allowed: false });
+      const denied = await home();
+      expect(denied.map((shelf) => shelf.id)).toEqual([
+        "continue-watching",
+        "recently-added",
+      ]);
+      expect(denied.at(-1)?.entries.map((entry) => entry.item.title)).toEqual([
+        "Heat",
+        "Arrival",
+      ]);
     }));
 });
 

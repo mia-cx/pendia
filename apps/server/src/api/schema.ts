@@ -35,6 +35,23 @@ export const BrowseCard = Schema.Struct({
   ),
 });
 
+/** One named row of Home, with resume progress on in-progress entries. */
+export const Shelf = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  entries: Schema.Array(
+    Schema.Struct({
+      item: BrowseCard,
+      progress: Schema.NullOr(
+        Schema.Struct({
+          positionSeconds: Schema.Number,
+          durationSeconds: Schema.NullOr(Schema.Number),
+        }),
+      ),
+    }),
+  ),
+});
+
 /** The item shape returned by detail endpoints. */
 export const ItemDetail = Schema.Struct({
   ...BrowseCard.fields,

@@ -263,3 +263,39 @@ export function getItemDetail(db: Database, caller: Caller, id: string) {
     };
   });
 }
+
+/** The most results a search answers with. */
+export const searchLimit = 24;
+
+/**
+ * Finds the Movies and Shows the caller may view whose titles resemble the
+ * query, best match first. Trigram similarity forgives a misspelling; word
+ * similarity lets a prefix or one word of a longer title match.
+ */
+export function searchItems(db: Database, caller: Caller, query: string) {
+  return Effect.gen(function* () {
+    const viewable = yield* fromHost(() =>
+      viewableLibraryIds(db, caller.user.id),
+    );
+    if (viewable.length === 0) return [];
+    return yield* fromHost(() =>
+      db
+        .select(cardFields)
+        .from(items)
+        .where(
+          and(
+            inArray(items.libraryId, viewable),
+            inArray(items.kind, ["movie", "show"]),
+            sql`(${items.title} % ${query} or ${query} <% ${items.title})`,
+          ),
+        )
+        .orderBy(
+          sql`word_similarity(${query}, ${items.title}) desc`,
+          sql`similarity(${items.title}, ${query}) desc`,
+          asc(items.title),
+          asc(items.id),
+        )
+        .limit(searchLimit),
+    );
+  });
+}

@@ -382,3 +382,50 @@ describe.skipIf(!databaseUrl)("browse details", () => {
       expect(error.code).toBe("FORBIDDEN");
     }));
 });
+
+describe.skipIf(!databaseUrl)("browse search", () => {
+  test("search forgives misspellings and stays inside viewable libraries", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { viewer, token } = await seedViewer(db);
+      const open = await addLibrary(db, "Movies");
+      const hidden = await addLibrary(db, "Hidden");
+      const titles = ["Interstellar", "Inception", "Heat", "The Prestige"];
+      await db.insert(items).values([
+        ...titles.map((title) => ({
+          libraryId: open.id,
+          kind: "movie" as const,
+          title,
+          canonicalFolder: title,
+        })),
+        {
+          libraryId: hidden.id,
+          kind: "movie" as const,
+          title: "Interstellar Wars",
+          canonicalFolder: "Interstellar Wars",
+        },
+      ]);
+      await db
+        .insert(libraryAccess)
+        .values({ libraryId: hidden.id, userId: viewer.id, allowed: false });
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const client = rpcClient(
+          `http://127.0.0.1:${server.apiServer?.port}`,
+          token,
+        );
+        const titlesFor = async (query: string) =>
+          (await client.items.search({ query })).map((item) => item.title);
+        expect(await titlesFor("Interstelar")).toEqual(["Interstellar"]);
+        expect((await titlesFor("  incep "))[0]).toBe("Inception");
+        expect(await titlesFor("prestige")).toEqual(["The Prestige"]);
+        expect(await titlesFor("Zxqvw")).toEqual([]);
+        for (const query of ["   ", "a\0b", "x".repeat(201)])
+          expect((await capture(client.items.search({ query }))).code).toBe(
+            "BAD_REQUEST",
+          );
+      } finally {
+        await server.stop();
+      }
+    }));
+});

@@ -4,6 +4,8 @@ import { startApiServer } from "./api.ts";
 import { createAuthHandler } from "./auth/http.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
+import { createJellyfinHandler } from "./jellyfin/http.ts";
+import { jellyfinRoutes } from "./jellyfin/routes.ts";
 import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
 import { registerLibraryJobs } from "./libraries/jobs.ts";
@@ -264,6 +266,7 @@ export async function startPendia(
         api: createApiHandler(database.db, eventBroker, transcoder),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
         artwork: createArtworkHandler(database.db),
+        jellyfin: createJellyfinHandler(database.db, jellyfinRoutes()),
       });
     }
     if (runsJobs && database) {

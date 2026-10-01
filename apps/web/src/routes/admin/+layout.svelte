@@ -1,10 +1,6 @@
 <script lang="ts">
-import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import { signOut } from "$lib/auth.ts";
-import Failure from "$lib/components/Failure.svelte";
-import { readFailure } from "$lib/errors.ts";
-import "$lib/admin.css";
+import SignOut from "$lib/components/SignOut.svelte";
 import type { LayoutProps } from "./$types";
 
 const { data, children }: LayoutProps = $props();
@@ -15,29 +11,6 @@ const sections = [
   { href: "/admin/groups", label: "Groups" },
   { href: "/admin/settings", label: "Settings" },
 ];
-
-let signingOut = $state(false);
-let signOutFailure = $state<ReturnType<typeof readFailure> | undefined>(
-  undefined,
-);
-
-async function logout() {
-  signingOut = true;
-  signOutFailure = undefined;
-  try {
-    await signOut();
-    await goto("/login");
-  } catch (error) {
-    const failure = readFailure(error);
-    if (failure.code === "UNAUTHORIZED") {
-      await goto("/login");
-    } else {
-      signOutFailure = failure;
-    }
-  } finally {
-    signingOut = false;
-  }
-}
 </script>
 
 <svelte:head>
@@ -45,7 +18,7 @@ async function logout() {
 </svelte:head>
 
 <header>
-  <a class="brand" href="/admin">Pendia</a>
+  <a class="brand" href="/">Pendia</a>
   <nav aria-label="Admin sections">
     {#each sections as section (section.href)}
       <a
@@ -59,12 +32,7 @@ async function logout() {
   </nav>
   <div class="who">
     <span class="muted">{data.me.user.displayName}</span>
-    {#if signOutFailure}
-      <Failure failure={signOutFailure} />
-    {/if}
-    <button type="button" onclick={logout} disabled={signingOut}
-      >Sign out</button
-    >
+    <SignOut />
   </div>
 </header>
 

@@ -34,15 +34,15 @@ The API already has `items.list`, `items.get` (with `metadataState`), `shelves.c
   - `shelves.nextUp` keeps its id output.
   - Validation: a seeded library with a movie in progress, a completed episode and new items yields the three shelves with the expected entries, and a user denied that library gets no entries from it.
 
-- [ ] 5. Add the browse shell, home and grids in `apps/web`.
+- [x] 5. Add the browse shell, home, grids and search in `apps/web`.
   - Share the session guard between the admin and browse layouts. Rename `admin.css` to `app.css` since every screen uses it. A `(browse)` route group with a header holding Home, Movies, Shows, search, an Admin link for built-in admins and Sign out. Sign-in lands on `/`.
   - `/` renders `shelves.home`. `/movies` and `/shows` render `items.list` grids with a sort control kept in the URL and a Show more button that also loads when it scrolls into view. A poster card with a reserved 2:3 frame and a placeholder for missing artwork.
+  - `/search?q=` renders `items.search` and follows the header field as it is typed. It moved here from TODO 6 because the header's typed routes need the page to exist.
   - `apps/web/DESIGN.md` records the layout, type, colour and card choices.
   - Validation: `bun run --cwd apps/web check` and `build` pass.
 
-- [ ] 6. Add the detail pages and search screen.
+- [ ] 6. Add the detail pages.
   - `$lib/components/ItemPage.svelte` renders one Item: backdrop, poster, title, facts, overview, an actions area the web player will fill with Play, Versions, credits and children. The routes match the mediums' screens: `/movies/[id]`, `/shows/[id]`, `/shows/[showId]/seasons/[id]` and `/shows/[showId]/seasons/[seasonId]/episodes/[id]`.
-  - `/search?q=` renders `items.search` and follows the header field as it is typed.
   - Validation: `bun run --cwd apps/web check` and `build` pass.
 
 - [ ] 7. Document, verify in a browser and run the gate.
@@ -65,3 +65,4 @@ The API already has `items.list`, `items.get` (with `metadataState`), `shelves.c
 - TODO 2 done. `parentId` plus the browse card's `show` replace the planned `ancestors` list: a Season's parent is its Show, and an Episode's parent is its Season, so the card already holds every id a route needs. Details list imported Versions only; stored Versions are renditions of an imported one and belong to the player's adaptive group, not to a choice on the page. The poster subquery names its owner table in full, because a single-table select renders `"id"` unqualified and it bound to `artwork.id`; `router.test.ts` caught that. `DATABASE_URL=... bun test` on `browse`, `router`, `openapi` and `marks`: 33 pass.
 - TODO 3 done. `items.search` answers at GET `/api/search?query=`, a static path, so it never competes with `/api/items/{id}`. The query trims through `Schema.Trim`. Tests: `Interstelar` finds only `Interstellar`, the denied library's `Interstellar Wars` never appears, a prefix and one word of a longer title match, gibberish finds nothing, and a blank, NUL or 201-character query answers 400. `browse` and `openapi` tests: 13 pass.
 - TODO 4 done. Home order is continue watching, next up, recently added: what you were watching, what comes next, then what is new. The test seeds a movie in progress, a completed first Episode and newer Items, checks all three shelves, then denies the shows library and sees next up and the Show leave Home. `browse`, `marks` and `openapi` tests: 20 pass.
+- TODO 5 done. `$lib/session.ts` is the one session guard for admin and browse; `SignOut.svelte` is the one sign-out button. `app.css` loads once from the root layout. The admin mark now links to Home, since the browse header carries the Admin link. The prerendered landing page is gone: `/` is Home, served from `200.html`. A grid caller with no viewable library gets 403 from `items.list`, which the grid shows as its empty state. `$lib/browse.test.ts` covers routes, Episode codes, durations and sizes: 6 pass with `scan.test.ts`. `bun run --cwd apps/web check` 0 errors; `build` writes `200.html`.

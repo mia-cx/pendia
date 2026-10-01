@@ -1,7 +1,3 @@
-<script lang="ts">
-import "$lib/admin.css";
-</script>
-
 <svelte:head>
   <title>Pendia</title>
 </svelte:head>

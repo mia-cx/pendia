@@ -329,6 +329,57 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
       });
     }));
 
+  test("TMDB_API_KEY from the environment serves when no key is stored", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Alien (1979) {tmdb-550}";
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, folder, "Alien.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Movies", medium: "movies", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        const { calls, request } = mockRequest((url) => {
+          if (url.hostname === "api.themoviedb.org")
+            return Response.json(tmdbDetail);
+          if (url.hostname === "image.tmdb.org") return new Response(png);
+          throw new Error(`Unexpected request to ${url.hostname}.`);
+        });
+        const item = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Alien",
+          year: 1979,
+          canonicalFolder: folder,
+          extension: {},
+        });
+        await db
+          .insert(providerIds)
+          .values({ itemId: item.id, provider: "tmdb", value: "550" });
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request);
+        await queue.enqueue({ type: "provider-fetch", itemId: item.id });
+        const claimedFetch = await queue.claim(["provider-fetch"]);
+        if (!claimedFetch) throw new Error("provider-fetch was not enqueued.");
+        const previous = Bun.env.TMDB_API_KEY;
+        Bun.env.TMDB_API_KEY = " env-key ";
+        try {
+          await registry.run(claimedFetch);
+        } finally {
+          if (previous === undefined) delete Bun.env.TMDB_API_KEY;
+          else Bun.env.TMDB_API_KEY = previous;
+        }
+        const tmdb = calls.find((url) => url.hostname === "api.themoviedb.org");
+        expect(tmdb?.searchParams.get("api_key")).toBe("env-key");
+        expect(await storedItem(db, item.id)).toMatchObject({
+          metadataState: "matched",
+        });
+      });
+    }));
+
   test("a scanned folder with tied best search results stays unmatched", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

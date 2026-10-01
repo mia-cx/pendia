@@ -19,7 +19,7 @@ Play Items in `apps/web`. A Play action on movie and episode pages opens `/play/
   - `src/service-worker.ts`: install caches the build and `200.html` under a versioned cache, activate drops older caches. Build assets answer from the cache first. Navigations go to the network and fall back to the cached shell on a network failure or a 5xx. `/api`, `/rpc` and media are never intercepted.
   - Validation: `api.test.ts` reads a refused connection and an HTML 502 as `UNREACHABLE` and a JSON 503 as a normal failure; `bun run --cwd apps/web check` and `build` pass and the build holds `service-worker.js`.
 
-- [ ] 2. Add the player helpers in `$lib/playback.ts`.
+- [x] 2. Add the player helpers in `$lib/playback.ts`.
   - `clientProfile(support)`: containers, video codecs with the profiles the browser decodes, audio codecs with channels, `webvtt` subtitles, and HDR when the display has a high dynamic range. `browserProfile()` wires it to `canPlayType`, `MediaSource.isTypeSupported` and `matchMedia`.
   - `withToken(url, token)` swaps the `token` query parameter, so hls.js requests carry the refreshed token. `formatPosition(seconds)` prints `12:34` or `1:02:03`.
   - Validation: `playback.test.ts` covers profiles for a browser with and without HEVC, token replacement on relative and absolute URLs, and positions.
@@ -55,4 +55,5 @@ Play Items in `apps/web`. A Play action on movie and episode pages opens `/play/
   - The resume prompt lives on the detail page as Resume and Play from start, so the choice is made before the player opens.
   - A Version change waits for stop before planning the next session, so the server's resume reads the position stop just wrote.
 - TODO 1 done. The auth routes' `postJson` goes through the same `reachServer`, so sign-in with the server down says so too. Unexplained client errors still reach the console, since a custom `handleError` replaces SvelteKit's logging. The worker leaves `/api/`, `/rpc/`, `/healthz` and `/readyz` alone, so OIDC redirects and media URLs never meet it. `bun test apps/web` 11 pass; `check` 0 errors; `build` writes `service-worker.js` next to `200.html`.
+- TODO 2 done. Codec support is asked of `ManagedMediaSource` or `MediaSource` when either exists, because that is how hls.js will decode, and of `canPlayType` otherwise. Audio channel limits follow the codec, not the speakers: browsers decode 5.1 and 7.1 and downmix. `withToken` only sees absolute URLs, since hls.js resolves every playlist URI before loading it. `bun test apps/web` 15 pass; `check` 0 errors; lint clean.
 - Chromium 151 at `/usr/bin/chromium` decodes H.264 High and High 10, AV1, VP9, AAC, Opus and FLAC through MSE, not HEVC or AC-3, and answers `maybe` for mkv.

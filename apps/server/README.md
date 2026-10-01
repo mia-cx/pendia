@@ -354,6 +354,8 @@ The `settings` row with key `metadata` holds one JSON object. Missing fields use
 
 `providerOrder` sets the enabled providers in priority order. Only `tmdb` is built in today. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
 
+TMDB title search compares the folder title with each result's `title` and `original_title`. When neither matches for any result, it also reads `/movie/{id}/translations` for the first five results, so a Radarr folder named with a translated title, such as `Die Verurteilten (1994)`, still matches. A search with a plain match makes no extra request.
+
 `libraries` maps a Library id to its provider list. A missing entry uses `providerOrder`, an explicit `[]` disables metadata for that Library, and an explicit `["tmdb"]` enables only TMDB:
 
 ```json

@@ -20,7 +20,7 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
 - [x] 2. Prove an untagged translated folder flows from scan to a match.
   - Add a provider-fetch job test with a scanned `Die Verurteilten (1994)` folder and mocked TMDB search, translations and details.
   - Validation: `DATABASE_URL=... bun test apps/server/src/metadata/jobs.test.ts` passes, and the Item ends `matched` with the TMDB id.
-- [ ] 3. Document translated-title matching in `apps/server/README.md`.
+- [x] 3. Document translated-title matching in `apps/server/README.md`.
   - Validation: the metadata settings section states when translations are read and the five-candidate cap.
 - [ ] 4. Run the full repository gate.
   - From the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55576/pendia bun test`, and `bun test` without `DATABASE_URL`.

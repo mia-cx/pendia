@@ -13,7 +13,7 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
 
 ## TODOs
 
-- [ ] 1. Read candidate translations in TMDB search when no plain title matches.
+- [x] 1. Read candidate translations in TMDB search when no plain title matches.
   - Decode every search result first. When none matches by `title` or `original_title`, request `/movie/{id}/translations` for the first five candidates in TMDB order and treat a normalized translated title as a title match.
   - A 404 for one candidate means no translations. Malformed translation bodies reject as `Invalid TMDB response.`
   - Validation: mocked HTTP tests in `tmdb.test.ts` cover the translated match, no lookup when a plain title matches, a nonmatching translation, a shared translated title, the lookup cap, 404 and malformed bodies. Run server typecheck.
@@ -33,4 +33,5 @@ Radarr can name a movie folder with a translated title. TMDB search finds the mo
 - The lookup is capped at the first five candidates in TMDB's relevance order. A translated query ranks its own movie near the top, and the cap bounds the requests for an untagged folder that matches nothing. A shared translated title past the fifth result goes unseen; that trade is accepted to keep unmatched folders cheap.
 - Lookups run in parallel. Any failed lookup fails the search, and the provider-fetch job retries as it does for other TMDB failures.
 - `service.ts` needs no change: the provider's confidence feeds the existing threshold and tie rules.
+- TODO 1 done. `searchMovies` decodes every result first, then reads `/movie/{id}/translations` through `translatedTitles` for up to five candidates when none matches plainly. The test mock now passes the request URL to its handler so tests can route by path. Red first: the 4 new translation tests failed against the old provider, the no-lookup test passed. `bun test apps/server/src/metadata/tmdb.test.ts` passed 27 of 27; `bun run --cwd apps/server check` clean; `bunx biome check` clean after formatting.
 - Worktree `/home/mia/mia-cx/pendia/.worktrees/translated-titles`, branch `feat/76-translated-titles`. Test Postgres `pendia-test-pg-76` on port 55576.

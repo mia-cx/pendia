@@ -13,7 +13,7 @@ Play Items in `apps/web`. A Play action on movie and episode pages opens `/play/
 
 ## TODOs
 
-- [ ] 1. Cache the app shell and report an unreachable server.
+- [x] 1. Cache the app shell and report an unreachable server.
   - `$lib/api.ts`: the client's fetch turns a network failure, or a 502, 503 or 504 without a JSON body, into a `ServerUnreachable` error. An aborted request keeps its own error.
   - `$lib/errors.ts`: an `UNREACHABLE` failure code with its own sentence. `hooks.client.ts` hands the code to the error page through `App.Error`, and `+error.svelte` says the server is unreachable and offers Try again.
   - `src/service-worker.ts`: install caches the build and `200.html` under a versioned cache, activate drops older caches. Build assets answer from the cache first. Navigations go to the network and fall back to the cached shell on a network failure or a 5xx. `/api`, `/rpc` and media are never intercepted.
@@ -54,4 +54,5 @@ Play Items in `apps/web`. A Play action on movie and episode pages opens `/play/
   - hls.js runs whenever it is supported, native HLS only otherwise. Chromium 151 now answers `maybe` for native HLS, so checking native first would bypass hls.js on Chrome. Native HLS cannot rewrite segment URLs, so its token refresh swaps the source at the current position.
   - The resume prompt lives on the detail page as Resume and Play from start, so the choice is made before the player opens.
   - A Version change waits for stop before planning the next session, so the server's resume reads the position stop just wrote.
+- TODO 1 done. The auth routes' `postJson` goes through the same `reachServer`, so sign-in with the server down says so too. Unexplained client errors still reach the console, since a custom `handleError` replaces SvelteKit's logging. The worker leaves `/api/`, `/rpc/`, `/healthz` and `/readyz` alone, so OIDC redirects and media URLs never meet it. `bun test apps/web` 11 pass; `check` 0 errors; `build` writes `service-worker.js` next to `200.html`.
 - Chromium 151 at `/usr/bin/chromium` decodes H.264 High and High 10, AV1, VP9, AAC, Opus and FLAC through MSE, not HEVC or AC-3, and answers `maybe` for mkv.

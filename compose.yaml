@@ -22,6 +22,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://pendia:pendia@postgres:5432/pendia
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:3000/readyz"]
       interval: 5s

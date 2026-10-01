@@ -33,9 +33,10 @@ export function registerMetadataJobs(
     const config = await readMetadataSettings(db);
     const providers: MetadataProvider[] = [];
     const storedTmdbKey = (await readProviderKey(db, "tmdb"))?.trim();
-    const tmdbKey = storedTmdbKey || config.tmdb?.apiKey;
-    if (tmdbKey !== undefined)
-      providers.push(createTmdbMetadataProvider(tmdbKey, request));
+    // An admin-stored key wins; TMDB_API_KEY covers deployments set up by env.
+    const tmdbKey =
+      storedTmdbKey || config.tmdb?.apiKey || Bun.env.TMDB_API_KEY?.trim();
+    if (tmdbKey) providers.push(createTmdbMetadataProvider(tmdbKey, request));
     const application = await applyMetadata(db, payload.itemId, providers);
     await publishLibraryChanged(db, payload.itemId);
     if (application.state !== "matched") return;

@@ -8,10 +8,10 @@ The API already has `items.list`, `items.get` (with `metadataState`), `shelves.c
 
 ## Acceptance criteria
 
-- [ ] Home renders its shelves from a seeded library.
-- [ ] Grid endpoints answer under 50 ms server time at 10,000 items on a generated dataset, measured in a test.
-- [ ] Search returns fuzzy matches for a misspelled title.
-- [ ] Detail pages list Versions and credits; a user without access to a library never sees its Items.
+- [x] Home renders its shelves from a seeded library.
+- [x] Grid endpoints answer under 50 ms server time at 10,000 items on a generated dataset, measured in a test.
+- [x] Search returns fuzzy matches for a misspelled title.
+- [x] Detail pages list Versions and credits; a user without access to a library never sees its Items.
 
 ## TODOs
 
@@ -45,7 +45,7 @@ The API already has `items.list`, `items.get` (with `metadataState`), `shelves.c
   - `$lib/components/ItemPage.svelte` renders one Item: backdrop, poster, title, facts, overview, an actions area the web player will fill with Play, Versions, credits and children. The routes match the mediums' screens: `/movies/[id]`, `/shows/[id]`, `/shows/[showId]/seasons/[id]` and `/shows/[showId]/seasons/[seasonId]/episodes/[id]`.
   - Validation: `bun run --cwd apps/web check` and `build` pass.
 
-- [ ] 7. Document, verify in a browser and run the gate.
+- [x] 7. Document, verify in a browser and run the gate.
   - `apps/server/README.md` documents `sort`, the detail additions, `items.search` and `shelves.home`.
   - Render every route at desktop and phone widths in Chromium against a seeded runtime, in both colour schemes, and perform the journey: home, grid, sort, show more, detail, season, episode, search.
   - Validation: the full gate from the repository root, recorded below.
@@ -68,3 +68,6 @@ The API already has `items.list`, `items.get` (with `metadataState`), `shelves.c
 - TODO 5 done. `$lib/session.ts` is the one session guard for admin and browse; `SignOut.svelte` is the one sign-out button. `app.css` loads once from the root layout. The admin mark now links to Home, since the browse header carries the Admin link. The prerendered landing page is gone: `/` is Home, served from `200.html`. A grid caller with no viewable library gets 403 from `items.list`, which the grid shows as its empty state. `$lib/browse.test.ts` covers routes, Episode codes, durations and sizes: 6 pass with `scan.test.ts`. `bun run --cwd apps/web check` 0 errors; `build` writes `200.html`.
 - Found while rendering in Chromium: the same-origin client handed oRPC a bare `/rpc`, and oRPC builds `new URL(url)`, so every screen on the default client, the merged admin included, failed with "Invalid URL". Fixed in its own commit; `api.test.ts` pins the request URL.
 - TODO 6 done. `ItemPage.svelte` draws all four detail routes; `Poster.svelte` is the one poster frame for cards and pages. An Episode or Season borrows its Show's poster. The actions row renders only when a route passes an `actions` snippet, which is where #39 adds Play. Cast shows twelve names until Show all. Rendering fixed three things before this commit: the backdrop now spans the full width, the phone header no longer overflows (the section links span both columns), and the phone grid keeps three posters across.
+- TODO 7 done. `apps/server/README.md` documents `sort`, browse cards, the detail additions, `items.search` and `shelves.home`.
+- Browser check: headless Chromium 1440x900 and 390x844 over CDP on a seeded runtime (30 movies with gradient posters, some without, one backdrop with 18 cast and 3 crew, Severance with two Seasons of nine Episodes, progress for continue watching and next up), in light and dark. Journey performed: Home, Movies, sort by title (URL gains `?sort=title`, A to Z order), scroll loads the next page, Show page, Season, Episode, back up the breadcrumb, header search typed from Home (lands on `/search?q=incep` with focus kept, later keystrokes replace the history entry). Keyboard tab order reaches the section links with a visible ring. A viewer denied both libraries sees the empty Home, an empty Movies grid, no search hits and "Permission denied" on a direct detail URL. No horizontal overflow at 390 px.
+- Gate at `3bb1766` plus docs: `bun install --frozen-lockfile` no changes; `bun run lint` clean, 240 files; `bun run check` 6 of 6; `bun run build` 4 of 4; `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55538/pendia bun test` 989 pass, 0 fail across 72 files; `env -u DATABASE_URL bun test` 549 pass, 448 skip, 0 fail with the single skip message.

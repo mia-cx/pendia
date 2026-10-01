@@ -1,5 +1,6 @@
 <script lang="ts">
-import { afterNavigate, goto } from "$app/navigation";
+import { onDestroy } from "svelte";
+import { afterNavigate, beforeNavigate, goto } from "$app/navigation";
 import { page } from "$app/state";
 import SignOut from "$lib/components/SignOut.svelte";
 import type { LayoutProps } from "./$types";
@@ -21,6 +22,12 @@ const current = (href: string) =>
   href === "/"
     ? page.url.pathname === "/"
     : page.url.pathname === href || page.url.pathname.startsWith(`${href}/`);
+
+// A link, back or forward wins over a search still waiting to fire.
+beforeNavigate(({ type }) => {
+  if (type !== "goto") clearTimeout(timer);
+});
+onDestroy(() => clearTimeout(timer));
 
 // The field follows the URL on back, forward and links, but never mid-typing.
 afterNavigate(({ type }) => {

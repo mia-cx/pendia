@@ -82,9 +82,9 @@ export function browserProfile(): ClientProfile {
   });
 }
 
-/** Swaps the playback token on an absolute playback URL. */
-export function withToken(url: string, token: string): string {
-  const next = new URL(url);
+/** Swaps the playback token on a playback URL, resolved against the page. */
+export function withToken(url: string, token: string, page: string): string {
+  const next = new URL(url, page);
   next.searchParams.set("token", token);
   return next.href;
 }

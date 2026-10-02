@@ -159,11 +159,17 @@ export function play(options: PlaybackOptions) {
           startPosition: at,
           xhrSetup: (xhr, requestUrl) => {
             if (token !== null)
-              xhr.open("GET", withToken(requestUrl, token), true);
+              xhr.open(
+                "GET",
+                withToken(requestUrl, token, location.href),
+                true,
+              );
           },
         });
         hls.on(HlsPlayer.Events.ERROR, (_event, data) => {
-          if (data.fatal) onNotice(stalled);
+          if (!data.fatal) return;
+          console.error("hls.js stopped:", data.details, data.error);
+          onNotice(stalled);
         });
         hls.loadSource(url);
         hls.attachMedia(video);

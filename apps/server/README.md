@@ -13,7 +13,7 @@ docker compose -p pendia-db-test -f compose.yaml -f compose.test.yaml down -v
 Tests create and drop unique databases on that server. They leave the database named in DATABASE_URL intact.
 The test role needs CREATEDB and permission to install pg_trgm and btree_gist. The Compose role has these permissions.
 Missing DATABASE_URL skips database tests locally and fails in CI. Connection errors always fail.
-The browser playback test runs when a Chromium binary is on PATH or PENDIA_BROWSER points at one, and skips otherwise.
+The browser playback tests run when a Chromium binary is on PATH or PENDIA_BROWSER points at one, and skip otherwise. The web player test also needs `apps/web/build`, which `bun run build` writes.
 
 After changing the Drizzle schema, generate the next migration:
 

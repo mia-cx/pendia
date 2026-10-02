@@ -73,12 +73,18 @@ describe("client profile", () => {
 
 describe("playback helpers", () => {
   test("a refreshed token replaces the old one and keeps the path", () => {
+    const page = "https://pendia.test/play/i";
     expect(
       withToken(
         "https://pendia.test/api/playback/s/i/hls/3.m4s?token=old",
         "new.sig",
+        page,
       ),
     ).toBe("https://pendia.test/api/playback/s/i/hls/3.m4s?token=new.sig");
+    // hls.js hands the master playlist over as the plan wrote it.
+    expect(
+      withToken("/api/playback/s/i/hls/master.m3u8?token=old", "new", page),
+    ).toBe("https://pendia.test/api/playback/s/i/hls/master.m3u8?token=new");
   });
 
   test("positions read as minutes or hours", () => {

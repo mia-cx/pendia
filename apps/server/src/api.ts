@@ -5,6 +5,7 @@ import type { createAuthHandler } from "./auth/http.ts";
 import type { createJellyfinHandler } from "./jellyfin/http.ts";
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 import type { createArtworkHandler } from "./metadata/artwork-http.ts";
+import type { createPluginRouteHandler } from "./plugins/http.ts";
 import type { createWatcherHandler } from "./watcher/http.ts";
 
 const defaultWebRoot = fileURLToPath(
@@ -67,6 +68,7 @@ export function startApiServer(
     api?: ReturnType<typeof createApiHandler>;
     webhooks?: ReturnType<typeof createServarrWebhookHandler>;
     artwork?: ReturnType<typeof createArtworkHandler>;
+    plugins?: ReturnType<typeof createPluginRouteHandler>;
     watcher?: ReturnType<typeof createWatcherHandler>;
     jellyfin?: ReturnType<typeof createJellyfinHandler>;
   } = {},
@@ -110,6 +112,14 @@ export function startApiServer(
 
       if (handlers.artwork) {
         const response = await handlers.artwork(request);
+        if (response !== undefined) return response;
+      }
+
+      if (handlers.plugins) {
+        const response = await handlers.plugins(
+          request,
+          server.requestIP(request)?.address ?? "",
+        );
         if (response !== undefined) return response;
       }
 

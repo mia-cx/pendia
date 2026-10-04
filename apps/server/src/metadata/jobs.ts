@@ -7,6 +7,8 @@ import type { Database } from "../db/client.ts";
 import { episodes, items, jobs, seasons, shows } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
+import { emitPluginEvents } from "../plugins/events.ts";
+import type { PluginRuntime } from "../plugins/runtime.ts";
 import { readProviderKey } from "../providers/keys.ts";
 import {
   removeSelectedArtwork,
@@ -98,9 +100,23 @@ export async function scheduleWeeklyRefresh(db: Database, showId: string) {
   });
 }
 
+async function emitItemUpdated(db: Database, itemId: string) {
+  await db.transaction(async (tx) => {
+    const [item] = await tx
+      .select({ kind: items.kind })
+      .from(items)
+      .where(eq(items.id, itemId));
+    if (item)
+      await emitPluginEvents(tx, [
+        { event: "item.updated", payload: { itemId, kind: item.kind } },
+      ]);
+  });
+}
+
 async function metadataProviders(
   db: Database,
   request: typeof fetch,
+  plugins: PluginRuntime | undefined,
 ): Promise<MetadataProvider[]> {
   const config = await readMetadataSettings(db);
   const providers: MetadataProvider[] = [];
@@ -117,6 +133,8 @@ async function metadataProviders(
         request,
       ),
     );
+  if (plugins !== undefined)
+    providers.push(...(await plugins.metadataProviders()));
   return providers;
 }
 
@@ -139,11 +157,12 @@ async function showChildren(db: Database, showId: string) {
   ];
 }
 
-/** Registers the built-in provider-fetch job handler. */
+/** Registers the provider-fetch job handler; plugin metadata providers join the built-in ones when a runtime is given. */
 export function registerMetadataJobs(
   db: Database,
   registry: ReturnType<typeof createJobRegistry>,
   request: typeof fetch = fetch,
+  plugins?: PluginRuntime,
 ): void {
   const markPending = (itemId: string) =>
     db
@@ -160,6 +179,7 @@ export function registerMetadataJobs(
     const application = await applyMetadata(db, item.id, providers);
     await publish();
     if (application.state !== "matched") return false;
+    await emitItemUpdated(db, item.id);
     const type = item.kind === "episode" ? "thumb" : "poster";
     const primary = application.artwork.find(
       (candidate) => candidate.type === type,
@@ -192,7 +212,7 @@ export function registerMetadataJobs(
     const publish = () =>
       publishEvent(db, { kind: "library.changed", libraryId: item.libraryId });
     try {
-      const providers = await metadataProviders(db, request);
+      const providers = await metadataProviders(db, request, plugins);
       const matched = await fetchItem(item, providers, publish);
       if (!matched || item.kind !== "show") return;
       // One job covers the whole Show, so its Seasons and Episodes publish

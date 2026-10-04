@@ -20,6 +20,7 @@ import { getItemDetail, listItemCards, searchItems } from "./items.ts";
 import { libraryProcedures } from "./libraries.ts";
 import { markProcedures, shelfProcedures } from "./marks.ts";
 import { playbackProcedures } from "./playback.ts";
+import { pluginProcedures, registryProcedures } from "./plugins.ts";
 import {
   ApiEvent,
   connection,
@@ -143,5 +144,7 @@ export const pendiaRouter = {
   users: userProcedures,
   groups: groupProcedures,
   settings: settingsProcedures,
+  plugins: pluginProcedures,
+  registries: registryProcedures,
   events: { stream: streamEvents },
 };

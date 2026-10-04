@@ -62,6 +62,40 @@ On SIGTERM, shutdown stops new claim loops and drains active handlers before clo
 Abrupt process loss does not recover running jobs in this slice. Handlers must be safe to retry after a reported failure.
 Plugin cron scheduling belongs to the plugin host, not this queue.
 
+## Plugins
+
+The api, worker and all roles each run a plugin runtime. At startup it listens on `pendia_plugins` and installs every plugin in the lockfile into `PENDIA_PLUGIN_DIR`, default `pendia-plugins` under the OS temp dir, in the background. Use local disk. Each package lands in a folder named after its integrity, written to a staging folder and renamed, so two versions never share a folder and a half-written install is never imported. A fresh process with an empty folder refetches each source and refuses one whose bytes no longer match the lockfile.
+
+A source is an absolute folder path, an http(s) tarball URL or an npm spec such as `pendia-plugin-prunarr@^1`. Npm specs resolve through `PENDIA_NPM_REGISTRY`, default `https://registry.npmjs.org`, and the lockfile records the exact version served. Integrity is SRI sha512 of the tarball, which matches npm's own, or of the sorted file listing for a folder. A folder skips `node_modules` and `.git`, so a plugin ships a bundled entry. Tarballs are capped at 64 MiB.
+
+The `plugin_lockfile` table holds name, pinned source, version and integrity. The `settings` row with key `plugins` holds the rest:
+
+```json
+{
+  "filesOff": null,
+  "registries": ["https://github.com/mia-cx/pendia"],
+  "plugins": {
+    "pendia-plugin-prunarr": {
+      "capabilities": ["items:read", "progress:read", "shelves", "jobs", "network"],
+      "enabled": true,
+      "failure": null,
+      "filesOff": { "until": "2026-10-05T12:00:00.000Z" },
+      "config": { "radarrUrl": "http://radarr:7878" }
+    }
+  }
+}
+```
+
+`capabilities` are the approved ones: the manifest's at the installed integrity. A files switch is `null` when on, `{ "until": null }` when off for good, or off until an instant. Every write takes the settings lock and NOTIFYs `pendia_plugins`, and every process then rebuilds the hosts whose state changed. A config change instead calls the plugin's `config.onChange` handlers.
+
+A plugin is imported on first use: a route request, a provider-fetch, a shelf, or a plugin job. Workers also import plugins with `jobs` at startup, because their schedules live in setup. Every call into plugin code is guarded. A throw, a bad default export, or a result that is not plain data marks the plugin failed in its settings, logs `plugin.failed` with the error, and unloads it in every process. Re-enabling it in the admin is the restart.
+
+Item, progress and playback writes enqueue one `plugin` job per event and per enabled plugin with `events`, inside the write's transaction. A schedule tick enqueues a `plugin` job whose id is derived from the plugin, schedule and minute, so every worker that fires the same tick enqueues it once. Workers need clocks within the same minute. `scan.completed` is declared but not emitted yet.
+
+Routes are served at `/plugins/<name>/<path>`, a scoped name taking two segments, for GET and POST. The handler gets the caller's user id when a session or API key authenticates, and null otherwise. POST passes the same origin check as API mutations. Plugin metadata providers join provider-fetch and take part in matching once their id is in the metadata `providerOrder`. Plugin home shelves appear on Home after the medium shelves; `GET /api/shelves/item/{id}` lists item shelves. Both show only items the caller may view.
+
+`plugins.*` and `registries.*` are the admin procedures, all behind `manage-server`: list, preview a source, install at the previewed integrity, enable and disable, files switches, config, and adding, listing and removing registries.
+
 ## Transcoder
 
 The transcoder and all roles run live remux sessions. When the playback engine decides remux, `playback.plan` returns `/api/playback/{sessionId}/{itemId}/hls/master.m3u8?token=...`. The api serves `media.m3u8`, `init.mp4` and `N.m4s` under the same path, and every HLS URL carries the playback token.
@@ -413,7 +447,7 @@ The `settings` row with key `metadata` holds one JSON object. Missing fields use
 }
 ```
 
-`providerOrder` sets the enabled providers in priority order. `tmdb` and `tvdb` are built in. TMDB handles movies and TVDB handles Shows, Seasons and Episodes, so each Item only reaches the provider for its kind. A `metadata` row that sets `providerOrder` without `tvdb` keeps TVDB off. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
+`providerOrder` sets the enabled providers in priority order. `tmdb` and `tvdb` are built in, and a plugin metadata provider joins by its id. TMDB handles movies and TVDB handles Shows, Seasons and Episodes, so each Item only reaches the provider for its kind. A `metadata` row that sets `providerOrder` without `tvdb` keeps TVDB off. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
 
 TMDB title search compares the folder title with each result's `title` and `original_title`. When neither matches for any result, it also reads `/movie/{id}/translations` for the first five results, so a Radarr folder named with a translated title, such as `Die Verurteilten (1994)`, still matches. A search with a plain match makes no extra request.
 

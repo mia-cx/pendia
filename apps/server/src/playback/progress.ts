@@ -10,6 +10,7 @@ import {
   sessionRegistry,
   versions,
 } from "../db/schema/index.ts";
+import { emitPluginEvents } from "../plugins/events.ts";
 
 type ProgressDb = Pick<Database, "select">;
 type LifecycleDb = Pick<
@@ -215,6 +216,12 @@ async function upsertProgress(
         ...(countPlay ? { playCount: sql`${progress.playCount} + 1` } : {}),
       },
     });
+  await emitPluginEvents(tx, [
+    {
+      event: "progress.updated",
+      payload: { itemId, userId, positionSeconds, completed },
+    },
+  ]);
 }
 
 async function touchSession(tx: LifecycleDb, sessionId: string) {
@@ -262,6 +269,12 @@ export async function startPlayback(
       sessionId: scope.sessionId,
       state: "playing",
     });
+    await emitPluginEvents(tx, [
+      {
+        event: "playback.started",
+        payload: { itemId: scope.itemId, userId, sessionId: scope.sessionId },
+      },
+    ]);
     return {
       state: "playing" as const,
       progress: await readProgress(tx, userId, scope.itemId),
@@ -335,6 +348,12 @@ export async function stopPlayback(
       sessionId: scope.sessionId,
       state: "stopped",
     });
+    await emitPluginEvents(tx, [
+      {
+        event: "playback.stopped",
+        payload: { itemId: scope.itemId, userId, sessionId: scope.sessionId },
+      },
+    ]);
     return {
       state: "stopped" as const,
       progress: await readProgress(tx, userId, scope.itemId),

@@ -1,4 +1,8 @@
+import { eq } from "drizzle-orm";
 import { Schema } from "effect";
+import { AuthError } from "../auth/errors.ts";
+import { requirePermission } from "../auth/permissions.ts";
+import { items } from "../db/schema/index.ts";
 import { createShowsMedium } from "../mediums/shows.ts";
 import {
   continueWatching as continueWatchingItems,
@@ -6,7 +10,7 @@ import {
   setFavourite as saveFavourite,
   setRating as saveRating,
 } from "../playback/marks.ts";
-import { homeShelves } from "./browse.ts";
+import { homeShelves, pluginShelves } from "./browse.ts";
 import { authenticated, authenticatedMutation } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
 import { Progress } from "./progress.ts";
@@ -130,11 +134,41 @@ const home = authenticated
   .route({ method: "GET", path: "/shelves/home" })
   .output(Schema.standardSchemaV1(Schema.Array(Shelf)))
   .handler(async ({ context }) =>
-    runApi(fromHost(() => homeShelves(context.db, context.caller.user.id))),
+    runApi(
+      fromHost(() =>
+        homeShelves(context.db, context.caller.user.id, context.plugins),
+      ),
+    ),
+  );
+
+const item = authenticated
+  .route({ method: "GET", path: "/shelves/item/{id}" })
+  .input(Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID })))
+  .output(Schema.standardSchemaV1(Schema.Array(Shelf)))
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(async () => {
+        const [row] = await context.db
+          .select({ libraryId: items.libraryId })
+          .from(items)
+          .where(eq(items.id, input.id));
+        if (row === undefined) throw new AuthError("NOT_FOUND");
+        const userId = context.caller.user.id;
+        await requirePermission(context.db, userId, "view", row.libraryId);
+        const shelves = await pluginShelves(
+          context.db,
+          userId,
+          context.plugins,
+          "item",
+          input.id,
+        );
+        return shelves.filter((shelf) => shelf.entries.length > 0);
+      }),
+    ),
   );
 
 /** The per-user favourite and rating procedures mounted under `marks`. */
 export const markProcedures = { get, setFavourite, setRating };
 
-/** The shelf read procedures mounted under `shelves`. */
-export const shelfProcedures = { home, continueWatching, nextUp };
+/** The shelf read procedures mounted under `shelves`; `item` lists plugin shelves for an Item page. */
+export const shelfProcedures = { home, item, continueWatching, nextUp };

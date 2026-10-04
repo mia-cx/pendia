@@ -25,6 +25,8 @@ import {
   type PluginRuntimeOptions,
 } from "./plugins/runtime.ts";
 import { registerStoreJobs } from "./stored/jobs.ts";
+import { createSubtitleHandler } from "./subtitles/http.ts";
+import { registerSubtitleJobs } from "./subtitles/jobs.ts";
 import {
   startTranscoder,
   type Transcoder,
@@ -313,6 +315,7 @@ export async function startPendia(
         api: createApiHandler(database.db, eventBroker, transcoder, plugins),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
         artwork,
+        subtitles: createSubtitleHandler(database.db),
         plugins: createPluginRouteHandler(database.db, plugins),
         jellyfin: createJellyfinHandler(database.db, jellyfinRoutes(artwork)),
         watcher: createWatcherHandler(database.db, changeDebouncer),
@@ -329,6 +332,8 @@ export async function startPendia(
         registerLibraryJobs(database.db, runtimeRegistry);
       if (!runtimeRegistry.types().includes("provider-fetch"))
         registerMetadataJobs(database.db, runtimeRegistry, fetch, runtime);
+      if (!runtimeRegistry.types().includes("subtitle-fetch"))
+        registerSubtitleJobs(database.db, runtimeRegistry, fetch, runtime);
       if (!runtimeRegistry.types().includes("plugin"))
         runtimeRegistry.register("plugin", (payload) =>
           runtime.runJob(payload),

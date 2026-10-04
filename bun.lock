@@ -53,8 +53,8 @@
     },
     "plugins/webhooks": {
       "name": "@pendia/plugin-webhooks",
-      "version": "0.1.0",
-      "dependencies": {
+      "version": "1.0.0",
+      "devDependencies": {
         "@pendia/plugin-api": "workspace:*",
       },
     },

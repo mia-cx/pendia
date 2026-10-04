@@ -5,6 +5,7 @@ import type {
   PluginHost,
   PluginRequest,
   PluginResponse,
+  SubtitleProvider,
 } from "@pendia/plugin-api";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
@@ -474,6 +475,19 @@ export function createPluginRuntime(
           kinds: [...provider.kinds],
           search: (query) => guard(plugin.name, () => provider.search(query)),
           fetch: (match) => guard(plugin.name, () => provider.fetch(match)),
+        })),
+      );
+    },
+
+    /** The subtitle providers of every enabled plugin with the providers capability, guarded. */
+    async subtitleProviders(): Promise<SubtitleProvider[]> {
+      const plugins = await loadAll("providers");
+      return plugins.flatMap((plugin) =>
+        plugin.registrations.subtitles.map((provider) => ({
+          id: provider.id,
+          search: (query) => guard(plugin.name, () => provider.search(query)),
+          download: (match) =>
+            guard(plugin.name, () => provider.download(match)),
         })),
       );
     },

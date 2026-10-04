@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { settings } from "../db/schema/index.ts";
+import { readLanguage } from "../subtitles/store.ts";
 
 const metadataSettingsKey = "metadata";
 
@@ -9,6 +10,8 @@ export interface MetadataSettings {
   confidenceThreshold: number;
   libraries: Record<string, string[]>;
   tmdb: { apiKey: string } | null;
+  /** Languages subtitle providers fetch for every movie and episode, such as `["en", "pt-br"]`. */
+  subtitleLanguages: string[];
 }
 
 function invalid(): never {
@@ -79,7 +82,27 @@ export async function readMetadataSettings(
 
   const tmdb = readTmdb(config.tmdb);
 
-  return { ...config, providerOrder, confidenceThreshold, libraries, tmdb };
+  const languagesValue =
+    config.subtitleLanguages === undefined ? [] : config.subtitleLanguages;
+  if (!Array.isArray(languagesValue)) invalid();
+  const subtitleLanguages = [
+    ...new Set(
+      languagesValue.map((entry) =>
+        typeof entry === "string"
+          ? (readLanguage(entry) ?? invalid())
+          : invalid(),
+      ),
+    ),
+  ];
+
+  return {
+    ...config,
+    providerOrder,
+    confidenceThreshold,
+    libraries,
+    tmdb,
+    subtitleLanguages,
+  };
 }
 
 /** Returns enabled providers for a library in configured order. */

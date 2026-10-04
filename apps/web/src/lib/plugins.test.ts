@@ -8,6 +8,9 @@ describe("plugin helpers", () => {
     expect(describeCapabilities(["network"], ["radarr.example"])).toEqual([
       "Reach radarr.example",
     ]);
+    expect(describeCapabilities(["network"], ["*"])).toEqual([
+      "Reach any host",
+    ]);
     expect(describeCapabilities(["files"], [])).toEqual([
       "Read, change and delete files in your libraries",
     ]);

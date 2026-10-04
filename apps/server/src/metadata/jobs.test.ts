@@ -409,6 +409,77 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
       });
     }));
 
+  test("an untagged folder with a translated title matches through translations", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Die Verurteilten (1994)";
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, folder, "Die Verurteilten.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Movies", medium: "movies", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await db.insert(settings).values({
+          key: "metadata",
+          value: { tmdb: { apiKey: "test-key" } },
+        });
+        const shawshank = {
+          id: 278,
+          title: "The Shawshank Redemption",
+          original_title: "The Shawshank Redemption",
+          release_date: "1994-09-23",
+        };
+        const { calls, request } = mockRequest((url) => {
+          if (url.pathname === "/3/search/movie")
+            return Response.json({ results: [shawshank] });
+          if (url.pathname === "/3/movie/278/translations")
+            return Response.json({
+              translations: [{ data: { title: "Die Verurteilten" } }],
+            });
+          if (url.pathname === "/3/movie/278") return Response.json(shawshank);
+          throw new Error(`Unexpected request to ${url}.`);
+        });
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        registerMetadataJobs(db, registry, request);
+        const scanJob = await queue.enqueue({
+          type: "scan",
+          libraryId: library.id,
+          path: folder,
+        });
+        const claimedScan = await queue.claim(["scan"]);
+        await registry.run(claimedScan ?? scanJob);
+        await queue.complete(claimedScan ?? scanJob);
+        const [item] = await db.select().from(items);
+        if (!item) throw new Error("Scanned item missing.");
+        const claimedFetch = await queue.claim(["provider-fetch"]);
+        if (!claimedFetch) throw new Error("provider-fetch was not enqueued.");
+        await registry.run(claimedFetch);
+        await queue.complete(claimedFetch);
+
+        expect(calls.map((url) => url.pathname)).toEqual([
+          "/3/search/movie",
+          "/3/movie/278/translations",
+          "/3/movie/278",
+        ]);
+        expect(calls[0]?.searchParams.get("query")).toBe("Die Verurteilten");
+        expect(await storedItem(db, item.id)).toMatchObject({
+          title: "The Shawshank Redemption",
+          year: 1994,
+          metadataState: "matched",
+        });
+        expect(
+          await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, item.id)),
+        ).toMatchObject([{ provider: "tmdb", value: "278" }]);
+      });
+    }));
+
   test("an explicit empty library list makes no HTTP call and stays pending", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

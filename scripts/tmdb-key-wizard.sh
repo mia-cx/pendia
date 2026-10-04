@@ -130,7 +130,8 @@ ask_secret() {
 write_env() {
   local key="$1" value="$2" tmp
   touch "$ENV_FILE"
-  tmp=$(mktemp)
+  # Same folder as ENV_FILE, so mv is an atomic rename.
+  tmp=$(mktemp "$(dirname "$ENV_FILE")/.env.XXXXXX")
   grep -vE "^${key}=" "$ENV_FILE" > "$tmp" || true
   printf '%s=%s\n' "$key" "$value" >> "$tmp"
   mv "$tmp" "$ENV_FILE"
@@ -197,6 +198,10 @@ open_url "https://www.themoviedb.org/settings/api"
 step "Sign in to TMDB if it asks."
 step "Under 'API Key', copy the 32-character value."
 note "Skip 'API Read Access Token' (the long one starting eyJ). Pendia doesn't use it."
+if ! command -v curl >/dev/null 2>&1; then
+  warn "The wizard checks the key with curl. Install curl and run it again."
+  exit 1
+fi
 while true; do
   ask_secret TMDB_API_KEY "Paste the API key:"
   TMDB_API_KEY="${TMDB_API_KEY//[[:space:]]/}"
@@ -205,9 +210,14 @@ while true; do
     warn "No key entered; nothing was written."
     exit 1
   fi
+  # The format check also keeps quotes out of curl's config below.
+  if [[ ! "$TMDB_API_KEY" =~ ^[[:alnum:]]{32}$ ]]; then
+    warn "That isn't a 32-character API key. Copy the API key, not the token, and paste it again."
+    continue
+  fi
   # curl reads the URL from stdin, so the key never shows in the process list.
   status=$(printf 'url = "https://api.themoviedb.org/3/configuration?api_key=%s"\n' "$TMDB_API_KEY" \
-    | curl -sS -o /dev/null -w '%{http_code}' -K - || true)
+    | curl --connect-timeout 10 --max-time 30 -sS -o /dev/null -w '%{http_code}' -K - || true)
   [[ "$status" == 200 ]] && break
   warn "TMDB answered $status. Copy the API key, not the token, and paste it again."
 done

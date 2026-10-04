@@ -2,6 +2,7 @@ import {
   and,
   desc,
   eq,
+  gte,
   inArray,
   isNull,
   lt,
@@ -40,18 +41,90 @@ export const watcherHeartbeatMs = 30_000;
 /** The Postgres NOTIFY channel that wakes idle workers. */
 export const jobChannel = "pendia_jobs";
 
-type QueueOptions = { retryDelayMs?: number; concurrencyLimit?: number };
+/** The error a job keeps when its holder stopped renewing its lease. */
+export const leaseExpiredError =
+  "Job lease expired before its holder finished.";
+
+const maxTimerDelayMs = 2_147_483_647;
+
+/** The job fields that identify one claim of it. */
+type Claim = Pick<Job, "id" | "claimToken">;
+
+type QueueOptions = {
+  retryDelayMs?: number;
+  concurrencyLimit?: number;
+  /** How long a claim or renewal keeps a running job from other claims. */
+  leaseMs?: number;
+  /** How often `hold` renews the lease while its work runs. */
+  renewMs?: number;
+};
 
 /** Creates queue operations on the shared Postgres database. */
 export function createJobQueue(
   db: Connection,
-  { retryDelayMs = 1_000, concurrencyLimit = 1 }: QueueOptions = {},
+  {
+    retryDelayMs = 1_000,
+    concurrencyLimit = 1,
+    leaseMs = 60_000,
+    renewMs = 20_000,
+  }: QueueOptions = {},
 ) {
   if (!Number.isFinite(retryDelayMs) || retryDelayMs <= 0)
     throw new Error("Retry delay must be positive and finite.");
   if (!Number.isSafeInteger(concurrencyLimit) || concurrencyLimit < 1)
     throw new Error("Concurrency limit must be a positive integer.");
+  if (!(renewMs > 0 && renewMs < leaseMs && leaseMs <= maxTimerDelayMs))
+    throw new Error("Lease renewal must be a positive delay below the lease.");
+  const leaseEnd = sql`statement_timestamp() + ${leaseMs} * interval '1 millisecond'`;
+  const leaseExpired = and(
+    eq(jobs.state, "running"),
+    lt(jobs.leaseExpiresAt, sql`statement_timestamp()`),
+  );
+
+  /** Extends the lease; false means another claim took the job or it settled. */
+  async function renew(job: Claim) {
+    const renewed = await db
+      .update(jobs)
+      .set({ leaseExpiresAt: leaseEnd })
+      .where(
+        and(
+          eq(jobs.id, job.id),
+          eq(jobs.claimToken, job.claimToken),
+          eq(jobs.state, "running"),
+        ),
+      )
+      .returning({ id: jobs.id });
+    return renewed.length > 0;
+  }
+
   return {
+    renew,
+
+    /**
+     * Runs `work` while renewing the job's lease every `renewMs`, and stops
+     * renewing when it settles. Renewal errors and a lost lease go to `onError`.
+     */
+    async hold<T>(
+      job: Claim,
+      work: () => Promise<T>,
+      onError: (error: unknown) => void = console.error,
+    ) {
+      let holding = true;
+      const timer = setInterval(() => {
+        renew(job).then((held) => {
+          if (held || !holding) return;
+          clearInterval(timer);
+          onError(new Error(`Lost the lease on job ${job.id}.`));
+        }, onError);
+      }, renewMs);
+      try {
+        return await work();
+      } finally {
+        holding = false;
+        clearInterval(timer);
+      }
+    },
+
     /** Enqueues a typed payload with its scheduling options. */
     async enqueue(payload: JobPayload, options: EnqueueOptions = {}) {
       return db.transaction(async (tx) => {
@@ -71,9 +144,10 @@ export function createJobQueue(
     },
 
     /**
-     * Claims the highest-priority ready job once across workers. Scans of a
-     * Library with a live watcher are left to that watcher, which claims them
-     * by passing its `libraryIds`.
+     * Claims the highest-priority ready job once across workers, with a fresh
+     * claim token and lease. A running job whose lease expired is ready again
+     * as its next attempt. Scans of a Library with a live watcher are left to
+     * that watcher, which claims them by passing its `libraryIds`.
      */
     async claim(
       types: readonly Job["type"][] = jobType.enumValues,
@@ -83,14 +157,24 @@ export function createJobQueue(
       const libraryId = sql`${jobs.payload}->>'libraryId'`;
       return db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(${claimLockKey})`);
+        // An expired lease on the last attempt leaves nothing to reclaim.
+        await tx
+          .update(jobs)
+          .set({ state: "failed", error: leaseExpiredError })
+          .where(and(leaseExpired, gte(jobs.attempts, jobs.maxAttempts)));
         const [job] = await tx
           .select()
           .from(jobs)
           .where(
             and(
-              eq(jobs.state, "queued"),
+              or(
+                and(
+                  eq(jobs.state, "queued"),
+                  lte(jobs.runAfter, sql`statement_timestamp()`),
+                ),
+                leaseExpired,
+              ),
               lt(jobs.attempts, jobs.maxAttempts),
-              lte(jobs.runAfter, sql`statement_timestamp()`),
               inArray(jobs.type, [...types]),
               libraryIds === undefined
                 ? or(
@@ -101,9 +185,10 @@ export function createJobQueue(
                     eq(jobs.type, "scan"),
                     inArray(libraryId, [...libraryIds]),
                   ),
+              // Only live leases hold a key: an expired job must not block its own reclaim.
               or(
                 isNull(jobs.concurrencyKey),
-                sql`(select count(*) from ${jobs} as running_jobs where running_jobs.state = 'running' and running_jobs.concurrency_key = ${jobs.concurrencyKey}) < ${concurrencyLimit}`,
+                sql`(select count(*) from ${jobs} as running_jobs where running_jobs.state = 'running' and running_jobs.lease_expires_at >= statement_timestamp() and running_jobs.concurrency_key = ${jobs.concurrencyKey}) < ${concurrencyLimit}`,
               ),
             ),
           )
@@ -113,31 +198,40 @@ export function createJobQueue(
         if (!job) return undefined;
         const [claimed] = await tx
           .update(jobs)
-          .set({ state: "running", attempts: sql`${jobs.attempts} + 1` })
+          .set({
+            state: "running",
+            attempts: sql`${jobs.attempts} + 1`,
+            claimToken: crypto.randomUUID(),
+            leaseExpiresAt: leaseEnd,
+            error: job.state === "running" ? leaseExpiredError : job.error,
+          })
           .where(eq(jobs.id, job.id))
           .returning();
         return claimed;
       });
     },
 
-    /** Completes only the currently running attempt. */
-    async complete(job: Pick<Job, "id" | "attempts">) {
+    /** Completes the job only for the claim that holds it. */
+    async complete(job: Claim) {
       const [completed] = await db
         .update(jobs)
         .set({ state: "completed" })
         .where(
           and(
             eq(jobs.id, job.id),
+            eq(jobs.claimToken, job.claimToken),
             eq(jobs.state, "running"),
-            eq(jobs.attempts, job.attempts),
           ),
         )
         .returning();
       return completed;
     },
 
-    /** Retains the error and schedules a retry unless attempts are exhausted. */
-    async fail(job: Pick<Job, "id" | "attempts">, error: unknown) {
+    /**
+     * Retains the error and schedules a retry unless attempts are exhausted,
+     * only for the claim that holds the job.
+     */
+    async fail(job: Claim & Pick<Job, "attempts">, error: unknown) {
       const delay = Math.min(
         maxRetryDelayMs,
         retryDelayMs * 2 ** (job.attempts - 1),
@@ -152,8 +246,8 @@ export function createJobQueue(
         .where(
           and(
             eq(jobs.id, job.id),
+            eq(jobs.claimToken, job.claimToken),
             eq(jobs.state, "running"),
-            eq(jobs.attempts, job.attempts),
           ),
         )
         .returning();

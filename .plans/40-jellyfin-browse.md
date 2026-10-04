@@ -8,10 +8,10 @@ Read contracts: CONTEXT.md, docs/spec/jellyfin-layer.md, docs/spec/auth.md, docs
 
 ## Acceptance criteria
 
-- [ ] Contract tests pass against the request and response shapes recorded in the Jellyfin research document.
-- [ ] Quick Connect completes with a 5 s poll from a test client.
-- [ ] Swiftfin and Infuse log in and browse a seeded library; the result is noted on the issue by hand.
-- [ ] Legacy per-user routes answer 404 cleanly.
+- [x] Contract tests pass against the request and response shapes recorded in the Jellyfin research document.
+- [x] Quick Connect completes with a 5 s poll from a test client.
+- [ ] Swiftfin and Infuse log in and browse a seeded library; the result is noted on the issue by hand. Left to Mia: it needs the real apps on a device.
+- [x] Legacy per-user routes answer 404 cleanly.
 
 ## TODOs
 
@@ -21,7 +21,7 @@ Read contracts: CONTEXT.md, docs/spec/jellyfin-layer.md, docs/spec/auth.md, docs
 - [x] 4. Add core browse services: offset-paged Item views with medium fields, selected artwork, provider ids and the caller's marks, plus the libraries a user may view. Validation: database tests cover library scoping, parent and ancestor filters, kinds, ids, search, sort, offset and total, and per-user marks.
 - [x] 5. Add the browse routes: `/UserViews`, `/Items`, `/Items/{id}`, `/UserItems/Resume`, `/Shows/NextUp`, `/Shows/{id}/Seasons` and `/Shows/{id}/Episodes`, with BaseItemDto and query result DTOs. Validation: contract tests check BaseItemDto, UserItemDataDto and BaseItemDtoQueryResult shapes; HTTP tests browse a seeded movie and show library as Swiftfin and Findroid do, including access denial.
 - [x] 6. Serve `GET /Items/{id}/Images/{type}` and `/{index}` anonymously through the artwork handler, honouring `maxWidth` and `fillWidth`. Validation: a Findroid-style request without a token gets the poster; an unknown type answers 404; with artwork auth on, the token from the MediaBrowser header is honoured.
-- [ ] 7. Run the full gate and record results. Validation: frozen install, lint, check, build, tests with and without DATABASE_URL all pass.
+- [x] 7. Run the full gate and record results. Validation: frozen install, lint, check, build, tests with and without DATABASE_URL all pass.
 
 ## Notes
 
@@ -53,3 +53,4 @@ Read contracts: CONTEXT.md, docs/spec/jellyfin-layer.md, docs/spec/auth.md, docs
 - TODO 5 validation: `bun test src/jellyfin src/api/views.test.ts` with DATABASE_URL passes 24 tests. The browse test logs in as Findroid and walks user views, a paged and sorted library grid, a movie detail, a library folder, series, seasons, episodes, resume, next up, favourites and search, contract-checking every BaseItemDtoQueryResult, BaseItemDto and UserItemDataDto. A denied library's Item answers 404 and its listing is empty.
 - The image route resolves the Item's selected Artwork with `selectedArtworkId` and hands `/api/artwork/{id}?width=` to the same artwork handler instance the server mounts, so both share one resize cache. The MediaBrowser token travels as a Bearer header, which is how artwork auth reads it. Without `maxWidth` or `fillWidth` the width is the handler's 4096 cap, and the handler never enlarges.
 - TODO 6 validation: `bun test src/jellyfin src/metadata/artwork-http.test.ts` passes 44 tests. A tokenless Findroid request gets a 4 px wide poster, `If-None-Match` answers 304, index 1 and an unknown type answer 404, and with artwork auth on a tokenless request answers 401 while the MediaBrowser token gets 200.
+- TODO 7 gate, on 2026-10-04 at main 68ffc3a: `bun install --frozen-lockfile` changed nothing; `bun run lint` passes after formatting the generated migration snapshot; `bun run check` passes 6 tasks; `bun run build` passes 4 tasks; `bun test` with DATABASE_URL passes 1014 tests with 0 failures; `bun test` without it passes 567 and skips 455, with 0 failures.

@@ -136,8 +136,11 @@ When a plan is not direct play, the complete stored rungs that pass the client b
 | Procedure | REST route | Input | Output |
 | --- | --- | --- | --- |
 | `playback.sessions` | GET `/api/playback/sessions` | None | `PlaybackSession[]`, newest first |
+| `store.status` | GET `/api/store/status` | None | `{ running, queued: { total, next } }` |
 
 `playback.sessions` needs `manage-server`. It lists sessions that are not stopped and reported in the last five minutes: state, play method, user, client and device, the Item as a browse card, rungs and the transcoder node name. Rungs are the stored rung names for a stored session, the output height for a live transcode such as `720p`, and `source` otherwise. A plan records the client and device of the caller's login, or an API key's name as the client, and publishes `session.state` `starting`, so a dashboard on `events.stream` sees a session arrive and leave.
+
+`store.status` needs `manage-transcoding`. Each running store encode reports its Item, rung, and the segments finished against the timeline's total, counted in the rung folder on the library share. The queue reports its total and the next ten encodes in run order with their run-after time; a job booked for the next idle window shows that window's start. Sweeps are left out.
 
 ## Auth
 

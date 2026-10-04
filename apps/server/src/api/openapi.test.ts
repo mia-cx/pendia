@@ -70,6 +70,7 @@ describe("openapi document", () => {
         "/settings",
         "/settings/providers/{name}",
         "/libraries/{id}/scan-status",
+        "/store/status",
       ]),
     );
   });

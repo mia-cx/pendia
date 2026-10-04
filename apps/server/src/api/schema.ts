@@ -217,6 +217,30 @@ export const PlaybackSession = Schema.Struct({
   lastSeenAt: Schema.String,
 });
 
+/** Store job progress: running encodes with finished segments, and the queue. */
+export const StoreStatus = Schema.Struct({
+  running: Schema.Array(
+    Schema.Struct({
+      jobId: Schema.UUID,
+      item: BrowseCard,
+      rung: Schema.String,
+      segmentsDone: Schema.Int,
+      segmentsTotal: Schema.Int,
+    }),
+  ),
+  queued: Schema.Struct({
+    total: Schema.Int,
+    next: Schema.Array(
+      Schema.Struct({
+        jobId: Schema.UUID,
+        item: BrowseCard,
+        rung: Schema.String,
+        runAfter: Schema.String,
+      }),
+    ),
+  }),
+});
+
 /** The newest scan run's job counts and newest job for one library. */
 export const ScanStatus = Schema.Struct({
   libraryId: Schema.UUID,

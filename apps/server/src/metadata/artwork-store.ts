@@ -119,7 +119,25 @@ export async function storeArtworkOriginal(
     throw new Error("Invalid artwork response.");
   }
 
-  let fresh: WrittenOriginal | undefined;
+  // A replacement keeps the selected row's id, whichever backend held it.
+  const candidateId = selected?.id ?? Bun.randomUUIDv7();
+  const writeOriginal = (rootPath: string, itemFolder: string, id: string) =>
+    writeArtworkOriginal(
+      store,
+      rootPath,
+      itemFolder,
+      `${id}.${Bun.randomUUIDv7()}`,
+      bytes,
+    );
+  // Only colocated writes need the Item folder lock; a slow S3 PUT must hold no row lock.
+  let fresh: WrittenOriginal | undefined =
+    store.backend === "colocated"
+      ? undefined
+      : await writeOriginal(
+          library.rootPath,
+          item.canonicalFolder,
+          candidateId,
+        );
   const stored = await db
     .transaction(async (tx) => {
       const [lockedLibrary] = await tx
@@ -146,14 +164,11 @@ export async function storeArtworkOriginal(
             eq(artwork.selected, true),
           ),
         );
-      // A replacement keeps the selected row's id, whichever backend held it.
-      const artworkId = selected?.id ?? Bun.randomUUIDv7();
-      fresh = await writeArtworkOriginal(
-        store,
+      const artworkId = selected?.id ?? candidateId;
+      fresh ??= await writeOriginal(
         lockedLibrary.rootPath,
         locked.canonicalFolder,
-        `${artworkId}.${Bun.randomUUIDv7()}`,
-        bytes,
+        artworkId,
       );
       const values = {
         sourceUrl: candidate.url,

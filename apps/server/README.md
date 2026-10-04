@@ -163,17 +163,19 @@ Use a private bind address, firewall or restricted ingress during setup. Expose 
 | POST | `/api/auth/login` | `username`, `password`, `clientName`, `deviceId`, `deviceName` | `token`, `user`, `session` |
 | POST | `/api/auth/invites` | `email`, `expiresInSeconds` | 201 with one-time `token` and safe `invite` |
 | POST | `/api/auth/invites/accept` | `token`, `username`, `password`, optional `displayName`, `clientName`, `deviceId`, `deviceName` | 201 with `token`, `user`, `session` and session cookie |
+| POST | `/api/auth/invites/status` | `token` | `status`: `live`, `expired`, `accepted` or `unknown` |
 | GET | `/api/auth/oidc/login` | Query `clientName`, `deviceId`, `deviceName`, optional `invite` | 302 to the configured provider |
-| GET | `/api/auth/oidc/callback` | Provider callback | 200 with `token`, `user`, `session` and session cookie |
+| GET | `/api/auth/oidc/callback` | Provider callback | 303 to `/` with the session cookie |
 | GET | `/api/auth/me` | None | `user`, `credential` |
 | POST | `/api/auth/logout` | None | Revokes the current session or API key and returns `ok` |
 
 Invite creation requires `manage-users` and accepts bearer or session-cookie auth. Invite tokens are random, stored only as SHA-256 digests, expire, and work once.
 Invite acceptance and new OIDC accounts require a live invite. Existing OIDC subjects log in directly.
+The two OIDC routes answer a browser, so a failure is a 303 to `/login?error=<code>`, where the code is the lowercased error code such as `oidc_failed`, or `internal_error`.
 Only `email_verified: true` can link an existing account. An unverified email never links, but a matching live invite can create a separate account.
 OIDC uses discovery, authorization code, state, nonce, PKCE S256, signed ID-token validation, confidential Basic client authentication, and UserInfo subject validation when advertised.
 
-Setup, local login, invite creation and local invite acceptance require `Content-Type: application/json`. Request bodies have a 16 KiB limit.
+Setup, local login, invite creation, invite status and local invite acceptance require `Content-Type: application/json`. Request bodies have a 16 KiB limit.
 Usernames use ASCII letters, digits, dots, underscores and hyphens, start with a letter or digit, and have at most 64 characters.
 Usernames ignore surrounding whitespace and case. Passwords retain whitespace and allow 1 to 1024 characters.
 Display names, client names and device names have at most 128 characters. Device IDs allow 1 to 128 characters.
@@ -223,15 +225,16 @@ To enable OIDC, set `oidc` to an object:
     "issuer": "https://id.mia.cx/application/o/pendia/",
     "clientId": "<client-id>",
     "clientSecret": "<client-secret>",
-    "scopes": ["openid", "profile", "email"]
+    "scopes": ["openid", "profile", "email"],
+    "name": "Authentik"
   }
 }
 ```
 
-The issuer, clientId and clientSecret fields are required. `openid` must be included, and scopes use OAuth scope-token characters. HTTPS is required except loopback HTTP for tests. Keep client secrets out of source control and logs.
+OIDC turns on once `issuer`, `clientId`, `clientSecret` and `scopes` are all stored. A missing field leaves OIDC off; a present but malformed one fails closed. `openid` must be included, and scopes use OAuth scope-token characters. HTTPS is required except loopback HTTP for tests. The optional `name` labels the login button, which reads "Sign in with SSO" without it. Set the client secret from the admin settings screen, or `settings.update` with `oidcClientSecret`, to keep it out of source control, shell history and logs.
 
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
-`artworkRequiresAuth` is a boolean defaulting to false. Of the auth settings, `settings.update` writes `trustedProxyAddresses` and `artworkRequiresAuth` only.
+`artworkRequiresAuth` is a boolean defaulting to false. Of the auth settings, `settings.update` writes `trustedProxyAddresses`, `artworkRequiresAuth` and the OIDC client secret only.
 Settings apply on the next request. Invalid stored settings fail closed.
 `artworkRequiresAuth` false keeps artwork anonymous for clients such as Findroid. True requires the existing bearer token or session cookie.
 A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
@@ -258,7 +261,7 @@ Discovery document: `https://id.mia.cx/application/o/pendia/.well-known/openid-c
 Authentik must emit `email` and `email_verified`. Only verified email links an existing Pendia account.
 Reverse proxies and firewalls must allow server-side discovery, token, JWKS, and UserInfo requests between Pendia and id.mia.cx.
 
-OIDC stays read-only over the API in this slice. Configure it with this PostgreSQL 18 upsert:
+Write the issuer, client ID, scopes and button name with this PostgreSQL 18 upsert:
 
 ```sql
 INSERT INTO settings (id, key, value)
@@ -270,19 +273,23 @@ VALUES (
     jsonb_build_object(
       'issuer', 'https://id.mia.cx/application/o/pendia/',
       'clientId', '<client-id>',
-      'clientSecret', '<client-secret>',
-      'scopes', jsonb_build_array('openid', 'profile', 'email')
+      'scopes', jsonb_build_array('openid', 'profile', 'email'),
+      'name', 'Authentik'
     )
   )
 )
 ON CONFLICT (key) DO UPDATE
-SET value = settings.value || EXCLUDED.value,
+SET value = (settings.value #>> '{}')::jsonb || jsonb_build_object(
+      'oidc',
+      coalesce(nullif((settings.value #>> '{}')::jsonb -> 'oidc', 'null'), '{}')
+        || (EXCLUDED.value -> 'oidc')
+    ),
     updated_at = clock_timestamp();
 ```
 
-This preserves the existing top-level auth keys. Replace the two placeholders before execution.
+This keeps the other auth keys and a client secret that is already stored. `#>> '{}'` unwraps a row the API wrote, which the Bun SQL driver stores as a JSON string. Replace the placeholder before execution. Then paste the Client Secret into OIDC on the admin settings screen.
 
-Live validation after merge: set the Client ID and Secret, open `/api/auth/oidc/login?clientName=Web&deviceId=<stable-device-id>&deviceName=<browser-name>`, authenticate, and confirm `/api/auth/me` returns that session. For a first OIDC account, add `&invite=<one-time-invite-token>`.
+Live validation after merge: sign out, choose "Sign in with Authentik" on the login page, authenticate, and confirm the browser lands on the home screen signed in. For a first OIDC account, open the invite link and choose the same button there.
 
 ### Reverse proxies
 
@@ -305,7 +312,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `items.refresh` | POST `/api/items/{id}/refresh` | `id` in the path | `{ jobId }` |
 | `shelves.home` | GET `/api/shelves/home` | None | `Shelf` array |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
-| `setup.status` | GET `/api/setup/status` | None | `{ complete }` |
+| `setup.status` | GET `/api/setup/status` | None | `{ complete, oidcConfigured, oidcName }` |
 | `users.list` | GET `/api/users` | None | `AdminUser` array |
 | `users.get` | GET `/api/users/{id}` | `id` | `UserAccess` |
 | `users.create` | POST `/api/users` | `username`, `password`, optional `displayName` | `UserAccount` |
@@ -319,14 +326,14 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `groups.create` | POST `/api/groups` | `name`, `permissions` | `Group` |
 | `groups.setPermissions` | PUT `/api/groups/{id}/permissions` | `id`, `permissions` | `Group` |
 | `settings.get` | GET `/api/settings` | None | `ServerSettings` |
-| `settings.update` | PATCH `/api/settings` | optional `trustedProxyAddresses`, `artworkRequiresAuth`, nullable `bitrateCapBps`, `idleWindow` | `ServerSettings` |
+| `settings.update` | PATCH `/api/settings` | optional `trustedProxyAddresses`, `artworkRequiresAuth`, `oidcClientSecret`, nullable `bitrateCapBps`, `idleWindow` | `ServerSettings` |
 | `settings.setProviderKey` | PUT `/api/settings/providers/{name}` | `name`, `value` | `ServerSettings` |
 | `settings.deleteProviderKey` | DELETE `/api/settings/providers/{name}` | `name` | `ServerSettings` |
 
 Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
 
-`setup.status` is the only unauthenticated procedure. The first-run wizard asks it before any account exists, and it leaks one boolean that `POST /api/auth/setup` already leaks through its 409.
+`setup.status` is the only unauthenticated procedure. The first-run wizard asks it before any account exists, and it leaks one boolean that `POST /api/auth/setup` already leaks through its 409. The login page also reads whether OIDC is configured and its button name, which `GET /api/auth/oidc/login` already reveals.
 The other admin procedures check permissions inside the auth slice: `manage-users` for user reads and settings, `manage-server` for server settings, and built-in admin membership for group and library access writes.
 
 `users.get` and the four `users.set*` mutations all answer the full `UserAccess` shape, so the per-user screen refreshes in one round trip. The mutations read that shape back without re-checking the caller, which exposes nothing new because reaching that line already required passing the write's own check; it lets an admin demote themselves and still receive the saved state.
@@ -336,8 +343,8 @@ Session and user instants cross as ISO-8601 at millisecond precision, because th
 
 Group permission edits apply to custom groups only. The built-in `admins` and `users` groups reject writes: admins bypass every check, and `users` is the documented default group.
 
-`settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured, the provider key names, the global bitrate cap, the store idle window and the artwork store. No read returns a provider key value, the OIDC client secret or S3 credentials; provider keys are write-only over the API.
-`settings.update` writes `trustedProxyAddresses`, `artworkRequiresAuth`, `bitrateCapBps` and `idleWindow`. OIDC stays read-only in this slice.
+`settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured, whether an OIDC client secret is stored, the provider key names, the global bitrate cap, the store idle window and the artwork store. No read returns a provider key value, the OIDC client secret or S3 credentials; provider keys are write-only over the API.
+`settings.update` writes `trustedProxyAddresses`, `artworkRequiresAuth`, `oidcClientSecret`, `bitrateCapBps` and `idleWindow`. `oidcClientSecret` sets or replaces the stored OIDC client secret and is never read back. The rest of the OIDC setting is written in the database.
 `bitrateCapBps` is the global default cap in bits per second, null for none; the next `playback.plan` reads it. `idleWindow` is `{ start, end }` as `HH:MM` server local time. A new window moves queued store jobs booked for a later start to the new window's start, or to now when the window is open.
 `artworkStore` is `{ backend, path, bucket, endpoint }`: the environment's choice (`PENDIA_ARTWORK_STORE`), read-only, because moving artwork between backends is unsupported.
 

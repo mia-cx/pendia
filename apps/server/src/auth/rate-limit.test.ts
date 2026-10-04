@@ -29,6 +29,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
         trustedProxyAddresses: [],
         artworkRequiresAuth: false,
         oidc: null,
+        oidcClientSecretSet: false,
       });
       await db.insert(settings).values({
         key: "auth",
@@ -41,6 +42,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
         trustedProxyAddresses: ["10.0.0.2", "10.0.0.3"],
         artworkRequiresAuth: false,
         oidc: null,
+        oidcClientSecretSet: false,
       });
       for (const value of [
         sql`'[]'::jsonb`,

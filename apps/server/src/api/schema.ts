@@ -198,6 +198,7 @@ export const ServerSettings = Schema.Struct({
   trustedProxyAddresses: Schema.Array(Schema.String),
   artworkRequiresAuth: Schema.Boolean,
   oidcConfigured: Schema.Boolean,
+  oidcClientSecretSet: Schema.Boolean,
   providerKeys: Schema.Array(Schema.String),
   bitrateCapBps: Schema.NullOr(Schema.Int),
   idleWindow: Schema.Struct({ start: Schema.String, end: Schema.String }),

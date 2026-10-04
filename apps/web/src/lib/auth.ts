@@ -138,6 +138,42 @@ export function signOut(options: AuthOptions = {}) {
   return postJson<{ ok: true }>("/api/auth/logout", undefined, options);
 }
 
+/** An invite token's state, as the status route reads it. */
+export type InviteStatus = "live" | "expired" | "accepted" | "unknown";
+
+/** Reads whether an invite token can still create an account, without spending it. */
+export function readInviteStatus(token: string, options: AuthOptions = {}) {
+  return postJson<{ status: InviteStatus }>(
+    "/api/auth/invites/status",
+    { token },
+    options,
+  );
+}
+
+/** Spends an invite on a new local account; the route also sets the session cookie. */
+export function acceptInvite(
+  input: {
+    token: string;
+    username: string;
+    password: string;
+    displayName?: string;
+  },
+  options: AuthOptions = {},
+) {
+  return postJson<{
+    token: string;
+    user: PublicUser;
+    session: SessionInfo;
+  }>("/api/auth/invites/accept", { ...input, ...deviceInfo() }, options);
+}
+
+/** The OIDC login route for this browser, carrying an invite token for a new account. */
+export function oidcLoginUrl(invite?: string) {
+  const params = new URLSearchParams(deviceInfo());
+  if (invite !== undefined) params.set("invite", invite);
+  return `/api/auth/oidc/login?${params}`;
+}
+
 /** Creates an invite and returns its one-time token with the safe row. */
 export function createInvite(
   input: { email: string; expiresInSeconds: number },

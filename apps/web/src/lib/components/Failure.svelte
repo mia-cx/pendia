@@ -9,7 +9,9 @@ const { failure }: { failure: { code: FailureCode; message: string } } =
   <h2>
     {failure.code === "FORBIDDEN"
       ? "Permission denied"
-      : "Something went wrong"}
+      : failure.code === "UNREACHABLE"
+        ? "Server unreachable"
+        : "Something went wrong"}
   </h2>
   <p>{failure.message}</p>
 </div>

@@ -10,12 +10,12 @@ Two change-detection bugs, both in `apps/server/src/libraries/changes.ts` and `w
 
 ## Acceptance criteria
 
-- [ ] A move onto an existing file replaces only the colliding destination Item, never its whole root subtree.
-- [ ] A move whose source and destination fall in different root Items (two Shows) is a removal at the source plus a scan of the destination folder. Progress does not follow it.
-- [ ] A move within one root keeps today's behaviour, Progress included.
-- [ ] A webhook move between two folders queues scans for both folders.
-- [ ] A webhook change whose scan folder is the library root answers with the `InvalidWebhookError` 400 and queues nothing: both a delete of the root itself and a file directly in the root.
-- [ ] Tests: one Episode moved onto another Show's Episode deletes only that Episode, and every other Season and Episode of the destination Show survives. After a cross-show move, the Episode belongs to the destination Show.
+- [x] A move onto an existing file replaces only the colliding destination Item, never its whole root subtree.
+- [x] A move whose source and destination fall in different root Items (two Shows) is a removal at the source plus a scan of the destination folder. Progress does not follow it.
+- [x] A move within one root keeps today's behaviour, Progress included.
+- [x] A webhook move between two folders queues scans for both folders.
+- [x] A webhook change whose scan folder is the library root answers with the `InvalidWebhookError` 400 and queues nothing: both a delete of the root itself and a file directly in the root.
+- [x] Tests: one Episode moved onto another Show's Episode deletes only that Episode, and every other Season and Episode of the destination Show survives. After a cross-show move, the Episode belongs to the destination Show.
 
 ## TODOs
 
@@ -29,9 +29,10 @@ Two change-detection bugs, both in `apps/server/src/libraries/changes.ts` and `w
   - Done: both new tests fail on the old `webhooks.ts` and pass now. `bun test src/libraries/webhooks.test.ts` with `DATABASE_URL`: 15 pass, 0 fail.
 - [x] 3. Document the root rejection and cross-show moves in `apps/server/README.md`.
   - Validation: the webhook section states the root 400 and that a cross-show move does not carry Progress.
-- [ ] 4. Run the full repository gate.
+- [x] 4. Run the full repository gate.
   - From the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55563/pendia bun test`, and `bun test` without `DATABASE_URL`.
   - Validation: all pass, and Notes record the real results.
+  - Done after merging `origin/main` at `f7e5ab3`: install clean, lint clean (376 files), check clean, build clean. With `DATABASE_URL`: 1326 pass, 3 skip, 0 fail. Without: 774 pass, 573 skip, 0 fail.
 
 ## Notes
 

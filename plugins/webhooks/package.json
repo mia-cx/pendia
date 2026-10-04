@@ -1,19 +1,96 @@
 {
   "name": "@pendia/plugin-webhooks",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Send server events to any HTTP endpoint.",
   "type": "module",
   "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "pendia": {
     "api": "^1.0.0",
-    "capabilities": [],
+    "capabilities": [
+      "events",
+      "items:read",
+      "network"
+    ],
+    "network": [
+      "*"
+    ],
+    "config": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "title": "URL",
+          "description": "Where each event is sent."
+        },
+        "method": {
+          "type": "string",
+          "title": "Method",
+          "enum": [
+            "POST",
+            "PUT",
+            "PATCH"
+          ],
+          "default": "POST"
+        },
+        "headers": {
+          "type": "array",
+          "title": "Headers",
+          "description": "A list of \"Name: value\" strings.",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "body": {
+          "type": "string",
+          "title": "Body",
+          "description": "{{event}}, {{timestamp}}, {{data}} and {{item}} insert the event; dotted paths such as {{item.title}} reach inside.",
+          "default": "{\"event\":\"{{event}}\",\"timestamp\":\"{{timestamp}}\",\"data\":{{data}},\"item\":{{item}}}"
+        },
+        "events": {
+          "type": "array",
+          "title": "Events",
+          "items": {
+            "type": "string",
+            "enum": [
+              "item.added",
+              "item.removed",
+              "item.updated",
+              "progress.updated",
+              "playback.started",
+              "playback.stopped",
+              "scan.completed"
+            ]
+          },
+          "default": [
+            "item.added"
+          ]
+        },
+        "retries": {
+          "type": "integer",
+          "title": "Retries",
+          "description": "How often to retry when the endpoint answers 5xx or cannot be reached.",
+          "default": 3
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
     "entry": "./dist/index.js"
   },
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target bun",
-    "check": "tsc --noEmit -p tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.json",
+    "prepack": "bun run build"
   },
-  "dependencies": {
+  "devDependencies": {
     "@pendia/plugin-api": "workspace:*"
   }
 }

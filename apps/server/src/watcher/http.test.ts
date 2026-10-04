@@ -455,7 +455,11 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         const claimed: WatcherClaim = await (
           await handler(post("claim", { libraryIds: [library.id] }, token))
         )?.json();
-        expect(claimed.job?.check).toEqual([sibling]);
+        // The destination too: the scan asks about it once the move re-paths the File.
+        expect(claimed.job?.check).toEqual([
+          sibling,
+          "New Show/Season 01/Show S01E01.mkv",
+        ]);
       }),
     ));
 

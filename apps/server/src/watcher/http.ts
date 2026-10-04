@@ -177,9 +177,21 @@ async function claim(
               sql`${probeCache.result} ? 'keyframesSeconds'`,
             ),
           );
-  const moved = (job.payload.changes ?? []).flatMap((change) =>
-    change.kind === "move" ? [change.previousPath] : [],
+  const moves = (job.payload.changes ?? []).flatMap((change) =>
+    change.kind === "move" ? [change] : [],
   );
+  // The scan re-paths moved Files first, so a destination that vanished must be checked too.
+  const check =
+    medium === "shows" && moves.length > 0
+      ? [
+          ...(await filesSharingShow(
+            db,
+            libraryId,
+            moves.map((move) => move.previousPath),
+          )),
+          ...moves.map((move) => move.path),
+        ]
+      : [];
   return {
     job: {
       id: job.id,
@@ -188,10 +200,7 @@ async function claim(
       path,
       medium,
       cached: cached.map((file) => Schema.encodeSync(ReportedFile)(file)),
-      check:
-        medium === "shows" && moved.length > 0
-          ? await filesSharingShow(db, libraryId, moved)
-          : [],
+      check,
     },
   };
 }

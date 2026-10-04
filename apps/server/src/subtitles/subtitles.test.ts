@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
@@ -9,14 +10,20 @@ import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
+import { providerIds, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { createJobQueue } from "../jobs/queue.ts";
+import { createJobRegistry } from "../jobs/registry.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
+import { setProviderKey } from "../providers/keys.ts";
+import { queueSubtitleFetch, registerSubtitleJobs } from "./jobs.ts";
+import { openSubtitlesHash } from "./opensubtitles.ts";
 import {
   listSubtitles,
   readLanguage,
@@ -91,6 +98,141 @@ describe("track names", () => {
     expect(readLanguage("")).toBeNull();
   });
 });
+
+describe("openSubtitlesHash", () => {
+  test("adds the size and the little-endian words of the first and last 64 KiB", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pendia-hash-"));
+    try {
+      const bytes = new Uint8Array(3 * 64 * 1024);
+      const view = new DataView(bytes.buffer);
+      view.setBigUint64(0, 1n, true);
+      // The middle 64 KiB is never read.
+      view.setBigUint64(64 * 1024, 0xffn, true);
+      view.setBigUint64(bytes.length - 8, 0xffffffffffffffffn, true);
+      await Bun.write(join(dir, "a.mkv"), bytes);
+      // 196608 + 1 + (2^64 - 1) wraps to 196608.
+      expect(await openSubtitlesHash(join(dir, "a.mkv"))).toBe(
+        "0000000000030000",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
+  test("fetches the best match per language for a fixture, and the plan lists it", () =>
+    withDatabase((db, url) =>
+      withScannedMovie(db, async ({ adminId, token, itemId, versionId }) => {
+        await setProviderKey(db, adminId, "opensubtitles", "os-key");
+        await db.insert(settings).values({
+          key: "metadata",
+          value: { subtitleLanguages: ["nl", "en"] },
+        });
+        await db
+          .insert(providerIds)
+          .values({ itemId, provider: "imdb", value: "tt0078748" });
+
+        const calls: { url: string; headers: Headers; body: string }[] = [];
+        const api = (async (input: string | URL, init?: RequestInit) => {
+          const href = String(input);
+          calls.push({
+            url: href,
+            headers: new Headers(init?.headers),
+            body: typeof init?.body === "string" ? init.body : "",
+          });
+          const { pathname } = new URL(href);
+          if (pathname === "/api/v1/subtitles")
+            return Response.json({
+              data: [
+                result("nl", 11, { moviehash_match: true, download_count: 5 }),
+                result("nl", 12, { download_count: 90_000 }),
+                result("en", 13, { machine_translated: true }),
+                result("en", 14, { foreign_parts_only: true }),
+              ],
+            });
+          if (pathname === "/api/v1/download")
+            return Response.json({
+              link: "https://dl.example/abc/movie.nl.srt",
+              file_name: "movie.nl.srt",
+            });
+          if (href === "https://dl.example/abc/movie.nl.srt")
+            return new Response(cue);
+          return new Response(null, { status: 404 });
+        }) as typeof fetch;
+
+        await queueSubtitleFetch(db, { id: itemId, kind: "movie" });
+        const registry = createJobRegistry();
+        registerSubtitleJobs(db, registry, api);
+        const job = await createJobQueue(db).claim(["subtitle-fetch"]);
+        if (job === undefined) throw new Error("No subtitle-fetch job queued.");
+        await registry.run(job);
+
+        const [search, download, file] = calls;
+        const query = new URL(search?.url ?? "").searchParams;
+        expect([...query.keys()]).toEqual([
+          "imdb_id",
+          "languages",
+          "moviehash",
+          "query",
+          "type",
+          "year",
+        ]);
+        expect(Object.fromEntries(query)).toMatchObject({
+          imdb_id: "78748",
+          languages: "nl,en",
+          moviehash: expect.stringMatching(/^[0-9a-f]{16}$/),
+          query: "movie",
+          type: "movie",
+          year: "2026",
+        });
+        expect(search?.headers.get("api-key")).toBe("os-key");
+        expect(search?.headers.get("user-agent")).toStartWith("Pendia");
+        expect(JSON.parse(download?.body ?? "")).toEqual({ file_id: 11 });
+        expect(file?.url).toBe("https://dl.example/abc/movie.nl.srt");
+        expect(calls).toHaveLength(3);
+        expect(await listSubtitles(db, itemId)).toEqual([
+          { language: "nl", format: "srt" },
+        ]);
+
+        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        try {
+          const client = createORPCClient<RouterClient<typeof pendiaRouter>>(
+            new RPCLink({
+              url: `http://127.0.0.1:${server.apiServer?.port}/rpc`,
+              headers: { authorization: `Bearer ${token}` },
+            }),
+          );
+          const planned = await client.playback.plan({
+            itemId,
+            versionId,
+            profile,
+          });
+          expect(planned.subtitles).toEqual([
+            {
+              language: "nl",
+              format: "srt",
+              url: `/api/subtitles/${itemId}/nl.srt`,
+            },
+          ]);
+        } finally {
+          await server.stop();
+        }
+      }),
+    ));
+});
+
+function result(
+  language: string,
+  fileId: number,
+  attributes: Record<string, unknown>,
+) {
+  return {
+    id: String(fileId),
+    type: "subtitle",
+    attributes: { language, files: [{ file_id: fileId }], ...attributes },
+  };
+}
 
 describe.skipIf(!databaseUrl)("stored subtitle tracks", () => {
   test("a stored track shows in the play plan and is served to a viewer", () =>

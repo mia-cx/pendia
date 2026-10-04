@@ -12,8 +12,9 @@ export type TreeOptions = {
   onError?: (error: unknown) => void;
 };
 
-const isEnoent = (error: unknown) =>
-  (error as NodeJS.ErrnoException).code === "ENOENT";
+// ENOTDIR: a directory on the path became a file.
+const isMissing = (error: unknown) =>
+  ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "");
 
 async function readEntry(path: string): Promise<Entry | "directory" | null> {
   try {
@@ -26,7 +27,7 @@ async function readEntry(path: string): Promise<Entry | "directory" | null> {
       modifiedNs: stat.mtimeNs,
     };
   } catch (error) {
-    if (isEnoent(error)) return null;
+    if (isMissing(error)) return null;
     throw error;
   }
 }
@@ -97,8 +98,12 @@ export async function watchTree(
         continue;
       }
       const previous = byInode.get(entry.inode);
+      const vanished = previous === undefined ? undefined : index.get(previous);
+      // A rename keeps size and mtime; a new file on a reused inode does not.
       if (
         previous !== undefined &&
+        vanished?.bytes === entry.bytes &&
+        vanished.modifiedNs === entry.modifiedNs &&
         (await readEntry(join(root, previous))) === null
       ) {
         forget(previous);

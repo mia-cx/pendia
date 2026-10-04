@@ -15,7 +15,7 @@
 
 ## TODOs
 
-- [ ] Shared `jsonb` column type in `db/schema/common.ts`, used by every `jsonb` column including `jobs.payload`. Validation: `db/jsonb.test.ts` writes every `jsonb` column through insert, update and upsert and checks `jsonb_typeof`; `drizzle-kit generate` reports no schema change; server `check`.
+- [x] Shared `jsonb` column type in `db/schema/common.ts`, used by every `jsonb` column including `jobs.payload`. Validation: `db/jsonb.test.ts` writes every `jsonb` column through insert, update and upsert and checks `jsonb_typeof`; `drizzle-kit generate` reports no schema change; server `check`.
 - [ ] Migration `0013` unwraps double-encoded strings in each affected column. Validation: `db/jsonb.test.ts` seeds every column through drizzle's own `jsonb` (the old path), plus plain-string settings written by raw SQL, runs the migration, and checks the result.
 - [ ] Remove the string workarounds in the server README and `probe-cache.test.ts`. Validation: `probe-cache.test.ts` on Postgres; the README upsert runs in the jsonb test.
 - [ ] Order the `session.state` reads in `api/transcode.test.ts` and `transcoder/sessions.test.ts` by `events.id`. Validation: both files on Postgres.
@@ -46,6 +46,12 @@ Real Postgres 18, Bun 1.4.2, drizzle-orm 0.45.2. Each row written through drizzl
 - Column defaults (`'[]'::jsonb`, `'{}'::jsonb`) are real arrays and objects. Only explicit writes are strings.
 - A live bug hides here: `watcher/http.ts` filters cached probes with `probe_cache.result ? 'keyframesSeconds'`. On a string row that never matches, so the watcher re-probes files it already has.
 - The pass-through `customType` is not enough on its own: Bun binds a JS number or boolean as `int4` or `bool`, and Postgres rejects that for a `jsonb` column. `settings.value` is typed `JsonValue`, so the shared type sends `JSON.stringify(value)` cast `::text::jsonb`. The `::text` matters: `$1::jsonb` would type the parameter `jsonb` and Bun would encode the string again. Measured: object, array, string, number, boolean and null all store as their own type on all three paths.
+
+### Fix
+
+- `jsonb` in `db/schema/common.ts` replaces drizzle's `jsonb` in every schema file, and the old `jobPayload` type. `drizzle-kit generate` reports no schema changes.
+- `db/jsonb.test.ts` writes one row per `jsonb` column, plus string and number settings, through insert, update and upsert, and checks `jsonb_typeof` and the drizzle read. A second test fails when a new `jsonb` column has no case. With the old `JSON.stringify` encoding swapped back in, the test fails on `settings.value` with `string`.
+- Validation: `jsonb.test.ts` 2 pass; `probe-cache`, `metadata/settings`, `auth` and `server-id` tests 108 pass; server `check` clean.
 
 ### Migration rule
 

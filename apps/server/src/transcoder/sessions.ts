@@ -1,6 +1,6 @@
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -24,12 +24,18 @@ import { loadPlaybackSource } from "../playback/planning.ts";
 import {
   buildMasterPlaylist,
   buildMediaPlaylist,
+  buildSubtitlePlaylist,
   type HlsName,
-  type PlaylistVariant,
   segmentCount,
-  variantCodecs,
 } from "../playback/playlists.ts";
-import { type RemuxRun, type RunHandle, startRemuxRun } from "./remux.ts";
+import {
+  type LiveRun,
+  type ReadySegment,
+  type RunHandle,
+  startLiveRun,
+} from "./live-run.ts";
+import { type SessionOutputs, sessionOutputs } from "./outputs.ts";
+import { type Conversion, convertToWebvtt } from "./subtitles.ts";
 
 /** The authorised session a request belongs to. */
 export type SessionScope = {
@@ -44,10 +50,11 @@ export type SessionManagerOptions = {
   scratchDir: string; // created if missing
   idleMs?: number; // default 60_000
   waitMs?: number; // default 20_000
-  readRate?: RemuxRun["readRate"]; // passed to every run; tests only
+  readRate?: LiveRun["readRate"]; // passed to every run; tests only
+  transcodeSlots?: number; // video re-encodes at once, default 2; later ones queue
 };
 
-/** Holds the live remux sessions of one transcoder: processes, scratch and ready events. */
+/** Holds the live sessions of one transcoder: processes, scratch and ready events. */
 export type SessionManager = ReturnType<typeof createSessionManager>;
 
 type Waiter = (ok: boolean) => void;
@@ -57,9 +64,11 @@ type LiveSession = {
   directory: string;
   inputPath: string;
   boundariesSeconds: readonly number[];
-  variant: PlaylistVariant;
+  outputs: SessionOutputs;
+  /** WebVTT conversions by subtitle Stream index, started on first request. */
+  conversions: Map<number, Conversion>;
   state: LiveState;
-  paths: Map<number, string>;
+  segments: Map<number, { path: string; fragmentOffset: number }>;
   init: Uint8Array | null;
   initWaiters: Set<Waiter>;
   segmentWaiters: Map<number, Set<Waiter>>;
@@ -69,8 +78,11 @@ type LiveSession = {
   publishes: Set<Promise<unknown>>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   stopped: boolean;
-  stripDolbyVision: boolean;
-  videoCodec: string;
+  /** Waiting for a transcode slot; init and segment requests wait with it. */
+  queued: boolean;
+  admissionWaiters: Set<Waiter>;
+  /** Registry state writes, in order, so a promotion never lands before its queueing. */
+  registryWrites: Promise<void>;
 };
 
 const log = (
@@ -103,8 +115,12 @@ export function createSessionManager(
   const idleMs = options.idleMs ?? 60_000;
   const waitMs = options.waitMs ?? 20_000;
   const readRate = options.readRate;
+  const transcodeSlots = options.transcodeSlots ?? 2;
   const sessions = new Map<string, Promise<LiveSession>>();
   const stopping = new Map<string, Promise<void>>();
+  // Session ids holding a transcode slot, and the sessions waiting for one in arrival order.
+  const admitted = new Set<string>();
+  const queue: LiveSession[] = [];
   let closed = false;
 
   const playlist = (body: string) =>
@@ -136,9 +152,10 @@ export function createSessionManager(
     );
 
   const serveSegmentFile = (session: LiveSession, index: number) => {
-    const path = session.paths.get(index);
-    if (path === undefined) return notReady();
-    return new Response(Bun.file(path), {
+    const segment = session.segments.get(index);
+    if (segment === undefined) return notReady();
+    // The file opens with its own init; only the fragment goes out.
+    return new Response(Bun.file(segment.path).slice(segment.fragmentOffset), {
       headers: { ...standardHeaders, "content-type": "video/iso.segment" },
     });
   };
@@ -178,9 +195,10 @@ export function createSessionManager(
     session: LiveSession,
     handle: RunHandle,
     directory: string,
-    indexes: number[],
+    ready: ReadySegment[],
   ) => {
     if (session.stopped) return;
+    const indexes = ready.map((segment) => segment.index);
     // A late event from a killed run still describes complete segments but
     // must not move the current run's frontier.
     session.state = segmentsReady(
@@ -188,16 +206,22 @@ export function createSessionManager(
       indexes,
       session.current?.handle === handle,
     );
-    for (const index of indexes) {
-      session.paths.set(index, join(directory, `${index}.m4s`));
+    for (const { index, fragmentOffset } of ready) {
+      session.segments.set(index, {
+        path: join(directory, `${index}.m4s`),
+        fragmentOffset,
+      });
     }
-    if (session.init === null) {
+    const [first] = ready;
+    if (session.init === null && first !== undefined) {
+      // Every run writes the same init; the session keeps the first one.
       void (async () => {
-        const bytes = await Bun.file(join(directory, "init.mp4"))
-          .arrayBuffer()
+        const bytes = await Bun.file(join(directory, `${first.index}.m4s`))
+          .slice(0, first.fragmentOffset)
+          .bytes()
           .catch(() => null);
         if (bytes === null || session.init !== null) return;
-        session.init = new Uint8Array(bytes);
+        session.init = bytes;
         for (const waiter of session.initWaiters) {
           waiter(true);
         }
@@ -240,17 +264,18 @@ export function createSessionManager(
     session.runs += 1;
     const directory = join(session.directory, `run-${session.runs}`);
     await mkdir(directory, { recursive: true });
-    const handle = startRemuxRun(
+    const handle = startLiveRun(
       {
         inputPath: session.inputPath,
         boundariesSeconds: session.boundariesSeconds,
         startIndex: index,
         directory,
-        videoCodec: session.videoCodec,
+        video: session.outputs.video,
+        audio: session.outputs.audio,
+        burnSubtitle: session.outputs.burnSubtitle,
         readRate,
-        stripDolbyVision: session.stripDolbyVision,
       },
-      (indexes) => onReady(session, handle, directory, indexes),
+      (ready) => onReady(session, handle, directory, ready),
     );
     if (session.stopped) {
       // A stop drained the transition while this start was in flight.
@@ -262,7 +287,7 @@ export function createSessionManager(
     handle.exited
       .then(() => onExit(session, handle))
       .catch((error: unknown) =>
-        log("error", "remux.exit_failed", {
+        log("error", "run.exit_failed", {
           sessionId: session.scope.sessionId,
           error: errorMessage(error),
         }),
@@ -308,12 +333,8 @@ export function createSessionManager(
 
   const loadSession = async (scope: SessionScope): Promise<LiveSession> => {
     const directory = join(scratchDir, scope.sessionId);
-    const { item, version, file, source } = await loadPlaybackSource(
-      db,
-      scope.userId,
-      scope.itemId,
-      scope.versionId,
-    );
+    const { item, version, file, source, subtitleDetails } =
+      await loadPlaybackSource(db, scope.userId, scope.itemId, scope.versionId);
     const [library] = await db
       .select({ rootPath: libraries.rootPath })
       .from(libraries)
@@ -327,6 +348,14 @@ export function createSessionManager(
     } catch {
       throw new AuthError("NOT_FOUND");
     }
+    const [row] = await db
+      .select({ decision: sessionRegistry.decision })
+      .from(sessionRegistry)
+      .where(eq(sessionRegistry.id, scope.sessionId))
+      .limit(1);
+    const outputs = sessionOutputs(row?.decision, source, subtitleDetails);
+    // A copy cuts on the Version's keyframes and a re-encode restarts on the
+    // frame at a boundary; both need the Version's frames on the timeline.
     if (version.segmentTimelineId === null || !version.timelineAligned) {
       throw new AuthError("CONFLICT");
     }
@@ -336,42 +365,15 @@ export function createSessionManager(
       .where(eq(segmentTimelines.id, version.segmentTimelineId))
       .limit(1);
     if (timeline === undefined) throw new AuthError("CONFLICT");
-    const [row] = await db
-      .select({ decision: sessionRegistry.decision })
-      .from(sessionRegistry)
-      .where(eq(sessionRegistry.id, scope.sessionId))
-      .limit(1);
-    const decision = row?.decision;
-    const stripDolbyVision =
-      decision != null &&
-      "video" in decision &&
-      decision.video.action === "copy" &&
-      decision.video.stripDolbyVision === true;
-    const audio = source.audio[0];
-    const variant: PlaylistVariant = {
-      uri: "media.m3u8",
-      bandwidth: Math.round(source.video.bitrate + (audio?.bitrate ?? 0)),
-      width: source.video.width,
-      height: source.video.height,
-      codecs: variantCodecs(
-        {
-          codec: source.video.codec,
-          profile: source.video.profile ?? null,
-          level: source.video.level ?? null,
-        },
-        audio === undefined
-          ? undefined
-          : { codec: audio.codec, profile: audio.profile ?? null },
-      ),
-    };
     return {
       scope,
       directory,
       inputPath,
       boundariesSeconds: timeline.boundariesSeconds,
-      variant,
+      outputs,
+      conversions: new Map(),
       state: initialState,
-      paths: new Map(),
+      segments: new Map(),
       init: null,
       initWaiters: new Set(),
       segmentWaiters: new Map(),
@@ -381,10 +383,116 @@ export function createSessionManager(
       publishes: new Set(),
       idleTimer: null,
       stopped: false,
-      stripDolbyVision,
-      videoCodec: source.video.codec,
+      queued: false,
+      admissionWaiters: new Set(),
+      registryWrites: Promise.resolve(),
     };
   };
+
+  // Moves the registry state the client sees, only from the expected state,
+  // so a stop or a start the client made in between wins. The row and its
+  // event commit together, so nobody reads the state without its event.
+  const recordState = (
+    session: LiveSession,
+    from: "starting" | "queued",
+    to: "starting" | "queued",
+  ) => {
+    const { sessionId } = session.scope;
+    session.registryWrites = session.registryWrites
+      .then(() =>
+        db.transaction(async (tx) => {
+          const moved = await tx
+            .update(sessionRegistry)
+            .set({ state: to })
+            .where(
+              and(
+                eq(sessionRegistry.id, sessionId),
+                eq(sessionRegistry.state, from),
+              ),
+            )
+            .returning({ id: sessionRegistry.id });
+          if (moved.length > 0) {
+            await publishEvent(tx, {
+              kind: "session.state",
+              sessionId,
+              state: to,
+            });
+          }
+        }),
+      )
+      .catch((error: unknown) =>
+        log("error", "session.state_failed", {
+          sessionId,
+          state: to,
+          error: errorMessage(error),
+        }),
+      );
+  };
+
+  /** Takes a transcode slot for a session that re-encodes video, or queues it. */
+  const requestSlot = (session: LiveSession) => {
+    if (session.outputs.video.action !== "transcode") return;
+    const { sessionId } = session.scope;
+    if (admitted.size < transcodeSlots) {
+      admitted.add(sessionId);
+      // A session that queued, idled out and revives into a free slot still
+      // reads queued in the registry; the client's start needs starting.
+      recordState(session, "queued", "starting");
+      return;
+    }
+    session.queued = true;
+    queue.push(session);
+    log("info", "session.queued", { sessionId, position: queue.length });
+    recordState(session, "starting", "queued");
+  };
+
+  /** Hands freed slots to queued sessions in arrival order. */
+  const admitNext = () => {
+    while (!closed && admitted.size < transcodeSlots) {
+      const next = queue.shift();
+      if (next === undefined) return;
+      if (next.stopped) continue;
+      admitted.add(next.scope.sessionId);
+      next.queued = false;
+      for (const waiter of next.admissionWaiters) {
+        waiter(true);
+      }
+      next.admissionWaiters.clear();
+      log("info", "session.admitted", { sessionId: next.scope.sessionId });
+      recordState(next, "queued", "starting");
+    }
+  };
+
+  const releaseSlot = (session: LiveSession) => {
+    const position = queue.indexOf(session);
+    if (position >= 0) queue.splice(position, 1);
+    if (admitted.delete(session.scope.sessionId)) admitNext();
+  };
+
+  const waitForAdmission = (session: LiveSession) =>
+    new Promise<boolean>((resolvePromise) => {
+      const finish = (ok: boolean) => {
+        clearTimeout(timer);
+        session.admissionWaiters.delete(finish);
+        resolvePromise(ok);
+      };
+      const timer = setTimeout(() => finish(false), waitMs);
+      session.admissionWaiters.add(finish);
+    });
+
+  const queuedResponse = () =>
+    Response.json(
+      {
+        error: {
+          code: "SESSION_QUEUED",
+          message: "The session is waiting for a free transcoder.",
+        },
+      },
+      {
+        status: 503,
+        headers: { ...standardHeaders, "retry-after": "1" },
+      },
+    );
 
   const liveSession = async (scope: SessionScope) => {
     // A request at the idle boundary waits for kill and rm to finish, then
@@ -393,7 +501,10 @@ export function createSessionManager(
     if (cleanup !== undefined) await cleanup.catch(() => {});
     const existing = sessions.get(scope.sessionId);
     if (existing !== undefined) return existing;
-    const pending = loadSession(scope);
+    const pending = loadSession(scope).then((session) => {
+      requestSlot(session);
+      return session;
+    });
     sessions.set(scope.sessionId, pending);
     pending.catch(() => {
       if (sessions.get(scope.sessionId) === pending) {
@@ -475,7 +586,10 @@ export function createSessionManager(
     return waitForInit(session);
   };
 
-  const stopSession = (sessionId: string, reason: "idle" | "shutdown") => {
+  const stopSession = (
+    sessionId: string,
+    reason: "idle" | "shutdown" | "ended",
+  ) => {
     const work = (async () => {
       // The sessions entry goes first so new requests never touch the dying
       // object; the stopping entry lets them wait for cleanup instead.
@@ -488,8 +602,20 @@ export function createSessionManager(
       session.stopped = true;
       await session.transition.catch(() => {});
       await session.current?.handle.kill();
+      // ffmpeg is gone, so the slot is free for the next queued session.
+      releaseSlot(session);
+      for (const conversion of session.conversions.values()) {
+        conversion.kill();
+      }
+      await Promise.allSettled(
+        [...session.conversions.values()].map((conversion) => conversion.done),
+      );
       rejectWaiters(session);
+      for (const waiter of session.admissionWaiters) {
+        waiter(false);
+      }
       await Promise.allSettled(session.publishes);
+      await session.registryWrites;
       await rm(session.directory, { recursive: true, force: true });
       log("info", "session.stopped", { sessionId, reason });
     })();
@@ -516,6 +642,51 @@ export function createSessionManager(
       },
     );
 
+  const subtitleNotFound = () =>
+    Response.json(
+      { error: { code: "NOT_FOUND", message: "Subtitle track not found." } },
+      { status: 404, headers: standardHeaders },
+    );
+
+  const offersSubtitle = (session: LiveSession, index: number) =>
+    session.outputs.subtitles.some((subtitle) => subtitle.index === index);
+
+  const serveSubtitle = async (session: LiveSession, index: number) => {
+    const path = join(session.directory, `subs-${index}.vtt`);
+    if (!session.conversions.has(index)) {
+      await mkdir(session.directory, { recursive: true });
+    }
+    // A stop that ran during the mkdir has already removed the directory.
+    if (session.stopped) return stoppingResponse();
+    // Checked again after the await, so concurrent first requests share one
+    // conversion instead of racing on the same file.
+    let conversion = session.conversions.get(index);
+    if (conversion === undefined) {
+      const started = convertToWebvtt(session.inputPath, index, path);
+      session.conversions.set(index, started);
+      // A failed conversion is not cached; the next request tries again.
+      started.done.catch(() => {
+        if (session.conversions.get(index) === started) {
+          session.conversions.delete(index);
+        }
+      });
+      conversion = started;
+    }
+    try {
+      await conversion.done;
+    } catch (error) {
+      log("error", "subtitle.failed", {
+        sessionId: session.scope.sessionId,
+        index,
+        error: errorMessage(error),
+      });
+      throw error;
+    }
+    return new Response(Bun.file(path), {
+      headers: { ...standardHeaders, "content-type": "text/vtt" },
+    });
+  };
+
   return {
     async serve(
       scope: SessionScope,
@@ -528,15 +699,40 @@ export function createSessionManager(
       if (closed || session.stopped) return stoppingResponse();
       touch(session);
       if (name.kind === "master" || name.kind === "media") {
-        await ensureStarted(session);
+        // Playlists come from the timeline, so a queued session answers them
+        // too; its run starts with the first init or segment request.
+        if (!session.queued) await ensureStarted(session);
         return playlist(
           name.kind === "master"
-            ? buildMasterPlaylist([session.variant], query)
+            ? buildMasterPlaylist(
+                [session.outputs.variant],
+                query,
+                session.outputs.subtitles,
+              )
             : buildMediaPlaylist(session.boundariesSeconds, query),
         );
       }
+      if (name.kind === "subtitles" || name.kind === "subtitle") {
+        if (!offersSubtitle(session, name.index)) return subtitleNotFound();
+        if (name.kind === "subtitle") return serveSubtitle(session, name.index);
+        return playlist(
+          buildSubtitlePlaylist(
+            name.index,
+            session.boundariesSeconds.at(-1) ?? 0,
+            query,
+          ),
+        );
+      }
+      if (session.queued && !(await waitForAdmission(session))) {
+        return session.stopped ? stoppingResponse() : queuedResponse();
+      }
       if (name.kind === "init") return serveInitRequest(session);
       return serveSegmentRequest(session, name.index);
+    },
+    /** Stops a session the client ended, freeing its slot at once instead of at the idle timeout. */
+    async end(sessionId: string) {
+      if (!sessions.has(sessionId)) return;
+      await stopSession(sessionId, "ended");
     },
     async inspect(sessionId: string) {
       const session = await sessions.get(sessionId)?.catch(() => null);
@@ -546,7 +742,13 @@ export function createSessionManager(
         running: session.current !== null,
         pid: session.current?.handle.pid ?? null,
         ready: [...session.state.ready].sort((a, b) => a - b),
-        stripDolbyVision: session.stripDolbyVision,
+        stripDolbyVision:
+          session.outputs.video.action === "copy" &&
+          session.outputs.video.stripDolbyVision,
+        video: session.outputs.video.action,
+        audio: session.outputs.audio?.action ?? "copy",
+        burnSubtitle: session.outputs.burnSubtitle ?? null,
+        queued: session.queued,
       };
     },
     async stop() {

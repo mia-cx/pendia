@@ -13,6 +13,8 @@ import {
   sessionRegistry,
   settings,
   streams,
+  type TranscoderBackend,
+  transcoderCapabilities,
   userSettings,
   versions,
 } from "../db/schema/index.ts";
@@ -24,9 +26,16 @@ import {
   decidePlayback,
   type PlaybackDecision,
   type PlaybackSource,
+  requiresBurnIn,
   type SubtitleStream,
 } from "./decisions.ts";
-import type { ClientProfile, Hdr, PlaybackCaps } from "./policy.ts";
+import {
+  type CapabilityTable,
+  type ClientProfile,
+  cpuCapabilities,
+  type Hdr,
+  type PlaybackCaps,
+} from "./policy.ts";
 
 /** The decoded input every playback planning call receives. */
 export type PlanInput = {
@@ -104,7 +113,7 @@ function toSubtitleStream(row: StreamRow): SubtitleStream {
   return { format, kind: bitmapSubtitles.has(format) ? "bitmap" : "text" };
 }
 
-/** Loads the Item, Version, File and normalized playback source for planning. */
+/** Loads the Item, Version, File, normalized playback source and subtitle details for planning. */
 export async function loadPlaybackSource(
   db: Database,
   userId: string,
@@ -173,7 +182,53 @@ export async function loadPlaybackSource(
       .filter((row) => row.kind === "subtitle")
       .map(toSubtitleStream),
   };
-  return { item, version, file, source };
+  // Aligned with source.subtitles: what names each rendition.
+  const subtitleDetails = streamRows
+    .filter((row) => row.kind === "subtitle")
+    .map(({ language, title, disposition }) => ({
+      language,
+      title,
+      disposition,
+    }));
+  return { item, version, file, source, subtitleDetails };
+}
+
+const toneMapFlavours: readonly string[] = hdrFlavours.filter(
+  (flavour) => flavour !== "sdr",
+);
+
+function isToneMapFlavour(value: string): value is Exclude<Hdr, "sdr"> {
+  return toneMapFlavours.includes(value);
+}
+
+/**
+ * Returns the CPU capabilities every registered transcoder shares, from their
+ * startup trials; the built-in CPU table when no node has reported one.
+ * Hardware backends are recorded but not offered: only CPU arguments exist.
+ */
+export async function readCapabilityTable(
+  db: Pick<Database, "select">,
+): Promise<CapabilityTable> {
+  const nodes = await db
+    .select({ backends: transcoderCapabilities.backends })
+    .from(transcoderCapabilities);
+  const tables = nodes.flatMap(({ backends }) =>
+    backends.filter((backend) => backend.name === "cpu"),
+  );
+  const [first, ...rest] = tables;
+  if (first === undefined) return cpuCapabilities;
+  const shared = (pick: (backend: TranscoderBackend) => string[]) =>
+    pick(first).filter((value) =>
+      rest.every((table) => pick(table).includes(value)),
+    );
+  return {
+    cpu: {
+      codecs: shared((backend) => backend.codecs),
+      toneMapping: shared((backend) => backend.toneMapping).filter(
+        isToneMapFlavour,
+      ),
+    },
+  };
 }
 
 async function globalBitrateCap(db: Database): Promise<number | null> {
@@ -228,7 +283,7 @@ function isLanAddress(address: string): boolean {
 }
 
 function playbackUrl(
-  method: "direct-play" | "remux",
+  method: "direct-play" | "remux" | "transcode",
   request: Request,
   caller: Caller,
   sessionId: string,
@@ -236,9 +291,9 @@ function playbackUrl(
   issued: { token: string; expiresAt: string },
 ) {
   const path =
-    method === "remux"
-      ? `/api/playback/${sessionId}/${itemId}/hls/master.m3u8`
-      : `/api/playback/${sessionId}/${itemId}/direct`;
+    method === "direct-play"
+      ? `/api/playback/${sessionId}/${itemId}/direct`
+      : `/api/playback/${sessionId}/${itemId}/hls/master.m3u8`;
   // Cookie callers can keep the token out of direct URLs; every HLS URL must
   // carry it because segments are requested without other credentials.
   if (
@@ -253,7 +308,7 @@ function playbackUrl(
   };
 }
 
-/** Runs the playback decision and, for direct play and remux, opens a session with a token URL. */
+/** Runs the playback decision and opens a session: a direct URL for direct play, else a master playlist URL with a token. */
 export async function planPlayback(
   db: Database,
   caller: Caller,
@@ -282,48 +337,51 @@ export async function planPlayback(
   // stored rung that fits.
   let decision: PlaybackDecision | null;
   try {
-    decision = decidePlayback(source, input.profile, caps);
+    decision = decidePlayback(
+      source,
+      input.profile,
+      caps,
+      await readCapabilityTable(db),
+    );
   } catch {
     decision = null;
   }
-  // Stored rungs that pass replace the live session; the api serves them from disk.
-  const storedVariantIds = await selectStoredVariants(
-    db,
-    {
-      itemId: item.id,
-      fileId: file.id,
-      segmentTimelineId: version.timelineAligned
-        ? version.segmentTimelineId
-        : null,
-      liveMethod: decision?.method ?? null,
-    },
-    input.profile,
-    caps,
-  );
+  // Stored rungs that pass replace the live session; the api serves them from
+  // disk. They carry no subtitle pixels, so a required burn-in stays live, or
+  // fails the plan when no live path exists.
+  const storedVariantIds = requiresBurnIn(source, input.profile)
+    ? []
+    : await selectStoredVariants(
+        db,
+        {
+          itemId: item.id,
+          fileId: file.id,
+          segmentTimelineId: version.timelineAligned
+            ? version.segmentTimelineId
+            : null,
+          liveMethod: decision?.method ?? null,
+        },
+        input.profile,
+        caps,
+      );
   const stored = storedVariantIds.length > 0;
   if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
-  const base = {
-    method: stored || decision === null ? ("remux" as const) : decision.method,
-    itemId: item.id,
-    versionId: version.id,
-    sessionId: null as string | null,
-    url: null as string | null,
-    expiresAt: null as string | null,
-    // Tracks a subtitle provider stored next to the Item, served on the side.
-    subtitles: (await listSubtitles(db, item.id)).map((track) => ({
-      ...track,
-      url: subtitleUrl(item.id, track),
-    })),
-  };
-  if (base.method === "transcode") return base;
-  // A Version without an aligned timeline cannot be segmented for remux.
+  const method =
+    stored || decision === null ? ("remux" as const) : decision.method;
+  // A live HLS session cuts on the Item's timeline. A copy cuts on the
+  // Version's own keyframes, and a re-encode restarts on the frame at a
+  // boundary, so both need the Version's frames on that timeline.
   if (
     !stored &&
-    base.method === "remux" &&
+    method !== "direct-play" &&
     (version.segmentTimelineId === null || !version.timelineAligned)
   )
     throw new AuthError("CONFLICT");
-  const method = base.method;
+  // Tracks a subtitle provider stored next to the Item, served on the side.
+  const subtitles = (await listSubtitles(db, item.id)).map((track) => ({
+    ...track,
+    url: subtitleUrl(item.id, track),
+  }));
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -344,7 +402,9 @@ export async function planPlayback(
       itemId: item.id,
     });
     return {
-      ...base,
+      method,
+      itemId: item.id,
+      versionId: version.id,
       sessionId: session.id,
       ...playbackUrl(
         method,
@@ -354,11 +414,12 @@ export async function planPlayback(
         item.id,
         issued,
       ),
+      subtitles,
     };
   });
 }
 
-/** Re-issues a playback token for the caller's live direct-play or remux session. */
+/** Re-issues a playback token for the caller's live session. */
 export async function refreshPlayback(
   db: Database,
   caller: Caller,
@@ -388,8 +449,7 @@ export async function refreshPlayback(
   if (
     !session ||
     session.userId !== caller.user.id ||
-    session.state === "stopped" ||
-    session.playMethod === "transcode"
+    session.state === "stopped"
   )
     throw new AuthError("UNAUTHENTICATED");
   const issued = await issuePlaybackToken(db, caller, scope);

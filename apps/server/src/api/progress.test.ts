@@ -308,40 +308,51 @@ describe.skipIf(!databaseUrl)("playback progress", () => {
       }
     }));
 
-  test("stopping a starting session cancels without writing progress", () =>
-    withDatabase(async (db, url) => {
-      await migrateDatabase(db);
-      const fx = await seed(db);
-      const version = await addVersion(db, fx);
-      const session = await addSession(db, fx.owner.id, fx.item.id, version.id);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
-      try {
-        const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = rpcClient(base, fx.keyToken);
-        const scope = { sessionId: session.id, itemId: fx.item.id };
-        const cancelled = await client.playback.stop({
-          ...scope,
-          positionSeconds: 10,
-        });
-        expect(cancelled.state).toBe("stopped");
-        expect(cancelled.progress).toBeNull();
-        expect(
-          await client.playback.getProgress({ itemId: fx.item.id }),
-        ).toBeNull();
-        expect((await capture(client.playback.start(scope))).status).toBe(409);
-        const repeated = await client.playback.stop({
-          ...scope,
-          positionSeconds: 20,
-        });
-        expect(repeated.state).toBe("stopped");
-        expect(repeated.progress).toBeNull();
-        expect(
-          await client.playback.getProgress({ itemId: fx.item.id }),
-        ).toBeNull();
-      } finally {
-        await server.stop();
-      }
-    }));
+  test.each(["starting", "queued"] as const)(
+    "stopping a %s session cancels without writing progress",
+    (state) =>
+      withDatabase(async (db, url) => {
+        await migrateDatabase(db);
+        const fx = await seed(db);
+        const version = await addVersion(db, fx);
+        const session = await addSession(
+          db,
+          fx.owner.id,
+          fx.item.id,
+          version.id,
+          state,
+        );
+        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        try {
+          const base = `http://127.0.0.1:${server.apiServer?.port}`;
+          const client = rpcClient(base, fx.keyToken);
+          const scope = { sessionId: session.id, itemId: fx.item.id };
+          const cancelled = await client.playback.stop({
+            ...scope,
+            positionSeconds: 10,
+          });
+          expect(cancelled.state).toBe("stopped");
+          expect(cancelled.progress).toBeNull();
+          expect(
+            await client.playback.getProgress({ itemId: fx.item.id }),
+          ).toBeNull();
+          expect((await capture(client.playback.start(scope))).status).toBe(
+            409,
+          );
+          const repeated = await client.playback.stop({
+            ...scope,
+            positionSeconds: 20,
+          });
+          expect(repeated.state).toBe("stopped");
+          expect(repeated.progress).toBeNull();
+          expect(
+            await client.playback.getProgress({ itemId: fx.item.id }),
+          ).toBeNull();
+        } finally {
+          await server.stop();
+        }
+      }),
+  );
 
   test("completed items resume at zero and a new start replays cleanly", () =>
     withDatabase(async (db, url) => {

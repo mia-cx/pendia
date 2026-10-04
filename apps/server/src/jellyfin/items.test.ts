@@ -212,5 +212,16 @@ describe.skipIf(!databaseUrl)("jellyfin browse", () => {
         "Good News About Hell",
       ]);
       expect(conforms(await admin.get("/Shows/NextUp"))).toEqual([]);
+
+      // Finishing the last episode leaves nothing next, even with E1 unwatched.
+      await db.insert(progress).values({
+        userId: s.admin.id,
+        itemId: s.episodeTwo.id,
+        format: "video",
+        completed: true,
+        playCount: 1,
+        playedAt: new Date(),
+      });
+      expect(conforms(await admin.get(nextUp))).toEqual([]);
     }));
 });

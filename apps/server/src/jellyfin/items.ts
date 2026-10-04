@@ -369,17 +369,17 @@ export const browseRoutes: Route[] = [
       const showId = series === undefined ? undefined : requiredGuid(series);
       const resumable = query.flag("enableResumable") ?? true;
       const ids = await nextUp(db, caller.user.id);
-      // A named Show offers its first unfinished episode, specials aside,
-      // before any episode is finished. The shelf's own pick comes first.
+      // A named Show with no finished episode offers its first one, specials
+      // aside. Once one is finished, only the shelf's pick after it counts.
       if (showId !== undefined) {
-        const unfinished = await listItemViews(db, caller.user.id, {
+        const episodes = await listItemViews(db, caller.user.id, {
           ancestorId: showId,
           kinds: ["episode"],
-          played: false,
           sort: [{ by: "number" }],
         });
-        const first = unfinished.items.find((view) => view.seasonNumber !== 0);
-        if (first !== undefined) ids.push(first.id);
+        const started = episodes.items.some((view) => view.marks.completed);
+        const first = episodes.items.find((view) => view.seasonNumber !== 0);
+        if (!started && first !== undefined) ids.push(first.id);
       }
       return shelfResult(context, ids, (views) => {
         const seen = new Set<string>();

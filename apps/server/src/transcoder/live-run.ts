@@ -1,5 +1,6 @@
 import { watch } from "node:fs";
 import type { PlaybackDecision } from "../playback/decisions.ts";
+import { audioMap } from "./remux.ts";
 
 /** What the engine decided for the video Stream: copy, or re-encode to a rung. */
 export type VideoDecision = PlaybackDecision["video"];
@@ -14,7 +15,9 @@ export type LiveRun = {
   startIndex: number; // segment index to start at
   directory: string; // the run directory, created by the caller
   video: VideoDecision;
-  /** The first audio Stream's decision; absent copies that Stream when the File has one. */
+  /** The audio Stream to play, counted among audio Streams; absent plays the first when the File has one. */
+  audioStream?: number;
+  /** That audio Stream's decision; absent copies it. */
   audio?: AudioDecision;
   /** The subtitle Stream, counted among subtitle Streams, burned into a re-encoded video. */
   burnSubtitle?: number;
@@ -176,15 +179,15 @@ function videoArguments(run: LiveRun) {
   return args;
 }
 
-function audioArguments(audio: AudioDecision | undefined) {
+function audioArguments(run: LiveRun) {
+  const audio = run.audio;
   if (audio === undefined || audio.action === "copy") {
-    return ["-map", "0:a:0?", "-c:a", "copy"];
+    return [...audioMap(run.audioStream), "-c:a", "copy"];
   }
   const bitrate =
     audio.codec === "eac3" ? audioBitrates.eac3 : audioBitrates.aac;
   return [
-    "-map",
-    "0:a:0",
+    ...audioMap(run.audioStream ?? 0),
     "-c:a",
     audio.codec,
     "-ac",
@@ -227,7 +230,7 @@ export function liveRunArguments(run: LiveRun) {
     "-i",
     run.inputPath,
     ...videoArguments(run),
-    ...audioArguments(run.audio),
+    ...audioArguments(run),
     "-sn",
     "-dn",
     "-copyts",

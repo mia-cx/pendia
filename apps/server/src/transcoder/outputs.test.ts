@@ -110,6 +110,57 @@ describe("sessionOutputs", () => {
     expect(twins).toEqual(["English (1)", "English (3)", "Deutsch"]);
   });
 
+  test("a selection maps its audio Stream and lists only its chosen subtitle as the default", () => {
+    const dubbed: PlaybackSource = {
+      ...source,
+      audio: [
+        { codec: "ac3", channels: 6, bitrate: 448_000 },
+        { codec: "aac", channels: 2, bitrate: 128_000 },
+      ],
+      selection: { audio: 1, subtitle: 3 },
+    };
+    const outputs = sessionOutputs(
+      decidePlayback(dubbed, browser, { isLan: true }),
+      dubbed,
+      details,
+    );
+    expect(outputs.audioStream).toBe(1);
+    expect(outputs.audio).toEqual({
+      action: "copy",
+      codec: "aac",
+      channels: 2,
+    });
+    expect(outputs.variant.codecs).toEqual(["avc1.640029", "mp4a.40.2"]);
+    expect(outputs.burnSubtitle).toBeUndefined();
+    expect(outputs.subtitles).toEqual([
+      {
+        index: 3,
+        name: "Subtitles 4",
+        language: null,
+        default: true,
+        forced: false,
+      },
+    ]);
+  });
+
+  test("subtitles off burn nothing and list nothing, with or without a live decision", () => {
+    const off: PlaybackSource = { ...source, selection: { subtitle: null } };
+    const live = sessionOutputs(
+      decidePlayback(off, browser, { isLan: true }),
+      off,
+      details,
+    );
+    const stored = sessionOutputs(
+      { method: "stored", selection: { audio: 0, subtitle: null } },
+      source,
+      details,
+    );
+    for (const outputs of [live, stored]) {
+      expect(outputs.burnSubtitle).toBeUndefined();
+      expect(outputs.subtitles).toEqual([]);
+    }
+  });
+
   test("an audio-only mismatch copies video and encodes EAC3 5.1 for a receiver", () => {
     const receiver: ClientProfile = {
       ...browser,

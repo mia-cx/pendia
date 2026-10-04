@@ -495,6 +495,17 @@ describe("liveRunArguments", () => {
       ]);
     });
 
+    test("maps the selected audio Stream for a copy and a re-encode", () => {
+      for (const audio of [
+        undefined,
+        { action: "transcode", codec: "aac", channels: 2 } as const,
+      ]) {
+        const args = liveRunArguments(base({ audio, audioStream: 1 }));
+        const map = args.lastIndexOf("-map");
+        expect(args.slice(map, map + 3)).toEqual(["-map", "0:a:1", "-c:a"]);
+      }
+    });
+
     test("encodes EAC3 5.1", () => {
       const args = liveRunArguments(
         base({ audio: { action: "transcode", codec: "eac3", channels: 6 } }),

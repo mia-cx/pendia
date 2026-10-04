@@ -298,7 +298,8 @@ describe("runStore on a nonuniform timeline", () => {
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "pendia-store-uneven-"));
-    // Keyframes at 0, 5, 8 and 12 s: segments of 5, 3, 4 and 4 s.
+    // Segments of 5, 3, 4 and 4 s; the keyframe at 14 s sits inside the
+    // last one, where a stray cut would split it.
     const encode = Bun.spawnSync([
       "ffmpeg",
       "-hide_banner",
@@ -319,7 +320,7 @@ describe("runStore on a nonuniform timeline", () => {
       "-preset",
       "ultrafast",
       "-force_key_frames",
-      "0,5,8,12",
+      "0,5,8,12,14",
       "-g",
       "1000",
       "-sc_threshold",
@@ -333,7 +334,7 @@ describe("runStore on a nonuniform timeline", () => {
     if (probe.durationSeconds === null || probe.keyframesSeconds === null)
       throw new Error("Fixture probe returned no duration or keyframes.");
     boundaries = [0, 5, 8, 12, probe.durationSeconds];
-    expect(probe.keyframesSeconds).toEqual([0, 5, 8, 12]);
+    expect(probe.keyframesSeconds).toEqual([0, 5, 8, 12, 14]);
   }, 60_000);
 
   afterAll(async () => {
@@ -377,7 +378,9 @@ describe("runStore on a nonuniform timeline", () => {
     const measured = await intervals(folder);
     measured.forEach(([first, last], index) => {
       expect(first).toBeCloseTo(boundaries[index] ?? -1, 3);
+      // The last frame starts within one 40 ms frame of the next boundary.
       expect(last).toBeLessThan(boundaries[index + 1] ?? 0);
+      expect(last).toBeGreaterThan((boundaries[index + 1] ?? 0) - 0.1);
     });
   };
 

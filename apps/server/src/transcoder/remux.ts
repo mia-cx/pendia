@@ -109,9 +109,13 @@ export function segmentArguments(
     boundariesSeconds.slice(startIndex),
     boundariesSeconds[startIndex],
   );
-  if (interior !== null) {
-    args.push("-segment_times", interior);
-  }
+  // With no later cut, ffmpeg would fall back to its 2 s segment_time; a
+  // segment as long as a day keeps the rest of the timeline in one file.
+  args.push(
+    ...(interior === null
+      ? ["-segment_time", String(oneSegmentSeconds)]
+      : ["-segment_times", interior]),
+  );
   args.push(
     "-segment_start_number",
     String(startIndex),
@@ -123,6 +127,8 @@ export function segmentArguments(
   );
   return args;
 }
+
+const oneSegmentSeconds = 86_400;
 
 /** The interior timeline boundaries as an ffmpeg time list measured from an origin; null for a one-segment timeline. */
 export function cutTimes(

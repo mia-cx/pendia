@@ -183,7 +183,7 @@ describe("remux", () => {
       expect(args).not.toContain("-tag:v");
     });
 
-    test("a one segment timeline omits cut times", () => {
+    test("a one segment timeline disables cuts instead of omitting them", () => {
       const args = remuxArguments({
         inputPath,
         boundariesSeconds: [0, 5],
@@ -192,6 +192,8 @@ describe("remux", () => {
         videoCodec: "h264",
       });
       expect(args).not.toContain("-segment_times");
+      // Omitting both would leave ffmpeg's default 2 s segment_time.
+      expect(args[args.indexOf("-segment_time") + 1]).toBe("86400");
     });
 
     test.each([5, -1, 1.5])("rejects start index %p", (startIndex) => {

@@ -115,12 +115,15 @@ function videoArguments(run: LiveRun) {
   const size = `w=${video.width}:h=${video.height}`;
   const picture = [`scale=${size}`];
   if (video.toneMap !== null) picture.push(toneMapFilter(video.toneMap));
+  // overlay blends in 8-bit unless told otherwise, which would flatten a
+  // 10-bit picture everywhere, not just under the subtitle.
+  const blend = tenBit ? ":format=yuv420p10" : "";
   const graph =
     run.burnSubtitle === undefined
       ? `[0:V:0]${picture.join(",")},format=${pixelFormat}[v]`
       : `[0:V:0]${picture.join(",")}[base];` +
         `[0:s:${run.burnSubtitle}]scale=${size}[subtitle];` +
-        `[base][subtitle]overlay=eof_action=pass:repeatlast=0,format=${pixelFormat}[v]`;
+        `[base][subtitle]overlay=eof_action=pass:repeatlast=0${blend},format=${pixelFormat}[v]`;
   const args = ["-filter_complex", graph, "-map", "[v]", ...encoder];
   if (profile !== undefined) args.push("-profile:v", profile);
   if (video.codec === "h264" && video.level !== null) {

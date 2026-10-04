@@ -361,6 +361,23 @@ describe("liveRunArguments", () => {
       expect(args).toContain("-sn");
     });
 
+    test("blends a burned subtitle in 10-bit when the output keeps HDR", () => {
+      const args = liveRunArguments(
+        base({
+          video: transcode({
+            codec: "hevc",
+            profile: "main10",
+            hdr: "hdr10",
+            burnSubtitles: true,
+          }),
+          burnSubtitle: 0,
+        }),
+      );
+      expect(after(args, "-filter_complex")).toContain(
+        "overlay=eof_action=pass:repeatlast=0:format=yuv420p10,format=yuv420p10le[v]",
+      );
+    });
+
     test("keeps HDR in 10-bit HEVC tagged hvc1", () => {
       const args = liveRunArguments(
         base({

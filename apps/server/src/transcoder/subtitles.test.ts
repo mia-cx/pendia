@@ -9,7 +9,7 @@ import {
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { ladder } from "../playback/policy.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
-import { fragmentOffset, startLiveRun } from "./live-run.ts";
+import { fragmentOffset, liveRunArguments, startLiveRun } from "./live-run.ts";
 import { convertToWebvtt, webvttArguments } from "./subtitles.ts";
 
 describe("webvttArguments", () => {
@@ -171,4 +171,88 @@ describe("subtitle paths", () => {
     const cleared = await luma(1.2);
     expect(cleared(centre.x, centre.y)).toBeLessThan(40);
   }, 60_000);
+
+  const hasLibx265 = Bun.spawnSync(["ffmpeg", "-hide_banner", "-encoders"])
+    .stdout.toString()
+    .includes("libx265");
+
+  test.skipIf(!hasLibx265)(
+    "a burned PGS Stream keeps an HDR picture 10-bit outside its box",
+    async () => {
+      const hdrPath = join(dir, "hdr-pgs.mkv");
+      await createVideoFixture(hdrPath, {
+        width,
+        height,
+        durationSeconds: 2,
+        frameRate: 25,
+        pattern: "testsrc2",
+        videoCodec: "hevc",
+        hdr: "hdr10",
+        subtitles: ["pgs"],
+      });
+      // The run's own filter graph, read raw: an encoder's noise would mask
+      // the levels an 8-bit blend throws away.
+      const args = liveRunArguments({
+        inputPath: hdrPath,
+        boundariesSeconds: [0, 2],
+        startIndex: 0,
+        directory: dir,
+        video: {
+          action: "transcode",
+          codec: "hevc",
+          profile: "main10",
+          level: null,
+          maxFrameRate: null,
+          width,
+          height,
+          bitrate: ladder[4].bitrate,
+          rung: ladder[4],
+          hdr: "hdr10",
+          toneMap: null,
+          backend: "cpu",
+          burnSubtitles: true,
+        },
+        burnSubtitle: 0,
+      });
+      const graph = args[args.indexOf("-filter_complex") + 1];
+      if (graph === undefined) throw new Error("Expected a filter graph.");
+      // Frame 10 (0.4 s, the box showing) as raw 10-bit 4:2:0.
+      const proc = Bun.spawn(
+        [
+          "ffmpeg",
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-i",
+          hdrPath,
+          "-filter_complex",
+          graph,
+          "-map",
+          "[v]",
+          "-frames:v",
+          "11",
+          "-f",
+          "rawvideo",
+          "-",
+        ],
+        { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      );
+      const [bytes, code] = await Promise.all([
+        new Response(proc.stdout).bytes(),
+        proc.exited,
+      ]);
+      expect(code).toBe(0);
+      const frameBytes = width * height * 3; // 1.5 samples per pixel, 2 bytes each
+      expect(bytes.byteLength).toBe(frameBytes * 11);
+      // The luma rows above the subtitle box.
+      const samples = new Uint16Array(
+        bytes.buffer,
+        bytes.byteOffset + frameBytes * 10,
+        width * pgsFixtureBox(width, height).y,
+      );
+      // An 8-bit blend keeps about 200 levels here; the 10-bit source has 800.
+      expect(new Set(samples).size).toBeGreaterThan(400);
+    },
+    60_000,
+  );
 });

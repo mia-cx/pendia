@@ -22,6 +22,6 @@ const { name, invite }: { name: string | null; invite?: string } = $props();
   }
 
   .oidc:hover {
-    border-color: var(--ink);
+    border-color: var(--signal);
   }
 </style>

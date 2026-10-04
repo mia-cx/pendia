@@ -7,7 +7,6 @@ import {
   foreignKey,
   index,
   integer,
-  jsonb,
   type PgTableExtraConfigValue,
   pgEnum,
   pgTable,
@@ -16,7 +15,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import { id, instant, type JsonObject, owned } from "./common.ts";
+import { id, instant, type JsonObject, jsonb, owned } from "./common.ts";
 
 export const medium = pgEnum("medium", ["movies", "shows"]);
 export const itemKind = pgEnum("item_kind", [

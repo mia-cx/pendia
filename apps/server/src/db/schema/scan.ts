@@ -2,14 +2,13 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   check,
-  jsonb,
   pgTable,
   text,
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
 import type { ProbeResult } from "../../mediums/video-common/probe.ts";
-import { id, owned } from "./common.ts";
+import { id, jsonb, owned } from "./common.ts";
 import { libraries } from "./core.ts";
 
 /** Cached ffprobe results keyed by library and library-relative path. */

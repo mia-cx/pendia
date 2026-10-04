@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import * as HLS from "hls-parser";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
@@ -397,7 +397,10 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
         );
         await until(third.sessionId, "starting");
         const kinds = (
-          await db.select({ payload: events.payload }).from(events)
+          await db
+            .select({ payload: events.payload })
+            .from(events)
+            .orderBy(asc(events.id))
         )
           .map(({ payload }) => payload)
           .filter(

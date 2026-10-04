@@ -2,11 +2,9 @@ import { sql } from "drizzle-orm";
 import {
   bigserial,
   check,
-  customType,
   foreignKey,
   index,
   integer,
-  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -19,6 +17,7 @@ import {
   instant,
   type JsonObject,
   type JsonValue,
+  jsonb,
   owned,
 } from "./common.ts";
 import { items, versions } from "./core.ts";
@@ -78,11 +77,6 @@ export type JobPayload =
   | { type: "store"; libraryId: string; folder: string }
   | { type: "plugin"; pluginName: string; jobId: string; data: JsonObject };
 
-// Bun encodes JSON objects itself.
-const jobPayload = customType<{ data: JobPayload }>({
-  dataType: () => "jsonb",
-});
-
 export const jobType = pgEnum("job_type", [
   "scan",
   "probe",
@@ -103,7 +97,7 @@ export const jobs = pgTable(
   {
     id: id(),
     type: jobType("type").notNull(),
-    payload: jobPayload("payload").notNull(),
+    payload: jsonb("payload").$type<JobPayload>().notNull(),
     priority: integer("priority").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull(),

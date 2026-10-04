@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import * as HLS from "hls-parser";
 import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
@@ -302,7 +302,12 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   };
 
   const stateEvents = async (db: Database, sessionId: string) =>
-    (await db.select({ payload: events.payload }).from(events))
+    (
+      await db
+        .select({ payload: events.payload })
+        .from(events)
+        .orderBy(asc(events.id))
+    )
       .map(({ payload }) => payload)
       .filter(
         (payload) =>

@@ -1,4 +1,6 @@
-import { stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { TranscoderBackend } from "../db/schema/index.ts";
 import { liveEncoders, rateArguments, toneMapFilter } from "./live-run.ts";
 
@@ -60,8 +62,8 @@ export const hardwareBackends = [
 const forcedSecond = 1;
 const trialBitrate = 1_000_000;
 
-/** Builds the 2 s CPU encode of one codec with the live settings and one forced keyframe, written as Matroska to stdout. */
-export function cpuTrialArguments(codec: string) {
+/** Builds the 2 s CPU encode of one codec with the live settings and one forced keyframe, written as Matroska to a file. */
+export function cpuTrialArguments(codec: string, outputPath: string) {
   const encoder = liveEncoders[codec];
   if (encoder === undefined) {
     throw new RangeError(`No live encoder for ${codec}.`);
@@ -75,7 +77,8 @@ export function cpuTrialArguments(codec: string) {
     String(forcedSecond),
     "-f",
     "matroska",
-    "-",
+    "-y",
+    outputPath,
   ];
 }
 
@@ -107,26 +110,37 @@ export function hardwareTrialArguments(
   ];
 }
 
-const succeeds = async (args: string[]) => {
-  const proc = Bun.spawn(["ffmpeg", ...args], {
+// A trial process that hangs fails its trial instead of holding startup.
+const trialTimeoutMs = 30_000;
+
+/** Runs one trial command; its output when it exits cleanly in time, else null. */
+const run = async (command: string[]) => {
+  const proc = Bun.spawn(command, {
     stdin: "ignore",
-    stdout: "ignore",
+    stdout: "pipe",
     stderr: "ignore",
+    timeout: trialTimeoutMs,
+    killSignal: "SIGKILL",
   });
-  return (await proc.exited) === 0;
+  const [output, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    proc.exited,
+  ]);
+  return code === 0 ? output : null;
 };
+
+const succeeds = async (args: string[]) =>
+  (await run(["ffmpeg", ...args])) !== null;
 
 // A live run cuts segments on forced keyframes, so an encoder that ignores
 // them with the live settings cannot serve one. SVT-AV1 1.7 under ffmpeg 6.1
 // is one: it honours forced keyframes only in CRF mode.
-const forcesKeyframe = async (args: string[]) => {
-  const encode = Bun.spawn(["ffmpeg", ...args], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  const probe = Bun.spawn(
-    [
+const forcesKeyframe = async (codec: string) => {
+  const directory = await mkdtemp(join(tmpdir(), "pendia-trial-"));
+  const path = join(directory, `${codec}.mkv`);
+  try {
+    if (!(await succeeds(cpuTrialArguments(codec, path)))) return false;
+    const packets = await run([
       "ffprobe",
       "-v",
       "error",
@@ -137,23 +151,18 @@ const forcesKeyframe = async (args: string[]) => {
       "-of",
       "csv=p=0",
       "-i",
-      "pipe:0",
-    ],
-    { stdin: encode.stdout, stdout: "pipe", stderr: "ignore" },
-  );
-  const [packets, encoded, probed] = await Promise.all([
-    new Response(probe.stdout).text(),
-    encode.exited,
-    probe.exited,
-  ]);
-  if (encoded !== 0 || probed !== 0) return false;
-  return packets.split("\n").some((line) => {
-    const [pts, flags] = line.split(",");
-    return (
-      flags?.startsWith("K") === true &&
-      Math.abs(Number(pts) - forcedSecond) < 0.05
-    );
-  });
+      path,
+    ]);
+    return (packets ?? "").split("\n").some((line) => {
+      const [pts, flags] = line.split(",");
+      return (
+        flags?.startsWith("K") === true &&
+        Math.abs(Number(pts) - forcedSecond) < 0.05
+      );
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 };
 
 const exists = (path: string) =>
@@ -170,22 +179,16 @@ const exists = (path: string) =>
  */
 export async function runStartupTrial(): Promise<TranscoderBackend[]> {
   const codecs = Object.keys(liveEncoders);
-  const passing = async <T>(
-    trials: [T, string[]][],
-    check: (args: string[]) => Promise<boolean> = succeeds,
-  ) => {
-    const results = await Promise.all(trials.map(([, args]) => check(args)));
+  const passing = async <T>(trials: [T, () => Promise<boolean>][]) => {
+    const results = await Promise.all(trials.map(([, trial]) => trial()));
     return trials.filter((_, index) => results[index]).map(([value]) => value);
   };
   const [cpuCodecs, toneMapping, hardware] = await Promise.all([
-    passing(
-      codecs.map((codec) => [codec, cpuTrialArguments(codec)]),
-      forcesKeyframe,
-    ),
+    passing(codecs.map((codec) => [codec, () => forcesKeyframe(codec)])),
     passing(
       toneMapGroups.map((group) => [
         group.flavours,
-        toneMapTrialArguments(group.filter),
+        () => succeeds(toneMapTrialArguments(group.filter)),
       ]),
     ),
     Promise.all(
@@ -194,7 +197,7 @@ export async function runStartupTrial(): Promise<TranscoderBackend[]> {
         const passed = await passing(
           Object.entries(backend.encoders).map(([codec, encoder]) => [
             codec,
-            hardwareTrialArguments(backend, encoder),
+            () => succeeds(hardwareTrialArguments(backend, encoder)),
           ]),
         );
         // Hardware tone mapping is not trialled: only the CPU path tone maps today.

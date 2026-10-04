@@ -12,7 +12,7 @@ const head = ["-hide_banner", "-loglevel", "error", "-nostdin"];
 
 describe("trial arguments", () => {
   test("a CPU trial encodes 2 s with the live settings and forces a keyframe at 1 s", () => {
-    expect(cpuTrialArguments("h264")).toEqual([
+    expect(cpuTrialArguments("h264", "/tmp/trial/h264.mkv")).toEqual([
       ...head,
       ...picture,
       "-c:v",
@@ -33,13 +33,16 @@ describe("trial arguments", () => {
       "1",
       "-f",
       "matroska",
-      "-",
+      "-y",
+      "/tmp/trial/h264.mkv",
     ]);
     // The live AV1 rate control: a target bitrate, no ceiling.
-    const av1 = cpuTrialArguments("av1");
+    const av1 = cpuTrialArguments("av1", "/tmp/trial/av1.mkv");
     expect(av1).toContain("libsvtav1");
     expect(av1).not.toContain("-maxrate");
-    expect(() => cpuTrialArguments("vp9")).toThrow(RangeError);
+    expect(() => cpuTrialArguments("vp9", "/tmp/trial/vp9.mkv")).toThrow(
+      RangeError,
+    );
   });
 
   test("a tone map trial runs the live filter on a 10-bit picture", () => {

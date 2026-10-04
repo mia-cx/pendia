@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import { createDatabase, type Database } from "../db/client.ts";
@@ -16,6 +16,7 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   artwork,
   files,
+  itemAncestors,
   items,
   libraries,
   progress,
@@ -108,6 +109,52 @@ async function runScanJob(
     throw error;
   }
   await queue.complete(claimed);
+}
+
+const showAEpisodes = [
+  "Show A/Season 01/Show A S01E01.mkv",
+  "Show A/Season 01/Show A S01E02.mkv",
+] as const;
+const showBEpisodes = [
+  "Show B/Season 01/Show B S01E01.mkv",
+  "Show B/Season 01/Show B S01E02.mkv",
+  "Show B/Season 02/Show B S02E01.mkv",
+] as const;
+
+/** Scans Show A with one Season and Show B with two into a new shows library. */
+async function scanTwoShows(db: Database, root: string) {
+  for (const path of [...showAEpisodes, ...showBEpisodes]) {
+    await mkdir(join(root, dirname(path)), { recursive: true });
+    await createVideoFixture(join(root, path));
+  }
+  const library = await insertLibrary(db, root, "shows");
+  await scanShowDirectory(db, library.id, "Show A");
+  await scanShowDirectory(db, library.id, "Show B");
+  return library;
+}
+
+async function itemAt(db: Database, path: string) {
+  const [file] = await db.select().from(files).where(eq(files.path, path));
+  if (!file) throw new Error(`No File at ${path}.`);
+  return file.itemId;
+}
+
+async function showAt(db: Database, folder: string) {
+  const [show] = await db
+    .select()
+    .from(items)
+    .where(and(eq(items.canonicalFolder, folder), eq(items.kind, "show")));
+  if (!show) throw new Error(`No Show at ${folder}.`);
+  return show.id;
+}
+
+async function showOf(db: Database, itemId: string) {
+  const [show] = await db
+    .select({ id: items.id })
+    .from(itemAncestors)
+    .innerJoin(items, eq(itemAncestors.ancestorId, items.id))
+    .where(and(eq(itemAncestors.descendantId, itemId), eq(items.kind, "show")));
+  return show?.id;
 }
 
 async function expectAuthError(
@@ -843,6 +890,92 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           ["tmdb", showId],
           ["tvdb", showId],
         ]);
+      });
+    }));
+
+  test("a move onto another Show's Episode replaces only that Episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const library = await scanTwoShows(db, root);
+        const replaced = await itemAt(db, showBEpisodes[0]);
+        const moved = await itemAt(db, showAEpisodes[0]);
+        const keptIds = (await db.select({ id: items.id }).from(items))
+          .map((item) => item.id)
+          .filter((id) => id !== replaced && id !== moved);
+
+        await rename(
+          join(root, showAEpisodes[0]),
+          join(root, showBEpisodes[0]),
+        );
+        await runScanJob(db, library.id, "Show B", [
+          {
+            kind: "move",
+            path: showBEpisodes[0],
+            previousPath: showAEpisodes[0],
+            providerIds: {},
+          },
+        ]);
+
+        const after = await db.select({ id: items.id }).from(items);
+        expect(after.map((item) => item.id)).toEqual(
+          expect.arrayContaining(keptIds),
+        );
+        const replacement = await itemAt(db, showBEpisodes[0]);
+        expect(replacement).not.toBe(replaced);
+        expect(await showOf(db, replacement)).toBe(await showAt(db, "Show B"));
+      });
+    }));
+
+  test("a cross-show move gives the Episode to the destination Show", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const library = await scanTwoShows(db, root);
+        const movedFrom = showAEpisodes[0];
+        const movedTo = "Show B/Season 01/Show B S01E03.mkv";
+        const episodeId = await itemAt(db, movedFrom);
+        const [file] = await db
+          .select()
+          .from(files)
+          .where(eq(files.path, movedFrom));
+        if (!file) throw new Error("Initial scan produced no File.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: episodeId,
+          versionId: file.versionId,
+          format: "video",
+          positionSeconds: 42,
+        });
+
+        await rename(join(root, movedFrom), join(root, movedTo));
+        // The webhook queues both folders; the source folder may run first.
+        for (const folder of ["Show A", "Show B"])
+          await scanShowDirectory(db, library.id, folder, {
+            changes: [
+              {
+                kind: "move",
+                path: movedTo,
+                previousPath: movedFrom,
+                providerIds: {},
+              },
+            ],
+          });
+
+        expect(await showOf(db, await itemAt(db, movedTo))).toBe(
+          await showAt(db, "Show B"),
+        );
+        const [source] = await db
+          .select()
+          .from(items)
+          .where(eq(items.id, episodeId));
+        expect(source).toBeUndefined();
+        expect(await db.select().from(progress)).toEqual([]);
+        expect(await itemAt(db, showAEpisodes[1])).toBeString();
       });
     }));
 

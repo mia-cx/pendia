@@ -19,9 +19,10 @@ Two change-detection bugs, both in `apps/server/src/libraries/changes.ts` and `w
 
 ## TODOs
 
-- [ ] 1. Replace only the colliding Item, and apply a cross-root move as a removal plus a destination scan.
+- [x] 1. Replace only the colliding Item, and apply a cross-root move as a removal plus a destination scan.
   - `applyScanChanges`: a collision deletes the destination's Version when both Files share one Item, else the destination Item's subtree. After the collision, a move whose destination path lies in another root Item's folder removes the source File like a file delete. Otherwise the move re-paths the File as before.
   - Validation: new tests in `changes.test.ts` for the collision onto another Show's Episode and for a cross-show move without a collision, including the source-folder job running first. Existing move tests pass.
+  - Done: both new tests fail on the old `changes.ts` and pass now. `bun test src/libraries/ src/watcher/` with `DATABASE_URL`: 157 pass, 0 fail.
 - [ ] 2. Queue both folders for a webhook move, and reject library-root scan folders.
   - `submitChanges` computes one scan folder per path: the Show folder for Sonarr, the Movie folder for Radarr, `"."` at the library root. A `"."` folder for the change or a move's source throws `Webhook path must name a folder inside the library root.` A move between folders also queues the move on the source folder, without provider ids.
   - Validation: `webhooks.test.ts` covers a Radarr file directly in the root, a delete of the root itself, and a cross-show Sonarr move that queues both folders.
@@ -34,6 +35,7 @@ Two change-detection bugs, both in `apps/server/src/libraries/changes.ts` and `w
 ## Notes
 
 - A root Item is a Show or Movie: an Item without a parent. The destination root is the root Item whose canonical folder holds the destination path. With no such Item (a Show folder rename into a new folder), the move stays within its root.
+- One exception to "only the colliding Item": a duplicate root goes whole. A scan of a renamed Show folder that runs before the move arrives creates a second Show from the moved Files. The existing test `a show folder rename keeps hierarchy identity and canonical folders` covers it, and replacing only its Episode would leave that Show standing, so the rename would count as cross-show and drop Progress. A destination root counts as a duplicate when it differs from the source root and holds no File outside this batch's move destinations. A real second Show always holds Files of its own, so it keeps every other Season and Episode. If the rename arrives in several batches, the first batch does not see the duplicate, and the move counts as cross-show.
 - The collision runs before the root check. A Movie moved onto another Movie's file replaces that Movie and then re-paths into its folder, so the moved Movie keeps its Progress.
 - The source-folder job carries the move without provider ids: Sonarr's ids name the destination Show, and the source Show's scan would match them and conflict. Either job order gives the same result, because the second application finds no File at the old path.
 - The watcher keeps its single destination job. `applyScanChanges` now handles a cross-show move inside that one job. A watcher file directly in a movies root still queues a `"."` job; #74 covers webhooks only.

@@ -1,6 +1,16 @@
 import { lstat } from "node:fs/promises";
 import { join, posix } from "node:path";
-import { and, eq, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -26,6 +36,53 @@ const rootItemId = async (db: Connection, itemId: string): Promise<string> => {
     .where(and(eq(itemAncestors.descendantId, itemId), eq(items.kind, "show")))
     .limit(1);
   return root?.id ?? itemId;
+};
+
+/** Finds the Show or Movie whose folder holds a library-relative path. */
+const rootItemAt = async (
+  db: Connection,
+  libraryId: string,
+  path: string,
+): Promise<string | undefined> => {
+  const folders: string[] = [];
+  for (
+    let folder = posix.dirname(path);
+    folder !== ".";
+    folder = posix.dirname(folder)
+  )
+    folders.push(folder);
+  if (folders.length === 0) return undefined;
+  const [root] = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(
+      and(
+        eq(items.libraryId, libraryId),
+        isNull(items.parentId),
+        inArray(items.canonicalFolder, folders),
+      ),
+    )
+    .orderBy(desc(sql`length(${items.canonicalFolder})`))
+    .limit(1);
+  return root?.id;
+};
+
+/** Removes one File, or its Version when no other File remains, and returns the Item that may now be empty. */
+const removeFile = async (
+  db: Connection,
+  file: typeof files.$inferSelect,
+): Promise<string | undefined> => {
+  const [sibling] = await db
+    .select({ id: files.id })
+    .from(files)
+    .where(and(eq(files.versionId, file.versionId), ne(files.id, file.id)))
+    .limit(1);
+  if (sibling !== undefined) {
+    await db.delete(files).where(eq(files.id, file.id));
+    return undefined;
+  }
+  await db.delete(versions).where(eq(versions.id, file.versionId));
+  return file.itemId;
 };
 
 const requireRelativePath = (path: string, allowDot: boolean): string => {
@@ -187,6 +244,9 @@ export async function applyScanChanges(
         ? requireRelativePath(change.previousPath, false)
         : undefined,
   }));
+  const movedPaths = normalized
+    .filter(({ change }) => change.kind === "move")
+    .map(({ path }) => path);
   const emptiedItemIds: string[] = [];
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
@@ -204,6 +264,9 @@ export async function applyScanChanges(
         .where(and(eq(files.libraryId, libraryId), eq(files.path, path)));
       if (file && destination) {
         if (file.id === destination.id) continue;
+        // A collision replaces only the colliding Item. The exception is a
+        // duplicate root an early scan made of a moved folder: it holds only
+        // Files this batch moves in, and it goes whole.
         if (destination.itemId === file.itemId) {
           await db
             .delete(versions)
@@ -211,16 +274,43 @@ export async function applyScanChanges(
         } else {
           const sourceRootId = await rootItemId(db, file.itemId);
           const destinationRootId = await rootItemId(db, destination.itemId);
+          const duplicate =
+            sourceRootId !== destinationRootId &&
+            (
+              await db
+                .select({ id: files.id })
+                .from(files)
+                .innerJoin(
+                  itemAncestors,
+                  eq(itemAncestors.descendantId, files.itemId),
+                )
+                .where(
+                  and(
+                    eq(itemAncestors.ancestorId, destinationRootId),
+                    notInArray(files.path, movedPaths),
+                  ),
+                )
+                .limit(1)
+            ).length === 0;
           await deleteItemSubtree(
             db,
-            sourceRootId === destinationRootId
-              ? destination.itemId
-              : destinationRootId,
+            duplicate ? destinationRootId : destination.itemId,
             deletedArtwork,
           );
         }
       }
       if (file) {
+        // A move into another Show or Movie leaves its source, and the
+        // destination folder's scan adds it there. Progress stays behind.
+        const destinationRootId = await rootItemAt(db, libraryId, path);
+        if (
+          destinationRootId !== undefined &&
+          destinationRootId !== (await rootItemId(db, file.itemId))
+        ) {
+          const emptied = await removeFile(db, file);
+          if (emptied !== undefined) emptiedItemIds.push(emptied);
+          continue;
+        }
         await db.update(files).set({ path }).where(eq(files.id, file.id));
         const [item] = await db
           .select()
@@ -247,17 +337,8 @@ export async function applyScanChanges(
         .from(files)
         .where(and(eq(files.libraryId, libraryId), eq(files.path, path)));
       if (!file) continue;
-      const [sibling] = await db
-        .select({ id: files.id })
-        .from(files)
-        .where(and(eq(files.versionId, file.versionId), ne(files.id, file.id)))
-        .limit(1);
-      if (sibling === undefined) {
-        emptiedItemIds.push(file.itemId);
-        await db.delete(versions).where(eq(versions.id, file.versionId));
-      } else {
-        await db.delete(files).where(eq(files.id, file.id));
-      }
+      const emptied = await removeFile(db, file);
+      if (emptied !== undefined) emptiedItemIds.push(emptied);
       continue;
     }
     let item = await findItemByProviderIds(db, libraryId, change.providerIds);

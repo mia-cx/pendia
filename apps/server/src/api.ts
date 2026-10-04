@@ -2,6 +2,7 @@ import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
+import type { createJellyfinHandler } from "./jellyfin/http.ts";
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 import type { createArtworkHandler } from "./metadata/artwork-http.ts";
 import type { createPluginRouteHandler } from "./plugins/http.ts";
@@ -67,6 +68,7 @@ export function startApiServer(
     webhooks?: ReturnType<typeof createServarrWebhookHandler>;
     artwork?: ReturnType<typeof createArtworkHandler>;
     plugins?: ReturnType<typeof createPluginRouteHandler>;
+    jellyfin?: ReturnType<typeof createJellyfinHandler>;
   } = {},
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
@@ -108,6 +110,14 @@ export function startApiServer(
 
       if (handlers.plugins) {
         const response = await handlers.plugins(
+          request,
+          server.requestIP(request)?.address ?? "",
+        );
+        if (response !== undefined) return response;
+      }
+
+      if (handlers.jellyfin) {
+        const response = await handlers.jellyfin(
           request,
           server.requestIP(request)?.address ?? "",
         );

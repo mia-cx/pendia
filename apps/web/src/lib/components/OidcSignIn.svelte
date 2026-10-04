@@ -4,7 +4,10 @@ import { oidcLoginUrl } from "../auth.ts";
 const { name, invite }: { name: string | null; invite?: string } = $props();
 </script>
 
-<a class="oidc" href={oidcLoginUrl(invite)}>Sign in with {name ?? "SSO"}</a>
+<!-- A server route, so the router must hand it to the browser. -->
+<a class="oidc" href={oidcLoginUrl(invite)} data-sveltekit-reload
+  >Sign in with {name ?? "SSO"}</a
+>
 
 <style>
   .oidc {

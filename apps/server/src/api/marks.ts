@@ -6,10 +6,11 @@ import {
   setFavourite as saveFavourite,
   setRating as saveRating,
 } from "../playback/marks.ts";
+import { homeShelves } from "./browse.ts";
 import { authenticated, authenticatedMutation } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
 import { Progress } from "./progress.ts";
-import { connection, ItemCard, PageSize } from "./schema.ts";
+import { connection, ItemCard, PageSize, Shelf } from "./schema.ts";
 
 const Marks = Schema.Struct({
   favourite: Schema.Boolean,
@@ -125,8 +126,15 @@ const nextUp = authenticated
     );
   });
 
+const home = authenticated
+  .route({ method: "GET", path: "/shelves/home" })
+  .output(Schema.standardSchemaV1(Schema.Array(Shelf)))
+  .handler(async ({ context }) =>
+    runApi(fromHost(() => homeShelves(context.db, context.caller.user.id))),
+  );
+
 /** The per-user favourite and rating procedures mounted under `marks`. */
 export const markProcedures = { get, setFavourite, setRating };
 
 /** The shelf read procedures mounted under `shelves`. */
-export const shelfProcedures = { continueWatching, nextUp };
+export const shelfProcedures = { home, continueWatching, nextUp };

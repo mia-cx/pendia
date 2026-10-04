@@ -82,6 +82,9 @@ export function toneMapFilter(hdr: string) {
   ].join(",");
 }
 
+// A segment length no file reaches: a day.
+const oneSegmentSeconds = 86_400;
+
 const seconds = (time: number) => (Math.floor(time * 1e6) / 1e6).toFixed(6);
 
 function videoArguments(run: LiveRun) {
@@ -223,6 +226,10 @@ export function liveRunArguments(run: LiveRun) {
       "-segment_times",
       cuts.map((time) => `${Math.floor((time - start) * 1e6)}us`).join(","),
     );
+  } else {
+    // Without a list the muxer cuts every 2 s at any keyframe; the run's one
+    // segment must run to the end.
+    args.push("-segment_time", String(oneSegmentSeconds));
   }
   args.push(
     "-segment_start_number",

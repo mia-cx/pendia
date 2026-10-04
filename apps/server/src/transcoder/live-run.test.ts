@@ -203,10 +203,14 @@ describe("liveRunArguments", () => {
       expect(after(args, "-segment_start_number")).toBe("1");
     });
 
-    test("a restart in the last segment lists no cut times", () => {
-      expect(liveRunArguments(base({ startIndex: 3 }))).not.toContain(
-        "-segment_times",
-      );
+    test("a run in the last segment keeps it whole instead of listing cuts", () => {
+      for (const args of [
+        liveRunArguments(base({ startIndex: 3 })),
+        liveRunArguments(base({ boundariesSeconds: [0, 5] })),
+      ]) {
+        expect(args).not.toContain("-segment_times");
+        expect(after(args, "-segment_time")).toBe("86400");
+      }
     });
 
     test("a throttled run passes the read rate before the input", () => {
@@ -218,11 +222,6 @@ describe("liveRunArguments", () => {
       expect(args[rate + 2]).toBe("-readrate_initial_burst");
       expect(args[rate + 3]).toBe("3.5");
       expect(rate).toBeLessThan(args.indexOf("-i"));
-    });
-
-    test("a one segment timeline omits cut times", () => {
-      const args = liveRunArguments(base({ boundariesSeconds: [0, 5] }));
-      expect(args).not.toContain("-segment_times");
     });
 
     test.each([4, -1, 1.5])("rejects start index %p", (startIndex) => {
@@ -669,6 +668,23 @@ describe("live runs", () => {
         expect(pts).toBeCloseTo(timeline[index] ?? -1, 3);
       }
     }
+
+    // The keyframes at 8 and 12 s sit inside the last segment, and inside
+    // the only segment of a one-segment timeline; neither splits it.
+    const lastSegment = await runToEnd("uneven-last", {
+      inputPath: uneven,
+      boundariesSeconds: [0, 5, 16],
+      startIndex: 1,
+      video: copy(),
+    });
+    expect(lastSegment.segments).toEqual([1]);
+    const whole = await runToEnd("uneven-whole", {
+      inputPath: uneven,
+      boundariesSeconds: [0, 16],
+      startIndex: 0,
+      video: copy(),
+    });
+    expect(whole.segments).toEqual([0]);
   }, 60_000);
 
   test.skipIf(!hasLibx265)(

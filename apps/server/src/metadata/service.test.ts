@@ -1189,5 +1189,19 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         state: "unmatched",
         artwork: [],
       });
+
+      // A matched Season keeps following its number, so a stale id from a
+      // Show's earlier TVDB record is replaced on the next fetch.
+      await db
+        .update(providerIds)
+        .set({ value: "99999" })
+        .where(eq(providerIds.itemId, season.id));
+      expect(await applyMetadata(db, season.id, providers)).toMatchObject({
+        state: "matched",
+        providerId: "30272",
+      });
+      expect(await itemProviderIds(db, season.id)).toEqual([
+        { provider: "tvdb", value: "30272" },
+      ]);
     }));
 });

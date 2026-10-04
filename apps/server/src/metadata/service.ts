@@ -382,13 +382,21 @@ export async function applyMetadata(
     idSnapshot.map((row) => [row.provider, row.value]),
   );
   const show = await showContext(db, item);
+  // A Season or Episode is its number under its Show. A matched id is
+  // re-matched each time, so its children follow when a Show's id changes.
+  // Only explicit ids pin it.
+  const pinned = new Set(
+    idSnapshot
+      .filter((row) => show === undefined || !row.metadataDerived)
+      .map((row) => row.provider),
+  );
   let consulted = false;
   for (const providerId of providersForLibrary(config, item.libraryId)) {
     const provider = providers.find((candidate) => candidate.id === providerId);
     if (provider === undefined || !provider.kinds.includes(item.kind)) continue;
     consulted = true;
     const existingValue = snapshotByProvider.get(provider.id);
-    if (existingValue !== undefined) {
+    if (existingValue !== undefined && pinned.has(provider.id)) {
       const result = await provider.fetch({
         providerId: existingValue,
         kind: item.kind,

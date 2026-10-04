@@ -37,10 +37,20 @@ function requiredString(value: unknown): string {
 
 const scopePattern = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 
-function readOidc(value: unknown) {
+const oidcRequiredFields = ["issuer", "clientId", "clientSecret", "scopes"];
+
+function oidcObject(value: unknown) {
   if (value == null) return null;
   if (typeof value !== "object" || Array.isArray(value)) invalid();
-  const raw = value as Record<string, unknown>;
+  return value as Record<string, unknown>;
+}
+
+// OIDC stays off until every required field is stored, so the secret can
+// arrive from the admin screen after the issuer and client ID.
+function readOidc(value: unknown) {
+  const raw = oidcObject(value);
+  if (raw === null) return null;
+  if (oidcRequiredFields.some((field) => raw[field] === undefined)) return null;
   let issuer: URL;
   try {
     issuer = new URL(requiredString(raw.issuer));
@@ -72,6 +82,7 @@ function readOidc(value: unknown) {
     clientId: requiredString(raw.clientId),
     clientSecret: requiredString(raw.clientSecret),
     scopes,
+    name: raw.name === undefined ? null : requiredString(raw.name),
   };
 }
 
@@ -115,6 +126,8 @@ function parseAuthSettings(raw: unknown) {
   const artworkRequiresAuth = config.artworkRequiresAuth ?? false;
 
   const oidc = readOidc(config.oidc);
+  const oidcClientSecretSet =
+    oidcObject(config.oidc)?.clientSecret !== undefined;
 
   return {
     sessionMaxAgeSeconds,
@@ -123,6 +136,7 @@ function parseAuthSettings(raw: unknown) {
     trustedProxyAddresses,
     artworkRequiresAuth,
     oidc,
+    oidcClientSecretSet,
   };
 }
 
@@ -140,7 +154,11 @@ export async function readAuthSettings(db: Pick<Database, "select">) {
 export type AuthSettingsPatch = {
   trustedProxyAddresses?: readonly string[];
   artworkRequiresAuth?: boolean;
+  /** Write-only: replaces the stored OIDC client secret. */
+  oidcClientSecret?: string;
 };
+
+const maxSecretLength = 4096;
 
 function validatedPatch(patch: AuthSettingsPatch): JsonObject {
   const values: JsonObject = {};
@@ -175,6 +193,12 @@ export async function writeAuthSettings(
 ) {
   await requirePermission(db, actorId, "manage-server");
   const values = validatedPatch(patch);
+  const secret = patch.oidcClientSecret?.trim();
+  if (
+    secret !== undefined &&
+    (secret === "" || secret.length > maxSecretLength)
+  )
+    throw new AuthError("INVALID_INPUT");
   return db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(${settingsLockClass}, hashtext(${authSettingsKey}))`,
@@ -193,6 +217,11 @@ export async function writeAuthSettings(
     // The raw stored object is written back untouched outside the patched
     // keys, so the OIDC issuer stays a string and never becomes a URL.
     const merged: JsonObject = { ...(stored ?? {}), ...values };
+    if (secret !== undefined) {
+      const provider = merged.oidc ?? {};
+      if (typeof provider !== "object" || Array.isArray(provider)) invalid();
+      merged.oidc = { ...provider, clientSecret: secret };
+    }
     const parsed = parseAuthSettings(merged);
     await tx
       .insert(settings)

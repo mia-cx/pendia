@@ -14,18 +14,19 @@ test("the default client calls the page's own origin", async () => {
     configurable: true,
   });
   const requested: string[] = [];
+  const status = { complete: true, oidcConfigured: false, oidcName: null };
   const client = createPendiaClient({
     fetch: Object.assign(
       async (request: URL | RequestInfo) => {
         requested.push(
           request instanceof Request ? request.url : String(request),
         );
-        return Response.json({ json: { complete: true } });
+        return Response.json({ json: status });
       },
       { preconnect: fetch.preconnect },
     ),
   });
-  expect(await client.setup.status()).toEqual({ complete: true });
+  expect(await client.setup.status()).toEqual(status);
   expect(requested).toEqual([`${pageOrigin}/rpc/setup/status`]);
 });
 

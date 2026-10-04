@@ -371,6 +371,17 @@ describe.skipIf(!databaseUrl)("auth http", () => {
           createdBody.token,
         );
 
+        const status = async (token: string) => {
+          const response = await post(`${base}/api/auth/invites/status`, {
+            token,
+          });
+          expect(response.status).toBe(200);
+          return ((await response.json()) as { status: string }).status;
+        };
+        expect(await status(createdBody.token)).toBe("live");
+        expect(await status("A".repeat(43))).toBe("unknown");
+        expect(await status("short")).toBe("unknown");
+
         const accepted = await post(`${base}/api/auth/invites/accept`, {
           token: createdBody.token,
           username: "newbie",
@@ -414,6 +425,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         expect(
           ((await replay.json()) as { error: { code: string } }).error.code,
         ).toBe("INVALID_INVITE");
+        expect(await status(createdBody.token)).toBe("accepted");
 
         const second = await post(
           `${base}/api/auth/invites`,
@@ -438,6 +450,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         expect(
           ((await expired.json()) as { error: { code: string } }).error.code,
         ).toBe("INVALID_INVITE");
+        expect(await status(secondBody.token)).toBe("expired");
       } finally {
         await server.stop();
       }

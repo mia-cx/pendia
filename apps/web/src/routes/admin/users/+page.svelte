@@ -28,6 +28,22 @@ let inviteFailure = $state<ReturnType<typeof readFailure> | undefined>(
   undefined,
 );
 let inviteResult = $state<InviteResult | undefined>(undefined);
+let copied = $state("");
+
+// The clipboard API exists only in a secure context, so plain HTTP selects instead.
+let canCopy = $state(
+  typeof navigator !== "undefined" && "clipboard" in navigator,
+);
+
+async function copyLink(link: string) {
+  try {
+    await navigator.clipboard.writeText(link);
+    copied = link;
+  } catch {
+    // A denied clipboard leaves the selectable field as the way to copy.
+    canCopy = false;
+  }
+}
 
 async function addUser(event: SubmitEvent) {
   event.preventDefault();
@@ -172,14 +188,30 @@ async function sendInvite(event: SubmitEvent) {
     </select>
     <button type="submit" disabled={inviteBusy}>Create invite</button>
     {#if inviteResult}
+      {@const link = `${location.origin}/invite/${inviteResult.token}`}
       <div class="token">
         <p class="muted">
-          Copy this token now. It is shown once and cannot be read again.
+          Copy this link now. It is shown once and cannot be read again.
         </p>
+        <label for="inviteLink">Invite link</label>
+        <div class="copy">
+          <input
+            id="inviteLink"
+            readonly
+            value={link}
+            onclick={(event) => event.currentTarget.select()}
+          />
+          {#if canCopy}
+            <button type="button" onclick={() => copyLink(link)}
+              >{copied === link ? "Copied" : "Copy"}</button
+            >
+          {/if}
+        </div>
+        <label for="inviteToken">Token</label>
         <input
+          id="inviteToken"
           readonly
           value={inviteResult.token}
-          aria-label="Invite token"
           onclick={(event) => event.currentTarget.select()}
         />
         <p class="muted">
@@ -227,5 +259,14 @@ form :global(.failure) {
 .token input {
   width: 100%;
   font-family: ui-monospace, monospace;
+}
+
+.copy {
+  display: flex;
+  gap: 8px;
+}
+
+.copy input {
+  min-width: 0;
 }
 </style>

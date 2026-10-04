@@ -75,7 +75,7 @@
         "retries": {
           "type": "integer",
           "title": "Retries",
-          "description": "How often to retry when the endpoint answers 5xx or cannot be reached.",
+          "description": "How often to retry, 0 to 10, when the endpoint answers 5xx or cannot be reached.",
           "default": 3
         }
       },

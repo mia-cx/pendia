@@ -9,7 +9,7 @@ Sends Pendia server events to an HTTP endpoint. First-party, listed in the offic
 - Headers: a list of `"Name: value"` strings, such as `["Authorization: Bearer abc"]`. `Content-Type` defaults to `application/json`.
 - Events: which events to send. `item.added` by default.
 - Body: the template, see below.
-- Retries: how often to retry a 5xx answer or an unreachable endpoint, waiting 1 s, 2 s, 4 s and so on. A 4xx answer is not retried. After the last retry the failure goes to the plugin log.
+- Retries: how often to retry a 5xx answer or an unreachable endpoint, from 0 to 10, waiting 1 s, 2 s, 4 s and so on. A 4xx answer is not retried. After the last retry the failure goes to the plugin log, which names the endpoint's origin but never its path or headers, since those often hold tokens.
 
 ## Body template
 

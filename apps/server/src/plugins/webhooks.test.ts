@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -70,7 +70,7 @@ describe.skipIf(!databaseUrl)("webhooks plugin", () => {
         await updatePluginState(db, webhooksName, (state) => ({
           ...state,
           config: {
-            url: `${receiver.url}hooks`,
+            url: `${receiver.url}hooks/secret-token`,
             headers: ["X-Token: s3cret"],
             body: '{"text":"Added {{item.title}} ({{item.year}})","kind":"{{data.kind}}"}',
           },
@@ -90,7 +90,19 @@ describe.skipIf(!databaseUrl)("webhooks plugin", () => {
         });
 
         const runtime = createPluginRuntime(db, { directory });
-        await runPluginJobs(db, runtime);
+        const logged = spyOn(console, "log");
+        let lines: string[];
+        try {
+          await runPluginJobs(db, runtime);
+          lines = logged.mock.calls.map(([line]) => String(line));
+        } finally {
+          logged.mockRestore();
+        }
+        // The 503 is logged by origin; the path's token stays out of the log.
+        expect(lines.some((line) => line.includes("webhook.rejected"))).toBe(
+          true,
+        );
+        expect(lines.some((line) => line.includes("secret-token"))).toBe(false);
 
         expect(received).toHaveLength(2);
         for (const request of received) {

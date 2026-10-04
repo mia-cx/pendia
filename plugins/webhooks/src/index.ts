@@ -23,35 +23,36 @@ const events = [
 
 const requestTimeoutMs = 10_000;
 const firstRetryDelayMs = 1_000;
+// Ten retries already wait about 17 minutes in total; more would hold a worker for hours.
+const maxRetries = 10;
 
 export default definePlugin((host) => {
   const { events: bus, fetch, items, log } = host;
   if (bus === undefined || fetch === undefined)
     throw new Error("Webhooks needs the events and network capabilities.");
 
-  /** Sends once; resolves whether the attempt is final, logging what went wrong. */
+  /** Sends once; resolves whether the attempt is final, logging what went wrong under `endpoint`. */
   const send = async (
-    config: Config & { url: string },
-    headers: [string, string][],
-    body: string,
+    url: string,
+    endpoint: string,
+    init: {
+      method: Config["method"];
+      headers: [string, string][];
+      body: string;
+    },
   ): Promise<boolean> => {
     try {
-      const response = await fetch(config.url, {
-        method: config.method,
-        headers,
-        body,
+      const response = await fetch(url, {
+        ...init,
         signal: AbortSignal.timeout(requestTimeoutMs),
       });
       await response.body?.cancel();
       if (response.status < 400) return true;
-      log.warn("webhook.rejected", {
-        url: config.url,
-        status: response.status,
-      });
+      log.warn("webhook.rejected", { endpoint, status: response.status });
       return response.status < 500;
     } catch (error) {
       log.warn("webhook.unreachable", {
-        url: config.url,
+        endpoint,
         error: error instanceof Error ? error.message : String(error),
       });
       return false;
@@ -77,15 +78,24 @@ export default definePlugin((host) => {
       item,
     });
     const { headers, invalid } = readHeaders(config.headers);
-    if (invalid.length > 0) log.warn("webhook.headers.skipped", { invalid });
+    // Header values and URL paths often hold tokens, so logs name neither.
+    if (invalid.length > 0)
+      log.warn("webhook.headers.skipped", { count: invalid.length });
     if (!headers.some(([name]) => name.toLowerCase() === "content-type"))
       headers.push(["Content-Type", "application/json"]);
+    const endpoint = URL.canParse(url) ? new URL(url).origin : "invalid URL";
+    const retries = Math.min(Math.max(config.retries, 0), maxRetries);
     // A receiver that stays down is logged, never thrown: a throw would
     // disable the plugin for every other event.
     for (let attempt = 0; ; attempt++) {
-      if (await send({ ...config, url }, headers, body)) return;
-      if (attempt >= config.retries) {
-        log.error("webhook.failed", { url, event, attempts: attempt + 1 });
+      const init = { method: config.method, headers, body };
+      if (await send(url, endpoint, init)) return;
+      if (attempt >= retries) {
+        log.error("webhook.failed", {
+          endpoint,
+          event,
+          attempts: attempt + 1,
+        });
         return;
       }
       await Bun.sleep(firstRetryDelayMs * 2 ** attempt);

@@ -10,6 +10,7 @@ import { createJobRegistry } from "../jobs/registry.ts";
 import { readStoreManifest } from "./encode.ts";
 import {
   enqueueStore,
+  enqueueStoreSweep,
   registerStoreJobs,
   type StoreJobOptions,
 } from "./jobs.ts";
@@ -175,6 +176,33 @@ describe.skipIf(!databaseUrl)("store job", () => {
           expect(await storedRows(db)).toEqual([]);
           expect(await queuedStores(db)).toEqual([]);
         });
+      }),
+    60_000,
+  );
+});
+
+describe.skipIf(!databaseUrl)("store sweeps", () => {
+  test(
+    "a sweep and an encode never run at the same time",
+    () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withStoredLibrary(
+          db,
+          twoRungPolicy,
+          async ({ library, file }) => {
+            await enqueueStoreSweep(db, library.id, ".");
+            await enqueueStore(db, { sourceFileId: file.id, rung: "source" });
+            const queue = createJobQueue(db);
+            // Whichever claims first holds the `store` key until it finishes, so
+            // a sweep's ownership snapshot can never miss a Version made mid-sweep.
+            const first = await queue.claim(["store"]);
+            expect(first).toBeDefined();
+            expect(await queue.claim(["store"])).toBeUndefined();
+            if (first !== undefined) await queue.complete(first);
+            expect(await queue.claim(["store"])).toBeDefined();
+          },
+        );
       }),
     60_000,
   );

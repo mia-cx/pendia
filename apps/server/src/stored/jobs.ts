@@ -85,10 +85,11 @@ export async function enqueueStoreSweep(
     )
     .limit(1);
   if (queued !== undefined) return;
-  // No concurrency key: a sweep never waits behind a night-long encode.
+  // The encode key keeps a sweep from ever running beside an encode, whose
+  // new Version its ownership snapshot would miss. Cleanup can wait.
   await createJobQueue(db).enqueue(
     { type: "store", libraryId, folder },
-    { priority: storePriority },
+    { priority: storePriority, concurrencyKey: storeConcurrencyKey },
   );
 }
 

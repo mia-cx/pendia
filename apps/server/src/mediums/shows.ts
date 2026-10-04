@@ -8,6 +8,10 @@ import {
 } from "../db/schema/shows.ts";
 import type { Medium, ScanRules } from "./medium.ts";
 import { isVideoExtra, isVideoPath } from "./video-common/paths.ts";
+import {
+  folderProviderIds,
+  stripProviderTags,
+} from "./video-common/provider-ids.ts";
 
 /** Sonarr-style path rules shared by show walks and the shows medium. */
 export const showsScan = { identify, parse, isExtra } satisfies ScanRules;
@@ -232,10 +236,7 @@ function parse(canonicalFolder: string): {
   title: string;
   year: number | null;
 } {
-  const folder = posix
-    .basename(canonicalFolder)
-    .replace(/\s*\{(?:tmdb|imdb|tvdb)[-=][^}]+\}/gi, "")
-    .trim();
+  const folder = stripProviderTags(posix.basename(canonicalFolder));
   const match = /^(.*?)\s*\((\d{4})\)(?:\s.*)?$/.exec(folder);
   const rawTitle = (match?.[1] ?? folder).trim();
   const title = rawTitle.includes(" ")
@@ -270,6 +271,7 @@ export interface ShowPathGroup {
   canonicalFolder: string;
   title: string;
   year: number | null;
+  providerIds: Record<string, string>;
   seasons: SeasonPathGroup[];
 }
 
@@ -339,6 +341,7 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
     .map(([canonicalFolder, seasons]) => ({
       canonicalFolder,
       ...parse(canonicalFolder),
+      providerIds: folderProviderIds(canonicalFolder),
       seasons: [...seasons.values()]
         .map((season) => ({
           canonicalFolder: `${canonicalFolder}/${season.seasonFolder}`,

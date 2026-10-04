@@ -221,6 +221,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `items.list` | GET `/api/items` | `libraryId`, `kind`, `sort`, `limit`, `cursor` | `{ items, cursor }` of cards |
 | `items.get` | GET `/api/items/{id}` | `id` in the path | the detail shape |
 | `items.search` | GET `/api/search` | `query` | card array, best match first |
+| `items.refresh` | POST `/api/items/{id}/refresh` | `id` in the path | `{ jobId }` |
 | `shelves.home` | GET `/api/shelves/home` | None | `Shelf` array |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
 | `setup.status` | GET `/api/setup/status` | None | `{ complete }` |
@@ -259,12 +260,14 @@ Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `set
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}?width=<pixels>`; `width` is required and accepts an integer from 1 through 4096.
 Browse cards add `parentId`, `seasonNumber`, `episodeNumber`, `episodeEndNumber` and `show`, which is `{ id, title, posterArtworkId }` for a Season or Episode and null otherwise. An Episode's `seasonNumber` is its Season's. Together they give every route a card needs.
-Details are browse cards plus `overview`, `contentRating`, `genres`, `tags`, `metadataState`, `updatedAt`, `backdropArtworkId`, `credits`, `versions` and `children`. `credits` lists `{ contributorId, name, role, character }` with actors first, then by role and credit order. `versions` lists the imported Versions as `{ id, label, format, durationSeconds, bytes }` by label; stored Versions are renditions of those and stay off the list. `children` holds a Show's Seasons or a Season's Episodes as browse cards in number order. `metadataState` is `pending` until an enabled provider looks at the Item, and again while a failed poster download waits for the next scan to retry it. It is `matched` after a confident match. It is `unmatched` when a provider searched and found no confident match, or has no record for the Item's stored id; that is the state an admin resolves by hand. Instants are the database's own UTC text at microsecond precision.
+Details are browse cards plus `overview`, `contentRating`, `genres`, `tags`, `metadataState`, `updatedAt`, `backdropArtworkId`, `credits`, `versions` and `children`. `credits` lists `{ contributorId, name, role, character }` with actors first, then by role and credit order. `versions` lists the imported Versions as `{ id, label, format, durationSeconds, bytes }` by label; stored Versions are renditions of those and stay off the list. `children` holds a Show's Seasons or a Season's Episodes as browse cards in number order. `metadataState` is `pending` until an enabled provider looks at the Item, and again while a failed artwork download or Show tree waits for the next scan to retry it. It is `matched` after a confident match. It is `unmatched` when a provider searched and found no confident match, or has no record for the Item's stored id; that is the state an admin resolves by hand. Instants are the database's own UTC text at microsecond precision.
 
 The list connection is `{ items, cursor }`. `sort` is `added` by default, newest first by `addedAt` then `id` descending, or `title`, A to Z by `title` then `id`.
 `cursor` is opaque and bound to its sort: an `added` cursor carries the microsecond instant, so a row that shares a millisecond with its predecessor still pages, and a `title` cursor starts with `t1.`. Either sort answers 400 to the other's cursor.
 Without a `libraryId` the list is scoped to the libraries the caller may view, with the auth slice's own precedence rules, and answers 403 when that set is empty.
 The default page is 24 and `limit` caps at 100. An unparseable cursor answers 400.
+
+`items.refresh` queues a provider-fetch for one Item and needs `manage-libraries`. It runs at priority 1, ahead of background scans at 0. When a due fetch for the Item is already queued, it raises that job to priority 1 and returns its id instead of adding another. A refresh of a Show re-fetches its whole tree. An unknown id answers 404.
 
 `items.search` matches the titles of Movies and Shows in the libraries the caller may view, with pg_trgm. Trigram similarity forgives a misspelling, so `Interstelar` finds `Interstellar`; word similarity lets a prefix or one word of a longer title match. Results come best match first, at most 24. `query` is trimmed, must keep 1 to 200 characters and may not contain NUL. A caller who may view no library gets an empty list.
 
@@ -322,7 +325,7 @@ The returned scan job walks the root and enqueues one scan per canonical movie o
 
 Each media file directly inside a movie folder becomes an imported Version of that folder's Item. Nested collection folders work. Loose videos at the library root are skipped. Titles and years come from folder names such as `Alien (1979) {tmdb-348}`. Version labels come from probe dimensions, codecs and HDR. Only explicit filename tags such as `{edition-Director's Cut}` contribute to those labels.
 
-A shows library uses each top-level show folder as canonical. `Season N` folders and `Specials` hold Episodes, with Specials as season zero. Episode names use `SxxEyy`; a range such as `S01E02-E03` becomes one Episode carrying that range. Files ending in `partN`, `ptN` or `cdN` form ordered Files in one Version. Only Episodes hold Versions; Shows and Seasons are containers.
+A shows library uses each top-level show folder as canonical. `Season N` folders and `Specials` hold Episodes, with Specials as season zero. Episode names use `SxxEyy`; a range such as `S01E02-E03` becomes one Episode carrying that range. Files ending in `partN`, `ptN` or `cdN` form ordered Files in one Version. Only Episodes hold Versions; Shows and Seasons are containers. Show folders carry provider ids the same way movie folders do, such as `The Expanse (2015) {tvdb-280619}` or Jellyfin's `[tvdbid-280619]`.
 
 The literal `extras` directory is always reserved, case-insensitively, even for same-name videos. Use a dated folder such as `Extras (2005)` for a movie named Extras. Other extras-category names can identify movies when the filename matches the canonical title, including `Collection/Shorts/Shorts.mkv`.
 
@@ -376,16 +379,22 @@ The `settings` row with key `metadata` holds one JSON object. Missing fields use
 
 ```json
 {
-  "providerOrder": ["tmdb"],
+  "providerOrder": ["tmdb", "tvdb"],
   "confidenceThreshold": 0.9,
   "libraries": {},
   "tmdb": null
 }
 ```
 
-`providerOrder` sets the enabled providers in priority order. Only `tmdb` is built in today. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
+`providerOrder` sets the enabled providers in priority order. `tmdb` and `tvdb` are built in. TMDB handles movies and TVDB handles Shows, Seasons and Episodes, so each Item only reaches the provider for its kind. A `metadata` row that sets `providerOrder` without `tvdb` keeps TVDB off. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
 
 TMDB title search compares the folder title with each result's `title` and `original_title`. When neither matches for any result, it also reads `/movie/{id}/translations` for the first five results, so a Radarr folder named with a translated title, such as `Die Verurteilten (1994)`, still matches. A search with a plain match makes no extra request.
+
+TVDB matches a Show by its folder's TVDB id first. Without one, an IMDb id pins the Show through TVDB's remote id search, and otherwise title search compares the folder title with each result's name, aliases and translations, scored the way TMDB scores movies. Seasons and Episodes match by number in TVDB's official order, which is the aired order Sonarr names files in. Names and overviews come in the Show's primary language. Shows store their first and last air dates and their status in lowercase, such as `continuing` or `ended`; Seasons and Episodes store their air dates.
+
+A show scan queues one provider-fetch for the Show whenever the Show or anything under it is `pending`. That job matches the Show, then each Season and Episode in number order, and stores each Item's primary artwork: a poster for Shows and Seasons and a thumb for Episodes. TVDB is read once per job: one login, one series request and one request per 500 Episodes. If any part of the tree fails, the Show goes back to `pending` and the job retries. The tree publishes one `library.changed` event at the end rather than one per Episode.
+
+After every Show fetch, whether it succeeded or not, a `continuing` Show keeps exactly one provider-fetch queued a week ahead, marked `weekly: true` in its payload. Any other status keeps none, so `ended` and `upcoming` Shows refresh only on a rescan while `pending` or through `items.refresh`. Scans and `items.refresh` coalesce only onto a fetch that is already due, so the weekly job never absorbs one.
 
 `libraries` maps a Library id to its provider list. A missing entry uses `providerOrder`, an explicit `[]` disables metadata for that Library, and an explicit `["tmdb"]` enables only TMDB:
 
@@ -400,7 +409,9 @@ TMDB title search compares the folder title with each result's `title` and `orig
 
 The TMDB API key lives in the separate `providers` settings row, written by the admin Provider keys screen or `settings.setProviderKey` with the name `tmdb`. Key values are write-only: `settings.get` returns names, never secrets. Storing or rotating `tmdb` marks every unmatched movie `pending`, so the next rescan queues a provider-fetch for each of them; a missing key means no TMDB provider, and scanned movies stay `pending` until a key arrives. A Library whose provider list is `[]` leaves its Items `pending` the same way. The embedded `metadata.tmdb.apiKey` field is still read as a backward-compatible fallback when no provider key is stored, but new deployments should use the provider key store.
 
-Settings apply to the next provider-fetch job. A rescan enqueues enrichment only while an Item is `pending`: matched rescans stay quiet, a changed provider ID marks the Item `pending` again, and scans coalesce onto an already queued fetch for the same Item while a fetch still running earns exactly one queued successor. `artworkRequiresAuth` stays in the separate `auth` settings row and defaults to false.
+The TVDB API key lives in the same row under the name `tvdb`, and a subscriber PIN, when the key needs one, under `tvdb-pin`. Storing or rotating `tvdb` marks every unmatched Show, Season and Episode `pending`. Without a `tvdb` key there is no TVDB provider, and scanned Shows stay `pending` until one arrives.
+
+Settings apply to the next provider-fetch job. A rescan enqueues enrichment only while an Item is `pending`: matched rescans stay quiet, a changed provider ID marks the Item `pending` again, and scans coalesce onto an already due fetch for the same Item while a fetch still running earns exactly one queued successor. `artworkRequiresAuth` stays in the separate `auth` settings row and defaults to false.
 
 Configure the `providers` row with this PostgreSQL 18 transaction, replacing the `<tmdb-api-key>` placeholder. The admin UI and `settings.setProviderKey` remain the preferred path and perform the same reset; this is the manual fallback. The conflict clause merges with any keys already stored rather than replacing them, and the `UPDATE` requeues unmatched movies the same way the API does:
 

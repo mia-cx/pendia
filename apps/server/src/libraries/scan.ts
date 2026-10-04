@@ -1000,7 +1000,19 @@ export async function scanShowDirectory(
     }
 
     // A changed provider id invalidates the match, so metadata re-fetches.
-    if (await setItemProviderIds(tx, showId, mergedProviderIds)) {
+    // Webhook ids assert; folder tags only fill ids nothing asserted yet.
+    const assertedChanged = await setItemProviderIds(
+      tx,
+      showId,
+      mergedProviderIds,
+    );
+    const filledChanged = await setItemProviderIds(
+      tx,
+      showId,
+      group.providerIds,
+      { fillOnly: true },
+    );
+    if (assertedChanged || filledChanged) {
       await tx
         .update(items)
         .set({ metadataState: "pending", updatedAt: new Date() })

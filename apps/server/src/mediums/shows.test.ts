@@ -195,6 +195,7 @@ describe("groupShowPaths", () => {
         canonicalFolder: "The Expanse (2015)",
         title: "The Expanse",
         year: 2015,
+        providerIds: {},
         seasons: [
           {
             canonicalFolder: "The Expanse (2015)/Specials",
@@ -281,6 +282,24 @@ describe("groupShowPaths", () => {
     ]);
   });
 
+  test("reads Sonarr and Jellyfin provider tags from the Show folder", () => {
+    const [sonarr] = groupShowPaths([
+      "The Expanse (2015) {tvdb-280619} {imdb-tt3230854}/Season 01/S01E01.mkv",
+    ]);
+    expect(sonarr).toMatchObject({
+      title: "The Expanse",
+      year: 2015,
+      providerIds: { tvdb: "280619", imdb: "tt3230854" },
+    });
+    const [jellyfin] = groupShowPaths([
+      "The Expanse (2015) [tvdbid-280619]/Season 01/S01E01.mkv",
+    ]);
+    expect(jellyfin).toMatchObject({
+      title: "The Expanse",
+      providerIds: { tvdb: "280619" },
+    });
+  });
+
   test("groups every split marker spelling into one version", () => {
     const groups = groupShowPaths([
       "Show/Season 01/Show S01E01 pt2.mkv",
@@ -317,6 +336,7 @@ describe("groupShowPaths", () => {
         canonicalFolder: "Show",
         title: "Show",
         year: null,
+        providerIds: {},
         seasons: [
           {
             canonicalFolder: "Show/Season 01",

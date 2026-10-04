@@ -611,6 +611,73 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       }
     }));
 
+  test("changes whose scan folder is the library root reject without jobs", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await insertLibrary(db, "Movies", "/media/movies");
+      const debouncer = createChangeDebouncer(db, { delayMs: 10 });
+      try {
+        for (const change of [
+          {
+            kind: "delete",
+            path: "/media/movies",
+            target: "item",
+            providerIds: movieIds,
+          },
+          { kind: "add", path: "/media/movies/Alien.mkv", providerIds: {} },
+        ] satisfies ChangeEvent[])
+          await expect(debouncer.submit("radarr", [change])).rejects.toThrow(
+            "Webhook path must name a folder inside the library root.",
+          );
+        await Bun.sleep(30);
+        expect(await listJobs(db, { type: "scan" })).toEqual([]);
+      } finally {
+        await debouncer.close();
+      }
+    }));
+
+  test("a move between two Show folders queues both folders", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const library = await insertLibrary(db, "Shows", "/media/shows", "shows");
+      const debouncer = createChangeDebouncer(db, { delayMs: 10 });
+      const move = {
+        kind: "move",
+        path: "Show B/Season 01/Show B S01E03.mkv",
+        previousPath: "Show A/Season 01/Show A S01E01.mkv",
+      } as const;
+      try {
+        await debouncer.submit("sonarr", [
+          {
+            ...move,
+            path: `/media/shows/${move.path}`,
+            previousPath: `/media/shows/${move.previousPath}`,
+            providerIds: { tvdb: "2" },
+          },
+        ]);
+        const jobs = await waitForScanJobs(db, 2);
+        expect(jobs).toHaveLength(2);
+        expect(jobs.map((job) => job.payload)).toEqual(
+          expect.arrayContaining([
+            {
+              type: "scan",
+              libraryId: library.id,
+              path: "Show A",
+              changes: [{ ...move, providerIds: {} }],
+            },
+            {
+              type: "scan",
+              libraryId: library.id,
+              path: "Show B",
+              changes: [{ ...move, providerIds: { tvdb: "2" } }],
+            },
+          ]),
+        );
+      } finally {
+        await debouncer.close();
+      }
+    }));
+
   test("the api role accepts api-key webhooks and rejects other callers", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);

@@ -40,33 +40,39 @@ describe("storeArguments", () => {
     expect(args).not.toContain("-tag:v");
   });
 
-  test("the source rung tags HEVC and encodes other audio to AAC stereo", () => {
-    const args = storeArguments(
-      {
-        ...base,
-        rung: source,
-        source: { codec: "hevc", hdr: "hdr10", audioCodec: "truehd" },
-      },
-      0,
-      "/p",
-    );
-    expect(valueAfter(args, "-tag:v")).toBe("hvc1");
-    expect(valueAfter(args, "-c:a")).toBe("aac");
-    expect(valueAfter(args, "-ac")).toBe("2");
-  });
+  test.each(["truehd", "eac3"])(
+    "the source rung tags HEVC and encodes %s audio to AAC stereo",
+    (audioCodec) => {
+      const args = storeArguments(
+        {
+          ...base,
+          rung: source,
+          source: { codec: "hevc", hdr: "hdr10", audioCodec },
+        },
+        0,
+        "/p",
+      );
+      expect(valueAfter(args, "-tag:v")).toBe("hvc1");
+      expect(valueAfter(args, "-c:a")).toBe("aac");
+      expect(valueAfter(args, "-ac")).toBe("2");
+    },
+  );
 
   test("an encoded rung scales, caps the bitrate and forces keyframes on the cuts", () => {
-    const args = storeArguments({ ...base, rung: p360, source: sdr }, 2, "/p");
+    const args = storeArguments({ ...base, rung: p360, source: sdr }, 0, "/p");
     expect(valueAfter(args, "-c:v")).toBe("libx264");
     expect(valueAfter(args, "-vf")).toBe("scale=-2:360,format=yuv420p");
     expect(valueAfter(args, "-maxrate")).toBe("1000000");
-    expect(valueAfter(args, "-force_key_frames")).toBe(
-      valueAfter(args, "-segment_times"),
-    );
     expect(valueAfter(args, "-segment_times")).toBe("3000000us,6000000us");
-    expect(valueAfter(args, "-ss")).toBe("6000000us");
-    expect(valueAfter(args, "-segment_start_number")).toBe("2");
+    expect(valueAfter(args, "-force_key_frames")).toBe("3000000us,6000000us");
     expect(valueAfter(args, "-c:a")).toBe("aac");
+  });
+
+  test("a resumed encode forces only the cuts after its first segment", () => {
+    const args = storeArguments({ ...base, rung: p360, source: sdr }, 1, "/p");
+    expect(valueAfter(args, "-ss")).toBe("3000000us");
+    expect(valueAfter(args, "-segment_start_number")).toBe("1");
+    expect(valueAfter(args, "-force_key_frames")).toBe("6000000us");
   });
 
   test("an encoded rung tone maps an HDR source", () => {
@@ -137,6 +143,8 @@ describe("runStore", () => {
       const path = await joined(folder, [index], `segment-${index}.mp4`);
       const keyframes = await ffprobeKeyframeTimes(path);
       expect(keyframes[0]).toBeCloseTo(boundaries[index] ?? -1, 3);
+      // A 3 s segment is shorter than x264's keyframe interval: one keyframe each.
+      expect(keyframes).toHaveLength(1);
     }
     const all = await joined(
       folder,

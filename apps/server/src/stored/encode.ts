@@ -33,12 +33,18 @@ export type StoreRun = {
   readRate?: RemuxRun["readRate"]; // tests only
 };
 
-/** Returns whether a rung carries the source's first audio track as is: only the remux, and only an fMP4-safe codec. */
+// A shared init cannot hold AC-3 or E-AC-3: the muxer needs their first
+// packet before it can write the moov.
+const sharedInitAudio = new Set(
+  [...hlsCopyAudio].filter((codec) => codec !== "ac3" && codec !== "eac3"),
+);
+
+/** Returns whether a rung carries the source's first audio track as is: only the remux, and only a codec a shared init holds. */
 export function copiesAudio(rung: Rung, source: StoreSource) {
   return (
     !("height" in rung) &&
     source.audioCodec !== null &&
-    hlsCopyAudio.has(source.audioCodec)
+    sharedInitAudio.has(source.audioCodec)
   );
 }
 
@@ -101,8 +107,9 @@ export function storeArguments(
     "-colorspace",
     "bt709",
   );
-  // Keyframes land on the timeline, so every cut starts a closed GOP.
-  const keyframes = cutTimes(run.boundariesSeconds);
+  // Keyframes land on the timeline, so every cut starts a closed GOP. ffmpeg
+  // spends one forced time per frame, so a resumed run lists only later cuts.
+  const keyframes = cutTimes(run.boundariesSeconds.slice(startIndex));
   if (keyframes !== null) args.push("-force_key_frames", keyframes);
   return [...args, ...audio, ...segments];
 }

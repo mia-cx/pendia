@@ -111,13 +111,32 @@ async function waitForBlockedScan(db: Database) {
   for (;;) {
     const rows = await db.$client<{ count: number }[]>`
       select count(*)::integer as count from pg_stat_activity
-      where wait_event_type = 'Lock'`;
+      where wait_event_type = 'Lock'
+        and datname = current_database()
+        and pid <> pg_backend_pid()`;
     if ((rows[0]?.count ?? 0) > 0) return;
     if (Date.now() >= deadline) {
       throw new Error("A blocked scan update was not observed.");
     }
     await Bun.sleep(10);
   }
+}
+
+/** Records an admin's progress on the Version that owns the File at this path. */
+async function recordProgress(db: Database, path: string) {
+  const [file] = await db.select().from(files).where(eq(files.path, path));
+  if (!file) throw new Error("Fixture File missing.");
+  const admin = await setupAdmin(db, {
+    username: "admin",
+    password: "admin-pass",
+  });
+  await db.insert(progress).values({
+    userId: admin.id,
+    itemId: file.itemId,
+    versionId: file.versionId,
+    format: "video",
+    positionSeconds: 33,
+  });
 }
 
 describe.skipIf(!databaseUrl)("scanDirectory", () => {
@@ -463,6 +482,40 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
         });
       });
     }));
+
+  test("a movie File recreated before the write lock keeps its row and progress", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        const recreated = join(dir, "Alien.720p.mkv");
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(dir, "Alien.1080p.mkv"));
+        await createVideoFixture(recreated);
+        await withLibrary(db, root, async (library) => {
+          await scanDirectory(db, library.id, folder);
+          await recordProgress(db, `${folder}/Alien.720p.mkv`);
+          const filesBefore = await db.select().from(files);
+          const progressBefore = await db.select().from(progress);
+          await rm(recreated);
+
+          await holdLibraryLock(url, library.id, async (release) => {
+            const scanning = scanDirectory(db, library.id, folder, {
+              reconcileMissing: true,
+            });
+            await waitForBlockedScan(db);
+            await createVideoFixture(recreated);
+            release();
+            await expect(scanning).rejects.toThrow(
+              "Library directory changed before scan write.",
+            );
+          });
+
+          expect(await db.select().from(files)).toEqual(filesBefore);
+          expect(await db.select().from(progress)).toEqual(progressBefore);
+        });
+      });
+    }));
 });
 
 const showFolder = "The Expanse (2015) {tvdb-280619}";
@@ -666,6 +719,21 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(splitVersion?.durationSeconds).toBe(
           (part1.durationSeconds ?? 0) + (part2.durationSeconds ?? 0),
         );
+        expect(splitVersion).toMatchObject({
+          keyframesSeconds: null,
+          lazyIndexPending: true,
+        });
+        for (const single of [range, special]) {
+          const version = versionRows.find(
+            (row) => row.id === single.versionId,
+          );
+          const probed = await probeVideo(join(root, single.path));
+          expect(probed.keyframesSeconds).not.toBeNull();
+          expect(version).toMatchObject({
+            keyframesSeconds: probed.keyframesSeconds,
+            lazyIndexPending: false,
+          });
+        }
 
         const snapshotIds = async () => ({
           items: (await db.select({ id: items.id }).from(items))
@@ -1215,6 +1283,87 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
       });
     }));
 
+  test("merges overlapping ranges from one scan into one widened Episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const earlier = join(seasonDir, "Show S01E01-E03.mkv");
+        await createVideoFixture(earlier);
+        await copyFile(earlier, join(seasonDir, "Show S01E02-E04.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(2);
+        const episodeRows = await db.select().from(episodes);
+        expect(episodeRows).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: 4 },
+        ]);
+        const episodeId = episodeRows[0]?.itemId;
+        if (!episodeId) throw new Error("Fixture Episode missing.");
+        const fileRows = await db.select().from(files);
+        expect(fileRows.map((file) => file.itemId)).toEqual([
+          episodeId,
+          episodeId,
+        ]);
+
+        // The later file keeps its Episode once the earlier one is gone.
+        await rm(earlier);
+        const second = await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+        });
+        expect(second.versionIds).toHaveLength(1);
+        expect(await db.select().from(episodes)).toEqual(episodeRows);
+        expect(await db.select().from(files)).toMatchObject([
+          {
+            path: "Show/Season 01/Show S01E02-E04.mkv",
+            itemId: episodeId,
+          },
+        ]);
+      });
+    }));
+
+  test("keeps a retained Episode when a new range overlaps it", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const retained = join(seasonDir, "Show S01E02.mkv");
+        await createVideoFixture(retained);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        await scanShowDirectory(db, library.id, show);
+        const [retainedEpisode] = await db.select().from(episodes);
+        if (!retainedEpisode) throw new Error("Fixture Episode missing.");
+
+        await copyFile(retained, join(seasonDir, "Show S01E01-E03.mkv"));
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(2);
+        expect(
+          await db.select().from(episodes).orderBy(asc(episodes.episodeNumber)),
+        ).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: null },
+          retainedEpisode,
+        ]);
+        const ranged = (await db.select().from(files)).find(
+          (file) => file.path === "Show/Season 01/Show S01E01-E03.mkv",
+        );
+        expect(ranged?.itemId).not.toBe(retainedEpisode.itemId);
+      });
+    }));
+
   test("reconcileMissing removes a missing Season while the default retains it", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -1294,12 +1443,21 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         if (!part1File) throw new Error("Fixture File missing.");
         const [firstVersion] = await db.select().from(versions);
         if (!firstVersion) throw new Error("Fixture Version missing.");
+        expect(firstVersion).toMatchObject({
+          keyframesSeconds: null,
+          lazyIndexPending: true,
+        });
+        const remainingProbe = await probeVideo(part1);
+        expect(remainingProbe.keyframesSeconds).not.toBeNull();
 
         await rm(part2);
 
         const second = await scanShowDirectory(db, library.id, show);
         expect(second.versionIds).toEqual([firstVersion.id]);
         expect(await db.select().from(files)).toHaveLength(2);
+        expect(await db.select().from(versions)).toMatchObject([
+          { keyframesSeconds: null, lazyIndexPending: true },
+        ]);
 
         const third = await scanShowDirectory(db, library.id, show, {
           reconcileMissing: true,
@@ -1315,11 +1473,55 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const [keptVersion] = await db.select().from(versions);
         expect(keptVersion?.id).toBe(firstVersion.id);
         expect(keptVersion?.bytes).toBe(part1File.bytes);
+        expect(keptVersion).toMatchObject({
+          keyframesSeconds: remainingProbe.keyframesSeconds,
+          lazyIndexPending: false,
+        });
         const itemRows = await db.select().from(items);
         expect(itemRows.map((row) => row.kind).sort()).toEqual([
           "episode",
           "season",
           "show",
+        ]);
+      });
+    }));
+
+  test("keeps a split Version pending when a move regroups its Files", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
+        await createVideoFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await scanShowDirectory(db, library.id, show);
+
+        const renamed = `${show}/Season 01/Show S01E01 1080p.mkv`;
+        await rename(
+          join(seasonDir, "Show S01E01 - part2.mkv"),
+          join(root, renamed),
+        );
+        await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+          changes: [
+            {
+              kind: "move",
+              path: renamed,
+              previousPath: `${show}/Season 01/Show S01E01 - part2.mkv`,
+              providerIds: {},
+            },
+          ],
+        });
+
+        expect(await db.select().from(files)).toHaveLength(2);
+        expect(await db.select().from(versions)).toMatchObject([
+          { keyframesSeconds: null, lazyIndexPending: true },
         ]);
       });
     }));
@@ -1380,6 +1582,44 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         );
         expect(await db.select().from(versions)).toHaveLength(1);
         expect(await db.select().from(files)).toHaveLength(1);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+      });
+    }));
+
+  test("an Episode File recreated before the write lock keeps its row and progress", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Foundation";
+        const seasonDir = join(root, show, "Season 01");
+        const recreated = join(seasonDir, "Foundation S01E02.mkv");
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(seasonDir, "Foundation S01E01.mkv"));
+        await createVideoFixture(recreated);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await scanShowDirectory(db, library.id, show);
+        await recordProgress(db, `${show}/Season 01/Foundation S01E02.mkv`);
+        const filesBefore = await db.select().from(files);
+        const progressBefore = await db.select().from(progress);
+        await rm(recreated);
+
+        await holdLibraryLock(url, library.id, async (release) => {
+          const scanning = scanShowDirectory(db, library.id, show, {
+            reconcileMissing: true,
+          });
+          await waitForBlockedScan(db);
+          await createVideoFixture(recreated);
+          release();
+          await expect(scanning).rejects.toThrow(
+            "Library directory changed before scan write.",
+          );
+        });
+
+        expect(await db.select().from(files)).toEqual(filesBefore);
         expect(await db.select().from(progress)).toEqual(progressBefore);
       });
     }));

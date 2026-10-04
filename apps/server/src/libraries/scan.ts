@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -19,7 +20,11 @@ import {
 } from "../db/tree.ts";
 import type { ScanRules } from "../mediums/medium.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
-import { groupShowPaths, showsScan } from "../mediums/shows.ts";
+import {
+  groupShowPaths,
+  mergeEpisodeRanges,
+  showsScan,
+} from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
@@ -48,6 +53,8 @@ export type ScanSource = {
   verify(file: ProbedLibraryFile): Promise<void>;
   /** Fails when an empty scope gained files before the write. Runs under the write lock. */
   confirmEmpty(path: string, recursive: boolean): Promise<void>;
+  /** Fails when a path the walk missed holds a file again before the write. Runs under the write lock. */
+  confirmMissing(paths: readonly string[]): Promise<void>;
   /** Whether a stored File's path outside the scope still holds a file. */
   exists(path: string): Promise<boolean>;
 };
@@ -70,6 +77,12 @@ export function scanScope(
     recursive: path === "." || medium === "shows",
   };
 }
+
+/** Whether a walk of this library-relative scope would reach the path. */
+export const inScope = (scope: string, recursive: boolean, path: string) =>
+  recursive
+    ? scope === "." || path.startsWith(`${scope}/`)
+    : posix.dirname(path) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -157,6 +170,15 @@ export function localScanSource(
   probe: typeof probeVideo = probeVideo,
 ): ScanSource {
   const { rules } = scanScope(library.medium, ".");
+  const exists = async (path: string) => {
+    try {
+      await readLibraryFile(library.rootPath, path);
+      return true;
+    } catch (error) {
+      if (error instanceof MissingLibraryPathError) return false;
+      throw error;
+    }
+  };
   return {
     async walk(path, recursive) {
       const walked: LibraryFile[] = [];
@@ -186,15 +208,12 @@ export function localScanSource(
     },
     confirmEmpty: (path, recursive) =>
       confirmScopeEmpty(library.rootPath, rules, path, recursive),
-    async exists(path) {
-      try {
-        await readLibraryFile(library.rootPath, path);
-        return true;
-      } catch (error) {
-        if (error instanceof MissingLibraryPathError) return false;
-        throw error;
-      }
+    async confirmMissing(paths) {
+      for (const path of paths)
+        if (await exists(path))
+          throw new Error("Library directory changed before scan write.");
     },
+    exists,
   };
 }
 
@@ -450,20 +469,31 @@ export async function scanDirectory(
     }
     if (options.reconcileMissing === true) {
       const itemFiles = await tx
-        .select()
+        .select({ versionId: files.versionId, path: files.path })
         .from(files)
+        .innerJoin(
+          versions,
+          and(
+            eq(versions.id, files.versionId),
+            eq(versions.origin, "imported"),
+          ),
+        )
         .where(eq(files.itemId, itemId));
       const present = new Set(group.paths);
-      for (const file of itemFiles) {
-        if (present.has(file.path)) continue;
-        const [version] = await tx
-          .select({ origin: versions.origin })
-          .from(versions)
-          .where(eq(versions.id, file.versionId));
-        if (version?.origin === "imported") {
-          await tx.delete(versions).where(eq(versions.id, file.versionId));
-        }
-      }
+      const missing = itemFiles.filter((file) => !present.has(file.path));
+      // Only a path inside the scope can have come back since the walk.
+      await source.confirmMissing(
+        missing
+          .map((file) => file.path)
+          .filter((missingPath) => inScope(path, false, missingPath)),
+      );
+      if (missing.length > 0)
+        await tx.delete(versions).where(
+          inArray(
+            versions.id,
+            missing.map((file) => file.versionId),
+          ),
+        );
     }
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
@@ -677,7 +707,28 @@ export async function scanShowDirectory(
         .from(episodes)
         .where(eq(episodes.seasonId, seasonId));
 
-      const discoveredStarts = seasonGroup.episodes.map(
+      const owners = await tx
+        .select({ path: files.path, episodeNumber: episodes.episodeNumber })
+        .from(files)
+        .innerJoin(episodes, eq(episodes.itemId, files.itemId))
+        .where(
+          and(
+            eq(episodes.seasonId, seasonId),
+            inArray(
+              files.path,
+              seasonGroup.episodes.flatMap((episode) =>
+                episode.versions.flatMap((version) => version.paths),
+              ),
+            ),
+          ),
+        );
+      const seasonEpisodes = mergeEpisodeRanges(
+        seasonGroup.episodes,
+        persistedEpisodes.map((persisted) => persisted.episodeNumber),
+        new Map(owners.map((owner) => [owner.path, owner.episodeNumber])),
+      );
+
+      const discoveredStarts = seasonEpisodes.map(
         (episode) => episode.episodeNumber,
       );
       for (const persisted of persistedEpisodes) {
@@ -695,11 +746,9 @@ export async function scanShowDirectory(
               normalizedEnd === persisted.episodeNumber ? null : normalizedEnd,
           })
           .where(eq(episodes.itemId, persisted.itemId));
-        persisted.episodeEndNumber =
-          normalizedEnd === persisted.episodeNumber ? null : normalizedEnd;
       }
 
-      for (const episodeGroup of seasonGroup.episodes) {
+      for (const episodeGroup of seasonEpisodes) {
         const [existingEpisode] = await tx
           .select({ item: items, episode: episodes })
           .from(episodes)
@@ -731,26 +780,13 @@ export async function scanShowDirectory(
               })
               .where(eq(items.id, episodeId));
           }
+          // Merged ranges stop before every later start, so widening is safe.
           const existingEnd =
             existingEpisode.episode.episodeEndNumber ??
             existingEpisode.episode.episodeNumber;
           const discoveredEnd =
             episodeGroup.episodeEndNumber ?? episodeGroup.episodeNumber;
-          const overlapsDiscoveredEpisode = seasonGroup.episodes.some(
-            (candidate) =>
-              candidate.episodeNumber > discoveredEnd &&
-              candidate.episodeNumber <= existingEnd,
-          );
-          const blocksWidening = persistedEpisodes.some(
-            (candidate) =>
-              candidate.itemId !== episodeId &&
-              candidate.episodeNumber > existingEnd &&
-              candidate.episodeNumber <= discoveredEnd,
-          );
-          if (
-            (discoveredEnd > existingEnd && !blocksWidening) ||
-            (discoveredEnd < existingEnd && overlapsDiscoveredEpisode)
-          ) {
+          if (discoveredEnd > existingEnd) {
             await tx
               .update(episodes)
               .set({ episodeEndNumber: episodeGroup.episodeEndNumber })
@@ -792,6 +828,15 @@ export async function scanShowDirectory(
           const first = members[0];
           if (!first) throw new Error("Show Version has no Files.");
           const label = videoVersionLabel(first.path, first.probe);
+          // Each split File has its own index, so only a lone File indexes the Version.
+          const indexFor = (fileCount: number) => {
+            const keyframesSeconds =
+              fileCount === 1 ? first.probe.keyframesSeconds : null;
+            return {
+              keyframesSeconds,
+              lazyIndexPending: keyframesSeconds === null,
+            };
+          };
 
           const existingFiles = await tx
             .select()
@@ -804,6 +849,7 @@ export async function scanShowDirectory(
             );
           const existingFile = existingFiles[0];
           let versionId: string;
+          let versionFiles: { id: string; path: string; order: number }[] = [];
           if (existingFile) {
             for (const file of existingFiles) {
               if (
@@ -825,11 +871,27 @@ export async function scanShowDirectory(
             ) {
               throw new AuthError("CONFLICT");
             }
+            versionId = version.id;
+            versionFiles = await tx
+              .select({ id: files.id, path: files.path, order: files.order })
+              .from(files)
+              .where(eq(files.versionId, versionId));
+            // Reconciliation deletes only Files the walk missed; the rest stay.
+            const retained = versionFiles.filter(
+              (file) =>
+                !versionGroup.paths.includes(file.path) &&
+                (options.reconcileMissing !== true ||
+                  memberByPath.has(file.path)),
+            ).length;
             await tx
               .update(versions)
-              .set({ label, bytes, durationSeconds })
-              .where(eq(versions.id, version.id));
-            versionId = version.id;
+              .set({
+                label,
+                bytes,
+                durationSeconds,
+                ...indexFor(members.length + retained),
+              })
+              .where(eq(versions.id, versionId));
           } else {
             const [version] = await tx
               .insert(versions)
@@ -841,6 +903,7 @@ export async function scanShowDirectory(
                 format: "video",
                 bytes,
                 durationSeconds,
+                ...indexFor(members.length),
               })
               .returning();
             if (!version) {
@@ -850,10 +913,6 @@ export async function scanShowDirectory(
           }
           versionIds.push(versionId);
 
-          const versionFiles = await tx
-            .select({ id: files.id, path: files.path, order: files.order })
-            .from(files)
-            .where(eq(files.versionId, versionId));
           const maxOrder = versionFiles.reduce(
             (maximum, file) => Math.max(maximum, file.order),
             -1,
@@ -938,6 +997,13 @@ export async function scanShowDirectory(
         })
         .from(files)
         .innerJoin(
+          versions,
+          and(
+            eq(versions.id, files.versionId),
+            eq(versions.origin, "imported"),
+          ),
+        )
+        .innerJoin(
           itemAncestors,
           and(
             eq(itemAncestors.descendantId, files.itemId),
@@ -945,6 +1011,12 @@ export async function scanShowDirectory(
           ),
         );
       const stale = showFiles.filter((file) => !memberByPath.has(file.path));
+      // Only a path inside the scope can have come back since the walk.
+      await source.confirmMissing(
+        stale
+          .map((file) => file.path)
+          .filter((stalePath) => inScope(path, true, stalePath)),
+      );
       const staleFileIds = stale.map((file) => file.id);
       if (staleFileIds.length > 0) {
         await tx.delete(files).where(inArray(files.id, staleFileIds));
@@ -953,11 +1025,6 @@ export async function scanShowDirectory(
         ...new Set(stale.map((file) => file.versionId)),
       ];
       for (const versionId of affectedVersionIds) {
-        const [version] = await tx
-          .select({ origin: versions.origin })
-          .from(versions)
-          .where(eq(versions.id, versionId));
-        if (version?.origin !== "imported") continue;
         const [remaining] = await tx
           .select({ id: files.id })
           .from(files)

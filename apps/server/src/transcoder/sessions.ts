@@ -343,10 +343,13 @@ export function createSessionManager(
       .limit(1);
     const decision = row?.decision;
     const stripDolbyVision =
-      decision?.video.action === "copy" &&
+      decision != null &&
+      "video" in decision &&
+      decision.video.action === "copy" &&
       decision.video.stripDolbyVision === true;
     const audio = source.audio[0];
     const variant: PlaylistVariant = {
+      uri: "media.m3u8",
       bandwidth: Math.round(source.video.bitrate + (audio?.bitrate ?? 0)),
       width: source.video.width,
       height: source.video.height,
@@ -528,7 +531,7 @@ export function createSessionManager(
         await ensureStarted(session);
         return playlist(
           name.kind === "master"
-            ? buildMasterPlaylist(session.variant, query)
+            ? buildMasterPlaylist([session.variant], query)
             : buildMediaPlaylist(session.boundariesSeconds, query),
         );
       }

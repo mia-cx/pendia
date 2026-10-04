@@ -190,7 +190,7 @@ function decideVideo(
 }
 
 /** Video codecs the fMP4 muxer takes on a stream copy; anything else transcodes over HLS. */
-const hlsCopyVideo = new Set([
+export const hlsCopyVideo = new Set([
   "h264",
   "hevc",
   "av1",
@@ -200,7 +200,7 @@ const hlsCopyVideo = new Set([
 ]);
 
 /** Audio codecs the fMP4 muxer takes on a stream copy; anything else transcodes over HLS. */
-const hlsCopyAudio = new Set([
+export const hlsCopyAudio = new Set([
   "aac",
   "ac3",
   "eac3",
@@ -320,3 +320,8 @@ export function decidePlayback(
 
 /** The engine's full output for one plan, persisted on the session. */
 export type PlaybackDecision = ReturnType<typeof decidePlayback>;
+
+/** A session's persisted plan: the decision, or "stored" when no live path exists, plus the stored rungs served instead of a live run. */
+export type SessionDecision = (PlaybackDecision | { method: "stored" }) & {
+  storedVariantIds?: string[];
+};

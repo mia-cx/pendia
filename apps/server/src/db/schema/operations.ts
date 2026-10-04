@@ -12,7 +12,7 @@ import {
   text,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { PlaybackDecision } from "../../playback/decisions.ts";
+import type { SessionDecision } from "../../playback/decisions.ts";
 import { users } from "./access.ts";
 import {
   id,
@@ -71,7 +71,9 @@ export type JobPayload =
   | { type: "probe"; fileId: string }
   // `weekly` marks the one refresh a continuing Show keeps queued a week ahead.
   | { type: "provider-fetch"; itemId: string; weekly?: true }
+  // A store job encodes one rung, or sweeps a library folder's stored output.
   | { type: "store"; sourceFileId: string; rung: string }
+  | { type: "store"; libraryId: string; folder: string }
   | { type: "plugin"; pluginName: string; jobId: string; data: JsonObject };
 
 // Bun encodes JSON objects itself.
@@ -177,7 +179,7 @@ export const sessionRegistry = pgTable(
     playMethod: playMethod("play_method").notNull(),
     state: playbackState("state").notNull(),
     transcoderNodeId: uuid("transcoder_node_id"),
-    decision: jsonb("decision").$type<PlaybackDecision>(),
+    decision: jsonb("decision").$type<SessionDecision>(),
     createdAt: instant("created_at").notNull().defaultNow(),
     lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
   },

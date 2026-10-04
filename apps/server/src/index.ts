@@ -24,6 +24,7 @@ import {
   type PluginRuntime,
   type PluginRuntimeOptions,
 } from "./plugins/runtime.ts";
+import { registerStoreJobs } from "./stored/jobs.ts";
 import {
   startTranscoder,
   type Transcoder,
@@ -205,9 +206,12 @@ export async function startPendia(
   let plugins: PluginRuntime | undefined;
   let watcher: Awaited<ReturnType<typeof startWatcher>> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops accepting API work, then stops the watcher, transcoder, debouncer, repair, worker, broker, API drain, plugins and database pool once. */
+  // Aborting stops a running store encode so the worker can drain.
+  const storeShutdown = new AbortController();
+  /** Stops accepting API work and store encodes, then stops the watcher, transcoder, debouncer, repair, worker, broker, API drain, plugins and database pool once. */
   function stop() {
     stopping ??= (async () => {
+      storeShutdown.abort();
       const apiStopped = Promise.resolve(apiServer?.stop());
       apiStopped.catch(() => {});
       try {
@@ -329,6 +333,10 @@ export async function startPendia(
         runtimeRegistry.register("plugin", (payload) =>
           runtime.runJob(payload),
         );
+      if (!runtimeRegistry.types().includes("store"))
+        registerStoreJobs(database.db, runtimeRegistry, {
+          signal: storeShutdown.signal,
+        });
       worker = await startJobWorker(database.db, runtimeRegistry, {
         ...workerOptions,
         onError:

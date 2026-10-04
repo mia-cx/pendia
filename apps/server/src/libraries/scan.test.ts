@@ -1766,6 +1766,7 @@ describe.skipIf(!databaseUrl)("scans across roots", () => {
         const transcodedId = await addRoot(db, library.id, transcoded);
         const scanned = await scanDirectory(db, library.id, dirname(movie));
         expect(scanned.versionIds).toHaveLength(2);
+        if (!scanned.itemId) throw new Error("scanDirectory returned no item.");
         expect(await db.select().from(items)).toHaveLength(1);
         const stored = await db
           .select()

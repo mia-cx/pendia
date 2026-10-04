@@ -60,7 +60,7 @@ describe.skipIf(!databaseUrl)("first-run wizard", () => {
             expect(library).toMatchObject({
               name: "Movies",
               medium: "movies",
-              rootPath: root,
+              roots: [{ path: root }],
             });
             expect(status.counts.failed).toBe(0);
             expect(status.counts.completed).toBeGreaterThanOrEqual(2);

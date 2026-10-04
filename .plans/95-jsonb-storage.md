@@ -19,7 +19,7 @@
 - [x] Migration `0013` unwraps double-encoded strings in each affected column. Validation: `db/jsonb.test.ts` seeds every column through drizzle's own `jsonb` (the old path), plus plain-string settings written by raw SQL, runs the migration, and checks the result.
 - [x] Remove the string workarounds in the server README and `probe-cache.test.ts`. Validation: `probe-cache.test.ts` on Postgres; the README upsert run by hand against an API-written `auth` row.
 - [x] Order the `session.state` reads in `api/transcode.test.ts` and `transcoder/sessions.test.ts` by `events.id`. Validation: both files on Postgres.
-- [ ] Full gate. Validation: the commands in the brief, results below.
+- [x] Full gate. Validation: the commands in the brief, results below.
 
 ## Notes
 
@@ -70,3 +70,11 @@ Real Postgres 18, Bun 1.4.2, drizzle-orm 0.45.2. Each row written through drizzl
 - Order-dependent reads of `events` without `ORDER BY`: `api/transcode.test.ts` (the issue) and `stateEvents` in `transcoder/sessions.test.ts`.
 - Left as they are: `transcoder/sessions.test.ts` `segment.ready` uses `toContain`; `libraries/jobs.test.ts` and `metadata/jobs.test.ts` assert lists of identical `library.changed` rows, which match in any order; `transcoder/index.ts` reads one row by id; `api/events.ts` already orders.
 - Validation: `api/transcode.test.ts` and `transcoder/sessions.test.ts` 24 pass on Postgres.
+
+### Gate
+
+Run from the repo root at `d1d9af1`, Postgres 18 on port 55567:
+
+- `bun install --frozen-lockfile`: no changes. `bun run lint`: 381 files, clean. `bun run check`: clean. `bun run build`: 4 tasks successful.
+- `DATABASE_URL=… bun test`: 1330 pass, 3 skip, 2 fail. Both failures were `db.test.ts` counting 13 applied migrations; `0013` makes 14. After the count change, `db.test.ts` 10 pass.
+- `bun test` without `DATABASE_URL`: 775 pass, 578 skip, 0 fail.

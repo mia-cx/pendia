@@ -14,7 +14,7 @@ Build the plugin host from `docs/spec/plugins.md`, `docs/spec/plugin-api.d.ts` a
 
 ## TODOs
 
-- [ ] 1. Manifest, plain-data boundary and config schema.
+- [x] 1. Manifest, plain-data boundary and config schema.
   - `plugins/manifest.ts` reads a package.json into name, version and manifest. It checks the npm name, the semver version, the host API range against `1.0.0`, known capabilities, `items:write` only with `items:read`, network hosts, a config schema of type object, and a relative entry inside the package.
   - `plugins/boundary.ts` accepts JSON values plus `Uint8Array` and rejects functions, class instances, symbols, bigints and non-finite numbers with the offending path.
   - `plugins/config.ts` validates config against the JSON Schema subset the settings form renders: type, properties, required, enum, items, default.

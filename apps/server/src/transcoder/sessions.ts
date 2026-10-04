@@ -1,6 +1,6 @@
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -51,6 +51,7 @@ export type SessionManagerOptions = {
   idleMs?: number; // default 60_000
   waitMs?: number; // default 20_000
   readRate?: LiveRun["readRate"]; // passed to every run; tests only
+  transcodeSlots?: number; // video re-encodes at once, default 2; later ones queue
 };
 
 /** Holds the live sessions of one transcoder: processes, scratch and ready events. */
@@ -77,6 +78,11 @@ type LiveSession = {
   publishes: Set<Promise<unknown>>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   stopped: boolean;
+  /** Waiting for a transcode slot; init and segment requests wait with it. */
+  queued: boolean;
+  admissionWaiters: Set<Waiter>;
+  /** Registry state writes, in order, so a promotion never lands before its queueing. */
+  registryWrites: Promise<void>;
 };
 
 const log = (
@@ -109,8 +115,12 @@ export function createSessionManager(
   const idleMs = options.idleMs ?? 60_000;
   const waitMs = options.waitMs ?? 20_000;
   const readRate = options.readRate;
+  const transcodeSlots = options.transcodeSlots ?? 2;
   const sessions = new Map<string, Promise<LiveSession>>();
   const stopping = new Map<string, Promise<void>>();
+  // Session ids holding a transcode slot, and the sessions waiting for one in arrival order.
+  const admitted = new Set<string>();
+  const queue: LiveSession[] = [];
   let closed = false;
 
   const playlist = (body: string) =>
@@ -376,8 +386,110 @@ export function createSessionManager(
       publishes: new Set(),
       idleTimer: null,
       stopped: false,
+      queued: false,
+      admissionWaiters: new Set(),
+      registryWrites: Promise.resolve(),
     };
   };
+
+  // Moves the registry state the client sees, only from the expected state,
+  // so a stop or a start the client made in between wins.
+  const recordState = (
+    session: LiveSession,
+    from: "starting" | "queued",
+    to: "starting" | "queued",
+  ) => {
+    const { sessionId } = session.scope;
+    session.registryWrites = session.registryWrites
+      .then(async () => {
+        const moved = await db
+          .update(sessionRegistry)
+          .set({ state: to })
+          .where(
+            and(
+              eq(sessionRegistry.id, sessionId),
+              eq(sessionRegistry.state, from),
+            ),
+          )
+          .returning({ id: sessionRegistry.id });
+        if (moved.length > 0) {
+          await publishEvent(db, {
+            kind: "session.state",
+            sessionId,
+            state: to,
+          });
+        }
+      })
+      .catch((error: unknown) =>
+        log("error", "session.state_failed", {
+          sessionId,
+          state: to,
+          error: errorMessage(error),
+        }),
+      );
+  };
+
+  /** Takes a transcode slot for a session that re-encodes video, or queues it. */
+  const requestSlot = (session: LiveSession) => {
+    if (session.outputs.video.action !== "transcode") return;
+    const { sessionId } = session.scope;
+    if (admitted.size < transcodeSlots) {
+      admitted.add(sessionId);
+      return;
+    }
+    session.queued = true;
+    queue.push(session);
+    log("info", "session.queued", { sessionId, position: queue.length });
+    recordState(session, "starting", "queued");
+  };
+
+  /** Hands freed slots to queued sessions in arrival order. */
+  const admitNext = () => {
+    while (!closed && admitted.size < transcodeSlots) {
+      const next = queue.shift();
+      if (next === undefined) return;
+      if (next.stopped) continue;
+      admitted.add(next.scope.sessionId);
+      next.queued = false;
+      for (const waiter of next.admissionWaiters) {
+        waiter(true);
+      }
+      next.admissionWaiters.clear();
+      log("info", "session.admitted", { sessionId: next.scope.sessionId });
+      recordState(next, "queued", "starting");
+    }
+  };
+
+  const releaseSlot = (session: LiveSession) => {
+    const position = queue.indexOf(session);
+    if (position >= 0) queue.splice(position, 1);
+    if (admitted.delete(session.scope.sessionId)) admitNext();
+  };
+
+  const waitForAdmission = (session: LiveSession) =>
+    new Promise<boolean>((resolvePromise) => {
+      const finish = (ok: boolean) => {
+        clearTimeout(timer);
+        session.admissionWaiters.delete(finish);
+        resolvePromise(ok);
+      };
+      const timer = setTimeout(() => finish(false), waitMs);
+      session.admissionWaiters.add(finish);
+    });
+
+  const queuedResponse = () =>
+    Response.json(
+      {
+        error: {
+          code: "SESSION_QUEUED",
+          message: "The session is waiting for a free transcoder.",
+        },
+      },
+      {
+        status: 503,
+        headers: { ...standardHeaders, "retry-after": "1" },
+      },
+    );
 
   const liveSession = async (scope: SessionScope) => {
     // A request at the idle boundary waits for kill and rm to finish, then
@@ -386,7 +498,10 @@ export function createSessionManager(
     if (cleanup !== undefined) await cleanup.catch(() => {});
     const existing = sessions.get(scope.sessionId);
     if (existing !== undefined) return existing;
-    const pending = loadSession(scope);
+    const pending = loadSession(scope).then((session) => {
+      requestSlot(session);
+      return session;
+    });
     sessions.set(scope.sessionId, pending);
     pending.catch(() => {
       if (sessions.get(scope.sessionId) === pending) {
@@ -468,7 +583,10 @@ export function createSessionManager(
     return waitForInit(session);
   };
 
-  const stopSession = (sessionId: string, reason: "idle" | "shutdown") => {
+  const stopSession = (
+    sessionId: string,
+    reason: "idle" | "shutdown" | "ended",
+  ) => {
     const work = (async () => {
       // The sessions entry goes first so new requests never touch the dying
       // object; the stopping entry lets them wait for cleanup instead.
@@ -481,6 +599,8 @@ export function createSessionManager(
       session.stopped = true;
       await session.transition.catch(() => {});
       await session.current?.handle.kill();
+      // ffmpeg is gone, so the slot is free for the next queued session.
+      releaseSlot(session);
       for (const conversion of session.conversions.values()) {
         conversion.kill();
       }
@@ -488,7 +608,11 @@ export function createSessionManager(
         [...session.conversions.values()].map((conversion) => conversion.done),
       );
       rejectWaiters(session);
+      for (const waiter of session.admissionWaiters) {
+        waiter(false);
+      }
       await Promise.allSettled(session.publishes);
+      await session.registryWrites;
       await rm(session.directory, { recursive: true, force: true });
       log("info", "session.stopped", { sessionId, reason });
     })();
@@ -568,7 +692,9 @@ export function createSessionManager(
       if (closed || session.stopped) return stoppingResponse();
       touch(session);
       if (name.kind === "master" || name.kind === "media") {
-        await ensureStarted(session);
+        // Playlists come from the timeline, so a queued session answers them
+        // too; its run starts with the first init or segment request.
+        if (!session.queued) await ensureStarted(session);
         return playlist(
           name.kind === "master"
             ? buildMasterPlaylist(
@@ -590,8 +716,16 @@ export function createSessionManager(
           ),
         );
       }
+      if (session.queued && !(await waitForAdmission(session))) {
+        return session.stopped ? stoppingResponse() : queuedResponse();
+      }
       if (name.kind === "init") return serveInitRequest(session);
       return serveSegmentRequest(session, name.index);
+    },
+    /** Stops a session the client ended, freeing its slot at once instead of at the idle timeout. */
+    async end(sessionId: string) {
+      if (!sessions.has(sessionId)) return;
+      await stopSession(sessionId, "ended");
     },
     async inspect(sessionId: string) {
       const session = await sessions.get(sessionId)?.catch(() => null);
@@ -607,6 +741,7 @@ export function createSessionManager(
         video: session.outputs.video.action,
         audio: session.outputs.audio?.action ?? "copy",
         burnSubtitle: session.outputs.burnSubtitle ?? null,
+        queued: session.queued,
       };
     },
     async stop() {

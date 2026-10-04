@@ -1,10 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { eventChannel } from "../api/events.ts";
 import { readPort } from "../api.ts";
 import type { Database } from "../db/client.ts";
-import { transcoderCapabilities } from "../db/schema/index.ts";
+import { events, transcoderCapabilities } from "../db/schema/index.ts";
 import { errorResponse, standardHeaders } from "../playback/direct.ts";
 import { authorizeHlsRequest, parseHlsPath } from "../playback/hls.ts";
 import {
@@ -20,10 +21,26 @@ export type TranscoderOptions = {
   address?: string; // PENDIA_TRANSCODER_URL, else `http://127.0.0.1:${server.port}`
   ready?: () => Promise<boolean>; // answers the Postgres half of /readyz; startPendia passes probeDatabase
   trial?: typeof runStartupTrial; // the startup trial; tests replace it
+  transcodeSlots?: number; // PENDIA_TRANSCODE_SLOTS, else 2: video re-encodes at once
   idleMs?: number;
   waitMs?: number;
   readRate?: SessionManagerOptions["readRate"];
 };
+
+const defaultTranscodeSlots = 2; // the spec's cap for a 12 vCPU node
+
+/** Reads PENDIA_TRANSCODE_SLOTS, the per-node cap on concurrent video re-encodes. */
+export function readTranscodeSlots() {
+  const value = Bun.env.PENDIA_TRANSCODE_SLOTS;
+  if (value === undefined) return defaultTranscodeSlots;
+  const slots = Number(value);
+  if (!Number.isInteger(slots) || slots < 1) {
+    throw new Error(
+      `PENDIA_TRANSCODE_SLOTS must be a positive integer. Found "${value}".`,
+    );
+  }
+  return slots;
+}
 
 /** The running transcoder role: its node id, address, session manager and shutdown. */
 export type Transcoder = Awaited<ReturnType<typeof startTranscoder>>;
@@ -43,6 +60,7 @@ export async function startTranscoder(
     idleMs: options.idleMs,
     waitMs: options.waitMs,
     readRate: options.readRate,
+    transcodeSlots: options.transcodeSlots ?? readTranscodeSlots(),
   });
   const port = options.port ?? readPort("PENDIA_TRANSCODER_PORT", 3001);
   let nodeId: string | null = null;
@@ -147,8 +165,37 @@ export async function startTranscoder(
     Bun.env.PENDIA_TRANSCODER_URL ??
     `http://127.0.0.1:${server.port}`
   ).replace(/\/+$/, "");
+  // A client's stop frees its transcode slot at once rather than at the idle
+  // timeout. Stops reach every node as session.state events.
+  const endStopped = async (payload: string) => {
+    if (!/^\d+$/.test(payload)) return;
+    const [row] = await db
+      .select({ payload: events.payload })
+      .from(events)
+      .where(
+        and(eq(events.id, BigInt(payload)), eq(events.kind, "session.state")),
+      )
+      .limit(1);
+    const sessionId = row?.payload.sessionId;
+    if (row?.payload.state === "stopped" && typeof sessionId === "string") {
+      await sessions.end(sessionId);
+    }
+  };
+  let subscription: Awaited<ReturnType<typeof db.$client.listen>> | undefined;
   let node: { id: string };
   try {
+    subscription = await db.$client.listen(eventChannel, (payload) => {
+      endStopped(payload).catch((error: unknown) =>
+        console.error(
+          JSON.stringify({
+            level: "error",
+            role: "transcoder",
+            message: "session.end_failed",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+      );
+    });
     // /readyz answers starting until the node row exists, so readiness waits
     // for the trial.
     const backends = await (options.trial ?? runStartupTrial)();
@@ -172,10 +219,12 @@ export async function startTranscoder(
     if (!inserted) throw new Error("Transcoder node insert returned no row.");
     node = inserted;
   } catch (error) {
+    await subscription?.unlisten().catch(() => {});
     await server.stop();
     throw error;
   }
   nodeId = node.id;
+  const listening = subscription;
 
   return {
     nodeId: node.id,
@@ -190,6 +239,7 @@ export async function startTranscoder(
             .delete(transcoderCapabilities)
             .where(eq(transcoderCapabilities.id, node.id));
         } finally {
+          await listening.unlisten().catch(() => {});
           await sessions.stop();
           await server.stop();
         }

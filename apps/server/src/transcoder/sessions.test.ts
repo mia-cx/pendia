@@ -247,6 +247,171 @@ describe.skipIf(!databaseUrl)("session manager", () => {
     30_000,
   );
 
+  /** Turns the scope's session into a 720p transcode and opens `extra` more like it for the same user. */
+  const transcodeSessions = async (
+    db: Database,
+    scope: SessionScope,
+    extra: number,
+  ) => {
+    const { source } = await loadPlaybackSource(
+      db,
+      scope.userId,
+      scope.itemId,
+      scope.versionId,
+    );
+    const decision = decidePlayback(
+      source,
+      {
+        containers: ["mp4"],
+        videoCodecs: [{ codec: "h264", maxWidth: 1280, maxHeight: 720 }],
+        audioCodecs: [{ codec: "aac", maxChannels: 2 }],
+        subtitleFormats: ["webvtt"],
+        hdr: ["sdr"],
+      },
+      { isLan: true },
+    );
+    await db
+      .update(sessionRegistry)
+      .set({ playMethod: "transcode", decision })
+      .where(eq(sessionRegistry.id, scope.sessionId));
+    const scopes = [scope];
+    for (let added = 0; added < extra; added++) {
+      const [row] = await db
+        .insert(sessionRegistry)
+        .values({
+          userId: scope.userId,
+          itemId: scope.itemId,
+          versionId: scope.versionId,
+          playMethod: "transcode",
+          state: "starting",
+          decision,
+        })
+        .returning({ id: sessionRegistry.id });
+      if (row === undefined) throw new Error("Session insert returned no row.");
+      scopes.push({ ...scope, sessionId: row.id });
+    }
+    return scopes;
+  };
+
+  const registryState = async (db: Database, sessionId: string) => {
+    const [row] = await db
+      .select({ state: sessionRegistry.state })
+      .from(sessionRegistry)
+      .where(eq(sessionRegistry.id, sessionId));
+    return row?.state;
+  };
+
+  const stateEvents = async (db: Database, sessionId: string) =>
+    (await db.select({ payload: events.payload }).from(events))
+      .map(({ payload }) => payload)
+      .filter(
+        (payload) =>
+          payload.kind === "session.state" && payload.sessionId === sessionId,
+      )
+      .map((payload) => payload.state);
+
+  test(
+    "a third transcode session queues and starts when one ends",
+    () =>
+      withSession(
+        async ({ db, manager, scope }) => {
+          const [first, second, third] = await transcodeSessions(db, scope, 2);
+          if (!first || !second || !third) throw new Error("Expected three.");
+          for (const running of [first, second]) {
+            await manager.serve(running, hlsName("master.m3u8"), "");
+            expect(
+              (await manager.serve(running, hlsName("0.m4s"), "")).status,
+            ).toBe(200);
+          }
+
+          // The third still gets its playlists, but no ffmpeg and a queued state.
+          const master = await manager.serve(third, hlsName("master.m3u8"), "");
+          expect(master.status).toBe(200);
+          expect(await manager.inspect(third.sessionId)).toMatchObject({
+            queued: true,
+            runs: 0,
+          });
+          const queuedDeadline = Date.now() + 2_000;
+          while ((await registryState(db, third.sessionId)) !== "queued") {
+            if (Date.now() > queuedDeadline) throw new Error("Not queued.");
+            await Bun.sleep(20);
+          }
+          expect(await stateEvents(db, third.sessionId)).toEqual(["queued"]);
+
+          const waiting = manager.serve(third, hlsName("0.m4s"), "");
+          await Bun.sleep(200);
+          expect((await manager.inspect(third.sessionId))?.runs).toBe(0);
+          await manager.end(first.sessionId);
+          expect(await manager.inspect(first.sessionId)).toBeUndefined();
+          const segment = await waiting;
+          expect(segment.status).toBe(200);
+          expect(await manager.inspect(third.sessionId)).toMatchObject({
+            queued: false,
+            runs: 1,
+          });
+          const startedDeadline = Date.now() + 2_000;
+          while ((await registryState(db, third.sessionId)) !== "starting") {
+            if (Date.now() > startedDeadline) throw new Error("Not started.");
+            await Bun.sleep(20);
+          }
+          expect(await stateEvents(db, third.sessionId)).toEqual([
+            "queued",
+            "starting",
+          ]);
+        },
+        // An encode outlasts the remux tests' short idle and wait limits.
+        {
+          idleMs: 30_000,
+          waitMs: 10_000,
+          readRate: undefined,
+          transcodeSlots: 2,
+        },
+      ),
+    60_000,
+  );
+
+  test(
+    "a queued request answers 503 SESSION_QUEUED after the wait, and remux never queues",
+    () =>
+      withSession(
+        async ({ db, manager, scope }) => {
+          const [first, second] = await transcodeSessions(db, scope, 1);
+          if (!first || !second) throw new Error("Expected two.");
+          await manager.serve(first, hlsName("master.m3u8"), "");
+          await manager.serve(second, hlsName("master.m3u8"), "");
+          const waitedAt = Date.now();
+          const queued = await manager.serve(second, hlsName("init.mp4"), "");
+          expect(Date.now() - waitedAt).toBeGreaterThanOrEqual(250);
+          expect(queued.status).toBe(503);
+          expect(queued.headers.get("retry-after")).toBe("1");
+          expect(await queued.json()).toMatchObject({
+            error: { code: "SESSION_QUEUED" },
+          });
+
+          // A remux session with the only slot taken still starts at once.
+          const [remux] = await db
+            .insert(sessionRegistry)
+            .values({
+              userId: scope.userId,
+              itemId: scope.itemId,
+              versionId: scope.versionId,
+              playMethod: "remux",
+              state: "starting",
+            })
+            .returning({ id: sessionRegistry.id });
+          if (remux === undefined) throw new Error("No remux session.");
+          const remuxScope = { ...scope, sessionId: remux.id };
+          await manager.serve(remuxScope, hlsName("master.m3u8"), "");
+          expect(await manager.inspect(remux.id)).toMatchObject({
+            queued: false,
+            runs: 1,
+          });
+        },
+        { transcodeSlots: 1 },
+      ),
+    30_000,
+  );
+
   test(
     "a transcode session encodes the rung and offers the SRT as WebVTT",
     () =>
@@ -333,8 +498,9 @@ describe.skipIf(!databaseUrl)("session manager", () => {
           expect(
             (await manager.serve(scope, hlsName("subs-1.vtt"), "")).status,
           ).toBe(404);
-        }, // An encode takes longer than the remux tests' 300 ms wait.
-        { waitMs: 10_000, readRate: undefined },
+        },
+        // An encode outlasts the remux tests' short idle and wait limits.
+        { idleMs: 30_000, waitMs: 10_000, readRate: undefined },
       ),
     30_000,
   );
@@ -682,12 +848,13 @@ describe.skipIf(!databaseUrl)("session manager", () => {
     () =>
       withSession(
         async ({ manager, scope, scratchDir }) => {
-          // idleMs 100: the stop has at least started by the second request.
+          // idleMs 300: the first segment lands well inside it, and the stop
+          // has at least started by the second request.
           for (let round = 0; round < 3; round += 1) {
             const first = await manager.serve(scope, hlsName("0.m4s"), "");
             expect(first.status).toBe(200);
             await first.body?.cancel();
-            await Bun.sleep(150);
+            await Bun.sleep(400);
             const revived = await manager.serve(scope, hlsName("0.m4s"), "");
             expect(revived.status).toBe(200);
             await revived.body?.cancel();
@@ -698,7 +865,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
             expect(entries.some((name) => name.startsWith("run-"))).toBe(true);
           }
         },
-        { idleMs: 100 },
+        { idleMs: 300 },
       ),
     30_000,
   );

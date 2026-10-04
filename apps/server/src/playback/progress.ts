@@ -298,7 +298,7 @@ export async function updatePlayback(
   });
 }
 
-/** Stops a session, persisting the final position when it was playing. */
+/** Stops a session, persisting the final position when it was playing; a queued or starting session stops without one. */
 export async function stopPlayback(
   db: Database,
   userId: string,
@@ -313,7 +313,6 @@ export async function stopPlayback(
         state: "stopped" as const,
         progress: await readProgress(tx, userId, scope.itemId),
       };
-    if (session.state === "queued") throw new AuthError("CONFLICT");
     if (session.state === "playing") {
       checkPosition(input.positionSeconds, version.durationSeconds);
       await upsertProgress(

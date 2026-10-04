@@ -19,12 +19,14 @@ RUN bun build --compile apps/server/src/index.ts --outfile /app/pendia
 
 FROM debian:trixie-slim AS runtime
 
+# Trixie ships ffmpeg 7.1.
 RUN apt-get update \
   && apt-get install --yes --no-install-recommends ca-certificates curl ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system pendia \
-  && useradd --system --gid pendia --home-dir /app --no-create-home --shell /usr/sbin/nologin pendia
+  && useradd --system --gid pendia --home-dir /app --no-create-home --shell /usr/sbin/nologin pendia \
+  && install --directory --owner pendia --group pendia /var/lib/pendia
 
 WORKDIR /app
 

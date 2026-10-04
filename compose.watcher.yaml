@@ -2,9 +2,7 @@
 # It reaches the api over HTTP and needs no database.
 services:
   watcher:
-    image: pendia:dev
-    build:
-      context: .
+    image: ghcr.io/mia-cx/pendia:${PENDIA_VERSION:-latest}
     command: ["--role", "watcher"]
     environment:
       PENDIA_API_URL: ${PENDIA_API_URL:?set the api origin, such as http://pendia.lan:3000}

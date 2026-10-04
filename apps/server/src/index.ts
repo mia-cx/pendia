@@ -413,7 +413,13 @@ async function run(): Promise<void> {
 
 if (import.meta.main) {
   void run().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(
+      JSON.stringify({
+        level: "error",
+        message: "server.failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
     process.exitCode = 1;
   });
 }

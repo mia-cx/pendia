@@ -15,8 +15,8 @@ Add `--role watcher`: a process on the storage host, configured with the api URL
 
 - [x] Split each scan into a disk source and a database write: a `ScanSource` walks, probes and re-checks files, with the current local behaviour as the default, so a report from elsewhere can feed the same write.
   - Validation: existing scan, jobs, changes and webhooks tests pass unchanged against `DATABASE_URL`. Done: `bun test src/libraries src/jobs`, 154 pass.
-- [ ] Accept watcher event batches at `POST /api/watcher/events` behind a Bearer API key with `manage-libraries`, feeding library-relative changes into the existing 10 s directory debouncer.
-  - Validation: tests for a missing, wrong and session token (401), a path escaping the root (400), and a batch that becomes one scan job with relative paths.
+- [x] Accept watcher event batches at `POST /api/watcher/events` behind a Bearer API key with `manage-libraries`, feeding library-relative changes into the existing 10 s directory debouncer.
+  - Validation: tests for a missing, wrong and session token (401), a path escaping the root (400), and a batch that becomes one scan job with relative paths. Done: `bun test src/watcher src/libraries/webhooks.test.ts`, 16 pass.
 - [ ] Route scan jobs of watched Libraries to the watcher: `POST /api/watcher/claim` records a heartbeat and claims one scan job for the watcher's Libraries, `POST /api/watcher/jobs/<id>` writes the reported files and probes and completes or fails the job, and workers skip scan jobs of Libraries with a live heartbeat.
   - Validation: tests that a worker leaves a watched Library's scan queued, and that a claimed job plus a reported probe writes Items, Versions, Files, Streams and the probe cache.
 - [ ] Add the watcher role: read `PENDIA_API_URL`, `PENDIA_WATCHER_TOKEN` and `PENDIA_WATCH`, watch each path recursively, turn create, close-write, move and delete into file changes (moves paired by inode), push them, and run claimed scans with the local walker and ffprobe.
@@ -34,4 +34,5 @@ Add `--role watcher`: a process on the storage host, configured with the api URL
 - Scan jobs stay one `scan` job type on the one queue. A watcher heartbeat per Library (30 s) routes them: workers skip scan jobs of a Library with a live heartbeat, and the api claims them for the watcher. When the watcher stops, workers take the Library's scans back over NFS.
 - The watcher learns cached probe keys for the scope from the claim, so it only probes files whose size or mtime changed.
 - Abrupt loss of a watcher mid-job leaves that job running, the same documented gap as an abrupt worker loss in the queue.
+- The watcher reports every regular file. The api keeps only changes to files the Library's medium accepts, the same test the walker applies, so subtitles, partial downloads and `.pendia` artwork never trigger a scan. A rename from a non-media name to a media name (`Alien.mkv.part` to `Alien.mkv`) becomes an add; the reverse becomes a delete.
 - The `all` role does not start an in-process watcher. The issue's acceptance criteria name only the standalone watcher.

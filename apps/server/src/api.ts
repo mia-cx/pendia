@@ -4,6 +4,7 @@ import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 import type { createArtworkHandler } from "./metadata/artwork-http.ts";
+import type { createWatcherHandler } from "./watcher/http.ts";
 
 const defaultWebRoot = fileURLToPath(
   new URL("../../web/build/", import.meta.url),
@@ -65,6 +66,7 @@ export function startApiServer(
     api?: ReturnType<typeof createApiHandler>;
     webhooks?: ReturnType<typeof createServarrWebhookHandler>;
     artwork?: ReturnType<typeof createArtworkHandler>;
+    watcher?: ReturnType<typeof createWatcherHandler>;
   } = {},
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
@@ -89,6 +91,11 @@ export function startApiServer(
         (pathname === "/api/webhooks" || pathname.startsWith("/api/webhooks/"))
       ) {
         const response = await handlers.webhooks(request);
+        if (response !== undefined) return response;
+      }
+
+      if (handlers.watcher) {
+        const response = await handlers.watcher(request);
         if (response !== undefined) return response;
       }
 

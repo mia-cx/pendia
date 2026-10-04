@@ -20,6 +20,7 @@ import {
   type Transcoder,
   type TranscoderOptions,
 } from "./transcoder/index.ts";
+import { createWatcherHandler } from "./watcher/http.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -264,6 +265,7 @@ export async function startPendia(
         api: createApiHandler(database.db, eventBroker, transcoder),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
         artwork: createArtworkHandler(database.db),
+        watcher: createWatcherHandler(database.db, changeDebouncer),
       });
     }
     if (runsJobs && database) {

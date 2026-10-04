@@ -64,6 +64,15 @@ const WatchedLibraries = Schema.Struct({
   libraryIds: Schema.NonEmptyArray(Schema.UUID),
 });
 
+/** The claim a report or heartbeat speaks for. */
+const HeldClaim = Schema.Struct({ claimToken: Schema.UUID });
+
+/** A heartbeat during a scan also renews the lease on the claimed job. */
+const Heartbeat = Schema.Struct({
+  ...WatchedLibraries.fields,
+  job: Schema.optional(Schema.Struct({ id: Schema.UUID, ...HeldClaim.fields })),
+});
+
 /** The file sizes and mtimes travel as decimal strings: JSON has no 64-bit integers. */
 const ReportedFile = Schema.Struct({
   path: RelativePath,
@@ -73,7 +82,7 @@ const ReportedFile = Schema.Struct({
 
 const ScanReport = Schema.Union(
   Schema.Struct({
-    attempts: Schema.Int,
+    ...HeldClaim.fields,
     files: Schema.Array(ReportedFile),
     probes: Schema.Array(
       Schema.Struct({
@@ -87,14 +96,15 @@ const ScanReport = Schema.Union(
       default: () => [],
     }),
   }),
-  Schema.Struct({ attempts: Schema.Int, error: Schema.String }),
+  Schema.Struct({ ...HeldClaim.fields, error: Schema.String }),
 );
 
 /** What the api answers a watcher's claim: one scan job to run, or none. */
 export type WatcherClaim = {
   job: {
     id: string;
-    attempts: number;
+    /** Sent back with the heartbeats and the report: only this claim may settle the job. */
+    claimToken: string;
     libraryId: string;
     path: string;
     medium: (typeof libraries.$inferSelect)["medium"];
@@ -195,7 +205,7 @@ async function claim(
   return {
     job: {
       id: job.id,
-      attempts: job.attempts,
+      claimToken: job.claimToken,
       libraryId,
       path,
       medium,
@@ -304,31 +314,34 @@ async function finishJob(db: Database, request: Request, jobId: string) {
     .from(jobs)
     .where(and(eq(jobs.id, jobId), eq(jobs.state, "running")));
   if (job?.payload.type !== "scan") throw new AuthError("NOT_FOUND");
+  const body: unknown = await request.json().catch(() => undefined);
+  // Only the claim that holds the job may settle it, even with a malformed report.
+  if (!Schema.is(HeldClaim)(body)) throw new AuthError("INVALID_INPUT");
   const queue = createJobQueue(db);
+  // Another claim may have taken the job while the body arrived. A renewal
+  // proves this claim still holds it, and holding keeps it while the report is written.
+  const held = { ...job, claimToken: body.claimToken };
+  if (!(await queue.renew(held))) throw new AuthError("CONFLICT");
   let report: typeof ScanReport.Type;
   try {
-    report = await readBody(request, ScanReport);
-  } catch (error) {
-    await queue.fail(job, new Error("Invalid watcher report."));
-    throw error;
+    report = Schema.decodeUnknownSync(ScanReport)(body);
+  } catch {
+    await queue.fail(held, new Error("Invalid watcher report."));
+    throw new AuthError("INVALID_INPUT");
   }
-  if (report.attempts !== job.attempts) throw new AuthError("CONFLICT");
   if ("error" in report) {
-    const failed = await queue.fail(job, new Error(report.error));
+    const failed = await queue.fail(held, new Error(report.error));
     return { state: failed?.state };
   }
+  const { payload } = job;
+  const source = reportedScanSource(db, payload.libraryId, report);
   try {
-    await runScanJob(
-      db,
-      job.payload,
-      job,
-      reportedScanSource(db, job.payload.libraryId, report),
-    );
+    await queue.hold(held, () => runScanJob(db, payload, job, source));
   } catch (error) {
-    const failed = await queue.fail(job, error);
+    const failed = await queue.fail(held, error);
     return { state: failed?.state };
   }
-  const completed = await queue.complete(job);
+  const completed = await queue.complete(held);
   return { state: completed?.state };
 }
 
@@ -356,8 +369,10 @@ export function createWatcherHandler(
         return respond(await claim(db, libraryIds), 200);
       }
       if (pathname === "/api/watcher/heartbeat") {
-        const { libraryIds } = await readBody(request, WatchedLibraries);
+        const { libraryIds, job } = await readBody(request, Heartbeat);
         await beat(db, libraryIds);
+        if (job !== undefined && !(await createJobQueue(db).renew(job)))
+          throw new AuthError("CONFLICT");
         return new Response(null, {
           status: 204,
           headers: { "Cache-Control": "no-store" },

@@ -9,6 +9,7 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   files,
   items,
+  jobs,
   libraries,
   probeCache,
   progress,
@@ -199,7 +200,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       const claimed: WatcherClaim = await response?.json();
       expect(claimed.job).toEqual({
         id: first.id,
-        attempts: 1,
+        claimToken: expect.any(String),
         libraryId: library.id,
         path: "Alien (1979)",
         medium: "movies",
@@ -235,7 +236,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         if (claimed.job === null) throw new Error("No scan was claimed.");
         const file = await readLibraryFile(dir, path);
         const report = {
-          attempts: claimed.job.attempts,
+          claimToken: claimed.job.claimToken,
           files: [
             {
               path,
@@ -307,7 +308,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
             post(
               `jobs/${claimed.job.id}`,
               {
-                attempts: claimed.job.attempts,
+                claimToken: claimed.job.claimToken,
                 files: [
                   {
                     path,
@@ -463,11 +464,79 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       }),
     ));
 
-  test("a report from a stale attempt is refused", () =>
+  test("a report whose claim was taken while it uploaded writes nothing", () =>
     withDatabase(async (db) => {
       const { token, library } = await setup(db);
       const handler = createWatcherHandler(db, unusedDebouncer);
-      await createJobQueue(db).enqueue({
+      const queue = createJobQueue(db);
+      const job = await queue.enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: ".",
+      });
+      const claimed: WatcherClaim = await (
+        await handler(post("claim", { libraryIds: [library.id] }, token))
+      )?.json();
+      if (claimed.job === null) throw new Error("No scan was claimed.");
+      // The body arrives only once the test sends it, after the api looked the job up.
+      let reading = () => {};
+      const read = new Promise<void>((resolve) => {
+        reading = resolve;
+      });
+      let send = (_body: unknown) => {};
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) =>
+            new Promise<void>((resolve) => {
+              send = (value) => {
+                controller.enqueue(
+                  new TextEncoder().encode(JSON.stringify(value)),
+                );
+                controller.close();
+                resolve();
+              };
+              reading();
+            }),
+        },
+        { highWaterMark: 0 },
+      );
+      const response = handler(
+        new Request(`http://pendia.test/api/watcher/jobs/${job.id}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body,
+        }),
+      );
+      await read;
+      await db
+        .update(jobs)
+        .set({
+          leaseExpiresAt: sql`statement_timestamp() - interval '1 second'`,
+        })
+        .where(eq(jobs.id, job.id));
+      const reclaimed = await queue.claim(["scan"], {
+        libraryIds: [library.id],
+      });
+      expect(reclaimed?.attempts).toBe(2);
+      send({
+        claimToken: claimed.job.claimToken,
+        files: [{ path: "Heat (1995)/Heat.mkv", bytes: "1", modifiedNs: "1" }],
+        probes: [],
+      });
+      expect((await response)?.status).toBe(409);
+      expect(await listJobs(db)).toMatchObject([
+        { id: job.id, state: "running", claimToken: reclaimed?.claimToken },
+      ]);
+    }));
+
+  test("heartbeats renew the claim's lease, and a stale claim settles nothing", () =>
+    withDatabase(async (db) => {
+      const { token, library } = await setup(db);
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      const job = await createJobQueue(db).enqueue({
         type: "scan",
         libraryId: library.id,
         path: "Alien (1979)",
@@ -476,13 +545,26 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         await handler(post("claim", { libraryIds: [library.id] }, token))
       )?.json();
       if (claimed.job === null) throw new Error("No scan was claimed.");
-      const response = await handler(
-        post(
-          `jobs/${claimed.job.id}`,
-          { attempts: claimed.job.attempts + 1, error: "late" },
-          token,
-        ),
-      );
-      expect(response?.status).toBe(409);
+      const leaseOf = async () =>
+        (await listJobs(db))[0]?.leaseExpiresAt.getTime();
+      const leased = await leaseOf();
+      const held = { id: job.id, claimToken: claimed.job.claimToken };
+      const stale = { id: job.id, claimToken: crypto.randomUUID() };
+      const beat = (claim: typeof held) =>
+        handler(
+          post("heartbeat", { libraryIds: [library.id], job: claim }, token),
+        );
+      expect((await beat(held))?.status).toBe(204);
+      expect(await leaseOf()).toBeGreaterThan(leased ?? Infinity);
+      expect((await beat(stale))?.status).toBe(409);
+      const report = (body: unknown) =>
+        handler(post(`jobs/${job.id}`, body, token));
+      expect(
+        (await report({ claimToken: stale.claimToken, error: "late" }))?.status,
+      ).toBe(409);
+      expect((await report({ files: "garbage" }))?.status).toBe(400);
+      expect(await listJobs(db)).toMatchObject([
+        { id: job.id, state: "running", error: null },
+      ]);
     }));
 });

@@ -52,14 +52,18 @@ Jobs without a key have no key-specific cap. Worker concurrency defaults to four
 
 Claims increment attempts. Failures retry after one second, then two, doubling to a sixty-second cap.
 The default maxAttempts is three. Exhausted jobs stay failed with their error stored.
-Completion and failure only update the matching running attempt. A later successful attempt retains the previous error.
+Each claim writes a fresh claim token and a lease. Completion, failure and renewal only update the job when the token matches, so a late answer from an earlier claim changes nothing. A later successful attempt retains the previous error.
+
+The lease lasts 60 seconds, and `queue.hold(job, work)` renews it every 20 seconds until `work` settles; the `leaseMs` and `renewMs` queue options change both.
+A claim takes a running job whose lease expired as its next attempt and records the lease error on it. A job whose lease expires on its last attempt fails with that error.
+Renewal runs under the claim lock and refuses an expired lease, so a lease that a claim already counted as free never returns into its concurrency key. A refused renewal means the holder lost the job, and `hold` reports that through its `onError`.
 
 Enqueue commits the row and NOTIFY together. LISTEN wakes idle workers; a five-second poll catches missed notifications and future jobs.
 A local timer wakes the worker when its failed job becomes eligible again.
 `startJobWorker` accepts concurrency, pollIntervalMs, queueOptions, and onError options.
 `startPendia` accepts workerOptions and an optional registry for an embedded server.
 On SIGTERM, shutdown stops new claim loops and drains active handlers before closing Postgres.
-Abrupt process loss does not recover running jobs in this slice. Handlers must be safe to retry after a reported failure.
+After abrupt process loss, another claim takes the job back once its lease expires. Handlers must be safe to retry after a reported failure or a lost lease.
 Plugin cron scheduling belongs to the plugin host, not this queue.
 
 ## Plugins
@@ -445,7 +449,7 @@ Media on NFS gives the api no inotify events, so `--role watcher` runs on the st
 
 The watcher watches each root recursively. After a file stays quiet for 200 ms, it posts the add, move or delete to `POST /api/watcher/events` with a library-relative path. A path that appears with the inode of a vanished path is a move, so renames keep Item and Progress identity. The api keeps changes to the medium's own files and debounces them like webhook changes. A failed post is logged and dropped; the repair pass heals what it missed.
 
-The watcher also runs its Libraries' scans on local disk. It claims scan jobs through `POST /api/watcher/claim`, walks and probes, and posts the files and raw ffprobe output to `POST /api/watcher/jobs/<id>`. The api writes them like a local scan and fills the probe cache, which the next claim shares so unchanged files skip ffprobe. Each claim, and a heartbeat every 5 s during a scan, marks the watcher's Libraries as watched for 30 s. Workers leave scans of a watched Library queued. When the watcher stops, workers scan the Library again after 30 s. A report the api fails to take is retried every 5 s, because the running job holds the Library's concurrency key. A watcher killed during a scan leaves that job running, like a worker killed during a job.
+The watcher also runs its Libraries' scans on local disk. It claims scan jobs through `POST /api/watcher/claim`, walks and probes, and posts the files and raw ffprobe output to `POST /api/watcher/jobs/<id>`. The api writes them like a local scan and fills the probe cache, which the next claim shares so unchanged files skip ffprobe. Each claim, and a heartbeat every 5 s during a scan, marks the watcher's Libraries as watched for 30 s. Workers leave scans of a watched Library queued. When the watcher stops, workers scan the Library again after 30 s. The claim carries a claim token. The heartbeat during a scan sends it back and renews the job's lease, and a 409 answer means another claim took the job. The report carries the token too. The api renews the lease with it before writing anything and holds the lease while it writes, so a report from a claim that lost the job answers 409. A report the api fails to take is retried every 5 s, because the running job holds the Library's concurrency key. A watcher killed during a scan stops renewing, so the job is claimable again once its lease expires.
 
 All watcher routes take the API key as `Authorization: Bearer <key>`. Missing, wrong and session tokens answer 401.
 

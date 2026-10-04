@@ -51,7 +51,7 @@ export async function startJobWorker(
   }
   async function execute(job: Job) {
     try {
-      await registry.run(job);
+      await queue.hold(job, () => registry.run(job), onError);
     } catch (error) {
       const retried = await queue.fail(job, error);
       if (!stopped && retried?.state === "queued") {

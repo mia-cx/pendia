@@ -120,7 +120,8 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
       await consumeLoginAttempt(db, "192.0.2.50", "frank", config);
       const key = `auth.login.account.${createHash("sha256").update("frank").digest("hex")}`;
       await db.execute(
-        sql`update settings set value = jsonb_build_object('attempts', (value->>'attempts')::integer, 'expiresAt', extract(epoch from clock_timestamp()) * 1000 + ${blockingWindowSeconds} * 1000) where key = ${key}`,
+        // A whole-second start keeps the ceiling within the window, however close the next clock reading.
+        sql`update settings set value = jsonb_build_object('attempts', (value->>'attempts')::integer, 'expiresAt', floor(extract(epoch from clock_timestamp())) * 1000 + ${blockingWindowSeconds} * 1000) where key = ${key}`,
       );
       const blocked = await consumeLoginAttempt(
         db,
@@ -137,7 +138,7 @@ describe.skipIf(!databaseUrl)("auth settings and rate limits", () => {
       expect(retry).toBeGreaterThanOrEqual(1);
       // Five minutes tolerates loaded CI but stays below the fresh,
       // nonblocking address counter's fifteen-minute window.
-      expect(retry).toBeLessThanOrEqual(blockingWindowSeconds + 1);
+      expect(retry).toBeLessThanOrEqual(blockingWindowSeconds);
     }));
 
   test("concurrent callers share the same fixed windows", () =>

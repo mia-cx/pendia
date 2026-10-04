@@ -30,7 +30,7 @@ const legacy = [
 ];
 
 describe.skipIf(!databaseUrl)("session decision migration", () => {
-  test("the 0014 migration keeps what pre-selection sessions played", () =>
+  test("the 0015 migration keeps what pre-selection sessions played", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await db.transaction(async (tx) => {
@@ -43,7 +43,7 @@ describe.skipIf(!databaseUrl)("session decision migration", () => {
       });
       const migration = await Bun.file(
         new URL(
-          "../../drizzle/0014_session_decision_selection.sql",
+          "../../drizzle/0015_session_decision_selection.sql",
           import.meta.url,
         ),
       ).text();

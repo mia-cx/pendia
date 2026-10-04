@@ -7,6 +7,10 @@ import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
+import {
+  reconcileStoredVersions,
+  removeOrphanedStoreFolders,
+} from "../stored/reconcile.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { walkLibrary } from "./walker.ts";
 
@@ -73,6 +77,8 @@ export function registerLibraryJobs(
           reconcileMissing: payload.reconcileMissing,
         });
       }
+      await reconcileStoredVersions(db, library, payload.path);
+      await removeOrphanedStoreFolders(library, payload.path);
       await publishEvent(db, {
         kind: "library.changed",
         libraryId: library.id,

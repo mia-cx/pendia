@@ -8,8 +8,8 @@ import { hlsCopyVideo } from "../playback/decisions.ts";
 /** The rung that remuxes the source into the stored layout without re-encoding. */
 export const sourceRungName = "source";
 
-// Rung names become folder names, so they stay short and path safe.
-const RungName = Schema.String.pipe(
+/** A rung name; names become folder names, so they stay short and path safe. */
+export const RungName = Schema.String.pipe(
   Schema.pattern(/^[a-z0-9][a-z0-9_-]{0,31}$/),
 );
 
@@ -48,7 +48,8 @@ export const StoredVersionPolicy = Schema.Struct({
       hdr: Schema.optional(Schema.Boolean),
     }),
   ),
-});
+  // Excess keys fail, so an encoded rung named "source" cannot pass as the remux.
+}).annotations({ parseOptions: { onExcessProperty: "error" } });
 
 /** A decoded library policy. */
 export type StoredVersionPolicy = typeof StoredVersionPolicy.Type;
@@ -57,10 +58,7 @@ export type StoredVersionPolicy = typeof StoredVersionPolicy.Type;
 export function readStoredVersionPolicy(configuration: JsonObject) {
   const raw = configuration.storedVersions;
   if (raw === undefined || raw === null) return null;
-  // Excess keys fail, so an encoded rung named "source" cannot pass as the remux.
-  return Schema.decodeUnknownSync(StoredVersionPolicy, {
-    onExcessProperty: "error",
-  })(raw);
+  return Schema.decodeUnknownSync(StoredVersionPolicy)(raw);
 }
 
 /** The video facts of a source that the policy looks at. */

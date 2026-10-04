@@ -354,12 +354,9 @@ export function createSessionManager(
       .where(eq(sessionRegistry.id, scope.sessionId))
       .limit(1);
     const outputs = sessionOutputs(row?.decision, source, subtitleDetails);
-    // Copied video cuts on source keyframes, so it needs an aligned timeline;
-    // re-encoded video puts its keyframes on the timeline itself.
-    if (
-      version.segmentTimelineId === null ||
-      (outputs.video.action === "copy" && !version.timelineAligned)
-    ) {
+    // A copy cuts on the Version's keyframes and a re-encode restarts on the
+    // frame at a boundary; both need the Version's frames on the timeline.
+    if (version.segmentTimelineId === null || !version.timelineAligned) {
       throw new AuthError("CONFLICT");
     }
     const [timeline] = await db
@@ -438,6 +435,9 @@ export function createSessionManager(
     const { sessionId } = session.scope;
     if (admitted.size < transcodeSlots) {
       admitted.add(sessionId);
+      // A session that queued, idled out and revives into a free slot still
+      // reads queued in the registry; the client's start needs starting.
+      recordState(session, "queued", "starting");
       return;
     }
     session.queued = true;
@@ -653,11 +653,15 @@ export function createSessionManager(
 
   const serveSubtitle = async (session: LiveSession, index: number) => {
     const path = join(session.directory, `subs-${index}.vtt`);
+    if (!session.conversions.has(index)) {
+      await mkdir(session.directory, { recursive: true });
+    }
+    // A stop that ran during the mkdir has already removed the directory.
+    if (session.stopped) return stoppingResponse();
+    // Checked again after the await, so concurrent first requests share one
+    // conversion instead of racing on the same file.
     let conversion = session.conversions.get(index);
     if (conversion === undefined) {
-      await mkdir(session.directory, { recursive: true });
-      // A stop that ran during the mkdir has already removed the directory.
-      if (session.stopped) return stoppingResponse();
       const started = convertToWebvtt(session.inputPath, index, path);
       session.conversions.set(index, started);
       // A failed conversion is not cached; the next request tries again.

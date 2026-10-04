@@ -471,7 +471,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       }
     }));
 
-  test("a transcode needs a timeline, and an aligned one only when the video copies", () =>
+  test("a transcode needs an aligned timeline whether the video copies or re-encodes", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db, "owner", { audioCodec: "ac3" });
@@ -491,11 +491,16 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         expect(
           (await capture(client.playback.plan({ ...reencode }))).status,
         ).toBe(409);
+        // A timeline whose boundaries are not on this Version's frames: a
+        // restarted encode would start a frame late and miss every cut.
         await alignTimeline(db, fx.version, false);
-        expect(
-          (await capture(client.playback.plan({ ...audioOnly, profile })))
-            .status,
-        ).toBe(409);
+        for (const input of [reencode, { ...audioOnly, profile }]) {
+          expect((await capture(client.playback.plan(input))).status).toBe(409);
+        }
+        await db
+          .update(versions)
+          .set({ timelineAligned: true })
+          .where(eq(versions.id, fx.version.id));
         const planned = await client.playback.plan(reencode);
         expect(planned.method).toBe("transcode");
         expect(planned.url).toMatch(/\/hls\/master\.m3u8\?token=/);

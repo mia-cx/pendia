@@ -338,12 +338,12 @@ export async function planPlayback(
   } catch {
     throw new AuthError("INVALID_INPUT");
   }
-  // HLS cuts on the Item's timeline. Copied video can only cut on its own
-  // keyframes, so it also needs the Version aligned to that timeline.
+  // HLS cuts on the Item's timeline. A copy cuts on the Version's own
+  // keyframes, and a re-encode restarts on the frame at a boundary, so both
+  // need the Version's frames on that timeline.
   if (
     decision.method !== "direct-play" &&
-    (version.segmentTimelineId === null ||
-      (decision.video.action === "copy" && !version.timelineAligned))
+    (version.segmentTimelineId === null || !version.timelineAligned)
   )
     throw new AuthError("CONFLICT");
   const method = decision.method;

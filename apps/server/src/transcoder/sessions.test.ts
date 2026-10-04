@@ -371,6 +371,80 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   );
 
   test(
+    "a queued session that idled out revives into a free slot as starting",
+    () =>
+      withSession(
+        async ({ db, manager, scope }) => {
+          const [first, second] = await transcodeSessions(db, scope, 1);
+          if (!first || !second) throw new Error("Expected two.");
+          await manager.serve(first, hlsName("master.m3u8"), "");
+          await manager.serve(second, hlsName("master.m3u8"), "");
+          const until = async (
+            check: () => Promise<boolean>,
+            message: string,
+          ) => {
+            const deadline = Date.now() + 3_000;
+            while (!(await check())) {
+              if (Date.now() > deadline) throw new Error(message);
+              await Bun.sleep(20);
+            }
+          };
+          await until(
+            async () =>
+              (await registryState(db, second.sessionId)) === "queued",
+            "Not queued.",
+          );
+          // Keep the first alive while the queued second idles out.
+          await Bun.sleep(500);
+          await manager.serve(first, hlsName("master.m3u8"), "");
+          await until(
+            async () => (await manager.inspect(second.sessionId)) === undefined,
+            "The queued session never idled out.",
+          );
+          expect(await registryState(db, second.sessionId)).toBe("queued");
+
+          await manager.end(first.sessionId);
+          await manager.serve(second, hlsName("master.m3u8"), "");
+          expect(await manager.inspect(second.sessionId)).toMatchObject({
+            queued: false,
+            runs: 1,
+          });
+          await until(
+            async () =>
+              (await registryState(db, second.sessionId)) === "starting",
+            "The revived session still reads queued.",
+          );
+          expect(await stateEvents(db, second.sessionId)).toEqual([
+            "queued",
+            "starting",
+          ]);
+        },
+        {
+          idleMs: 1_000,
+          waitMs: 10_000,
+          readRate: undefined,
+          transcodeSlots: 1,
+        },
+      ),
+    30_000,
+  );
+
+  test("concurrent first requests for a subtitle share one conversion", () =>
+    withSession(async ({ manager, scope }) => {
+      const responses = await Promise.all(
+        [0, 1, 2].map(() => manager.serve(scope, hlsName("subs-0.vtt"), "")),
+      );
+      const texts = await Promise.all(
+        responses.map(async (response) => {
+          expect(response.status).toBe(200);
+          return response.text();
+        }),
+      );
+      expect(texts[0]).toContain("Fixture");
+      expect(new Set(texts).size).toBe(1);
+    }));
+
+  test(
     "a queued request answers 503 SESSION_QUEUED after the wait, and remux never queues",
     () =>
       withSession(

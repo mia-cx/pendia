@@ -218,8 +218,10 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | Procedure | REST route | Input | Output |
 | --- | --- | --- | --- |
 | `me` | GET `/api/me` | None | `user`, `credential`, and `admin` saying whether the caller is a built-in admin |
-| `items.list` | GET `/api/items` | `libraryId`, `kind`, `limit`, `cursor` | `{ items, cursor }` of cards |
+| `items.list` | GET `/api/items` | `libraryId`, `kind`, `sort`, `limit`, `cursor` | `{ items, cursor }` of cards |
 | `items.get` | GET `/api/items/{id}` | `id` in the path | the detail shape |
+| `items.search` | GET `/api/search` | `query` | card array, best match first |
+| `shelves.home` | GET `/api/shelves/home` | None | `Shelf` array |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
 | `setup.status` | GET `/api/setup/status` | None | `{ complete }` |
 | `users.list` | GET `/api/users` | None | `AdminUser` array |
@@ -256,12 +258,17 @@ Group permission edits apply to custom groups only. The built-in `admins` and `u
 Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `settings.update`. OIDC stays read-only in this slice.
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}?width=<pixels>`; `width` is required and accepts an integer from 1 through 4096.
-Details add `parentId`, `overview`, `contentRating`, `genres`, `tags`, `metadataState` and `updatedAt`. `metadataState` is `pending` until an enabled provider looks at the Item, and again while a failed poster download waits for the next scan to retry it. It is `matched` after a confident match. It is `unmatched` when a provider searched and found no confident match, or has no record for the Item's stored id; that is the state an admin resolves by hand. Instants are the database's own UTC text at microsecond precision.
+Browse cards add `parentId`, `seasonNumber`, `episodeNumber`, `episodeEndNumber` and `show`, which is `{ id, title, posterArtworkId }` for a Season or Episode and null otherwise. An Episode's `seasonNumber` is its Season's. Together they give every route a card needs.
+Details are browse cards plus `overview`, `contentRating`, `genres`, `tags`, `metadataState`, `updatedAt`, `backdropArtworkId`, `credits`, `versions` and `children`. `credits` lists `{ contributorId, name, role, character }` with actors first, then by role and credit order. `versions` lists the imported Versions as `{ id, label, format, durationSeconds, bytes }` by label; stored Versions are renditions of those and stay off the list. `children` holds a Show's Seasons or a Season's Episodes as browse cards in number order. `metadataState` is `pending` until an enabled provider looks at the Item, and again while a failed poster download waits for the next scan to retry it. It is `matched` after a confident match. It is `unmatched` when a provider searched and found no confident match, or has no record for the Item's stored id; that is the state an admin resolves by hand. Instants are the database's own UTC text at microsecond precision.
 
-The list connection is `{ items, cursor }` over the newest-first order, `addedAt` then `id` descending.
-`cursor` is opaque, bound to that order and carries the microsecond instant, so a row that shares a millisecond with its predecessor still pages.
+The list connection is `{ items, cursor }`. `sort` is `added` by default, newest first by `addedAt` then `id` descending, or `title`, A to Z by `title` then `id`.
+`cursor` is opaque and bound to its sort: an `added` cursor carries the microsecond instant, so a row that shares a millisecond with its predecessor still pages, and a `title` cursor starts with `t1.`. Either sort answers 400 to the other's cursor.
 Without a `libraryId` the list is scoped to the libraries the caller may view, with the auth slice's own precedence rules, and answers 403 when that set is empty.
 The default page is 24 and `limit` caps at 100. An unparseable cursor answers 400.
+
+`items.search` matches the titles of Movies and Shows in the libraries the caller may view, with pg_trgm. Trigram similarity forgives a misspelling, so `Interstelar` finds `Interstellar`; word similarity lets a prefix or one word of a longer title match. Results come best match first, at most 24. `query` is trimmed, must keep 1 to 200 characters and may not contain NUL. A caller who may view no library gets an empty list.
+
+`shelves.home` assembles Home from the mediums in one call. Continue watching comes first, then each medium's own shelves such as next up, then recently added. A core shelf appears only when some medium joins it, each holds at most 24 entries, and an empty shelf is left out. A shelf is `{ id, title, entries }` and an entry is `{ item, progress }`: a browse card, and `{ positionSeconds, durationSeconds }` on continue watching or null elsewhere. Recently added lists Movies and Shows by their own `addedAt`, so a new Episode does not lift its Show.
 
 Errors map host codes to HTTP statuses:
 
@@ -353,6 +360,8 @@ The `settings` row with key `metadata` holds one JSON object. Missing fields use
 ```
 
 `providerOrder` sets the enabled providers in priority order. Only `tmdb` is built in today. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
+
+TMDB title search compares the folder title with each result's `title` and `original_title`. When neither matches for any result, it also reads `/movie/{id}/translations` for the first five results, so a Radarr folder named with a translated title, such as `Die Verurteilten (1994)`, still matches. A search with a plain match makes no extra request.
 
 `libraries` maps a Library id to its provider list. A missing entry uses `providerOrder`, an explicit `[]` disables metadata for that Library, and an explicit `["tmdb"]` enables only TMDB:
 

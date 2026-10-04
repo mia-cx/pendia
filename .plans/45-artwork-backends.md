@@ -39,3 +39,4 @@ Add the two remaining artwork store backends next to the colocated one from #28:
 - The read-only fallback shipped in the backend-interface commit; its TODO commit adds the test. The test skips as root, which ignores directory permissions.
 - Library deletion removes path and S3 originals. Colocated originals stay, because deleting a Library never touches the media folder.
 - Scan deletes go through `deleteItemSubtree` and `removeArtworkFiles`, which the removal tests call directly.
+- Gate on 2026-10-04 from the repo root: `bun install --frozen-lockfile` no changes; `bun run lint` clean; `bun run check` 6 of 6 tasks; `bun run build` 4 of 4 tasks; `bun test` with `DATABASE_URL` and `TEST_S3_URL` 1002 pass, 0 fail; `bun test` without them 554 pass, 456 skip, 0 fail.

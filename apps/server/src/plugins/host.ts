@@ -19,11 +19,11 @@ import type { JsonObject } from "../db/schema/common.ts";
 import {
   files,
   items,
-  libraries,
   progress,
   providerIds,
   versions,
 } from "../db/schema/index.ts";
+import { type LibraryRoot, rootsOf } from "../libraries/roots.ts";
 import { assertPlainData } from "./boundary.ts";
 import { anyHost } from "./manifest.ts";
 
@@ -216,15 +216,22 @@ async function libraryPath(
   libraryId: string,
   path: string,
 ): Promise<string> {
-  const [library] = await db
-    .select({ rootPath: libraries.rootPath })
-    .from(libraries)
-    .where(eq(libraries.id, requireUuid(libraryId, "libraryId")));
-  if (library === undefined)
-    throw new Error(`Library ${libraryId} does not exist.`);
+  const roots = await rootsOf(db, requireUuid(libraryId, "libraryId"));
   const relative = requireString(path, "path");
   const outside = () => new Error(`${relative} is outside the library.`);
-  const root = await realpath(library.rootPath);
+  // A path resolves in the first root holding it, else the first holding its folder.
+  const holds = (at: string) => (root: LibraryRoot) =>
+    lstat(resolve(root.path, at)).then(
+      () => true,
+      () => false,
+    );
+  const chosen =
+    (await findRoot(roots, holds(relative))) ??
+    (await findRoot(roots, holds(dirname(relative)))) ??
+    roots[0];
+  if (chosen === undefined)
+    throw new Error(`Library ${libraryId} does not exist.`);
+  const root = await realpath(chosen.path);
   const target = resolve(root, relative);
   if (isAbsolute(relative) || !target.startsWith(`${root}${sep}`))
     throw outside();
@@ -248,6 +255,14 @@ async function libraryPath(
       missing.unshift(basename(existing));
     }
   }
+}
+
+async function findRoot(
+  roots: readonly LibraryRoot[],
+  matches: (root: LibraryRoot) => Promise<boolean>,
+) {
+  for (const root of roots) if (await matches(root)) return root;
+  return undefined;
 }
 
 function isMissing(error: unknown): boolean {

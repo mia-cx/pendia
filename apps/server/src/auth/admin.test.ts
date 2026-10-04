@@ -4,13 +4,13 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   groups,
-  libraries,
   type Permission,
   userGroups,
   userPermissionOverrides,
   userSettings,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { createLocalUser, setupAdmin } from "./accounts.ts";
 import {
   getUserAccess,
@@ -53,10 +53,11 @@ async function seedManager(db: Database, adminId: string) {
 }
 
 async function createLibrary(db: Database, name: string) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name, medium: "movies", rootPath: `/srv/${name}` })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name,
+    medium: "movies",
+    rootPath: `/srv/${name}`,
+  });
   if (!library) throw new Error("Fixture library missing.");
   return library;
 }

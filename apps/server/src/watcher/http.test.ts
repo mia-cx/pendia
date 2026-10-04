@@ -11,6 +11,7 @@ import {
   items,
   jobs,
   libraries,
+  libraryRoots,
   probeCache,
   progress,
   streams,
@@ -19,6 +20,7 @@ import {
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJobQueue, listJobs, watcherHeartbeatMs } from "../jobs/queue.ts";
 import { scanShowDirectory } from "../libraries/scan.ts";
+import { addRoot, insertLibraries } from "../libraries/testing.ts";
 import { readLibraryFile } from "../libraries/walker.ts";
 import { createChangeDebouncer } from "../libraries/webhooks.ts";
 import {
@@ -44,11 +46,12 @@ async function setup(db: Database) {
     password: "admin-pass",
   });
   const { token } = await createApiKey(db, admin.id, "Watcher");
-  const [library] = await db
-    .insert(libraries)
-    // The api never reads this root: a watched Library's disk is the watcher's.
-    .values({ name: "Movies", medium: "movies", rootPath: "/media/movies" })
-    .returning();
+  // The api never reads this root: a watched Library's disk is the watcher's.
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/media/movies",
+  });
   if (!library) throw new Error("Library insert returned no row.");
   return { admin, token, library };
 }
@@ -84,7 +87,7 @@ describe.skipIf(!databaseUrl)("watcher events", () => {
       );
       const debouncer = createChangeDebouncer(db, { delayMs: 10 });
       const handler = createWatcherHandler(db, debouncer);
-      const batch = { libraryId: library.id, changes: [] };
+      const batch = { rootId: library.rootId, changes: [] };
       try {
         for (const token of [undefined, "x".repeat(43), sessionToken]) {
           const response = await handler(post("events", batch, token));
@@ -105,7 +108,7 @@ describe.skipIf(!databaseUrl)("watcher events", () => {
           const response = await handler(
             post(
               "events",
-              { libraryId: library.id, changes: [{ kind: "add", path }] },
+              { rootId: library.rootId, changes: [{ kind: "add", path }] },
               token,
             ),
           );
@@ -127,7 +130,7 @@ describe.skipIf(!databaseUrl)("watcher events", () => {
           post(
             "events",
             {
-              libraryId: library.id,
+              rootId: library.rootId,
               changes: [
                 { kind: "add", path: "Alien (1979)/Alien.mkv.part" },
                 {
@@ -159,15 +162,22 @@ describe.skipIf(!databaseUrl)("watcher events", () => {
           libraryId: library.id,
           path: "Alien (1979)",
           changes: [
-            { kind: "add", path: "Alien (1979)/Alien.mkv", providerIds: {} },
+            {
+              kind: "add",
+              rootId: library.rootId,
+              path: "Alien (1979)/Alien.mkv",
+              providerIds: {},
+            },
             {
               kind: "move",
+              rootId: library.rootId,
               path: "Alien (1979)/Alien (1979).mkv",
               previousPath: "Alien (1979)/Alien.mkv",
               providerIds: {},
             },
             {
               kind: "delete",
+              rootId: library.rootId,
               path: "Alien (1979)/Alien (1979).mkv",
               target: "file",
               providerIds: {},
@@ -195,13 +205,14 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         path: "Heat (1995)",
       });
       const response = await handler(
-        post("claim", { libraryIds: [library.id] }, token),
+        post("claim", { rootIds: [library.rootId] }, token),
       );
       const claimed: WatcherClaim = await response?.json();
       expect(claimed.job).toEqual({
         id: first.id,
         claimToken: expect.any(String),
         libraryId: library.id,
+        rootIds: [library.rootId],
         path: "Alien (1979)",
         medium: "movies",
         cached: [],
@@ -215,6 +226,34 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         })
         .where(eq(libraries.id, library.id));
       expect((await queue.claim())?.id).toBe(second.id);
+    }));
+
+  test("a watcher claims a Library's scans only when it watches every root", () =>
+    withDatabase(async (db) => {
+      const { token, library } = await setup(db);
+      const otherRoot = await addRoot(db, library.id, "/media/transcoded");
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      const job = await createJobQueue(db).enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: "Alien (1979)",
+      });
+      const claim = async (rootIds: string[]): Promise<WatcherClaim> =>
+        (await handler(post("claim", { rootIds }, token)))?.json();
+      expect(await claim([library.rootId])).toEqual({ job: null });
+      const [unclaimed] = await db.select().from(libraries);
+      expect(unclaimed?.watcherSeenAt).toBeNull();
+      expect((await claim([library.rootId, otherRoot])).job).toMatchObject({
+        id: job.id,
+        rootIds: [library.rootId, otherRoot],
+      });
+      expect(
+        (
+          await handler(
+            post("claim", { rootIds: [crypto.randomUUID()] }, token),
+          )
+        )?.status,
+      ).toBe(404);
     }));
 
   test("a claimed scan with a reported probe writes the movie and the probe cache", () =>
@@ -231,7 +270,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           path: "Alien (1979)",
         });
         const claimed: WatcherClaim = await (
-          await handler(post("claim", { libraryIds: [library.id] }, token))
+          await handler(post("claim", { rootIds: [library.rootId] }, token))
         )?.json();
         if (claimed.job === null) throw new Error("No scan was claimed.");
         const file = await readLibraryFile(dir, path);
@@ -239,6 +278,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           claimToken: claimed.job.claimToken,
           files: [
             {
+              rootId: library.rootId,
               path,
               bytes: String(file.bytes),
               modifiedNs: String(file.modifiedNs),
@@ -246,6 +286,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           ],
           probes: [
             {
+              rootId: library.rootId,
               path,
               ffprobe: await readFfprobe(join(dir, path)),
               keyframesSeconds: (await readKeyframeIndex(join(dir, path)))
@@ -286,9 +327,8 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         const { admin, token, library } = await setup(db);
         await db
           .update(libraries)
-          .set({ name: "Shows", medium: "shows", rootPath: "/media/shows" })
+          .set({ name: "Shows", medium: "shows" })
           .where(eq(libraries.id, library.id));
-        expect(root).not.toBe("/media/shows");
         const oldShow = "Old Show";
         const newShow = "New Show";
         const oldPath = `${oldShow}/Season 01/Show S01E01.mkv`;
@@ -299,7 +339,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         const handler = createWatcherHandler(db, debouncer);
         const finishScan = async (path: string, scope: string) => {
           const claimed: WatcherClaim = await (
-            await handler(post("claim", { libraryIds: [library.id] }, token))
+            await handler(post("claim", { rootIds: [library.rootId] }, token))
           )?.json();
           if (claimed.job === null) throw new Error("No scan was claimed.");
           expect(claimed.job).toMatchObject({ path: scope, medium: "shows" });
@@ -311,6 +351,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
                 claimToken: claimed.job.claimToken,
                 files: [
                   {
+                    rootId: library.rootId,
                     path,
                     bytes: String(file.bytes),
                     modifiedNs: String(file.modifiedNs),
@@ -318,6 +359,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
                 ],
                 probes: [
                   {
+                    rootId: library.rootId,
                     path,
                     ffprobe: await readFfprobe(join(root, path)),
                     keyframesSeconds: (
@@ -362,7 +404,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
             post(
               "events",
               {
-                libraryId: library.id,
+                rootId: library.rootId,
                 changes: [
                   { kind: "move", previousPath: oldPath, path: newPath },
                 ],
@@ -383,6 +425,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
             changes: [
               {
                 kind: "move",
+                rootId: library.rootId,
                 previousPath: oldPath,
                 path: newPath,
                 providerIds: {},
@@ -431,8 +474,12 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         const { token, library } = await setup(db);
         await db
           .update(libraries)
-          .set({ medium: "shows", rootPath: root })
+          .set({ medium: "shows" })
           .where(eq(libraries.id, library.id));
+        await db
+          .update(libraryRoots)
+          .set({ path: root })
+          .where(eq(libraryRoots.id, library.rootId));
         const moved = "Old Show/Season 01/Show S01E01.mkv";
         const sibling = "Old Show/Season 01/Show S01E02.mkv";
         await mkdir(join(root, "Old Show", "Season 01"), { recursive: true });
@@ -447,6 +494,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           changes: [
             {
               kind: "move",
+              rootId: library.rootId,
               path: "New Show/Season 01/Show S01E01.mkv",
               previousPath: moved,
               providerIds: {},
@@ -454,12 +502,15 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           ],
         });
         const claimed: WatcherClaim = await (
-          await handler(post("claim", { libraryIds: [library.id] }, token))
+          await handler(post("claim", { rootIds: [library.rootId] }, token))
         )?.json();
         // The destination too: the scan asks about it once the move re-paths the File.
         expect(claimed.job?.check).toEqual([
-          sibling,
-          "New Show/Season 01/Show S01E01.mkv",
+          { rootId: library.rootId, path: sibling },
+          {
+            rootId: library.rootId,
+            path: "New Show/Season 01/Show S01E01.mkv",
+          },
         ]);
       }),
     ));
@@ -475,7 +526,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         path: ".",
       });
       const claimed: WatcherClaim = await (
-        await handler(post("claim", { libraryIds: [library.id] }, token))
+        await handler(post("claim", { rootIds: [library.rootId] }, token))
       )?.json();
       if (claimed.job === null) throw new Error("No scan was claimed.");
       // The body arrives only once the test sends it, after the api looked the job up.
@@ -523,7 +574,14 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       expect(reclaimed?.attempts).toBe(2);
       send({
         claimToken: claimed.job.claimToken,
-        files: [{ path: "Heat (1995)/Heat.mkv", bytes: "1", modifiedNs: "1" }],
+        files: [
+          {
+            rootId: library.rootId,
+            path: "Heat (1995)/Heat.mkv",
+            bytes: "1",
+            modifiedNs: "1",
+          },
+        ],
         probes: [],
       });
       expect((await response)?.status).toBe(409);
@@ -542,7 +600,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         path: "Alien (1979)",
       });
       const claimed: WatcherClaim = await (
-        await handler(post("claim", { libraryIds: [library.id] }, token))
+        await handler(post("claim", { rootIds: [library.rootId] }, token))
       )?.json();
       if (claimed.job === null) throw new Error("No scan was claimed.");
       const leaseOf = async () =>
@@ -552,7 +610,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       const stale = { id: job.id, claimToken: crypto.randomUUID() };
       const beat = (claim: typeof held) =>
         handler(
-          post("heartbeat", { libraryIds: [library.id], job: claim }, token),
+          post("heartbeat", { rootIds: [library.rootId], job: claim }, token),
         );
       expect((await beat(held))?.status).toBe(204);
       expect(await leaseOf()).toBeGreaterThan(leased ?? Infinity);

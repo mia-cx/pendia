@@ -4,17 +4,13 @@ import { join } from "node:path";
 import { asc, eq } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import {
-  files,
-  libraries,
-  segmentTimelines,
-  versions,
-} from "../db/schema/index.ts";
+import { files, segmentTimelines, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { scanDirectory } from "./scan.ts";
+import { insertLibraries } from "./testing.ts";
 
 const folder = "Movie (2000)";
 const member = (name: string) => `${folder}/${name}`;
@@ -24,10 +20,11 @@ async function withLibrary(
   rootPath: string,
   run: (library: { id: string; rootPath: string }) => Promise<void>,
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath,
+  });
   if (!library) throw new Error("Fixture library missing.");
   await run(library);
 }

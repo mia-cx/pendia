@@ -157,12 +157,12 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
             const created = await client.libraries.create({
               name: "Movies",
               medium: "movies",
-              rootPath: root,
+              roots: [root],
             });
             expect(created).toMatchObject({
               name: "Movies",
               medium: "movies",
-              rootPath: root,
+              roots: [{ path: root }],
             });
 
             const get = await fetch(`${base}/api/libraries/${created.id}`, {
@@ -324,11 +324,26 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
             body: JSON.stringify(body),
           });
         const created = await post(
-          { name: "Shows", medium: "shows", rootPath: "/srv/shows" },
+          { name: "Shows", medium: "shows", roots: ["/srv/shows"] },
           adminHeaders,
         );
         expect(created.status).toBe(200);
         const showsLibrary = (await created.json()) as { id: string };
+        const overlapping = await fetch(
+          `${base}/api/libraries/${showsLibrary.id}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json", ...adminHeaders },
+            body: JSON.stringify({
+              roots: [{ path: "/srv/anime" }, { path: "/srv/anime/kids" }],
+            }),
+          },
+        );
+        expect(overlapping.status).toBe(400);
+        expect(await overlapping.json()).toMatchObject({
+          message: "This folder overlaps another folder of this library.",
+          data: { root: 1 },
+        });
         const deleted = await fetch(
           `${base}/api/libraries/${showsLibrary.id}`,
           { method: "DELETE", headers: adminHeaders },
@@ -337,7 +352,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
         expect(
           (
             await post(
-              { name: "Movies", medium: "movies", rootPath: "relative" },
+              { name: "Movies", medium: "movies", roots: ["relative"] },
               adminHeaders,
             )
           ).status,
@@ -345,7 +360,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
         expect(
           (
             await post(
-              { name: "Movies", medium: "movies", rootPath: "/srv/movies" },
+              { name: "Movies", medium: "movies", roots: ["/srv/movies"] },
               viewerHeaders,
             )
           ).status,
@@ -384,12 +399,12 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
             const library = await client.libraries.create({
               name: "Shows",
               medium: "shows",
-              rootPath: root,
+              roots: [root],
             });
             expect(library).toMatchObject({
               name: "Shows",
               medium: "shows",
-              rootPath: root,
+              roots: [{ path: root }],
             });
 
             const { jobId } = await client.libraries.scan({ id: library.id });
@@ -463,7 +478,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
           JSON.stringify({
             name,
             medium: "movies",
-            rootPath: "/srv/movies",
+            roots: [`/srv/${name}`],
           });
         const cookie = `${sessionCookieName}=${token}`;
         const foreign = await fetch(`${base}/api/libraries`, {
@@ -543,7 +558,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
                 const library = await client.libraries.create({
                   name,
                   medium: "movies",
-                  rootPath: root,
+                  roots: [root],
                 });
                 await client.libraries.scan({ id: library.id });
                 await waitForLibraryJobs(db, library.id);

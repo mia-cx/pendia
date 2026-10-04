@@ -6,11 +6,12 @@ import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { items, jobs, libraries, settings } from "../db/schema/index.ts";
+import { items, jobs, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { registerMetadataJobs } from "../metadata/jobs.ts";
 import { createPluginRouteHandler } from "./http.ts";
 import { createPluginRuntime, enqueueTick } from "./runtime.ts";
@@ -31,10 +32,11 @@ async function seed(db: Database, folder: string, plugin: FixturePlugin) {
   await migrateDatabase(db);
   globalThis.pendiaCalls = [];
   await installFixture(db, folder, plugin);
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: folder })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: folder,
+  });
   if (!library) throw new Error("Library missing.");
   const item = await insertItem(db, {
     libraryId: library.id,

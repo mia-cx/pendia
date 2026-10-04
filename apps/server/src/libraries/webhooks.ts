@@ -4,7 +4,12 @@ import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { files, libraries, type ScanChange } from "../db/schema/index.ts";
+import {
+  files,
+  libraries,
+  libraryRoots,
+  type ScanChange,
+} from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { leavesRoot } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
@@ -14,7 +19,7 @@ import { acceptsLibraryFile } from "./walker.ts";
 
 const defaultDelayMs = 10_000;
 
-/** A library-relative file change a watcher saw on disk. */
+/** A root-relative file change a watcher saw on disk. */
 export type WatchedChange =
   | { kind: "add" | "delete"; path: string }
   | { kind: "move"; path: string; previousPath: string };
@@ -150,42 +155,41 @@ export function createChangeDebouncer(
   ): Promise<void> => {
     const medium = source === "sonarr" ? "shows" : "movies";
     const roots = await db
-      .select({ id: libraries.id, rootPath: libraries.rootPath })
-      .from(libraries)
+      .select({
+        id: libraryRoots.id,
+        libraryId: libraryRoots.libraryId,
+        path: libraryRoots.path,
+      })
+      .from(libraryRoots)
+      .innerJoin(libraries, eq(libraries.id, libraryRoots.libraryId))
       .where(eq(libraries.medium, medium));
 
+    // The longest root containing the path. Roots never overlap, so at most one does.
     const locate = (path: string) => {
       let found:
-        | { libraryId: string; relativePath: string; rootLength: number }
+        | {
+            libraryId: string;
+            rootId: string;
+            relativePath: string;
+            rootLength: number;
+          }
         | undefined;
-      let ambiguous = false;
       for (const root of roots) {
-        const normalized = resolve(root.rootPath);
-        const relativePath = relative(normalized, resolve(path));
+        const relativePath = relative(root.path, resolve(path));
         if (
           relativePath === ".." ||
           relativePath.startsWith("../") ||
           isAbsolute(relativePath)
         )
           continue;
-        if (found === undefined || normalized.length > found.rootLength) {
+        if (found === undefined || root.path.length > found.rootLength)
           found = {
-            libraryId: root.id,
+            libraryId: root.libraryId,
+            rootId: root.id,
             relativePath,
-            rootLength: normalized.length,
+            rootLength: root.path.length,
           };
-          ambiguous = false;
-        } else if (
-          normalized.length === found.rootLength &&
-          root.id !== found.libraryId
-        ) {
-          ambiguous = true;
-        }
       }
-      if (ambiguous)
-        throw new InvalidWebhookError(
-          "Webhook path matches duplicate library roots.",
-        );
       return found;
     };
 
@@ -214,6 +218,7 @@ export function createChangeDebouncer(
           `No ${medium} library contains the webhook path.`,
         );
 
+      const { libraryId, rootId } = found;
       let directory: string;
       let previousDirectory: string | undefined;
       let scan: ScanChange;
@@ -222,6 +227,7 @@ export function createChangeDebouncer(
         directory = folder;
         scan = {
           kind: "delete",
+          rootId,
           path: folder,
           target: "item",
           providerIds: change.providerIds,
@@ -230,13 +236,46 @@ export function createChangeDebouncer(
         directory = scanFolder(found.relativePath);
         if (change.kind === "move") {
           const previous = locate(change.previousPath);
-          if (previous === undefined || previous.libraryId !== found.libraryId)
+          if (previous === undefined || previous.libraryId !== libraryId)
             throw new InvalidWebhookError(
               "Webhook move crosses library roots.",
             );
           previousDirectory = scanFolder(previous.relativePath);
+          if (directory === "." || previousDirectory === ".")
+            throw new InvalidWebhookError(
+              "Webhook path must name a folder inside the library root.",
+            );
+          // A move between two roots of one Library leaves its source
+          // root, and the destination folder's scan adds it there.
+          if (previous.rootId !== rootId) {
+            resolved.push(
+              {
+                libraryId,
+                path: previousDirectory,
+                scan: {
+                  kind: "delete",
+                  rootId: previous.rootId,
+                  path: previous.relativePath,
+                  target: "file",
+                  providerIds: {},
+                },
+              },
+              {
+                libraryId,
+                path: directory,
+                scan: {
+                  kind: "add",
+                  rootId,
+                  path: found.relativePath,
+                  providerIds: change.providerIds,
+                },
+              },
+            );
+            continue;
+          }
           scan = {
             kind: "move",
+            rootId,
             path: found.relativePath,
             previousPath: previous.relativePath,
             providerIds: change.providerIds,
@@ -244,12 +283,14 @@ export function createChangeDebouncer(
         } else if (change.kind === "add") {
           scan = {
             kind: "add",
+            rootId,
             path: found.relativePath,
             providerIds: change.providerIds,
           };
         } else {
           scan = {
             kind: "delete",
+            rootId,
             path: found.relativePath,
             target: "file",
             providerIds: change.providerIds,
@@ -261,7 +302,7 @@ export function createChangeDebouncer(
         throw new InvalidWebhookError(
           "Webhook path must name a folder inside the library root.",
         );
-      resolved.push({ libraryId: found.libraryId, path: directory, scan });
+      resolved.push({ libraryId, path: directory, scan });
       // A move into another Show or Movie scans its source too. Servarr's
       // provider ids name the destination, so the source scan goes without them.
       if (
@@ -273,17 +314,14 @@ export function createChangeDebouncer(
           .select({ itemId: files.itemId })
           .from(files)
           .where(
-            and(
-              eq(files.libraryId, found.libraryId),
-              eq(files.path, scan.previousPath),
-            ),
+            and(eq(files.rootId, rootId), eq(files.path, scan.previousPath)),
           );
         if (
           file !== undefined &&
-          (await leavesRoot(db, found.libraryId, file.itemId, scan.path))
+          (await leavesRoot(db, libraryId, file.itemId, scan.path))
         )
           resolved.push({
-            libraryId: found.libraryId,
+            libraryId,
             path: previousDirectory,
             scan: { ...scan, providerIds: {} },
           });
@@ -292,16 +330,18 @@ export function createChangeDebouncer(
     queueChanges(resolved);
   };
 
-  /** Turns a watcher's library-relative file changes into scan changes of the medium's files. */
+  /** Turns a watcher's root-relative file changes in one root into scan changes of the medium's files. */
   const submitWatchedChanges = async (
-    libraryId: string,
+    rootId: string,
     changes: readonly WatchedChange[],
   ): Promise<number> => {
     const [library] = await db
-      .select({ medium: libraries.medium })
-      .from(libraries)
-      .where(eq(libraries.id, libraryId));
+      .select({ id: libraries.id, medium: libraries.medium })
+      .from(libraryRoots)
+      .innerJoin(libraries, eq(libraries.id, libraryRoots.libraryId))
+      .where(eq(libraryRoots.id, rootId));
     if (library === undefined) throw new AuthError("NOT_FOUND");
+    const libraryId = library.id;
     const { rules } = scanScope(library.medium, ".");
     const accepts = (path: string) => acceptsLibraryFile(rules, path);
     const resolved: ResolvedChange[] = [];
@@ -310,9 +350,10 @@ export function createChangeDebouncer(
       const scan: ScanChange | undefined =
         change.kind === "move" && accepts(change.previousPath)
           ? accepts(change.path)
-            ? { ...change, providerIds: {} }
+            ? { ...change, rootId, providerIds: {} }
             : {
                 kind: "delete",
+                rootId,
                 path: change.previousPath,
                 target: "file",
                 providerIds: {},
@@ -320,8 +361,8 @@ export function createChangeDebouncer(
           : !accepts(change.path)
             ? undefined
             : change.kind === "delete"
-              ? { ...change, target: "file", providerIds: {} }
-              : { kind: "add", path: change.path, providerIds: {} };
+              ? { ...change, rootId, target: "file", providerIds: {} }
+              : { kind: "add", rootId, path: change.path, providerIds: {} };
       if (scan === undefined) continue;
       resolved.push({
         libraryId,
@@ -380,11 +421,9 @@ export function createChangeDebouncer(
   const submit = (source: "sonarr" | "radarr", changes: ChangeEvent[]) =>
     serialize(() => submitChanges(source, changes));
 
-  /** Queues a watcher's library-relative changes and returns how many were media files. */
-  const submitWatched = (
-    libraryId: string,
-    changes: readonly WatchedChange[],
-  ) => serialize(() => submitWatchedChanges(libraryId, changes));
+  /** Queues a watcher's changes in one root and returns how many were media files. */
+  const submitWatched = (rootId: string, changes: readonly WatchedChange[]) =>
+    serialize(() => submitWatchedChanges(rootId, changes));
 
   const close = (): Promise<void> => {
     closePromise ??= (async () => {

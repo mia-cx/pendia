@@ -41,17 +41,24 @@ export const pluginLockfile = pgTable("plugin_lockfile", {
   integrity: text("integrity").notNull(),
 });
 
-/** A library-relative change carried by a scan job. */
+/** A change inside one root of a Library, carried by a scan job. Paths are relative to the root; a move stays in its root. */
 export type ScanChange =
-  | { kind: "add"; path: string; providerIds: Record<string, string> }
+  | {
+      kind: "add";
+      rootId: string;
+      path: string;
+      providerIds: Record<string, string>;
+    }
   | {
       kind: "move";
+      rootId: string;
       path: string;
       previousPath: string;
       providerIds: Record<string, string>;
     }
   | {
       kind: "delete";
+      rootId: string;
       path: string;
       target: "file" | "item";
       providerIds: Record<string, string>;

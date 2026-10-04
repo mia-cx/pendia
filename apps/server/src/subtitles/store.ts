@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { items, libraries } from "../db/schema/index.ts";
+import { items } from "../db/schema/index.ts";
+import { itemFolder } from "../libraries/roots.ts";
 
 /** The formats a stored subtitle track may have. */
 export const subtitleFormats = ["srt", "ass", "vtt"] as const;
@@ -43,22 +44,17 @@ export function trackName(track: StoredSubtitle): string {
  */
 export async function subtitleFolder(db: Database, itemId: string) {
   const [row] = await db
-    .select({
-      libraryId: items.libraryId,
-      rootPath: libraries.rootPath,
-      canonicalFolder: items.canonicalFolder,
-    })
+    .select({ libraryId: items.libraryId })
     .from(items)
-    .innerJoin(libraries, eq(libraries.id, items.libraryId))
     .where(eq(items.id, itemId));
   if (row === undefined) throw new AuthError("NOT_FOUND");
-  const itemFolder = join(row.rootPath, row.canonicalFolder);
+  const folder = await itemFolder(db, itemId);
   return {
     libraryId: row.libraryId,
-    itemFolder,
-    path: join(itemFolder, ".pendia", "subtitles"),
+    itemFolder: folder,
+    path: join(folder, ".pendia", "subtitles"),
     file: (track: StoredSubtitle) =>
-      join(itemFolder, ".pendia", "subtitles", `${itemId}.${trackName(track)}`),
+      join(folder, ".pendia", "subtitles", `${itemId}.${trackName(track)}`),
   };
 }
 

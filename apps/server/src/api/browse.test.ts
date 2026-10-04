@@ -12,7 +12,6 @@ import {
   contributors,
   credits,
   items,
-  libraries,
   libraryAccess,
   progress,
   versions,
@@ -20,6 +19,7 @@ import {
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { homeShelves } from "./browse.ts";
 import { fromHost, runApi } from "./errors.ts";
 import { getItemDetail, type ListItemsInput, listItemCards } from "./items.ts";
@@ -61,10 +61,11 @@ async function addLibrary(
   name: string,
   medium: "movies" | "shows" = "movies",
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name, medium, rootPath: `/srv/${name}` })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name,
+    medium,
+    rootPath: `/srv/${name}`,
+  });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
 }

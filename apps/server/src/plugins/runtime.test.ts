@@ -3,9 +3,9 @@ import { rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Capability } from "@pendia/plugin-api";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { createHost, createRegistrations } from "./host.ts";
 import {
   createPluginRuntime,
@@ -137,10 +137,11 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
         });
         const root = join(folder, "library");
         await Bun.write(join(root, "movie.mkv"), "frames");
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Library missing.");
         const runtime = createPluginRuntime(db, {
           directory: join(folder, "installed"),
@@ -263,10 +264,11 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
           capabilities: ["items:read"],
           source: stashingSource(name),
         });
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: folder })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: folder,
+        });
         if (!library) throw new Error("Library missing.");
         const item = await insertItem(db, {
           libraryId: library.id,

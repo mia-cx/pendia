@@ -1,10 +1,11 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   createLibrary,
   deleteLibrary,
   getLibrary,
   libraryScanStatus,
   listLibraries,
+  RootError,
   scanLibrary,
   updateLibrary,
 } from "../libraries/service.ts";
@@ -14,10 +15,28 @@ import {
   setStoredVersionPolicy,
 } from "../stored/service.ts";
 import { authenticated, authenticatedMutation } from "./context.ts";
-import { fromHost, runApi } from "./errors.ts";
-import { Library, LibraryInput, ScanStatus } from "./schema.ts";
+import { ApiError, fromHost, runApi } from "./errors.ts";
+import { Library, LibraryInput, LibraryUpdate, ScanStatus } from "./schema.ts";
 
 const idInput = Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID }));
+
+/** Like `fromHost`, but a refused root answers BAD_REQUEST with its index as `data.root`. */
+const writeRoots = <A>(run: () => Promise<A>) =>
+  fromHost(run).pipe(
+    Effect.catchAllDefect((defect) =>
+      defect instanceof RootError
+        ? Effect.fail(
+            new ApiError({
+              code: "BAD_REQUEST",
+              reason: defect.message,
+              ...(defect.root === undefined
+                ? {}
+                : { data: { root: defect.root } }),
+            }),
+          )
+        : Effect.die(defect),
+    ),
+  );
 const libraryOutput = Schema.standardSchemaV1(Library);
 
 const list = authenticated
@@ -43,24 +62,20 @@ const create = authenticatedMutation
   .output(libraryOutput)
   .handler(async ({ context, input }) =>
     runApi(
-      fromHost(() => createLibrary(context.db, context.caller.user.id, input)),
+      writeRoots(() =>
+        createLibrary(context.db, context.caller.user.id, input),
+      ),
     ),
   );
 
 const update = authenticatedMutation
   .route({ method: "PATCH", path: "/libraries/{id}" })
-  .input(
-    Schema.standardSchemaV1(
-      Schema.Struct({ id: Schema.UUID, name: Schema.String }),
-    ),
-  )
+  .input(Schema.standardSchemaV1(LibraryUpdate))
   .output(libraryOutput)
-  .handler(async ({ context, input }) =>
+  .handler(async ({ context, input: { id, ...changes } }) =>
     runApi(
-      fromHost(() =>
-        updateLibrary(context.db, context.caller.user.id, input.id, {
-          name: input.name,
-        }),
+      writeRoots(() =>
+        updateLibrary(context.db, context.caller.user.id, id, changes),
       ),
     ),
   );

@@ -4,7 +4,6 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   artwork,
   favourites,
-  libraries,
   libraryAccess,
   progress,
   providerIds,
@@ -12,12 +11,14 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { insertItem } from "../db/tree.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 
 async function library(db: Database, name: string, medium: "movies" | "shows") {
-  const [row] = await db
-    .insert(libraries)
-    .values({ name, medium, rootPath: `/srv/${name}` })
-    .returning();
+  const [row] = await insertLibraries(db, {
+    name,
+    medium,
+    rootPath: `/srv/${name}`,
+  });
   if (!row) throw new Error("Library insert returned no row.");
   return row;
 }

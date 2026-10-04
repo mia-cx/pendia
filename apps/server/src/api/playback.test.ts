@@ -16,7 +16,6 @@ import {
   events,
   files,
   items,
-  libraries,
   libraryAccess,
   segmentTimelines,
   sessionRegistry,
@@ -27,6 +26,8 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { rootsOf } from "../libraries/roots.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { planPlayback, refreshPlayback } from "../playback/planning.ts";
 import { writeGlobalBitrateCap } from "../playback/settings.ts";
 import type { pendiaRouter } from "./router.ts";
@@ -115,12 +116,15 @@ async function addMedia(
     })
     .returning();
   if (!version) throw new Error("Version insert returned no row.");
+  const [root] = await rootsOf(db, libraryId);
+  if (!root) throw new Error("Library has no root.");
   const [file] = await db
     .insert(files)
     .values({
       versionId: version.id,
       itemId,
       libraryId,
+      rootId: root.id,
       path: `/srv/movies/file-${version.id}.mp4`,
       order: 0,
       bytes: 75_000_000n,
@@ -216,10 +220,11 @@ async function seedPlayback(
   const caller = await authenticate(db, accountToken);
   const { token: keyToken } = await createApiKey(db, owner.id, "player");
   const keyCaller = await authenticate(db, keyToken);
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/srv/movies" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/srv/movies",
+  });
   if (!library) throw new Error("Library insert returned no row.");
   const item = await addItem(db, library.id, "Movie");
   const { version, file } = await addMedia(db, library.id, item.id, options);
@@ -576,6 +581,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           versionId: multiVersion.id,
           itemId: multiItem.id,
           libraryId: fx.library.id,
+          rootId: multiFile.rootId,
           path: `/srv/movies/file-${multiVersion.id}-part2.mp4`,
           order: 1,
           bytes: 1n,

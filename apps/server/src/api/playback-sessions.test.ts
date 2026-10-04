@@ -10,7 +10,6 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   files,
   items,
-  libraries,
   segmentTimelines,
   sessionRegistry,
   transcoderCapabilities,
@@ -18,6 +17,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { decidePlayback } from "../playback/decisions.ts";
 import { listPlaybackSessions } from "./playback-sessions.ts";
 import type { pendiaRouter } from "./router.ts";
@@ -29,10 +29,11 @@ async function seed(db: Database) {
     password: "viewer-pass",
     displayName: "Viewer",
   });
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/srv/movies" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/srv/movies",
+  });
   if (!library) throw new Error("Library insert returned no row.");
   const [item] = await db
     .insert(items)
@@ -69,6 +70,7 @@ async function seed(db: Database) {
       versionId: version.id,
       itemId: item.id,
       libraryId: library.id,
+      rootId: library.rootId,
       path: "/srv/movies/alien/alien.mkv",
       order: 0,
       bytes: 1n,

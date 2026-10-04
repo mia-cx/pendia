@@ -1,4 +1,5 @@
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
+import { locateIn, type RootedPath } from "../libraries/roots.ts";
 import { scanScope } from "../libraries/scan.ts";
 import {
   type LibraryFile,
@@ -12,11 +13,11 @@ import { readFfprobe } from "../mediums/video-common/probe.ts";
 import type { WatcherClaim, WatcherReport } from "./http.ts";
 import { watchTree } from "./tree.ts";
 
-/** Where the watcher reaches the api, and the local root of each watched Library. */
+/** Where the watcher reaches the api, and the local path of each watched root. */
 export type WatcherConfig = {
   apiUrl: URL;
   token: string;
-  /** Library id to the absolute local path of its root. */
+  /** Root id to its absolute local path. */
   roots: Map<string, string>;
 };
 
@@ -33,7 +34,7 @@ type Job = NonNullable<WatcherClaim["job"]>;
 /** Report answers after which the api has failed or finished the job itself. */
 const settledStatuses = [400, 404, 409];
 
-/** Reads PENDIA_API_URL, PENDIA_WATCHER_TOKEN and PENDIA_WATCH (`<library-id>=<path>,...`). */
+/** Reads PENDIA_API_URL, PENDIA_WATCHER_TOKEN and PENDIA_WATCH (`<root-id>=<path>,...`). */
 export function readWatcherConfig(
   env: Record<string, string | undefined>,
 ): WatcherConfig {
@@ -44,12 +45,12 @@ export function readWatcherConfig(
     throw new Error("PENDIA_WATCHER_TOKEN must be an API key.");
   const roots = new Map<string, string>();
   for (const pair of (PENDIA_WATCH ?? "").split(",")) {
-    const [libraryId, path] = pair.trim().split(/=(.*)/s, 2);
-    if (!libraryId || !path || !isAbsolute(path))
+    const [rootId, path] = pair.trim().split(/=(.*)/s, 2);
+    if (!rootId || !path || !isAbsolute(path))
       throw new Error(
-        "PENDIA_WATCH must list <library-id>=<absolute path> pairs, separated by commas.",
+        "PENDIA_WATCH must list <root-id>=<absolute path> pairs, separated by commas.",
       );
-    roots.set(libraryId, path);
+    roots.set(rootId, path);
   }
   return {
     apiUrl: new URL(PENDIA_API_URL),
@@ -58,33 +59,44 @@ export function readWatcherConfig(
   };
 }
 
-const encodeFile = (file: LibraryFile) => ({
+const encodeFile = (file: LibraryFile & { rootId: string }) => ({
+  rootId: file.rootId,
   path: file.path,
   bytes: String(file.bytes),
   modifiedNs: String(file.modifiedNs),
 });
 
 const cacheKey = (file: ReturnType<typeof encodeFile>) =>
-  `${file.bytes}:${file.modifiedNs}:${file.path}`;
+  `${file.bytes}:${file.modifiedNs}:${file.rootId}:${file.path}`;
 
-/** Walks and probes one claimed scan on local disk, skipping files with a current cached probe. */
-async function runScan(root: string, job: Job): Promise<WatcherReport> {
+/** Walks and probes one claimed scan in each root of its Library on local disk, skipping files with a current cached probe. */
+async function runScan(
+  roots: ReadonlyMap<string, string>,
+  job: Job,
+): Promise<WatcherReport> {
   const { claimToken } = job;
+  const pathOf = (rootId: string) => {
+    const root = roots.get(rootId);
+    if (root === undefined) throw new Error(`Root ${rootId} is not watched.`);
+    return root;
+  };
   try {
     const { rules, recursive } = scanScope(job.medium, job.path);
-    const files: LibraryFile[] = [];
-    try {
-      for await (const file of walkLibrary(root, rules, {
-        path: job.path,
-        recursive,
-      }))
-        files.push(file);
-    } catch (error) {
-      if (
-        !(error instanceof MissingLibraryPathError) ||
-        error.scope !== "requested"
-      )
-        throw error;
+    const files: (LibraryFile & { rootId: string })[] = [];
+    for (const rootId of job.rootIds) {
+      try {
+        for await (const file of walkLibrary(pathOf(rootId), rules, {
+          path: job.path,
+          recursive,
+        }))
+          files.push({ ...file, rootId });
+      } catch (error) {
+        if (
+          !(error instanceof MissingLibraryPathError) ||
+          error.scope !== "requested"
+        )
+          throw error;
+      }
     }
     const cached = new Set(job.cached.map(cacheKey));
     const probes: Extract<
@@ -94,21 +106,26 @@ async function runScan(root: string, job: Job): Promise<WatcherReport> {
     // A Library scan only lists files; its directory scans probe them.
     for (const file of job.path === "." ? [] : files) {
       if (cached.has(cacheKey(encodeFile(file)))) continue;
-      const absolute = join(root, file.path);
+      const { absolute } = await locateIn(pathOf(file.rootId), file.path);
       const ffprobe = await readFfprobe(absolute);
       const { keyframesSeconds } = await readKeyframeIndex(absolute);
-      const after = await readLibraryFile(root, file.path);
+      const after = await readLibraryFile(pathOf(file.rootId), file.path);
       if (after.bytes !== file.bytes || after.modifiedNs !== file.modifiedNs)
         throw new Error(`File changed during probe: ${file.path}`);
-      probes.push({ path: file.path, ffprobe, keyframesSeconds });
+      probes.push({
+        rootId: file.rootId,
+        path: file.path,
+        ffprobe,
+        keyframesSeconds,
+      });
     }
-    const missing: string[] = [];
-    for (const path of job.check) {
+    const missing: RootedPath[] = [];
+    for (const checked of job.check) {
       try {
-        await readLibraryFile(root, path);
+        await readLibraryFile(pathOf(checked.rootId), checked.path);
       } catch (error) {
         if (!(error instanceof MissingLibraryPathError)) throw error;
-        missing.push(path);
+        missing.push(checked);
       }
     }
     return { claimToken, files: files.map(encodeFile), probes, missing };
@@ -129,7 +146,7 @@ export async function startWatcher(
     onError = console.error,
   }: WatcherOptions = {},
 ) {
-  const libraryIds = [...roots.keys()];
+  const rootIds = [...roots.keys()];
   const request = (path: string, body: unknown) =>
     fetch(new URL(`/api/watcher/${path}`, apiUrl), {
       method: "POST",
@@ -148,25 +165,25 @@ export async function startWatcher(
     return response;
   }
 
-  // Changes queue per Library while one batch is in flight, then go as the next batch.
+  // Changes queue per root while one batch is in flight, then go as the next batch.
   const pending = new Map<string, WatchedChange[]>();
   let sending: Promise<void> | undefined;
   async function send() {
-    // Map iteration also visits Libraries that queue again during a post.
-    for (const [libraryId, changes] of pending) {
-      pending.delete(libraryId);
-      await post("events", { libraryId, changes }).catch(onError);
+    // Map iteration also visits roots that queue again during a post.
+    for (const [rootId, changes] of pending) {
+      pending.delete(rootId);
+      await post("events", { rootId, changes }).catch(onError);
     }
     sending = undefined;
   }
-  const push = (libraryId: string, changes: WatchedChange[]) => {
-    pending.set(libraryId, [...(pending.get(libraryId) ?? []), ...changes]);
+  const push = (rootId: string, changes: WatchedChange[]) => {
+    pending.set(rootId, [...(pending.get(rootId) ?? []), ...changes]);
     sending ??= send();
   };
 
   const trees = await Promise.all(
-    [...roots].map(([libraryId, root]) =>
-      watchTree(root, (changes) => push(libraryId, changes), {
+    [...roots].map(([rootId, root]) =>
+      watchTree(root, (changes) => push(rootId, changes), {
         settleMs,
         onError,
       }),
@@ -220,20 +237,17 @@ export async function startWatcher(
     while (!stopped) {
       try {
         const { job }: WatcherClaim = await (
-          await post("claim", { libraryIds })
+          await post("claim", { rootIds })
         ).json();
         if (job !== null) {
-          const root = roots.get(job.libraryId);
-          if (root === undefined) throw new Error("Claimed an unwatched scan.");
           // Also renews the job's lease; a 409 means another claim took the job.
           const held = { id: job.id, claimToken: job.claimToken };
           const heartbeat = setInterval(
-            () =>
-              void post("heartbeat", { libraryIds, job: held }).catch(onError),
+            () => void post("heartbeat", { rootIds, job: held }).catch(onError),
             pollIntervalMs,
           );
           try {
-            await deliver(job.id, await runScan(root, job));
+            await deliver(job.id, await runScan(roots, job));
           } finally {
             clearInterval(heartbeat);
           }

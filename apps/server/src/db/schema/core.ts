@@ -42,7 +42,6 @@ export const libraries = pgTable("libraries", {
   id: id(),
   name: text("name").notNull(),
   medium: medium("medium").notNull(),
-  rootPath: text("root_path").notNull(),
   configuration: jsonb("configuration")
     .$type<JsonObject>()
     .notNull()
@@ -50,6 +49,24 @@ export const libraries = pgTable("libraries", {
   // A watcher's last claim. While it is recent, the watcher runs the Library's scans.
   watcherSeenAt: instant("watcher_seen_at"),
 });
+
+/** One absolute folder of a Library. No root equals or contains another; the service checks that. */
+export const libraryRoots = pgTable(
+  "library_roots",
+  {
+    id: id(),
+    libraryId: uuid("library_id")
+      .notNull()
+      .references(() => libraries.id, owned),
+    path: text("path").notNull().unique(),
+    // The lowest position is the first root: home of Items it holds.
+    position: integer("position").notNull(),
+  },
+  (table) => [
+    unique("library_roots_id_library_unique").on(table.id, table.libraryId),
+    index("library_roots_library_idx").on(table.libraryId, table.position),
+  ],
+);
 
 export const items = pgTable(
   "items",
@@ -253,6 +270,8 @@ export const files = pgTable(
     versionId: uuid("version_id").notNull(),
     itemId: uuid("item_id").notNull(),
     libraryId: uuid("library_id").notNull(),
+    rootId: uuid("root_id").notNull(),
+    // Relative to the File's root.
     path: text("path").notNull(),
     order: integer("order").notNull(),
     bytes: bigint("bytes", { mode: "bigint" }).notNull(),
@@ -263,7 +282,7 @@ export const files = pgTable(
   },
   (table) => [
     unique("files_version_order_unique").on(table.versionId, table.order),
-    unique("files_library_path_unique").on(table.libraryId, table.path),
+    unique("files_root_path_unique").on(table.rootId, table.path),
     unique("files_id_item_unique").on(table.id, table.itemId),
     unique("files_id_version_unique").on(table.id, table.versionId),
     foreignKey({
@@ -277,6 +296,14 @@ export const files = pgTable(
       name: "files_version_library_fk",
       columns: [table.versionId, table.libraryId],
       foreignColumns: [versions.id, versions.libraryId],
+    })
+      .onDelete("cascade")
+      .onUpdate("no action"),
+    // A File's root belongs to its Library.
+    foreignKey({
+      name: "files_root_library_fk",
+      columns: [table.rootId, table.libraryId],
+      foreignColumns: [libraryRoots.id, libraryRoots.libraryId],
     })
       .onDelete("cascade")
       .onUpdate("no action"),

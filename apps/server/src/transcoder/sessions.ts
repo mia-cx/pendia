@@ -1,15 +1,11 @@
 import { mkdir, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import {
-  libraries,
-  segmentTimelines,
-  sessionRegistry,
-} from "../db/schema/index.ts";
-import { readLibraryFile } from "../libraries/walker.ts";
+import { segmentTimelines, sessionRegistry } from "../db/schema/index.ts";
+import { locateFile } from "../libraries/roots.ts";
 import { standardHeaders } from "../playback/direct.ts";
 import {
   decideSegment,
@@ -333,18 +329,15 @@ export function createSessionManager(
 
   const loadSession = async (scope: SessionScope): Promise<LiveSession> => {
     const directory = join(scratchDir, scope.sessionId);
-    const { item, version, file, source, subtitleDetails } =
-      await loadPlaybackSource(db, scope.userId, scope.itemId, scope.versionId);
-    const [library] = await db
-      .select({ rootPath: libraries.rootPath })
-      .from(libraries)
-      .where(eq(libraries.id, item.libraryId))
-      .limit(1);
-    if (library === undefined) throw new AuthError("NOT_FOUND");
+    const { version, file, source, subtitleDetails } = await loadPlaybackSource(
+      db,
+      scope.userId,
+      scope.itemId,
+      scope.versionId,
+    );
     let inputPath: string;
     try {
-      const validated = await readLibraryFile(library.rootPath, file.path);
-      inputPath = resolve(library.rootPath, validated.path);
+      inputPath = (await locateFile(db, file)).absolute;
     } catch {
       throw new AuthError("NOT_FOUND");
     }

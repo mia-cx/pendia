@@ -18,7 +18,7 @@ import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { artwork, libraries } from "../db/schema/index.ts";
+import { artwork } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import {
   type DeletedArtworkFile,
@@ -26,6 +26,7 @@ import {
   insertItem,
 } from "../db/tree.ts";
 import { deleteLibrary } from "../libraries/service.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import type { ArtworkOpen, ArtworkStoreConfig } from "./artwork-backends.ts";
 import {
   readArtworkOriginal,
@@ -83,10 +84,11 @@ async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
 }
 
 async function fixture(db: Database, rootPath: string) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath,
+  });
   if (!library) throw new Error("Fixture library missing.");
   const item = await insertItem(db, {
     libraryId: library.id,

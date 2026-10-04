@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import { homeRoot } from "../libraries/roots.ts";
 import { emitPluginEvents } from "../plugins/events.ts";
 import type { Database } from "./client.ts";
 import {
@@ -207,7 +208,7 @@ export async function moveItem(
 /** One artwork original to remove after its database owner commits deletion. */
 export interface DeletedArtworkFile {
   backend: (typeof artwork.$inferSelect)["backend"];
-  // The Library root, which only colocated keys are relative to.
+  // The owning Item's home root, which only colocated keys are relative to.
   rootPath: string;
   storageKey: string;
 }
@@ -228,9 +229,10 @@ export async function deleteItemSubtree(
       .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
       .where(eq(itemAncestors.ancestorId, itemId))
       .for("update", { of: items });
+    // Colocated keys of the whole subtree resolve in the top Item's home root.
+    const { path: rootPath } = await homeRoot(tx, itemId);
     const deletedFields = {
       backend: artwork.backend,
-      rootPath: libraries.rootPath,
       storageKey: artwork.storageKey,
     };
     const orphaned = await tx
@@ -243,8 +245,7 @@ export async function deleteItemSubtree(
           eq(itemAncestors.descendantId, items.id),
           eq(itemAncestors.ancestorId, itemId),
         ),
-      )
-      .innerJoin(libraries, eq(items.libraryId, libraries.id));
+      );
     const versionOwned = await tx
       .select(deletedFields)
       .from(artwork)
@@ -256,19 +257,18 @@ export async function deleteItemSubtree(
           eq(itemAncestors.descendantId, items.id),
           eq(itemAncestors.ancestorId, itemId),
         ),
-      )
-      .innerJoin(libraries, eq(items.libraryId, libraries.id));
-    const fileKey = (row: DeletedArtworkFile) =>
-      `${row.backend}\n${row.rootPath}\n${row.storageKey}`;
+      );
+    const fileKey = (row: { backend: string; storageKey: string }) =>
+      `${row.backend}\n${row.storageKey}`;
     const seen = new Set(orphaned.map(fileKey));
     for (const row of orphaned) {
-      deletedArtwork.push(row);
+      deletedArtwork.push({ ...row, rootPath });
     }
     for (const row of versionOwned) {
       const key = fileKey(row);
       if (seen.has(key)) continue;
       seen.add(key);
-      deletedArtwork.push(row);
+      deletedArtwork.push({ ...row, rootPath });
     }
     await tx.delete(items).where(eq(items.id, itemId));
     await emitPluginEvents(

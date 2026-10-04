@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { startApiServer } from "../api.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import { type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
@@ -17,7 +18,6 @@ import {
   itemAncestors,
   items,
   jobs,
-  libraries,
   movies,
   permissions,
   progress,
@@ -41,14 +41,10 @@ import {
 } from "./tree.ts";
 
 async function fixture(db: Database) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Shows", medium: "shows", rootPath: "/shows" })
-    .returning();
-  const [movieLibrary] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/movies" })
-    .returning();
+  const [library, movieLibrary] = await insertLibraries(db, [
+    { name: "Shows", medium: "shows", rootPath: "/shows" },
+    { name: "Movies", medium: "movies", rootPath: "/movies" },
+  ]);
   if (!library || !movieLibrary) throw new Error("Fixture libraries missing.");
   const base = {
     libraryId: library.id,
@@ -96,7 +92,18 @@ async function fixture(db: Database) {
       kind: "movie",
       extension: {},
     });
-    return { base, first, second, season, spare, episode, sibling, movie };
+    const roots = { shows: library.rootId, movies: movieLibrary.rootId };
+    return {
+      base,
+      roots,
+      first,
+      second,
+      season,
+      spare,
+      episode,
+      sibling,
+      movie,
+    };
   });
 }
 
@@ -172,8 +179,8 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const before = await migrationState(db);
-      expect(before.journal).toHaveLength(15);
-      expect(before.tables).toHaveLength(35);
+      expect(before.journal).toHaveLength(16);
+      expect(before.tables).toHaveLength(36);
       expect(before.extensions).toEqual([
         { extname: "btree_gist" },
         { extname: "pg_trgm" },
@@ -221,8 +228,8 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             { code: 0, stderr: "" },
           ]);
           const state = await migrationState(db);
-          expect(state.journal).toHaveLength(15);
-          expect(state.tables).toHaveLength(35);
+          expect(state.journal).toHaveLength(16);
+          expect(state.tables).toHaveLength(36);
           expect(state.groups).toHaveLength(2);
         } finally {
           for (const runner of runners) runner.kill();
@@ -290,10 +297,11 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       await migrateDatabase(db);
       const root = await mkdtemp(join(tmpdir(), "pendia-tree-"));
       try {
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Library missing.");
         const item = await insertItem(db, {
           libraryId: library.id,
@@ -556,6 +564,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             versionId: source.id,
             itemId: source.itemId,
             libraryId: f.base.libraryId,
+            rootId: f.roots.shows,
             path: "wrong.mkv",
             order: 0,
             bytes: 100n,
@@ -567,6 +576,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         versionId: source.id,
         itemId: source.itemId,
         libraryId: source.libraryId,
+        rootId: f.roots.movies,
         path: "source.mkv",
         order: 0,
         bytes: 100n,
@@ -665,6 +675,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           versionId: version.id,
           itemId: version.itemId,
           libraryId: f.movie.libraryId,
+          rootId: f.roots.movies,
           path: "movie.mkv",
           order: 0,
           bytes: 100n,
@@ -678,6 +689,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           versionId: version.id,
           itemId: version.itemId,
           libraryId: f.movie.libraryId,
+          rootId: f.roots.movies,
           path: "movie-part2.mkv",
           order: 1,
           bytes: 100n,
@@ -827,6 +839,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             versionId: stored.id,
             itemId: stored.itemId,
             libraryId: f.movie.libraryId,
+            rootId: f.roots.movies,
             path: "segment.ts",
             order: 0,
             bytes: 50n,

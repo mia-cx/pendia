@@ -5,6 +5,7 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, libraries } from "../db/schema/index.ts";
 import type { DeletedArtworkFile } from "../db/tree.ts";
+import { homeRoot } from "../libraries/roots.ts";
 import {
   type ArtworkOpen,
   type ArtworkStoreConfig,
@@ -60,11 +61,8 @@ export async function storeArtworkOriginal(
     throw new Error("Invalid artwork download limit.");
   const [item] = await db.select().from(items).where(eq(items.id, itemId));
   if (!item) throw new AuthError("NOT_FOUND");
-  const [library] = await db
-    .select()
-    .from(libraries)
-    .where(eq(libraries.id, item.libraryId));
-  if (!library) throw new AuthError("NOT_FOUND");
+  // Colocated originals live in the Item folder of its home root.
+  const home = await homeRoot(db, itemId);
 
   const [selected] = await db
     .select()
@@ -79,7 +77,7 @@ export async function storeArtworkOriginal(
   if (
     selected !== undefined &&
     selected.sourceUrl === candidate.url &&
-    (await artworkBackend(store, selected.backend, library.rootPath)?.exists(
+    (await artworkBackend(store, selected.backend, home.path)?.exists(
       selected.storageKey,
     ))
   ) {
@@ -133,11 +131,7 @@ export async function storeArtworkOriginal(
   let fresh: WrittenOriginal | undefined =
     store.backend === "colocated"
       ? undefined
-      : await writeOriginal(
-          library.rootPath,
-          item.canonicalFolder,
-          candidateId,
-        );
+      : await writeOriginal(home.path, item.canonicalFolder, candidateId);
   const stored = await db
     .transaction(async (tx) => {
       const [lockedLibrary] = await tx
@@ -166,7 +160,7 @@ export async function storeArtworkOriginal(
         );
       const artworkId = selected?.id ?? candidateId;
       fresh ??= await writeOriginal(
-        lockedLibrary.rootPath,
+        home.path,
         locked.canonicalFolder,
         artworkId,
       );
@@ -210,19 +204,13 @@ export async function storeArtworkOriginal(
           .then((rows) => rows.length > 0)
           .catch(() => true);
         if (!referenced)
-          await removeArtworkFiles(
-            [{ ...fresh, rootPath: library.rootPath }],
-            store,
-          );
+          await removeArtworkFiles([{ ...fresh, rootPath: home.path }], store);
       }
       throw error;
     });
   const { previous } = stored;
   if (previous !== undefined && previous.storageKey !== stored.row.storageKey)
-    await removeArtworkFiles(
-      [{ ...previous, rootPath: library.rootPath }],
-      store,
-    );
+    await removeArtworkFiles([{ ...previous, rootPath: home.path }], store);
   return stored.row;
 }
 
@@ -256,11 +244,7 @@ export async function removeSelectedArtwork(
       .where(eq(items.id, itemId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
-    const [library] = await tx
-      .select()
-      .from(libraries)
-      .where(eq(libraries.id, locked.libraryId));
-    if (!library) throw new AuthError("NOT_FOUND");
+    const home = await homeRoot(tx, itemId);
     const [selected] = await tx
       .select()
       .from(artwork)
@@ -275,7 +259,7 @@ export async function removeSelectedArtwork(
     await tx.delete(artwork).where(eq(artwork.id, selected.id));
     return {
       backend: selected.backend,
-      rootPath: library.rootPath,
+      rootPath: home.path,
       storageKey: selected.storageKey,
     };
   });
@@ -323,22 +307,12 @@ export async function readArtworkOriginal(
       .from(artwork)
       .where(eq(artwork.id, artworkId));
     if (!row || row.itemId === null || !row.selected) return null;
-    const [item] = await db
-      .select()
-      .from(items)
-      .where(eq(items.id, row.itemId));
-    if (!item) return null;
-    const [library] = await db
-      .select()
-      .from(libraries)
-      .where(eq(libraries.id, item.libraryId));
-    if (!library) return null;
-    const backend = artworkBackend(
-      store,
-      row.backend,
-      library.rootPath,
-      openFile,
-    );
+    const home = await homeRoot(db, row.itemId).catch((error: unknown) => {
+      if (error instanceof AuthError) return null;
+      throw error;
+    });
+    if (home === null) return null;
+    const backend = artworkBackend(store, row.backend, home.path, openFile);
     if (backend === null) return null;
     const bytes = await backend.read(row.storageKey);
     if (bytes !== null) return { bytes, artwork: row };

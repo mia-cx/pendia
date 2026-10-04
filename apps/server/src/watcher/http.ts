@@ -1,5 +1,5 @@
 import { extname, posix } from "node:path";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { Schema } from "effect";
 import { AuthError } from "../auth/errors.ts";
@@ -12,11 +12,13 @@ import {
   items,
   jobs,
   libraries,
+  libraryRoots,
   probeCache,
 } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { runScanJob } from "../libraries/jobs.ts";
 import { cacheProbe } from "../libraries/probe-cache.ts";
+import { type RootedPath, rootedKey, rootsOf } from "../libraries/roots.ts";
 import { inScope, type ScanSource } from "../libraries/scan.ts";
 import type {
   createChangeDebouncer,
@@ -27,7 +29,7 @@ import { parseProbeOutput } from "../mediums/video-common/probe.ts";
 const bearerPattern = /^Bearer (\S+)$/i;
 const jobPattern = /^\/api\/watcher\/jobs\/([^/]+)$/;
 
-/** A normalized library-relative path below the root. */
+/** A normalized root-relative path below the root. */
 const RelativePath = Schema.String.pipe(
   Schema.filter(
     (path) =>
@@ -41,7 +43,7 @@ const RelativePath = Schema.String.pipe(
 );
 
 const EventBatch = Schema.Struct({
-  libraryId: Schema.UUID,
+  rootId: Schema.UUID,
   changes: Schema.Array(
     Schema.Union(
       Schema.Struct({
@@ -56,12 +58,12 @@ const EventBatch = Schema.Struct({
     ),
   ),
 }) satisfies Schema.Schema<{
-  libraryId: string;
+  rootId: string;
   changes: readonly WatchedChange[];
 }>;
 
-const WatchedLibraries = Schema.Struct({
-  libraryIds: Schema.NonEmptyArray(Schema.UUID),
+const WatchedRoots = Schema.Struct({
+  rootIds: Schema.NonEmptyArray(Schema.UUID),
 });
 
 /** The claim a report or heartbeat speaks for. */
@@ -69,13 +71,16 @@ const HeldClaim = Schema.Struct({ claimToken: Schema.UUID });
 
 /** A heartbeat during a scan also renews the lease on the claimed job. */
 const Heartbeat = Schema.Struct({
-  ...WatchedLibraries.fields,
+  ...WatchedRoots.fields,
   job: Schema.optional(Schema.Struct({ id: Schema.UUID, ...HeldClaim.fields })),
 });
 
+/** A path in one root. */
+const ReportedPath = Schema.Struct({ rootId: Schema.UUID, path: RelativePath });
+
 /** The file sizes and mtimes travel as decimal strings: JSON has no 64-bit integers. */
 const ReportedFile = Schema.Struct({
-  path: RelativePath,
+  ...ReportedPath.fields,
   bytes: Schema.BigInt,
   modifiedNs: Schema.BigInt,
 });
@@ -86,13 +91,13 @@ const ScanReport = Schema.Union(
     files: Schema.Array(ReportedFile),
     probes: Schema.Array(
       Schema.Struct({
-        path: RelativePath,
+        ...ReportedPath.fields,
         ffprobe: Schema.Unknown,
         keyframesSeconds: Schema.NullOr(Schema.Array(Schema.Number)),
       }),
     ),
-    /** The claim's `check` paths that hold no file. */
-    missing: Schema.optionalWith(Schema.Array(RelativePath), {
+    /** The claim's `check` files that are gone. */
+    missing: Schema.optionalWith(Schema.Array(ReportedPath), {
       default: () => [],
     }),
   }),
@@ -106,12 +111,14 @@ export type WatcherClaim = {
     /** Sent back with the heartbeats and the report: only this claim may settle the job. */
     claimToken: string;
     libraryId: string;
+    /** The Library's root ids, first root first: the scan walks its path in each. */
+    rootIds: string[];
     path: string;
     medium: (typeof libraries.$inferSelect)["medium"];
     /** Files whose cached probe is current at this size and mtime. */
     cached: (typeof ReportedFile.Encoded)[];
-    /** Stored File paths outside the scope whose existence the scan may need: the rest of a moved Show. */
-    check: string[];
+    /** Stored Files outside the scope whose existence the scan may need: the rest of a moved Show. */
+    check: RootedPath[];
   } | null;
 };
 
@@ -145,36 +152,70 @@ async function readBody<A, I>(request: Request, schema: Schema.Schema<A, I>) {
   }
 }
 
-/** Records the watcher's heartbeat on its Libraries, which keeps their scans away from workers. */
-async function beat(db: Database, libraryIds: readonly string[]) {
-  const watched = await db
-    .update(libraries)
-    .set({ watcherSeenAt: sql`statement_timestamp()` })
-    .where(inArray(libraries.id, [...libraryIds]))
-    .returning({ id: libraries.id, medium: libraries.medium });
-  if (watched.length !== new Set(libraryIds).size)
-    throw new AuthError("NOT_FOUND");
-  return watched;
+/**
+ * Records the watcher's heartbeat on the Libraries it watches whole, which
+ * keeps their scans away from workers. A scan walks every root, so a
+ * Library with a root this watcher lacks stays with the workers.
+ */
+async function beat(db: Database, rootIds: readonly string[]) {
+  const watchedRoots = new Set(rootIds);
+  const roots = await db
+    .select({
+      libraryId: libraryRoots.libraryId,
+      rootId: libraryRoots.id,
+    })
+    .from(libraryRoots)
+    .where(
+      inArray(
+        libraryRoots.libraryId,
+        db
+          .select({ id: libraryRoots.libraryId })
+          .from(libraryRoots)
+          .where(inArray(libraryRoots.id, [...watchedRoots])),
+      ),
+    )
+    .orderBy(asc(libraryRoots.position), asc(libraryRoots.id));
+  const known = roots.filter((root) => watchedRoots.has(root.rootId));
+  if (known.length !== watchedRoots.size) throw new AuthError("NOT_FOUND");
+  const rootIdsOf = Map.groupBy(roots, (root) => root.libraryId);
+  const whole = [...rootIdsOf]
+    .filter(([, held]) => held.every((root) => watchedRoots.has(root.rootId)))
+    .map(([libraryId]) => libraryId);
+  const watched =
+    whole.length === 0
+      ? []
+      : await db
+          .update(libraries)
+          .set({ watcherSeenAt: sql`statement_timestamp()` })
+          .where(inArray(libraries.id, whole))
+          .returning({ id: libraries.id, medium: libraries.medium });
+  return watched.map((library) => ({
+    ...library,
+    rootIds: (rootIdsOf.get(library.id) ?? []).map((root) => root.rootId),
+  }));
 }
 
-/** Records the watcher's heartbeat and claims one scan of its Libraries. */
+/** Records the watcher's heartbeat and claims one scan of the Libraries it watches whole. */
 async function claim(
   db: Database,
-  libraryIds: readonly string[],
+  rootIds: readonly string[],
 ): Promise<WatcherClaim> {
-  const watched = await beat(db, libraryIds);
-  const job = await createJobQueue(db).claim(["scan"], { libraryIds });
+  const watched = await beat(db, rootIds);
+  const job = await createJobQueue(db).claim(["scan"], {
+    libraryIds: watched.map((library) => library.id),
+  });
   if (job === undefined) return { job: null };
   if (job.payload.type !== "scan") throw new Error("Claimed a non-scan job.");
   const { libraryId, path } = job.payload;
-  const medium = watched.find((library) => library.id === libraryId)?.medium;
-  if (medium === undefined) throw new Error("Claimed an unwatched scan.");
+  const library = watched.find((candidate) => candidate.id === libraryId);
+  if (library === undefined) throw new Error("Claimed an unwatched scan.");
   // A Library scan only lists files, so it needs no probes.
   const cached =
     path === "."
       ? []
       : await db
           .select({
+            rootId: probeCache.rootId,
             path: probeCache.path,
             bytes: probeCache.bytes,
             modifiedNs: probeCache.modifiedNs,
@@ -182,7 +223,7 @@ async function claim(
           .from(probeCache)
           .where(
             and(
-              eq(probeCache.libraryId, libraryId),
+              inArray(probeCache.rootId, library.rootIds),
               sql`starts_with(${probeCache.path}, ${`${path}/`})`,
               sql`${probeCache.result} ? 'keyframesSeconds'`,
             ),
@@ -192,14 +233,14 @@ async function claim(
   );
   // The scan re-paths moved Files first, so a destination that vanished must be checked too.
   const check =
-    medium === "shows" && moves.length > 0
+    library.medium === "shows" && moves.length > 0
       ? [
           ...(await filesSharingShow(
             db,
             libraryId,
             moves.map((move) => move.previousPath),
           )),
-          ...moves.map((move) => move.path),
+          ...moves.map(({ rootId, path }) => ({ rootId, path })),
         ]
       : [];
   return {
@@ -207,15 +248,16 @@ async function claim(
       id: job.id,
       claimToken: job.claimToken,
       libraryId,
+      rootIds: library.rootIds,
       path,
-      medium,
+      medium: library.medium,
       cached: cached.map((file) => Schema.encodeSync(ReportedFile)(file)),
       check,
     },
   };
 }
 
-/** Lists the other File paths of the Shows that own Files at these paths. */
+/** Lists the other Files of the Shows that own Files at these paths. */
 async function filesSharingShow(
   db: Database,
   libraryId: string,
@@ -223,8 +265,8 @@ async function filesSharingShow(
 ) {
   const movedFiles = alias(files, "moved_files");
   const movedAncestors = alias(itemAncestors, "moved_ancestors");
-  const rows = await db
-    .selectDistinct({ path: files.path })
+  return db
+    .selectDistinct({ rootId: files.rootId, path: files.path })
     .from(movedFiles)
     .innerJoin(
       movedAncestors,
@@ -243,23 +285,26 @@ async function filesSharingShow(
         notInArray(files.path, [...paths]),
       ),
     );
-  return rows.map((row) => row.path);
 }
 
 /** Reads a scan's files from a watcher's report and its probes into the probe cache. */
 function reportedScanSource(
   db: Database,
-  libraryId: string,
+  rootIds: readonly string[],
   report: Extract<typeof ScanReport.Type, { files: unknown }>,
 ): ScanSource {
+  if (report.files.some((file) => !rootIds.includes(file.rootId)))
+    throw new Error("Watcher reported a file outside the Library's roots.");
   const reportedFiles = new Map(
     report.files.map((file) => [
-      file.path,
+      rootedKey(file),
       { ...file, modifiedAt: new Date(Number(file.modifiedNs / 1_000_000n)) },
     ]),
   );
-  const probes = new Map(report.probes.map((probe) => [probe.path, probe]));
-  const missing = new Set(report.missing);
+  const probes = new Map(
+    report.probes.map((probe) => [rootedKey(probe), probe]),
+  );
+  const missing = new Set(report.missing.map(rootedKey));
   return {
     async walk(path, recursive) {
       const walked = [...reportedFiles.values()];
@@ -267,20 +312,20 @@ function reportedScanSource(
         throw new Error("Watcher reported a file outside the scan scope.");
       return walked;
     },
-    async probe(path) {
-      const file = reportedFiles.get(path);
+    async probe(at) {
+      const file = reportedFiles.get(rootedKey(at));
       if (file === undefined)
-        throw new Error(`Watcher did not report ${path}.`);
-      const reported = probes.get(path);
+        throw new Error(`Watcher did not report ${at.path}.`);
+      const reported = probes.get(rootedKey(at));
       if (reported !== undefined) {
         const probe = {
-          ...parseProbeOutput(reported.ffprobe, extname(path).toLowerCase()),
+          ...parseProbeOutput(reported.ffprobe, extname(at.path).toLowerCase()),
           keyframesSeconds:
             reported.keyframesSeconds === null
               ? null
               : [...reported.keyframesSeconds],
         };
-        await cacheProbe(db, libraryId, file, probe);
+        await cacheProbe(db, file.rootId, file, probe);
         return { ...file, probe, cached: false };
       }
       const [cached] = await db
@@ -288,22 +333,22 @@ function reportedScanSource(
         .from(probeCache)
         .where(
           and(
-            eq(probeCache.libraryId, libraryId),
-            eq(probeCache.path, path),
+            eq(probeCache.rootId, file.rootId),
+            eq(probeCache.path, file.path),
             eq(probeCache.bytes, file.bytes),
             eq(probeCache.modifiedNs, file.modifiedNs),
           ),
         );
       if (cached?.result.keyframesSeconds === undefined)
-        throw new Error(`Watcher reported no probe for ${path}.`);
+        throw new Error(`Watcher reported no probe for ${at.path}.`);
       return { ...file, probe: cached.result, cached: true };
     },
     // The watcher re-reads each file after its probe, and its walk is the whole scope.
     verify: async () => {},
     confirmEmpty: async () => {},
     confirmMissing: async () => {},
-    // An unchecked path counts as present, which keeps a Show where it is.
-    exists: async (path) => !missing.has(path),
+    // An unchecked file counts as present, which keeps a Show where it is.
+    exists: async (file) => !missing.has(rootedKey(file)),
   };
 }
 
@@ -334,7 +379,12 @@ async function finishJob(db: Database, request: Request, jobId: string) {
     return { state: failed?.state };
   }
   const { payload } = job;
-  const source = reportedScanSource(db, payload.libraryId, report);
+  const roots = await rootsOf(db, payload.libraryId);
+  const source = reportedScanSource(
+    db,
+    roots.map((root) => root.id),
+    report,
+  );
   try {
     await queue.hold(held, () => runScanJob(db, payload, job, source));
   } catch (error) {
@@ -359,18 +409,18 @@ export function createWatcherHandler(
       if (pathname === "/api/watcher/events") {
         const batch = await readBody(request, EventBatch);
         const accepted = await debouncer.submitWatched(
-          batch.libraryId,
+          batch.rootId,
           batch.changes,
         );
         return respond({ accepted }, 202);
       }
       if (pathname === "/api/watcher/claim") {
-        const { libraryIds } = await readBody(request, WatchedLibraries);
-        return respond(await claim(db, libraryIds), 200);
+        const { rootIds } = await readBody(request, WatchedRoots);
+        return respond(await claim(db, rootIds), 200);
       }
       if (pathname === "/api/watcher/heartbeat") {
-        const { libraryIds, job } = await readBody(request, Heartbeat);
-        await beat(db, libraryIds);
+        const { rootIds, job } = await readBody(request, Heartbeat);
+        await beat(db, rootIds);
         if (job !== undefined && !(await createJobQueue(db).renew(job)))
           throw new AuthError("CONFLICT");
         return new Response(null, {

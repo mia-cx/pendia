@@ -87,14 +87,26 @@ export const Library = Schema.Struct({
   id: Schema.UUID,
   name: Schema.String,
   medium: Schema.Literal("movies", "shows"),
-  rootPath: Schema.String,
+  /** The absolute folders the library reads, first root first. */
+  roots: Schema.Array(Schema.Struct({ id: Schema.UUID, path: Schema.String })),
 });
 
 /** The fields accepted when a library is created. */
 export const LibraryInput = Schema.Struct({
   name: Schema.String,
   medium: Schema.Literal("movies", "shows"),
-  rootPath: Schema.String,
+  roots: Schema.Array(Schema.String),
+});
+
+/** A library edit: a new name, and the whole new root list, where an `id` keeps and repoints that root. */
+export const LibraryUpdate = Schema.Struct({
+  id: Schema.UUID,
+  name: Schema.optional(Schema.String),
+  roots: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ id: Schema.optional(Schema.UUID), path: Schema.String }),
+    ),
+  ),
 });
 
 /** The authenticated caller returned by the me procedure. */

@@ -11,7 +11,6 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   events,
   items,
-  libraries,
   libraryAccess,
   progress,
   segmentTimelines,
@@ -20,6 +19,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import type { pendiaRouter } from "./router.ts";
 
 function rpcClient(base: string, token?: string) {
@@ -50,10 +50,11 @@ async function seed(db: Database) {
     password: "owner-pass",
   });
   const { token: keyToken } = await createApiKey(db, owner.id, "player");
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/srv/movies" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/srv/movies",
+  });
   if (!library) throw new Error("Library insert returned no row.");
   const [item] = await db
     .insert(items)

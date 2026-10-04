@@ -8,14 +8,10 @@ import { setPermissionOverride } from "../auth/permissions.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import {
-  artwork,
-  items,
-  libraries,
-  libraryAccess,
-} from "../db/schema/index.ts";
+import { artwork, items, libraryAccess } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import type { pendiaRouter } from "./router.ts";
 
 const device = {
@@ -52,10 +48,11 @@ async function seed(db: Database) {
     { username: "admin", password: "admin-pass", ...device },
     "127.0.0.1",
   );
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/srv/movies" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/srv/movies",
+  });
   if (!library) throw new Error("Library insert returned no row.");
   const rows = [];
   for (const index of [0, 1, 2, 3, 4]) {
@@ -270,10 +267,11 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { admin, library } = await seed(db);
-      const [other] = await db
-        .insert(libraries)
-        .values({ name: "Shows", medium: "shows", rootPath: "/srv/shows" })
-        .returning();
+      const [other] = await insertLibraries(db, {
+        name: "Shows",
+        medium: "shows",
+        rootPath: "/srv/shows",
+      });
       if (!other) throw new Error("Library insert returned no row.");
       const otherRows = [];
       for (const index of [0, 1]) {

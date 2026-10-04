@@ -15,6 +15,7 @@ import {
   artwork,
   episodes,
   favourites,
+  files,
   itemAncestors,
   items,
   libraries,
@@ -24,6 +25,7 @@ import {
   ratings,
   seasons,
   shows,
+  streams,
   versions,
 } from "../db/schema/index.ts";
 
@@ -312,6 +314,64 @@ export async function listItemViews(
   ]);
   return { items: rows.map(toView), total: counted?.total ?? 0 };
 }
+
+/**
+ * Lists the imported video Versions of an Item the user may view, in label
+ * order, each with its one File and that File's Streams in index order. A
+ * Version split over several Files is left out, since playback cannot open it.
+ */
+export async function listVersionViews(
+  db: Database,
+  userId: string,
+  itemId: string,
+) {
+  const viewable = await viewableLibraryIds(db, userId);
+  if (viewable.length === 0) return [];
+  const rows = await db
+    .select({
+      id: versions.id,
+      label: versions.label,
+      durationSeconds: versions.durationSeconds,
+      file: {
+        id: files.id,
+        container: files.container,
+        bytes: files.bytes,
+        durationSeconds: files.durationSeconds,
+      },
+    })
+    .from(versions)
+    .innerJoin(files, eq(files.versionId, versions.id))
+    .where(
+      and(
+        eq(versions.itemId, itemId),
+        eq(versions.origin, "imported"),
+        eq(versions.format, "video"),
+        inArray(versions.libraryId, viewable),
+      ),
+    )
+    .orderBy(asc(versions.label), asc(versions.id), asc(files.order));
+  const single = rows.filter(
+    (row) => rows.filter((other) => other.id === row.id).length === 1,
+  );
+  if (single.length === 0) return [];
+  const fileStreams = await db
+    .select()
+    .from(streams)
+    .where(
+      inArray(
+        streams.fileId,
+        single.map((row) => row.file.id),
+      ),
+    )
+    .orderBy(asc(streams.index));
+  return single.map((row) => ({
+    ...row,
+    streams: fileStreams.filter((stream) => stream.fileId === row.file.id),
+  }));
+}
+
+/** One playable Version of an Item with its File and Streams, as a translation layer lists it. */
+export type VersionView = Awaited<ReturnType<typeof listVersionViews>>[number];
 
 /** Lists the libraries a user may view, by name. */
 export async function viewableLibraries(db: Database, userId: string) {

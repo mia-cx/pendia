@@ -85,6 +85,13 @@
       "when": 1791101028881,
       "tag": "0011_session_client",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791103186844,
+      "tag": "0012_session_credential",
+      "breakpoints": true
     }
   ]
 }

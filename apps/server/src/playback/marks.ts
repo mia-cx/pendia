@@ -8,6 +8,7 @@ import {
   type SQLWrapper,
   sql,
 } from "drizzle-orm";
+import { publishEvent } from "../api/events.ts";
 import {
   decodeCursor,
   defaultPageSize,
@@ -21,6 +22,7 @@ import type { Database } from "../db/client.ts";
 import {
   artwork,
   favourites,
+  itemAncestors,
   items,
   progress,
   ratings,
@@ -73,17 +75,96 @@ export async function setFavourite(
   favourite: boolean,
 ) {
   await viewableItem(db, userId, itemId);
-  if (favourite) {
-    await db
-      .insert(favourites)
-      .values({ userId, itemId })
-      .onConflictDoNothing();
-  } else {
-    await db
-      .delete(favourites)
-      .where(and(eq(favourites.userId, userId), eq(favourites.itemId, itemId)));
-  }
+  await db.transaction(async (tx) => {
+    if (favourite) {
+      await tx
+        .insert(favourites)
+        .values({ userId, itemId })
+        .onConflictDoNothing();
+    } else {
+      await tx
+        .delete(favourites)
+        .where(
+          and(eq(favourites.userId, userId), eq(favourites.itemId, itemId)),
+        );
+    }
+    await publishEvent(tx, {
+      kind: "user-data.changed",
+      userId,
+      itemIds: [itemId],
+    });
+  });
   return getItemMarks(db, userId, itemId);
+}
+
+/**
+ * Marks an Item and everything under it played or unplayed for the caller,
+ * as marking a Show watched marks its Episodes. Played finishes each Item
+ * that has a Version and counts a play; unplayed clears the progress of all.
+ */
+export async function setPlayed(
+  db: Database,
+  userId: string,
+  itemId: string,
+  played: boolean,
+) {
+  await viewableItem(db, userId, itemId);
+  const tree = (
+    await db
+      .select({ id: itemAncestors.descendantId })
+      .from(itemAncestors)
+      .where(eq(itemAncestors.ancestorId, itemId))
+  ).map((row) => row.id);
+  // Each Item's progress takes the format of its first Version.
+  const targets = played
+    ? await db
+        .selectDistinctOn([versions.itemId], {
+          itemId: versions.itemId,
+          format: versions.format,
+        })
+        .from(versions)
+        .where(
+          and(inArray(versions.itemId, tree), eq(versions.origin, "imported")),
+        )
+        .orderBy(versions.itemId, versions.label, versions.id)
+    : [];
+  await db.transaction(async (tx) => {
+    if (!played)
+      await tx
+        .delete(progress)
+        .where(
+          and(eq(progress.userId, userId), inArray(progress.itemId, tree)),
+        );
+    if (targets.length > 0)
+      await tx
+        .insert(progress)
+        .values(
+          targets.map((target) => ({
+            userId,
+            ...target,
+            completed: true,
+            positionSeconds: 0,
+            playCount: 1,
+            playedAt: sql`clock_timestamp()`,
+            updatedAt: sql`clock_timestamp()`,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [progress.userId, progress.itemId],
+          set: {
+            completed: true,
+            positionSeconds: 0,
+            playCount: sql`${progress.playCount} + 1`,
+            playedAt: sql`clock_timestamp()`,
+            updatedAt: sql`clock_timestamp()`,
+          },
+        });
+    await publishEvent(tx, {
+      kind: "user-data.changed",
+      userId,
+      itemIds: tree,
+    });
+  });
 }
 
 /** Sets or clears the caller's zero-to-ten, single-decimal rating on an Item. */
@@ -121,6 +202,11 @@ export async function setRating(
         },
       });
   }
+  await publishEvent(db, {
+    kind: "user-data.changed",
+    userId,
+    itemIds: [itemId],
+  });
   return getItemMarks(db, userId, itemId);
 }
 

@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
 import type { createJellyfinHandler } from "./jellyfin/http.ts";
+import {
+  type createJellyfinSocket,
+  type SocketData,
+  socketPath,
+} from "./jellyfin/socket.ts";
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 import type { createArtworkHandler } from "./metadata/artwork-http.ts";
 import type { createPluginRouteHandler } from "./plugins/http.ts";
@@ -73,12 +78,15 @@ export function startApiServer(
     plugins?: ReturnType<typeof createPluginRouteHandler>;
     watcher?: ReturnType<typeof createWatcherHandler>;
     jellyfin?: ReturnType<typeof createJellyfinHandler>;
+    socket?: ReturnType<typeof createJellyfinSocket>;
   } = {},
-): Bun.Server<undefined> {
+): Bun.Server<SocketData> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
 
-  return Bun.serve({
+  return Bun.serve<SocketData>({
     port,
+    // Without the Jellyfin socket nothing upgrades, so no message arrives.
+    websocket: handlers.socket?.websocket ?? { message() {} },
     async fetch(request, server) {
       const { pathname } = new URL(request.url);
 
@@ -130,10 +138,15 @@ export function startApiServer(
         if (response !== undefined) return response;
       }
 
+      if (handlers.socket && pathname.toLowerCase() === socketPath) {
+        return handlers.socket.upgrade(request, server);
+      }
+
       if (handlers.jellyfin) {
         const response = await handlers.jellyfin(
           request,
           server.requestIP(request)?.address ?? "",
+          server,
         );
         if (response !== undefined) return response;
       }

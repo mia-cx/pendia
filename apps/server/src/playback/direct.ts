@@ -79,6 +79,50 @@ async function requestUserId(
   return caller.user.id;
 }
 
+/**
+ * Resolves a Version's File on disk after the view and play checks, with its
+ * playback source. The path is undefined when the File left the library.
+ */
+export async function locateVersionFile(
+  db: Database,
+  userId: string,
+  itemId: string,
+  versionId: string,
+) {
+  const loaded = await loadPlaybackSource(db, userId, itemId, versionId);
+  const [library] = await db
+    .select({ rootPath: libraries.rootPath })
+    .from(libraries)
+    .where(eq(libraries.id, loaded.item.libraryId))
+    .limit(1);
+  if (library === undefined) throw new AuthError("NOT_FOUND");
+  let validated: LibraryFile;
+  try {
+    validated = await readLibraryFile(library.rootPath, loaded.file.path);
+  } catch {
+    return { ...loaded, path: undefined };
+  }
+  return { ...loaded, path: resolve(library.rootPath, validated.path) };
+}
+
+/** Serves a Version's File for byte-range playback; Bun answers Range requests on a file body itself. */
+export async function serveVersionFile(
+  db: Database,
+  userId: string,
+  itemId: string,
+  versionId: string,
+) {
+  const { path } = await locateVersionFile(db, userId, itemId, versionId);
+  if (path === undefined)
+    return respond(
+      { error: { code: "NOT_FOUND", message: "Playback file not found." } },
+      404,
+    );
+  const headers = new Headers(standardHeaders);
+  headers.set("accept-ranges", "bytes");
+  return new Response(Bun.file(path), { headers });
+}
+
 /** Creates the direct-play file handler matched ahead of the API router. */
 export function createDirectPlayHandler(db: Database) {
   return async (
@@ -136,37 +180,7 @@ export function createDirectPlayHandler(db: Database) {
         session.playMethod !== "direct-play"
       )
         throw new AuthError("UNAUTHENTICATED");
-      const { item, file } = await loadPlaybackSource(
-        db,
-        userId,
-        itemId,
-        session.versionId,
-      );
-      const [library] = await db
-        .select({ rootPath: libraries.rootPath })
-        .from(libraries)
-        .where(eq(libraries.id, item.libraryId))
-        .limit(1);
-      if (library === undefined) throw new AuthError("NOT_FOUND");
-      let validated: LibraryFile;
-      try {
-        validated = await readLibraryFile(library.rootPath, file.path);
-      } catch {
-        return respond(
-          {
-            error: {
-              code: "NOT_FOUND",
-              message: "Playback file not found.",
-            },
-          },
-          404,
-        );
-      }
-      const headers = new Headers(standardHeaders);
-      headers.set("accept-ranges", "bytes");
-      return new Response(Bun.file(resolve(library.rootPath, validated.path)), {
-        headers,
-      });
+      return await serveVersionFile(db, userId, itemId, session.versionId);
     } catch (error) {
       return errorResponse(error);
     }

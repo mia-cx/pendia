@@ -107,7 +107,7 @@ async function assignOwner(
 export function createHlsHandler(db: Database, local?: Transcoder) {
   return async (
     request: Request,
-    server: Bun.Server<undefined>,
+    server: Pick<Bun.Server<undefined>, "timeout">,
   ): Promise<Response | undefined> => {
     const url = new URL(request.url);
     const variant = parseVariantHlsPath(url.pathname);

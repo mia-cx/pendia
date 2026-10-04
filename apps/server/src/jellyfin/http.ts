@@ -19,7 +19,14 @@ export type RequestContext = {
   params: Record<string, string>;
   client: ClientInfo;
   peerAddress: string;
+  /** Lets a route outlive Bun's ten second idle timeout, as an HLS segment wait can. */
+  server: Timeouts;
 };
+
+type Timeouts = Pick<Bun.Server<undefined>, "timeout">;
+
+/** Stands in for Bun's server where a request is not one it accepted, as in tests or a forwarded request. */
+export const noTimeouts: Timeouts = { timeout: () => {} };
 
 /** The context of a route that needs a signed-in caller. */
 export type UserContext = RequestContext & {
@@ -89,6 +96,7 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
   return async (
     request: Request,
     peerAddress: string,
+    server: Timeouts = noTimeouts,
   ): Promise<Response | undefined> => {
     const url = new URL(request.url);
     const candidates = compiled.flatMap(({ route, pattern }) => {
@@ -119,6 +127,7 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
         params,
         client: readClient(request),
         peerAddress,
+        server,
       };
       if (found.route.anonymous) return await found.route.handle(context);
       const token = context.client.token;

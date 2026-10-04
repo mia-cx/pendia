@@ -46,6 +46,8 @@ export type PlanInput = {
   versionId: string;
   profile: ClientProfile;
   bitrateCapBps?: number;
+  /** How long the playback token lives; the token's default when absent. */
+  tokenLifetimeSeconds?: number;
 };
 
 /** The request details planning needs to judge network locality and URL style. */
@@ -111,7 +113,8 @@ const subtitleFormats: Record<string, string> = {
 };
 const bitmapSubtitles = new Set(["pgs", "vobsub", "dvb_subtitle", "xsub"]);
 
-function toSubtitleStream(row: StreamRow): SubtitleStream {
+/** Normalizes a probed subtitle Stream to its engine format and text-or-bitmap kind. */
+export function toSubtitleStream(row: StreamRow): SubtitleStream {
   const format = subtitleFormats[row.codec] ?? row.codec;
   return { format, kind: bitmapSubtitles.has(format) ? "bitmap" : "text" };
 }
@@ -251,7 +254,7 @@ async function userBitrateCap(
 }
 
 /** Names the app and device behind a caller's credential; an API key names the client only. */
-async function callerClient(db: Database, caller: Caller) {
+export async function callerClient(db: Database, caller: Caller) {
   if (caller.credential.kind === "api-key") {
     const [key] = await db
       .select({ name: apiKeys.name })
@@ -403,6 +406,7 @@ export async function planPlayback(
           ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
           : decision,
         ...client,
+        credentialId: caller.credential.id,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");
@@ -411,10 +415,13 @@ export async function planPlayback(
       sessionId: session.id,
       state: "starting",
     });
-    const issued = await issuePlaybackToken(tx, caller, {
-      sessionId: session.id,
-      itemId: item.id,
-    });
+    const issued = await issuePlaybackToken(
+      tx,
+      caller,
+      { sessionId: session.id, itemId: item.id },
+      Date.now(),
+      input.tokenLifetimeSeconds,
+    );
     return {
       method,
       itemId: item.id,

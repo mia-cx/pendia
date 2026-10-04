@@ -28,6 +28,28 @@ export function webvttArguments(
   ];
 }
 
+/** Converts one text subtitle Stream to WebVTT in memory; aborting the signal kills ffmpeg. */
+export async function readWebvtt(
+  inputPath: string,
+  subtitleIndex: number,
+  signal?: AbortSignal,
+) {
+  const proc = Bun.spawn(
+    ["ffmpeg", ...webvttArguments(inputPath, subtitleIndex, "pipe:1")],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe", signal },
+  );
+  const [text, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0)
+    throw new Error(
+      `WebVTT conversion failed (${code}): ${stderr.trim().slice(-2000)}`,
+    );
+  return text;
+}
+
 /** A running WebVTT conversion: done settles when the file is in place or the conversion failed. */
 export type Conversion = { done: Promise<void>; kill(): void };
 

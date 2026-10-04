@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHlsHandler } from "../api/hls.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { libraries, settings } from "../db/schema/index.ts";
@@ -51,7 +52,7 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
 
         const handle = createJellyfinHandler(
           db,
-          jellyfinRoutes(createArtworkHandler(db)),
+          jellyfinRoutes(createArtworkHandler(db), createHlsHandler(db)),
         );
         const send = async (path: string, headers: HeadersInit = {}) => {
           const response = await handle(

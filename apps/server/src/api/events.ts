@@ -67,6 +67,9 @@ export async function canReceive(
       if (session?.userId === caller.user.id) return true;
       return checkPermission(db, caller.user.id, "manage-server");
     }
+    // Marks and progress are private to the user who made them.
+    case "user-data.changed":
+      return event.userId === caller.user.id;
     default:
       return false;
   }
@@ -84,6 +87,8 @@ function subjectKey(event: Event): string {
     case "session.state":
     case "segment.ready":
       return `session:${event.sessionId}`;
+    case "user-data.changed":
+      return `user:${event.userId}`;
     default:
       // The union is exhaustive today; a future kind memoises its own denial.
       return `kind:${kind}`;

@@ -186,6 +186,9 @@ export const sessionRegistry = pgTable(
     // The app and device that planned the session; an API key has no device.
     clientName: text("client_name"),
     deviceName: text("device_name"),
+    // The device session or API key that opened it, so a report that names no
+    // session finds the reporting device's own. Either table, so no foreign key.
+    credentialId: uuid("credential_id"),
     createdAt: instant("created_at").notNull().defaultNow(),
     lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
   },

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { sql } from "drizzle-orm";
+import { createHlsHandler } from "../api/hls.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -33,7 +34,7 @@ async function setup(db: Database) {
   });
   const handle = createJellyfinHandler(
     db,
-    jellyfinRoutes(createArtworkHandler(db)),
+    jellyfinRoutes(createArtworkHandler(db), createHlsHandler(db)),
   );
   const call = async (
     method: string,

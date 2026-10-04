@@ -1,6 +1,6 @@
 <script lang="ts">
 import { ScrollArea as ScrollAreaPrimitive } from "bits-ui";
-import { cn, type WithoutChild } from "$lib/utils.js";
+import { cn, type WithoutChild } from "$lib/utils.ts";
 import { Scrollbar } from "./index.js";
 
 let {
@@ -21,24 +21,24 @@ let {
 </script>
 
 <ScrollAreaPrimitive.Root
-	bind:ref
-	type="hover"
-	data-slot="scroll-area"
-	class={cn("relative", className)}
-	{...restProps}
+  bind:ref
+  type="hover"
+  data-slot="scroll-area"
+  class={cn("outline-none relative", className)}
+  {...restProps}
 >
-	<ScrollAreaPrimitive.Viewport
-		bind:ref={viewportRef}
-		data-slot="scroll-area-viewport"
-		class="size-full rounded-[inherit]"
-	>
-		{@render children?.()}
-	</ScrollAreaPrimitive.Viewport>
-	{#if orientation === "vertical" || orientation === "both"}
-		<Scrollbar orientation="vertical" class={scrollbarYClasses} />
-	{/if}
-	{#if orientation === "horizontal" || orientation === "both"}
-		<Scrollbar orientation="horizontal" class={scrollbarXClasses} />
-	{/if}
-	<ScrollAreaPrimitive.Corner />
+  <ScrollAreaPrimitive.Viewport
+    bind:ref={viewportRef}
+    data-slot="scroll-area-viewport"
+    class="size-full rounded-[inherit]"
+  >
+    {@render children?.()}
+  </ScrollAreaPrimitive.Viewport>
+  {#if orientation === "vertical" || orientation === "both"}
+    <Scrollbar orientation="vertical" class={scrollbarYClasses} />
+  {/if}
+  {#if orientation === "horizontal" || orientation === "both"}
+    <Scrollbar orientation="horizontal" class={scrollbarXClasses} />
+  {/if}
+  <ScrollAreaPrimitive.Corner />
 </ScrollAreaPrimitive.Root>

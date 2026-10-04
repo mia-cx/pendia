@@ -1,7 +1,7 @@
 <script lang="ts">
 import { Select as SelectPrimitive } from "bits-ui";
 import type { ComponentProps } from "svelte";
-import { cn } from "$lib/utils.js";
+import { cn } from "$lib/utils.ts";
 
 let {
   ref = $bindable(null),
@@ -12,10 +12,10 @@ let {
 </script>
 
 <SelectPrimitive.GroupHeading
-	bind:ref
-	data-slot="select-group-heading"
-	class={cn("px-2.5 pt-1.5 pb-1 text-footnote font-semibold text-label-secondary", className)}
-	{...restProps}
+  bind:ref
+  data-slot="select-group-heading"
+  class={cn("px-2.5 pt-1.5 pb-1 text-footnote font-semibold text-label-secondary", className)}
+  {...restProps}
 >
-	{@render children?.()}
+  {@render children?.()}
 </SelectPrimitive.GroupHeading>

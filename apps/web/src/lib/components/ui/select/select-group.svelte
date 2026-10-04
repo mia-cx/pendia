@@ -1,6 +1,6 @@
 <script lang="ts">
 import { Select as SelectPrimitive } from "bits-ui";
-import { cn } from "$lib/utils.js";
+import { cn } from "$lib/utils.ts";
 
 let {
   ref = $bindable(null),
@@ -10,8 +10,8 @@ let {
 </script>
 
 <SelectPrimitive.Group
-	bind:ref
-	data-slot="select-group"
-	class={cn("scroll-my-1 p-1", className)}
-	{...restProps}
+  bind:ref
+  data-slot="select-group"
+  class={cn("scroll-my-1 p-1", className)}
+  {...restProps}
 />

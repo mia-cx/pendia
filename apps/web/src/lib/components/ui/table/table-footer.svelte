@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { HTMLAttributes } from "svelte/elements";
-import { cn, type WithElementRef } from "$lib/utils.js";
+import { cn, type WithElementRef } from "$lib/utils.ts";
 
 let {
   ref = $bindable(null),
@@ -11,10 +11,10 @@ let {
 </script>
 
 <tfoot
-	bind:this={ref}
-	data-slot="table-footer"
-	class={cn("border-t border-separator font-medium [&>tr]:last:border-b-0", className)}
-	{...restProps}
+  bind:this={ref}
+  data-slot="table-footer"
+  class={cn("border-t border-separator font-medium [&>tr]:last:border-b-0", className)}
+  {...restProps}
 >
-	{@render children?.()}
+  {@render children?.()}
 </tfoot>

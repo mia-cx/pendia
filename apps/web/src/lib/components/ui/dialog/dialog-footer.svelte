@@ -2,7 +2,7 @@
 import { Dialog as DialogPrimitive } from "bits-ui";
 import type { HTMLAttributes } from "svelte/elements";
 import { Button } from "$lib/components/ui/button/index.js";
-import { cn, type WithElementRef } from "$lib/utils.js";
+import { cn, type WithElementRef } from "$lib/utils.ts";
 
 let {
   ref = $bindable(null),
@@ -16,17 +16,17 @@ let {
 </script>
 
 <div
-	bind:this={ref}
-	data-slot="dialog-footer"
-	class={cn("flex flex-col-reverse gap-2 *:w-full sm:flex-row sm:justify-end sm:*:w-auto", className)}
-	{...restProps}
+  bind:this={ref}
+  data-slot="dialog-footer"
+  class={cn("flex flex-col-reverse gap-2 *:w-full sm:flex-row sm:justify-end sm:*:w-auto", className)}
+  {...restProps}
 >
-	{@render children?.()}
-	{#if showCloseButton}
-		<DialogPrimitive.Close>
-			{#snippet child({ props })}
-				<Button variant="outline" {...props}>Close</Button>
-			{/snippet}
-		</DialogPrimitive.Close>
-	{/if}
+  {@render children?.()}
+  {#if showCloseButton}
+    <DialogPrimitive.Close>
+      {#snippet child({ props })}
+        <Button variant="outline" {...props}>Close</Button>
+      {/snippet}
+    </DialogPrimitive.Close>
+  {/if}
 </div>

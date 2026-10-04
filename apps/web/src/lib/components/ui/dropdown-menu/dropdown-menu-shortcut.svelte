@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { HTMLAttributes } from "svelte/elements";
-import { cn, type WithElementRef } from "$lib/utils.js";
+import { cn, type WithElementRef } from "$lib/utils.ts";
 
 let {
   ref = $bindable(null),
@@ -11,10 +11,10 @@ let {
 </script>
 
 <span
-	bind:this={ref}
-	data-slot="dropdown-menu-shortcut"
-	class={cn("ml-auto text-footnote text-label-tertiary group-focus/dropdown-menu-item:text-label-secondary", className)}
-	{...restProps}
+  bind:this={ref}
+  data-slot="dropdown-menu-shortcut"
+  class={cn("ml-auto text-footnote text-label-tertiary group-focus/dropdown-menu-item:text-label-secondary", className)}
+  {...restProps}
 >
-	{@render children?.()}
+  {@render children?.()}
 </span>

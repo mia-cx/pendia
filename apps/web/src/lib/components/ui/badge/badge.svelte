@@ -1,6 +1,6 @@
 <script lang="ts" module>
 import type { VariantProps } from "tailwind-variants";
-import { tv } from "$lib/utils.js";
+import { tv } from "$lib/utils.ts";
 
 export const badgeVariants = tv({
   base: "inline-flex h-5.5 w-fit shrink-0 items-center justify-center gap-1 rounded-full px-2 text-caption-1 font-semibold whitespace-nowrap [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3",
@@ -21,28 +21,28 @@ export type BadgeVariant = VariantProps<typeof badgeVariants>["variant"];
 </script>
 
 <script lang="ts">
-	import { cn, type WithElementRef } from "$lib/utils.js";
-	import type { HTMLAnchorAttributes } from "svelte/elements";
+  import { cn, type WithElementRef } from "$lib/utils.ts";
+  import type { HTMLAnchorAttributes } from "svelte/elements";
 
-	let {
-		ref = $bindable(null),
-		href,
-		class: className,
-		variant = "default",
-		children,
-		...restProps
-	}: WithElementRef<HTMLAnchorAttributes> & {
-		variant?: BadgeVariant;
-	} = $props();
+  let {
+    ref = $bindable(null),
+    href,
+    class: className,
+    variant = "default",
+    children,
+    ...restProps
+  }: WithElementRef<HTMLAnchorAttributes> & {
+    variant?: BadgeVariant;
+  } = $props();
 </script>
 
 <svelte:element
-	this={href ? "a" : "span"}
-	bind:this={ref}
-	data-slot="badge"
-	{href}
-	class={cn(badgeVariants({ variant }), className)}
-	{...restProps}
+  this={href ? "a" : "span"}
+  bind:this={ref}
+  data-slot="badge"
+  {href}
+  class={cn(badgeVariants({ variant }), className)}
+  {...restProps}
 >
-	{@render children?.()}
+  {@render children?.()}
 </svelte:element>

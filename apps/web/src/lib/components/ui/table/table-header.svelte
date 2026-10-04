@@ -1,6 +1,6 @@
 <script lang="ts">
 import type { HTMLAttributes } from "svelte/elements";
-import { cn, type WithElementRef } from "$lib/utils.js";
+import { cn, type WithElementRef } from "$lib/utils.ts";
 
 let {
   ref = $bindable(null),
@@ -11,10 +11,10 @@ let {
 </script>
 
 <thead
-	bind:this={ref}
-	data-slot="table-header"
-	class={cn("[&_tr]:border-b [&_tr]:border-separator", className)}
-	{...restProps}
+  bind:this={ref}
+  data-slot="table-header"
+  class={cn("[&_tr]:border-b [&_tr]:border-separator", className)}
+  {...restProps}
 >
-	{@render children?.()}
+  {@render children?.()}
 </thead>

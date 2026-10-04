@@ -33,6 +33,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/** A props type without `child`. */
 export type WithoutChild<T> = T extends { child?: unknown }
   ? Omit<T, "child">
   : T;

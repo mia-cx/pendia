@@ -25,13 +25,14 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
 - [x] Follow the README quick start in an empty directory and reach the admin wizard; screenshot it. Run the full gate and record the results here.
   - Validation: wizard screenshot; `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `bun test` with and without `DATABASE_URL`.
   - Quick start: in an empty folder, `git clone --branch feat/46-release` (the branch, since `main` lacks the change), then `PENDIA_HOST_PORT=3846 docker compose -p pendia-46 up -d`. The GHCR pull answered `denied`, compose built the image from the clone, and `/readyz` answered ready. `/` opened the setup wizard: https://i.mia.cx/file/2026/10/pendia-46-wizard-compose.png. Inside the container `/media` was read-only to `pendia` and `/var/lib/pendia` was writable, which confirms the artwork fallback is needed. Torn down with `down -v`; the image and the 19 build cache entries the build made were removed by id.
+  - After the compose split, at 431d5fb, in a second empty folder: `docker compose up -d` without a GHCR login stops at `denied`. The README's build line, `docker compose -f compose.yaml -f compose.build.yaml up -d --build`, built `pendia:local`, answered ready and opened the wizard: https://i.mia.cx/file/2026/10/pendia-46-wizard-compose-build.png. Torn down and pruned the same way. The pull path waits for the first published image.
   - Image size: 625 MB in the PR's CI `image` job, with ffmpeg 7.1.5. The local build showed 888 MB disk usage and 243 MB compressed.
   - Gate at 1972ce0: install no changes; lint clean (376 files); check 6 of 6; build 4 of 4. With DATABASE_URL: 1316 pass, 3 skip, 0 fail. Without: 774 pass, 563 skip, 0 fail.
 
 ## Notes
 
 - Registry: GHCR, `ghcr.io/mia-cx/pendia`. The workflow pushes with `GITHUB_TOKEN` and `packages: write`, so no repository secret is needed. A new GHCR package is private, which matches the issue's "private registry".
-- Compose names the registry image and keeps `build: .`. Compose pulls the image when the host can, and builds from the clone when the pull fails. A clone without registry access still starts.
+- `compose.yaml` and `compose.watcher.yaml` only pull a release. A first cut kept `build: .` as the fallback, but Pullfrog showed that a failed pull of `PENDIA_VERSION=1.2.3` then built the checkout and tagged it `1.2.3`, and a self-built `latest` would block later pulls. `compose.build.yaml` now builds the checkout as `pendia:local`.
 - The wizard asks for a library root path, so compose mounts `PENDIA_MEDIA` (default `./media`) at `/media`. The image's `pendia` user rarely owns that folder, so colocated artwork would hit `EACCES`; compose sets `PENDIA_ARTWORK_PATH` to a `pendia-data` volume, the fallback the artwork store already has.
 - In `all`, `startPendia` migrates, starts plugins and awaits the transcoder trial before it binds the api port. Until then `/readyz` has no answer, which every probe counts as not ready. The test pins that order.
 - The spec's request id on log lines is not implemented anywhere yet; the log format section documents the lines as they are.

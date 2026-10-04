@@ -396,7 +396,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         async ({ db, manager, scope }) => {
           // The h264 fixture makes the dovi bitstream filter fail, so only
           // the master is requested; the flag itself is what is asserted.
-          // The run's remux.failed log is expected and silenced.
+          // The run's run.failed log is expected and silenced.
           const quiet = spyOn(console, "error").mockImplementation(() => {});
           try {
             await manager.serve(scope, hlsName("master.m3u8"), "");

@@ -29,7 +29,13 @@ import {
   segmentCount,
   variantCodecs,
 } from "../playback/playlists.ts";
-import { type RemuxRun, type RunHandle, startRemuxRun } from "./remux.ts";
+import {
+  type LiveRun,
+  type ReadySegment,
+  type RunHandle,
+  startLiveRun,
+  type VideoDecision,
+} from "./live-run.ts";
 
 /** The authorised session a request belongs to. */
 export type SessionScope = {
@@ -44,10 +50,10 @@ export type SessionManagerOptions = {
   scratchDir: string; // created if missing
   idleMs?: number; // default 60_000
   waitMs?: number; // default 20_000
-  readRate?: RemuxRun["readRate"]; // passed to every run; tests only
+  readRate?: LiveRun["readRate"]; // passed to every run; tests only
 };
 
-/** Holds the live remux sessions of one transcoder: processes, scratch and ready events. */
+/** Holds the live sessions of one transcoder: processes, scratch and ready events. */
 export type SessionManager = ReturnType<typeof createSessionManager>;
 
 type Waiter = (ok: boolean) => void;
@@ -59,7 +65,7 @@ type LiveSession = {
   boundariesSeconds: readonly number[];
   variant: PlaylistVariant;
   state: LiveState;
-  paths: Map<number, string>;
+  segments: Map<number, { path: string; fragmentOffset: number }>;
   init: Uint8Array | null;
   initWaiters: Set<Waiter>;
   segmentWaiters: Map<number, Set<Waiter>>;
@@ -69,8 +75,7 @@ type LiveSession = {
   publishes: Set<Promise<unknown>>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   stopped: boolean;
-  stripDolbyVision: boolean;
-  videoCodec: string;
+  video: VideoDecision;
 };
 
 const log = (
@@ -136,9 +141,10 @@ export function createSessionManager(
     );
 
   const serveSegmentFile = (session: LiveSession, index: number) => {
-    const path = session.paths.get(index);
-    if (path === undefined) return notReady();
-    return new Response(Bun.file(path), {
+    const segment = session.segments.get(index);
+    if (segment === undefined) return notReady();
+    // The file opens with its own init; only the fragment goes out.
+    return new Response(Bun.file(segment.path).slice(segment.fragmentOffset), {
       headers: { ...standardHeaders, "content-type": "video/iso.segment" },
     });
   };
@@ -178,9 +184,10 @@ export function createSessionManager(
     session: LiveSession,
     handle: RunHandle,
     directory: string,
-    indexes: number[],
+    ready: ReadySegment[],
   ) => {
     if (session.stopped) return;
+    const indexes = ready.map((segment) => segment.index);
     // A late event from a killed run still describes complete segments but
     // must not move the current run's frontier.
     session.state = segmentsReady(
@@ -188,16 +195,22 @@ export function createSessionManager(
       indexes,
       session.current?.handle === handle,
     );
-    for (const index of indexes) {
-      session.paths.set(index, join(directory, `${index}.m4s`));
+    for (const { index, fragmentOffset } of ready) {
+      session.segments.set(index, {
+        path: join(directory, `${index}.m4s`),
+        fragmentOffset,
+      });
     }
-    if (session.init === null) {
+    const [first] = ready;
+    if (session.init === null && first !== undefined) {
+      // Every run writes the same init; the session keeps the first one.
       void (async () => {
-        const bytes = await Bun.file(join(directory, "init.mp4"))
-          .arrayBuffer()
+        const bytes = await Bun.file(join(directory, `${first.index}.m4s`))
+          .slice(0, first.fragmentOffset)
+          .bytes()
           .catch(() => null);
         if (bytes === null || session.init !== null) return;
-        session.init = new Uint8Array(bytes);
+        session.init = bytes;
         for (const waiter of session.initWaiters) {
           waiter(true);
         }
@@ -240,17 +253,16 @@ export function createSessionManager(
     session.runs += 1;
     const directory = join(session.directory, `run-${session.runs}`);
     await mkdir(directory, { recursive: true });
-    const handle = startRemuxRun(
+    const handle = startLiveRun(
       {
         inputPath: session.inputPath,
         boundariesSeconds: session.boundariesSeconds,
         startIndex: index,
         directory,
-        videoCodec: session.videoCodec,
+        video: session.video,
         readRate,
-        stripDolbyVision: session.stripDolbyVision,
       },
-      (indexes) => onReady(session, handle, directory, indexes),
+      (ready) => onReady(session, handle, directory, ready),
     );
     if (session.stopped) {
       // A stop drained the transition while this start was in flight.
@@ -262,7 +274,7 @@ export function createSessionManager(
     handle.exited
       .then(() => onExit(session, handle))
       .catch((error: unknown) =>
-        log("error", "remux.exit_failed", {
+        log("error", "run.exit_failed", {
           sessionId: session.scope.sessionId,
           error: errorMessage(error),
         }),
@@ -342,9 +354,15 @@ export function createSessionManager(
       .where(eq(sessionRegistry.id, scope.sessionId))
       .limit(1);
     const decision = row?.decision;
-    const stripDolbyVision =
-      decision?.video.action === "copy" &&
-      decision.video.stripDolbyVision === true;
+    const video: VideoDecision =
+      decision?.video.action === "copy"
+        ? decision.video
+        : {
+            action: "copy",
+            codec: source.video.codec,
+            hdr: source.video.hdr,
+            stripDolbyVision: false,
+          };
     const audio = source.audio[0];
     const variant: PlaylistVariant = {
       bandwidth: Math.round(source.video.bitrate + (audio?.bitrate ?? 0)),
@@ -368,7 +386,7 @@ export function createSessionManager(
       boundariesSeconds: timeline.boundariesSeconds,
       variant,
       state: initialState,
-      paths: new Map(),
+      segments: new Map(),
       init: null,
       initWaiters: new Set(),
       segmentWaiters: new Map(),
@@ -378,8 +396,7 @@ export function createSessionManager(
       publishes: new Set(),
       idleTimer: null,
       stopped: false,
-      stripDolbyVision,
-      videoCodec: source.video.codec,
+      video,
     };
   };
 
@@ -543,7 +560,8 @@ export function createSessionManager(
         running: session.current !== null,
         pid: session.current?.handle.pid ?? null,
         ready: [...session.state.ready].sort((a, b) => a - b),
-        stripDolbyVision: session.stripDolbyVision,
+        stripDolbyVision:
+          session.video.action === "copy" && session.video.stripDolbyVision,
       };
     },
     async stop() {

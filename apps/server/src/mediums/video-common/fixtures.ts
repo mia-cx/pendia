@@ -11,9 +11,14 @@ export interface VideoFixtureOptions {
   frameRate?: number;
   gopSeconds?: number;
   pattern?: "color" | "testsrc2";
+  videoCodec?: "h264" | "hevc";
+  /** Tags a 10-bit HEVC video with this transfer function; needs videoCodec "hevc". */
+  hdr?: "hdr10" | "hlg";
+  audioCodec?: "aac" | "ac3" | "flac";
+  audioChannels?: 2 | 6;
 }
 
-/** Generate a short real MKV with h264 video, AAC audio and SRT subtitles. */
+/** Generate a short real MKV with video, silent audio and SRT subtitles; h264 and stereo AAC by default. */
 export async function createVideoFixture(
   path: string,
   options: VideoFixtureOptions = {},
@@ -26,13 +31,66 @@ export async function createVideoFixture(
     frameRate = 2,
     gopSeconds,
     pattern = "color",
+    videoCodec = "h264",
+    hdr,
+    audioCodec = "aac",
+    audioChannels = 2,
   } = options;
+  if (hdr !== undefined && videoCodec !== "hevc") {
+    throw new Error("An HDR fixture needs HEVC video.");
+  }
   const source =
     pattern === "testsrc2"
       ? `testsrc2=s=${width}x${height}:r=${frameRate}:d=${durationSeconds}`
       : `color=c=black:s=${width}x${height}:r=${frameRate}:d=${durationSeconds}`;
   const gopFrames =
     gopSeconds === undefined ? undefined : Math.round(gopSeconds * frameRate);
+  const h264 = [
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    // testsrc2 at 1080p is too slow to encode on one thread.
+    ...(pattern === "testsrc2" ? [] : ["-threads", "1"]),
+    "-pix_fmt",
+    "yuv420p",
+    ...(gopFrames === undefined
+      ? []
+      : [
+          "-g",
+          String(gopFrames),
+          "-keyint_min",
+          String(gopFrames),
+          "-sc_threshold",
+          "0",
+        ]),
+    ...(pattern === "testsrc2" ? ["-crf", "30"] : []),
+  ];
+  const hevc = [
+    "-c:v",
+    "libx265",
+    "-preset",
+    "ultrafast",
+    "-x265-params",
+    [
+      "log-level=error",
+      ...(gopFrames === undefined
+        ? []
+        : [`keyint=${gopFrames}`, `min-keyint=${gopFrames}`, "scenecut=0"]),
+      // libx265 writes colour tags only from its own parameters.
+      ...(hdr === undefined
+        ? []
+        : [
+            "colorprim=bt2020",
+            `transfer=${hdr === "hlg" ? "arib-std-b67" : "smpte2084"}`,
+            "colormatrix=bt2020nc",
+          ]),
+    ].join(":"),
+    "-pix_fmt",
+    hdr === undefined ? "yuv420p" : "yuv420p10le",
+    "-tag:v",
+    "hvc1",
+  ];
   const subtitlesPath = `${path}.srt`;
   const metadataPath = `${path}.ffmetadata`;
   await writeFile(subtitlesPath, "1\n00:00:00,000 --> 00:00:00,800\nFixture\n");
@@ -56,7 +114,7 @@ export async function createVideoFixture(
         "-f",
         "lavfi",
         "-i",
-        "anullsrc=r=48000:cl=stereo",
+        `anullsrc=r=48000:cl=${audioChannels === 6 ? "5.1" : "stereo"}`,
         "-f",
         "srt",
         "-i",
@@ -77,27 +135,9 @@ export async function createVideoFixture(
         "3",
         "-t",
         String(durationSeconds),
-        "-c:v",
-        "libx264",
-        "-preset",
-        "ultrafast",
-        // testsrc2 at 1080p is too slow to encode on one thread.
-        ...(pattern === "testsrc2" ? [] : ["-threads", "1"]),
-        "-pix_fmt",
-        "yuv420p",
-        ...(gopFrames === undefined
-          ? []
-          : [
-              "-g",
-              String(gopFrames),
-              "-keyint_min",
-              String(gopFrames),
-              "-sc_threshold",
-              "0",
-            ]),
-        ...(pattern === "testsrc2" ? ["-crf", "30"] : []),
+        ...(videoCodec === "hevc" ? hevc : h264),
         "-c:a",
-        "aac",
+        audioCodec,
         "-c:s",
         "srt",
         "-metadata:s:a:0",

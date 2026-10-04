@@ -6,33 +6,33 @@ Add the in-tree TVDB provider on the plugin `MetadataProvider` contract for show
 
 ## Acceptance criteria
 
-- [ ] A scanned fixture show receives show, season and episode metadata and artwork.
-- [ ] The refresh job is scheduled weekly for continuing shows only.
-- [ ] Manual refresh re-fetches one show on demand.
+- [x] A scanned fixture show receives show, season and episode metadata and artwork.
+- [x] The refresh job is scheduled weekly for continuing shows only.
+- [x] Manual refresh re-fetches one show on demand.
 
 ## TODOs
 
-- [ ] 1. Share the provider HTTP and JSON decoding helpers.
+- [x] 1. Share the provider HTTP and JSON decoding helpers.
   - Move TMDB's bounded JSON request, decoders and title normalization into `metadata/provider-http.ts`, parameterized by the provider label so error messages stay `TMDB ...`.
   - Validation: `tmdb.test.ts` passes unchanged; server check and build.
-- [ ] 2. Implement the TVDB provider for shows, seasons and episodes.
+- [x] 2. Implement the TVDB provider for shows, seasons and episodes.
   - Extend the plugin contract in both `plugin-api.d.ts` copies: `search` takes an optional `show` context (parent Show provider ids, season and episode numbers); `MetadataResult` gains optional `releaseDate`, `lastAirDate` and `status`.
   - `metadata/tvdb.ts`: log in once per provider instance with the API key and optional PIN. Shows match by IMDb remote id, then title and year search with TMDB's confidence rules. Seasons and Episodes match by number in the official (aired) order. Fetch decodes series extended records, official seasons and paged episodes, caching them per instance so one Show job costs a few requests. A 404 resolves null.
   - Validation: mocked HTTP tests cover login, search, numbers, fetch shapes, caching, artwork, credits, status and malformed or failed responses; check and build.
-- [ ] 3. Persist Show, Season and Episode metadata.
+- [x] 3. Persist Show, Season and Episode metadata.
   - `applyMetadata` passes the Show context to Season and Episode searches and writes `releaseDate`, `lastAirDate` and `status` into the kind tables in the same transaction. Default provider order becomes `["tmdb", "tvdb"]`.
   - Validation: disposable Postgres tests cover Season and Episode matching by number, kind-table fields, and unchanged movie behavior.
-- [ ] 4. Run Show trees through provider-fetch.
+- [x] 4. Run Show trees through provider-fetch.
   - Shared `{tvdb-…}` folder id parsing for movies and shows; show scans fill folder ids and enqueue provider-fetch for pending Shows like movie scans.
   - The provider-fetch handler builds TVDB from the `tvdb` and `tvdb-pin` provider keys, matches the Show, then its Seasons and Episodes, and stores each Item's primary artwork. A failure in the tree marks the Show pending and throws for a retry. Storing a `tvdb` key requeues unmatched Shows.
   - Validation: a scanned fixture show with mocked TVDB and image HTTP receives Show, Season and Episode metadata and artwork (AC 1).
-- [ ] 5. Schedule the weekly refresh for continuing Shows.
+- [x] 5. Schedule the weekly refresh for continuing Shows.
   - After every Show fetch, success or failure, a continuing Show keeps one queued provider-fetch a week ahead and any other status keeps none. Scans and manual refreshes only coalesce onto due jobs.
   - Validation: Postgres tests cover the continuing, ended and repeat-run cases (AC 2).
-- [ ] 6. Add the manual refresh procedure.
+- [x] 6. Add the manual refresh procedure.
   - `items.refresh` at `POST /items/{id}/refresh` requires `manage-libraries` on the Item's Library and queues a provider-fetch ahead of background work, or returns the due one already queued.
   - Validation: API tests cover the job, coalescing, permissions and a missing Item; running the job re-fetches the Show (AC 3).
-- [ ] 7. Document and run the full gate.
+- [x] 7. Document and run the full gate.
   - README: TVDB keys, Show matching, the Show tree job, weekly refresh and manual refresh.
   - Run `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55529/pendia bun test` and `bun test` without `DATABASE_URL`.
 
@@ -45,5 +45,12 @@ Add the in-tree TVDB provider on the plugin `MetadataProvider` contract for show
 - Names and overviews come from the TVDB base records, in the series' primary language. Pendia has no metadata language setting yet.
 - The PIN lives in the provider key store as `tvdb-pin`, next to `tvdb`, so the existing write-only key screen sets both.
 - Only `continuing` Shows refresh weekly, as the issue asks. `upcoming` and `ended` Shows refresh on rescan of a pending Show or by manual refresh.
-- The weekly job is the normal provider-fetch payload with a future `runAfter`, so it survives restarts and runs on any worker. Scheduling in the handler's `finally` keeps the chain alive when a weekly fetch fails.
+- The weekly job is a provider-fetch payload marked `weekly: true` with a `runAfter` a week out, so it survives restarts and runs on any worker. The marker lets the scheduler replace exactly that job without mistaking a retry backoff for it. Scheduling in the handler's `finally` keeps the chain alive when a weekly fetch fails. A weekly job whose Show was deleted returns quietly.
 - Manual refresh is an API procedure. A web UI button is out of scope.
+- The permission model has no per-Library `manage-libraries`, so `items.refresh` checks `manage-libraries` before the Item lookup, like `libraries.scan`; callers without it cannot probe Item ids.
+- A Show tree publishes one `library.changed` at the end instead of one per Season and Episode. Movie events are unchanged.
+- A show scan queues the Show's fetch when the Show or any descendant is pending, so a new Episode under a matched Show gets metadata without waiting for the weekly refresh.
+- A Season or Episode id that is no longer in the official order resolves null, which stores it unmatched. Pendia only ever stores official-order ids for them.
+- Merged `origin/main` (`68ffc3a`, #78 and #79) before implementing; the stopped attempt's uncommitted `provider-http.ts` was rewritten in TODO 1 and its empty `provider-http.ts.new` deleted.
+- Gate on the merge with `main` at `27bc7b4`: `bun install --frozen-lockfile` no changes; `bun run lint` 256 files clean; `bun run check` 6/6 tasks, svelte-check 0 errors; `bun run build` 4/4 tasks; `bun test` with `DATABASE_URL` 1016 pass, 0 fail; `bun test` without it 569 pass, 457 skip, 0 fail.
+- One slip: the `inArray` import in `providers/keys.ts` was added with `sed` instead of the edit tool. The change is one import name.

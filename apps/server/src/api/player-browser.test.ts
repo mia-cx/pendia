@@ -46,6 +46,87 @@ async function run(command: string[]) {
   if (exitCode !== 0) throw new Error(`${command[0]} failed: ${stderr}`);
 }
 
+/** Attaches to a page target of a Chromium started with --remote-debugging-port=0. */
+async function watchPage(profileDir: string) {
+  const portFile = join(profileDir, "DevToolsActivePort");
+  let port: number | undefined;
+  for (let i = 0; i < 100; i++) {
+    const text = await Bun.file(portFile)
+      .text()
+      .catch(() => null);
+    const first = text?.split("\n")[0];
+    if (first !== undefined && first !== "") {
+      port = Number(first);
+      break;
+    }
+    await Bun.sleep(100);
+  }
+  if (port === undefined) throw new Error("Chromium opened no debug port.");
+  let targets: { type: string; webSocketDebuggerUrl: string }[] = [];
+  for (let i = 0; i < 100; i++) {
+    targets = await fetch(`http://127.0.0.1:${port}/json`)
+      .then((response) => response.json())
+      .catch(() => []);
+    if (targets.some((target) => target.type === "page")) break;
+    await Bun.sleep(100);
+  }
+  const page = targets.find((target) => target.type === "page");
+  if (page === undefined) throw new Error("Chromium opened no page target.");
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener("open", resolve, { once: true });
+    ws.addEventListener("error", () => reject(new Error("CDP failed")), {
+      once: true,
+    });
+  });
+  const exceptions: string[] = [];
+  let nextId = 0;
+  const pending = new Map<
+    number,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
+  ws.addEventListener("message", (event) => {
+    const message = JSON.parse(String(event.data));
+    if (message.id !== undefined) {
+      const waiter = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error)
+        waiter?.reject(new Error(JSON.stringify(message.error)));
+      else waiter?.resolve(message.result);
+      return;
+    }
+    if (message.method === "Runtime.exceptionThrown")
+      exceptions.push(
+        message.params.exceptionDetails.exception?.description ??
+          message.params.exceptionDetails.text,
+      );
+  });
+  const send = (method: string, params: Record<string, unknown> = {}) => {
+    const id = ++nextId;
+    ws.send(JSON.stringify({ id, method, params }));
+    return new Promise<{
+      result?: { type: string; value?: unknown };
+      exceptionDetails?: unknown;
+    }>((resolve, reject) =>
+      pending.set(id, {
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      }),
+    );
+  };
+  await send("Runtime.enable");
+  await send("Page.enable");
+  return {
+    exceptions,
+    async navigate(url: string) {
+      await send("Page.navigate", { url });
+    },
+    close() {
+      ws.close();
+    },
+  };
+}
+
 async function waitForProgress(
   db: Database,
   userId: string,
@@ -185,12 +266,20 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
                 "--no-first-run",
                 "--mute-audio",
                 "--autoplay-policy=no-user-gesture-required",
+                "--remote-debugging-port=0",
                 `--user-data-dir=${profileDir}`,
-                `http://127.0.0.1:${signIn.port}/?next=${encodeURIComponent(next)}`,
+                "about:blank",
               ],
               { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
             );
+            let watcher: Awaited<ReturnType<typeof watchPage>> | undefined;
             try {
+              // Watch the page over CDP so a crashing load fails the test.
+              watcher = await watchPage(profileDir);
+              const { exceptions, navigate } = watcher;
+              await navigate(
+                `http://127.0.0.1:${signIn.port}/?next=${encodeURIComponent(next)}`,
+              );
               const row = await waitForProgress(db, admin.id, itemId, 40_000);
               expect(row?.versionId).toBe(versionId);
               expect(row?.positionSeconds).toBeGreaterThan(fixtureSeconds - 1);
@@ -199,7 +288,9 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
                 .from(sessionRegistry)
                 .where(eq(sessionRegistry.itemId, itemId));
               expect(sessions).toEqual([{ method }]);
+              expect(exceptions).toEqual([]);
             } finally {
+              watcher?.close();
               proc.kill();
               await proc.exited;
               await rm(profileDir, { recursive: true, force: true });

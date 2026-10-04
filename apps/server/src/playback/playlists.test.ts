@@ -3,6 +3,7 @@ import * as HLS from "hls-parser";
 import {
   buildMasterPlaylist,
   buildMediaPlaylist,
+  buildSubtitlePlaylist,
   codecString,
   type HlsName,
   parseHlsName,
@@ -49,6 +50,68 @@ describe("buildMasterPlaylist", () => {
     const variant = playlist.variants[0];
     expect(variant?.codecs).toBeUndefined();
     expect(variant?.uri).toBe("media.m3u8");
+  });
+
+  test("lists a WebVTT rendition per subtitle and links the variant to the group", () => {
+    const text = buildMasterPlaylist(
+      { bandwidth: 5_000_000, width: 1920, height: 1080, codecs: [] },
+      "?token=t",
+      [
+        {
+          index: 0,
+          name: "Nederlands",
+          language: "nld",
+          default: false,
+          forced: true,
+        },
+        {
+          index: 2,
+          name: 'Director "Commentary"',
+          language: null,
+          default: true,
+          forced: false,
+        },
+      ],
+    );
+    const playlist = HLS.parse(text);
+    if (!playlist.isMasterPlaylist) {
+      throw new Error("Expected a master playlist.");
+    }
+    const variant = playlist.variants[0];
+    expect(variant?.subtitles.map((rendition) => rendition.uri)).toEqual([
+      "subs-0.m3u8?token=t",
+      "subs-2.m3u8?token=t",
+    ]);
+    expect(variant?.subtitles[0]).toMatchObject({
+      type: "SUBTITLES",
+      groupId: "subs",
+      name: "Nederlands",
+      language: "nld",
+      isDefault: false,
+      autoselect: true,
+      forced: true,
+    });
+    expect(variant?.subtitles[1]).toMatchObject({
+      name: "Director Commentary",
+      isDefault: true,
+    });
+    expect(variant?.subtitles[1]?.language).toBeUndefined();
+    expect(text).toContain('SUBTITLES="subs"');
+  });
+});
+
+describe("buildSubtitlePlaylist", () => {
+  test("carries the whole track as one WebVTT segment", () => {
+    const playlist = HLS.parse(buildSubtitlePlaylist(1, 12.021, "?token=t"));
+    if (playlist.isMasterPlaylist) {
+      throw new Error("Expected a media playlist.");
+    }
+    expect(playlist.targetDuration).toBe(13);
+    expect(playlist.playlistType).toBe("VOD");
+    expect(playlist.endlist).toBe(true);
+    expect(
+      playlist.segments.map((segment) => [segment.uri, segment.duration]),
+    ).toEqual([["subs-1.vtt?token=t", 12.021]]);
   });
 });
 
@@ -105,17 +168,27 @@ describe("parseHlsName", () => {
     ["init.mp4", { kind: "init" }],
     ["0.m4s", { kind: "segment", index: 0 }],
     ["12.m4s", { kind: "segment", index: 12 }],
+    ["subs-0.m3u8", { kind: "subtitles", index: 0 }],
+    ["subs-3.vtt", { kind: "subtitle", index: 3 }],
   ];
   test.each(known)("%s -> %o", (name, expected) => {
     expect(parseHlsName(name)).toEqual(expected);
   });
 
-  test.each(["../x", "01.m4s", "00.m4s", "x.m4s", "1.mp4", "", "init.MP4"])(
-    "rejects %s",
-    (name) => {
-      expect(parseHlsName(name)).toBeNull();
-    },
-  );
+  test.each([
+    "../x",
+    "01.m4s",
+    "00.m4s",
+    "x.m4s",
+    "1.mp4",
+    "",
+    "init.MP4",
+    "subs-01.vtt",
+    "subs-1.srt",
+    "subs-.m3u8",
+  ])("rejects %s", (name) => {
+    expect(parseHlsName(name)).toBeNull();
+  });
 });
 
 describe("codecString", () => {

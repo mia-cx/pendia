@@ -19,7 +19,10 @@ import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
-import type { PlaybackDecision } from "../playback/decisions.ts";
+import {
+  decidePlayback,
+  type PlaybackDecision,
+} from "../playback/decisions.ts";
 import { loadPlaybackSource } from "../playback/planning.ts";
 import { type HlsName, parseHlsName } from "../playback/playlists.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
@@ -241,6 +244,98 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         expect((await segment.arrayBuffer()).byteLength).toBeGreaterThan(0);
         console.info(`first playable segment in ${Date.now() - startedAt} ms`);
       }),
+    30_000,
+  );
+
+  test(
+    "a transcode session encodes the rung and offers the SRT as WebVTT",
+    () =>
+      withSession(
+        async ({ db, manager, scope, scratchDir }) => {
+          const { source } = await loadPlaybackSource(
+            db,
+            scope.userId,
+            scope.itemId,
+            scope.versionId,
+          );
+          // The client decodes H.264 up to 720p only, so the 1080p source re-encodes.
+          const decision = decidePlayback(
+            source,
+            {
+              containers: ["mp4"],
+              videoCodecs: [{ codec: "h264", maxWidth: 1280, maxHeight: 720 }],
+              audioCodecs: [{ codec: "aac", maxChannels: 2 }],
+              subtitleFormats: ["webvtt"],
+              hdr: ["sdr"],
+            },
+            { isLan: true },
+          );
+          expect(decision.method).toBe("transcode");
+          await db
+            .update(sessionRegistry)
+            .set({ playMethod: "transcode", decision })
+            .where(eq(sessionRegistry.id, scope.sessionId));
+
+          const master = HLS.parse(
+            await (
+              await manager.serve(scope, hlsName("master.m3u8"), "?token=t")
+            ).text(),
+          );
+          if (!master.isMasterPlaylist) {
+            throw new Error("Expected a master playlist.");
+          }
+          const variant = master.variants[0];
+          expect(variant?.resolution).toEqual({ width: 1280, height: 720 });
+          expect(variant?.subtitles).toMatchObject([
+            {
+              uri: "subs-0.m3u8?token=t",
+              language: "nld",
+              forced: true,
+            },
+          ]);
+          expect((await manager.inspect(scope.sessionId))?.video).toBe(
+            "transcode",
+          );
+
+          const init = await manager.serve(scope, hlsName("init.mp4"), "");
+          const segment = await manager.serve(scope, hlsName("0.m4s"), "");
+          expect(segment.status).toBe(200);
+          const joined = join(scratchDir, "transcoded.mp4");
+          await writeFile(
+            joined,
+            Buffer.concat([
+              Buffer.from(await init.arrayBuffer()),
+              Buffer.from(await segment.arrayBuffer()),
+            ]),
+          );
+          const probe = await probeVideo(joined);
+          expect(
+            probe.streams.find((stream) => stream.kind === "video"),
+          ).toMatchObject({ codec: "h264", width: 1280, height: 720 });
+
+          const subtitles = HLS.parse(
+            await (
+              await manager.serve(scope, hlsName("subs-0.m3u8"), "?token=t")
+            ).text(),
+          );
+          if (subtitles.isMasterPlaylist) {
+            throw new Error("Expected a media playlist.");
+          }
+          expect(subtitles.segments.map((entry) => entry.uri)).toEqual([
+            "subs-0.vtt?token=t",
+          ]);
+          const vtt = await manager.serve(scope, hlsName("subs-0.vtt"), "");
+          expect(vtt.status).toBe(200);
+          expect(vtt.headers.get("content-type")).toBe("text/vtt");
+          const text = await vtt.text();
+          expect(text.startsWith("WEBVTT")).toBe(true);
+          expect(text).toContain("00:00.000 --> 00:00.800");
+          expect(
+            (await manager.serve(scope, hlsName("subs-1.vtt"), "")).status,
+          ).toBe(404);
+        }, // An encode takes longer than the remux tests' 300 ms wait.
+        { waitMs: 10_000, readRate: undefined },
+      ),
     30_000,
   );
 

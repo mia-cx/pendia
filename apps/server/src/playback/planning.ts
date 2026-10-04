@@ -107,7 +107,7 @@ function toSubtitleStream(row: StreamRow): SubtitleStream {
   return { format, kind: bitmapSubtitles.has(format) ? "bitmap" : "text" };
 }
 
-/** Loads the Item, Version, File and normalized playback source for planning. */
+/** Loads the Item, Version, File, normalized playback source and subtitle details for planning. */
 export async function loadPlaybackSource(
   db: Database,
   userId: string,
@@ -176,7 +176,15 @@ export async function loadPlaybackSource(
       .filter((row) => row.kind === "subtitle")
       .map(toSubtitleStream),
   };
-  return { item, version, file, source };
+  // Aligned with source.subtitles: what names each rendition.
+  const subtitleDetails = streamRows
+    .filter((row) => row.kind === "subtitle")
+    .map(({ language, title, disposition }) => ({
+      language,
+      title,
+      disposition,
+    }));
+  return { item, version, file, source, subtitleDetails };
 }
 
 const toneMapFlavours: readonly string[] = hdrFlavours.filter(

@@ -24,18 +24,18 @@ import { loadPlaybackSource } from "../playback/planning.ts";
 import {
   buildMasterPlaylist,
   buildMediaPlaylist,
+  buildSubtitlePlaylist,
   type HlsName,
-  type PlaylistVariant,
   segmentCount,
-  variantCodecs,
 } from "../playback/playlists.ts";
 import {
   type LiveRun,
   type ReadySegment,
   type RunHandle,
   startLiveRun,
-  type VideoDecision,
 } from "./live-run.ts";
+import { type SessionOutputs, sessionOutputs } from "./outputs.ts";
+import { type Conversion, convertToWebvtt } from "./subtitles.ts";
 
 /** The authorised session a request belongs to. */
 export type SessionScope = {
@@ -63,7 +63,9 @@ type LiveSession = {
   directory: string;
   inputPath: string;
   boundariesSeconds: readonly number[];
-  variant: PlaylistVariant;
+  outputs: SessionOutputs;
+  /** WebVTT conversions by subtitle Stream index, started on first request. */
+  conversions: Map<number, Conversion>;
   state: LiveState;
   segments: Map<number, { path: string; fragmentOffset: number }>;
   init: Uint8Array | null;
@@ -75,7 +77,6 @@ type LiveSession = {
   publishes: Set<Promise<unknown>>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   stopped: boolean;
-  video: VideoDecision;
 };
 
 const log = (
@@ -259,7 +260,9 @@ export function createSessionManager(
         boundariesSeconds: session.boundariesSeconds,
         startIndex: index,
         directory,
-        video: session.video,
+        video: session.outputs.video,
+        audio: session.outputs.audio,
+        burnSubtitle: session.outputs.burnSubtitle,
         readRate,
       },
       (ready) => onReady(session, handle, directory, ready),
@@ -320,12 +323,8 @@ export function createSessionManager(
 
   const loadSession = async (scope: SessionScope): Promise<LiveSession> => {
     const directory = join(scratchDir, scope.sessionId);
-    const { item, version, file, source } = await loadPlaybackSource(
-      db,
-      scope.userId,
-      scope.itemId,
-      scope.versionId,
-    );
+    const { item, version, file, source, subtitleDetails } =
+      await loadPlaybackSource(db, scope.userId, scope.itemId, scope.versionId);
     const [library] = await db
       .select({ rootPath: libraries.rootPath })
       .from(libraries)
@@ -339,7 +338,18 @@ export function createSessionManager(
     } catch {
       throw new AuthError("NOT_FOUND");
     }
-    if (version.segmentTimelineId === null || !version.timelineAligned) {
+    const [row] = await db
+      .select({ decision: sessionRegistry.decision })
+      .from(sessionRegistry)
+      .where(eq(sessionRegistry.id, scope.sessionId))
+      .limit(1);
+    const outputs = sessionOutputs(row?.decision, source, subtitleDetails);
+    // Copied video cuts on source keyframes, so it needs an aligned timeline;
+    // re-encoded video puts its keyframes on the timeline itself.
+    if (
+      version.segmentTimelineId === null ||
+      (outputs.video.action === "copy" && !version.timelineAligned)
+    ) {
       throw new AuthError("CONFLICT");
     }
     const [timeline] = await db
@@ -348,43 +358,13 @@ export function createSessionManager(
       .where(eq(segmentTimelines.id, version.segmentTimelineId))
       .limit(1);
     if (timeline === undefined) throw new AuthError("CONFLICT");
-    const [row] = await db
-      .select({ decision: sessionRegistry.decision })
-      .from(sessionRegistry)
-      .where(eq(sessionRegistry.id, scope.sessionId))
-      .limit(1);
-    const decision = row?.decision;
-    const video: VideoDecision =
-      decision?.video.action === "copy"
-        ? decision.video
-        : {
-            action: "copy",
-            codec: source.video.codec,
-            hdr: source.video.hdr,
-            stripDolbyVision: false,
-          };
-    const audio = source.audio[0];
-    const variant: PlaylistVariant = {
-      bandwidth: Math.round(source.video.bitrate + (audio?.bitrate ?? 0)),
-      width: source.video.width,
-      height: source.video.height,
-      codecs: variantCodecs(
-        {
-          codec: source.video.codec,
-          profile: source.video.profile ?? null,
-          level: source.video.level ?? null,
-        },
-        audio === undefined
-          ? undefined
-          : { codec: audio.codec, profile: audio.profile ?? null },
-      ),
-    };
     return {
       scope,
       directory,
       inputPath,
       boundariesSeconds: timeline.boundariesSeconds,
-      variant,
+      outputs,
+      conversions: new Map(),
       state: initialState,
       segments: new Map(),
       init: null,
@@ -396,7 +376,6 @@ export function createSessionManager(
       publishes: new Set(),
       idleTimer: null,
       stopped: false,
-      video,
     };
   };
 
@@ -502,6 +481,12 @@ export function createSessionManager(
       session.stopped = true;
       await session.transition.catch(() => {});
       await session.current?.handle.kill();
+      for (const conversion of session.conversions.values()) {
+        conversion.kill();
+      }
+      await Promise.allSettled(
+        [...session.conversions.values()].map((conversion) => conversion.done),
+      );
       rejectWaiters(session);
       await Promise.allSettled(session.publishes);
       await rm(session.directory, { recursive: true, force: true });
@@ -530,6 +515,47 @@ export function createSessionManager(
       },
     );
 
+  const subtitleNotFound = () =>
+    Response.json(
+      { error: { code: "NOT_FOUND", message: "Subtitle track not found." } },
+      { status: 404, headers: standardHeaders },
+    );
+
+  const offersSubtitle = (session: LiveSession, index: number) =>
+    session.outputs.subtitles.some((subtitle) => subtitle.index === index);
+
+  const serveSubtitle = async (session: LiveSession, index: number) => {
+    const path = join(session.directory, `subs-${index}.vtt`);
+    let conversion = session.conversions.get(index);
+    if (conversion === undefined) {
+      await mkdir(session.directory, { recursive: true });
+      // A stop that ran during the mkdir has already removed the directory.
+      if (session.stopped) return stoppingResponse();
+      const started = convertToWebvtt(session.inputPath, index, path);
+      session.conversions.set(index, started);
+      // A failed conversion is not cached; the next request tries again.
+      started.done.catch(() => {
+        if (session.conversions.get(index) === started) {
+          session.conversions.delete(index);
+        }
+      });
+      conversion = started;
+    }
+    try {
+      await conversion.done;
+    } catch (error) {
+      log("error", "subtitle.failed", {
+        sessionId: session.scope.sessionId,
+        index,
+        error: errorMessage(error),
+      });
+      throw error;
+    }
+    return new Response(Bun.file(path), {
+      headers: { ...standardHeaders, "content-type": "text/vtt" },
+    });
+  };
+
   return {
     async serve(
       scope: SessionScope,
@@ -545,8 +571,23 @@ export function createSessionManager(
         await ensureStarted(session);
         return playlist(
           name.kind === "master"
-            ? buildMasterPlaylist(session.variant, query)
+            ? buildMasterPlaylist(
+                session.outputs.variant,
+                query,
+                session.outputs.subtitles,
+              )
             : buildMediaPlaylist(session.boundariesSeconds, query),
+        );
+      }
+      if (name.kind === "subtitles" || name.kind === "subtitle") {
+        if (!offersSubtitle(session, name.index)) return subtitleNotFound();
+        if (name.kind === "subtitle") return serveSubtitle(session, name.index);
+        return playlist(
+          buildSubtitlePlaylist(
+            name.index,
+            session.boundariesSeconds.at(-1) ?? 0,
+            query,
+          ),
         );
       }
       if (name.kind === "init") return serveInitRequest(session);
@@ -561,7 +602,11 @@ export function createSessionManager(
         pid: session.current?.handle.pid ?? null,
         ready: [...session.state.ready].sort((a, b) => a - b),
         stripDolbyVision:
-          session.video.action === "copy" && session.video.stripDolbyVision,
+          session.outputs.video.action === "copy" &&
+          session.outputs.video.stripDolbyVision,
+        video: session.outputs.video.action,
+        audio: session.outputs.audio?.action ?? "copy",
+        burnSubtitle: session.outputs.burnSubtitle ?? null,
       };
     },
     async stop() {

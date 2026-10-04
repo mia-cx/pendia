@@ -3,19 +3,39 @@ export type HlsName =
   | { kind: "master" }
   | { kind: "media" }
   | { kind: "init" }
-  | { kind: "segment"; index: number };
+  | { kind: "segment"; index: number }
+  | { kind: "subtitles"; index: number } // subs-<n>.m3u8, the rendition's playlist
+  | { kind: "subtitle"; index: number }; // subs-<n>.vtt, the whole track as WebVTT
+
+// Canonical numbers only: no leading zeros beyond "0" itself.
+const canonical = (digits: string) => digits === "0" || !digits.startsWith("0");
 
 /** Parses the last path segment of an HLS URL; null when it names nothing we serve. */
 export function parseHlsName(name: string): HlsName | null {
   if (name === "master.m3u8") return { kind: "master" };
   if (name === "media.m3u8") return { kind: "media" };
   if (name === "init.mp4") return { kind: "init" };
+  const subtitle = /^subs-(\d+)\.(m3u8|vtt)$/.exec(name);
+  if (subtitle?.[1] !== undefined) {
+    if (!canonical(subtitle[1])) return null;
+    const index = Number(subtitle[1]);
+    return subtitle[2] === "m3u8"
+      ? { kind: "subtitles", index }
+      : { kind: "subtitle", index };
+  }
   const segment = /^(\d+)\.m4s$/.exec(name)?.[1];
-  if (segment === undefined) return null;
-  // Canonical names only: no leading zeros beyond "0" itself.
-  if (segment !== "0" && segment.startsWith("0")) return null;
+  if (segment === undefined || !canonical(segment)) return null;
   return { kind: "segment", index: Number(segment) };
 }
+
+/** One text subtitle Stream offered as a WebVTT rendition; index counts subtitle Streams in the File. */
+export type SubtitleRendition = {
+  index: number;
+  name: string;
+  language: string | null;
+  default: boolean;
+  forced: boolean;
+};
 
 /** The single variant a remux master playlist advertises. */
 export type PlaylistVariant = {
@@ -102,8 +122,19 @@ export function variantCodecs(
   return [videoCodec, audioCodec];
 }
 
-/** Builds the master playlist: one variant whose media playlist URI carries the query. */
-export function buildMasterPlaylist(variant: PlaylistVariant, query: string) {
+// A quoted-string attribute cannot hold a double quote or a line break.
+const quoted = (value: string) =>
+  `"${value
+    .replace(/["\r\n]/g, " ")
+    .replace(/ {2,}/g, " ")
+    .trim()}"`;
+
+/** Builds the master playlist: one variant, plus a WebVTT rendition per text subtitle; every URI carries the query. */
+export function buildMasterPlaylist(
+  variant: PlaylistVariant,
+  query: string,
+  subtitles: readonly SubtitleRendition[] = [],
+) {
   const attributes = [
     `BANDWIDTH=${variant.bandwidth}`,
     `RESOLUTION=${variant.width}x${variant.height}`,
@@ -111,12 +142,49 @@ export function buildMasterPlaylist(variant: PlaylistVariant, query: string) {
   if (variant.codecs.length > 0) {
     attributes.push(`CODECS="${variant.codecs.join(",")}"`);
   }
+  if (subtitles.length > 0) {
+    attributes.push('SUBTITLES="subs"');
+  }
+  const renditions = subtitles.map((subtitle) =>
+    [
+      "#EXT-X-MEDIA:TYPE=SUBTITLES",
+      'GROUP-ID="subs"',
+      `NAME=${quoted(subtitle.name)}`,
+      ...(subtitle.language === null
+        ? []
+        : [`LANGUAGE=${quoted(subtitle.language)}`]),
+      `DEFAULT=${subtitle.default ? "YES" : "NO"}`,
+      "AUTOSELECT=YES",
+      `FORCED=${subtitle.forced ? "YES" : "NO"}`,
+      `URI="subs-${subtitle.index}.m3u8${query}"`,
+    ].join(","),
+  );
   return [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
     "#EXT-X-INDEPENDENT-SEGMENTS",
+    ...renditions,
     `#EXT-X-STREAM-INF:${attributes.join(",")}`,
     `media.m3u8${query}`,
+    "",
+  ].join("\n");
+}
+
+/** Builds a subtitle rendition's VOD playlist: the whole track as one WebVTT segment. */
+export function buildSubtitlePlaylist(
+  index: number,
+  durationSeconds: number,
+  query: string,
+) {
+  return [
+    "#EXTM3U",
+    "#EXT-X-VERSION:7",
+    `#EXT-X-TARGETDURATION:${Math.ceil(durationSeconds)}`,
+    "#EXT-X-MEDIA-SEQUENCE:0",
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    `#EXTINF:${durationSeconds.toFixed(6)},`,
+    `subs-${index}.vtt${query}`,
+    "#EXT-X-ENDLIST",
     "",
   ].join("\n");
 }

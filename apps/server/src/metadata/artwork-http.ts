@@ -6,6 +6,10 @@ import { authenticate } from "../auth/sessions.ts";
 import { readAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, versions } from "../db/schema/index.ts";
+import {
+  type ArtworkStoreConfig,
+  artworkStoreConfig,
+} from "./artwork-backends.ts";
 import { readArtworkOriginal } from "./artwork-store.ts";
 
 /** A resize operation used by the process-local artwork cache. */
@@ -85,8 +89,10 @@ export function createArtworkHandler(
     maxCacheBytes?: number;
     maxConcurrentResizes?: number;
     maxQueuedResizes?: number;
+    store?: ArtworkStoreConfig;
   } = {},
 ): (request: Request) => Promise<Response | undefined> {
+  const store = options.store ?? artworkStoreConfig();
   const maxCacheEntries = options.maxCacheEntries ?? 128;
   const maxCacheBytes = options.maxCacheBytes ?? 64 * 1024 * 1024;
   const maxConcurrentResizes = options.maxConcurrentResizes ?? 4;
@@ -238,7 +244,7 @@ export function createArtworkHandler(
           "Artwork service is busy.",
         );
       try {
-        const original = await readArtworkOriginal(db, id);
+        const original = await readArtworkOriginal(db, id, store);
         if (original === null)
           return jsonError(404, "NOT_FOUND", "Artwork not found.");
 

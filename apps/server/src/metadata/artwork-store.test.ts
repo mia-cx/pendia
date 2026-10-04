@@ -19,11 +19,8 @@ import { migrateDatabase } from "../db/migrate.ts";
 import { artwork, libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
-import {
-  type ArtworkOpen,
-  readArtworkOriginal,
-  storeArtworkOriginal,
-} from "./artwork-store.ts";
+import type { ArtworkOpen } from "./artwork-backends.ts";
+import { readArtworkOriginal, storeArtworkOriginal } from "./artwork-store.ts";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
@@ -372,14 +369,9 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
             }),
         );
         await expect(
-          storeArtworkOriginal(
-            db,
-            item.id,
-            poster,
-            request,
-            30_000,
-            png.length,
-          ),
+          storeArtworkOriginal(db, item.id, poster, request, {
+            maxDownloadBytes: png.length,
+          }),
         ).rejects.toThrow("Artwork response too large.");
         expect(cancelled).toBe(true);
         expect(calls).toHaveLength(1);
@@ -407,7 +399,9 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         });
         const { request } = mockRequest(() => new Response(stream));
         await expect(
-          storeArtworkOriginal(db, item.id, poster, request, 30_000, 4),
+          storeArtworkOriginal(db, item.id, poster, request, {
+            maxDownloadBytes: 4,
+          }),
         ).rejects.toThrow("Artwork response too large.");
         expect(cancelled).toBe(true);
         expect(await db.select().from(artwork)).toHaveLength(0);
@@ -425,14 +419,9 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const { calls, request } = mockRequest(() => new Response(png));
         for (const maxDownloadBytes of [0, -1, 1.5, Number.NaN]) {
           await expect(
-            storeArtworkOriginal(
-              db,
-              item.id,
-              poster,
-              request,
-              30_000,
+            storeArtworkOriginal(db, item.id, poster, request, {
               maxDownloadBytes,
-            ),
+            }),
           ).rejects.toThrow("Invalid artwork download limit.");
         }
         expect(calls).toHaveLength(0);
@@ -481,33 +470,53 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       });
     }));
 
-  test("a non-colocated selected row yields a fresh id and is unselected", () =>
+  test("round-trips a poster through the configured path", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
-        const { item } = await fixture(db, root);
-        const [old] = await db
-          .insert(artwork)
-          .values({
-            itemId: item.id,
-            versionId: null,
-            type: "poster",
-            sourceUrl: "https://image.example/old.jpg",
-            backend: "configured-path",
-            storageKey: "elsewhere/old.jpg",
-            selected: true,
-          })
-          .returning();
-        if (!old) throw new Error("Fixture artwork missing.");
-        const { request } = mockRequest(() => new Response(png));
-        const row = await storeArtworkOriginal(db, item.id, poster, request);
-        expect(row.id).not.toBe(old.id);
-        expect(row.backend).toBe("colocated");
-        const rows = await db.select().from(artwork).orderBy(artwork.id);
-        expect(rows).toHaveLength(2);
-        expect(rows[0]).toMatchObject({ id: old.id, selected: false });
-        expect(rows[1]).toMatchObject({ id: row.id, selected: true });
-        expect(await readFile(join(root, row.storageKey))).toEqual(png);
+        await withTempRoot(async (path) => {
+          const store = { backend: "configured-path", path } as const;
+          const { item } = await fixture(db, root);
+          const { request } = mockRequest(() => new Response(png));
+          const row = await storeArtworkOriginal(db, item.id, poster, request, {
+            store,
+          });
+          expect(row.backend).toBe("configured-path");
+          expect(row.storageKey).toMatch(
+            new RegExp(`^${row.id}\\.[0-9a-f-]{36}$`),
+          );
+          expect(await readFile(join(path, row.storageKey))).toEqual(png);
+          await expect(
+            access(join(root, "Alien (1979)", ".pendia")),
+          ).rejects.toThrow();
+          const original = await readArtworkOriginal(db, row.id, store);
+          expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+          expect(await readArtworkOriginal(db, row.id)).toBeNull();
+        });
+      });
+    }));
+
+  test("a replacement keeps the row id and removes the old original from its backend", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await withTempRoot(async (path) => {
+          const { item } = await fixture(db, root);
+          const { request } = mockRequest(() => new Response(png));
+          const old = await storeArtworkOriginal(db, item.id, poster, request);
+          const row = await storeArtworkOriginal(
+            db,
+            item.id,
+            { type: "poster", url: "https://image.example/new.png" },
+            request,
+            { store: { backend: "configured-path", path } },
+          );
+          expect(row.id).toBe(old.id);
+          expect(row.backend).toBe("configured-path");
+          await expect(access(join(root, old.storageKey))).rejects.toThrow();
+          expect(await readFile(join(path, row.storageKey))).toEqual(png);
+          expect(await db.select().from(artwork)).toHaveLength(1);
+        });
       });
     }));
 
@@ -613,7 +622,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
             );
           })) as typeof fetch;
         await expect(
-          storeArtworkOriginal(db, item.id, poster, request, 1),
+          storeArtworkOriginal(db, item.id, poster, request, { timeoutMs: 1 }),
         ).rejects.toThrow("timed out");
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(
@@ -630,7 +639,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const { calls, request } = mockRequest(() => new Response(png));
         for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
           await expect(
-            storeArtworkOriginal(db, item.id, poster, request, timeoutMs),
+            storeArtworkOriginal(db, item.id, poster, request, { timeoutMs }),
           ).rejects.toThrow("Invalid artwork request timeout.");
         }
         expect(calls).toHaveLength(0);
@@ -727,7 +736,12 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
             );
           return open(path, flags);
         };
-        const original = await readArtworkOriginal(db, first.id, openFile);
+        const original = await readArtworkOriginal(
+          db,
+          first.id,
+          { backend: "colocated" },
+          openFile,
+        );
         expect(paths).toHaveLength(3);
         expect(paths[0]).not.toBe(paths[1]);
         expect(paths[1]).not.toBe(paths[2]);
@@ -758,7 +772,7 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
       });
     }));
 
-  test("returns null for a non-colocated artwork row", () =>
+  test("returns null for a row whose backend this process lacks", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {

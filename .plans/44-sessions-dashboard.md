@@ -13,9 +13,9 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, .plans/35-stored-versio
 
 ## Acceptance criteria
 
-- [ ] A running session appears and disappears live.
-- [ ] Editing a policy enqueues store jobs; a manual request does the same for one Item.
-- [ ] A changed cap applies to the next play plan.
+- [x] A running session appears and disappears live.
+- [x] Editing a policy enqueues store jobs; a manual request does the same for one Item.
+- [x] A changed cap applies to the next play plan.
 
 ## TODOs
 
@@ -26,7 +26,7 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, .plans/35-stored-versio
 - [x] 5. Activity screen at `/admin/activity`: sessions and store jobs, reloading sessions on `session.state` events, and both lists every 10 s for staleness and progress. Validation: web `check` and `build`; rendered in Chromium with a live session appearing and leaving without a reload.
 - [x] 6. Store policy editor at `/admin/libraries/[id]` (linked from the libraries list) and a manual store request on the movie and episode pages for callers holding manage-transcoding. Validation: web `check` and `build`; in Chromium, saving a policy shows queued jobs on Activity, and a manual request answers queued.
 - [x] 7. Settings screen sections for the global bitrate cap, the idle window and the artwork store; the per-user cap moves to Mbit/s to match. README documents the new procedures. Validation: web `check` and `build`; in Chromium, a cap saved, reloaded and cleared.
-- [ ] 8. Final gate and evidence: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=... bun test`, `bun test` without it; before and after screenshots at 1440x900 and 390x844, light and dark.
+- [x] 8. Final gate and evidence: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=... bun test`, `bun test` without it; before and after screenshots at 1440x900 and 390x844, light and dark.
 
 ## Notes
 

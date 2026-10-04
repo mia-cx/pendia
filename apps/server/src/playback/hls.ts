@@ -24,7 +24,7 @@ export function parseHlsPath(pathname: string, prefix: HlsPrefix) {
   return { sessionId: match[1] ?? "", itemId: match[2] ?? "", name };
 }
 
-/** Verifies the playback token in the URL and loads the live remux session it names. */
+/** Verifies the playback token in the URL and loads the live remux or transcode session it names. */
 export async function authorizeHlsRequest(
   db: Database,
   url: URL,
@@ -62,7 +62,7 @@ export async function authorizeHlsRequest(
   if (
     session === undefined ||
     session.userId !== claims.userId ||
-    session.playMethod !== "remux" ||
+    session.playMethod === "direct-play" ||
     session.state === "stopped"
   ) {
     throw new AuthError("UNAUTHENTICATED");

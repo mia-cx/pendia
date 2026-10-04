@@ -277,7 +277,7 @@ function isLanAddress(address: string): boolean {
 }
 
 function playbackUrl(
-  method: "direct-play" | "remux",
+  method: "direct-play" | "remux" | "transcode",
   request: Request,
   caller: Caller,
   sessionId: string,
@@ -285,9 +285,9 @@ function playbackUrl(
   issued: { token: string; expiresAt: string },
 ) {
   const path =
-    method === "remux"
-      ? `/api/playback/${sessionId}/${itemId}/hls/master.m3u8`
-      : `/api/playback/${sessionId}/${itemId}/direct`;
+    method === "direct-play"
+      ? `/api/playback/${sessionId}/${itemId}/direct`
+      : `/api/playback/${sessionId}/${itemId}/hls/master.m3u8`;
   // Cookie callers can keep the token out of direct URLs; every HLS URL must
   // carry it because segments are requested without other credentials.
   if (
@@ -302,7 +302,7 @@ function playbackUrl(
   };
 }
 
-/** Runs the playback decision and, for direct play and remux, opens a session with a token URL. */
+/** Runs the playback decision and opens a session: a direct URL for direct play, else a master playlist URL with a token. */
 export async function planPlayback(
   db: Database,
   caller: Caller,
@@ -338,19 +338,12 @@ export async function planPlayback(
   } catch {
     throw new AuthError("INVALID_INPUT");
   }
-  const base = {
-    method: decision.method,
-    itemId: item.id,
-    versionId: version.id,
-    sessionId: null as string | null,
-    url: null as string | null,
-    expiresAt: null as string | null,
-  };
-  if (decision.method === "transcode") return base;
-  // A Version without an aligned timeline cannot be segmented for remux.
+  // HLS cuts on the Item's timeline. Copied video can only cut on its own
+  // keyframes, so it also needs the Version aligned to that timeline.
   if (
-    decision.method === "remux" &&
-    (version.segmentTimelineId === null || !version.timelineAligned)
+    decision.method !== "direct-play" &&
+    (version.segmentTimelineId === null ||
+      (decision.video.action === "copy" && !version.timelineAligned))
   )
     throw new AuthError("CONFLICT");
   const method = decision.method;
@@ -372,7 +365,9 @@ export async function planPlayback(
       itemId: item.id,
     });
     return {
-      ...base,
+      method,
+      itemId: item.id,
+      versionId: version.id,
       sessionId: session.id,
       ...playbackUrl(
         method,
@@ -386,7 +381,7 @@ export async function planPlayback(
   });
 }
 
-/** Re-issues a playback token for the caller's live direct-play or remux session. */
+/** Re-issues a playback token for the caller's live session. */
 export async function refreshPlayback(
   db: Database,
   caller: Caller,
@@ -416,8 +411,7 @@ export async function refreshPlayback(
   if (
     !session ||
     session.userId !== caller.user.id ||
-    session.state === "stopped" ||
-    session.playMethod === "transcode"
+    session.state === "stopped"
   )
     throw new AuthError("UNAUTHENTICATED");
   const issued = await issuePlaybackToken(db, caller, scope);

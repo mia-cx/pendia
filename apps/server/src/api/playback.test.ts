@@ -174,6 +174,7 @@ async function addMedia(
 async function alignTimeline(
   db: Database,
   version: { id: string; itemId: string; durationSeconds: number | null },
+  aligned = true,
 ) {
   const duration = version.durationSeconds;
   if (duration === null) throw new Error("Version has no duration.");
@@ -188,7 +189,7 @@ async function alignTimeline(
   if (!timeline) throw new Error("Timeline insert returned no row.");
   await db
     .update(versions)
-    .set({ segmentTimelineId: timeline.id, timelineAligned: true })
+    .set({ segmentTimelineId: timeline.id, timelineAligned: aligned })
     .where(eq(versions.id, version.id));
 }
 
@@ -358,7 +359,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       }
     }));
 
-  test("remux opens a session and transcode returns no session or URL", () =>
+  test("remux and transcode both open a session with a master playlist URL", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
@@ -399,27 +400,51 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         expect(remuxRow?.decision?.video.action).toBe("copy");
 
         const [sequelVersion] = await db
-          .select({ id: versions.id })
+          .select()
           .from(versions)
           .where(eq(versions.itemId, second.id));
         if (!sequelVersion) throw new Error("Sequel version missing.");
+        await alignTimeline(db, sequelVersion);
+        // The AC-3 track alone mismatches: the video copies and audio re-encodes.
         const transcoded = await client.playback.plan({
           itemId: second.id,
           versionId: sequelVersion.id,
           profile,
         });
-        expect(transcoded).toEqual({
+        expect(transcoded).toMatchObject({
           method: "transcode",
           itemId: second.id,
           versionId: sequelVersion.id,
-          sessionId: null,
-          url: null,
-          expiresAt: null,
         });
-        const rows = await db
-          .select({ id: sessionRegistry.id })
-          .from(sessionRegistry);
-        expect(rows).toHaveLength(1);
+        if (transcoded.sessionId === null || transcoded.url === null)
+          throw new Error("Transcode must return a session and URL.");
+        expect(transcoded.expiresAt).not.toBeNull();
+        expect(transcoded.url).toMatch(
+          new RegExp(
+            `^/api/playback/${transcoded.sessionId}/${second.id}/hls/master\\.m3u8\\?token=`,
+          ),
+        );
+        const [transcodeRow] = await db
+          .select()
+          .from(sessionRegistry)
+          .where(eq(sessionRegistry.id, transcoded.sessionId));
+        expect(transcodeRow).toMatchObject({
+          playMethod: "transcode",
+          state: "starting",
+        });
+        expect(transcodeRow?.decision?.video.action).toBe("copy");
+        expect(transcodeRow?.decision?.audio[0]).toEqual({
+          action: "transcode",
+          codec: "aac",
+          channels: 2,
+        });
+
+        const refreshed = await client.playback.refresh({
+          sessionId: transcoded.sessionId,
+          itemId: second.id,
+        });
+        expect(refreshed.method).toBe("transcode");
+        expect(refreshed.url).toMatch(/\/hls\/master\.m3u8\?token=/);
       } finally {
         await server.stop();
       }
@@ -441,6 +466,39 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           }),
         );
         expect(failure.status).toBe(409);
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("a transcode needs a timeline, and an aligned one only when the video copies", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db, "owner", { audioCodec: "ac3" });
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = rpcClient(base, fx.keyToken);
+        const audioOnly = { itemId: fx.item.id, versionId: fx.version.id };
+        // A 720p client re-encodes the 1080p video too.
+        const reencode = {
+          ...audioOnly,
+          profile: {
+            ...profile,
+            videoCodecs: [{ codec: "h264", maxWidth: 1280, maxHeight: 720 }],
+          },
+        };
+        expect(
+          (await capture(client.playback.plan({ ...reencode }))).status,
+        ).toBe(409);
+        await alignTimeline(db, fx.version, false);
+        expect(
+          (await capture(client.playback.plan({ ...audioOnly, profile })))
+            .status,
+        ).toBe(409);
+        const planned = await client.playback.plan(reencode);
+        expect(planned.method).toBe("transcode");
+        expect(planned.url).toMatch(/\/hls\/master\.m3u8\?token=/);
       } finally {
         await server.stop();
       }
@@ -856,6 +914,8 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
+      // A transcode plan opens an HLS session, which needs a timeline.
+      await alignTimeline(db, fx.version);
       const input = {
         itemId: fx.item.id,
         versionId: fx.version.id,
@@ -927,6 +987,8 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
+      // A transcode plan opens an HLS session, which needs a timeline.
+      await alignTimeline(db, fx.version);
       const input = {
         itemId: fx.item.id,
         versionId: fx.version.id,
@@ -958,7 +1020,15 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         { request: planRequest(), peerAddress: "203.0.113.8" },
       );
       expect(planned.method).toBe("transcode");
-      expect(planned.sessionId).toBeNull();
+      if (planned.sessionId === null) throw new Error("Expected a session.");
+      const [row] = await db
+        .select({ decision: sessionRegistry.decision })
+        .from(sessionRegistry)
+        .where(eq(sessionRegistry.id, planned.sessionId));
+      expect(row?.decision?.video).toMatchObject({
+        action: "transcode",
+        bitrate: 3_000_000,
+      });
     }));
 
   test("dts-hd audio, srt subtitles and attached pictures normalise for direct play", () =>

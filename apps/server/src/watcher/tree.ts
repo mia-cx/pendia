@@ -121,7 +121,9 @@ export async function watchTree(
   async function confirmGone(paths: readonly string[]) {
     const changes: WatchedChange[] = [];
     for (const path of paths) {
-      if (!index.has(path) || (await readEntry(join(root, path))) !== null)
+      // A directory now at a file's path means the file is gone too.
+      const current = await readEntry(join(root, path));
+      if (!index.has(path) || (current !== null && current !== "directory"))
         continue;
       forget(path);
       changes.push({ kind: "delete", path });

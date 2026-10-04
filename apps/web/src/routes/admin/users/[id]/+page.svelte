@@ -395,8 +395,8 @@ async function revoke(sessionId: string) {
         id="bitrateCap"
         name="bitrateCap"
         type="number"
-        min="0.1"
-        step="0.1"
+        min="0"
+        step="any"
         inputmode="decimal"
         value={capValue}
         oninput={(event) => (capInput = event.currentTarget.value)}

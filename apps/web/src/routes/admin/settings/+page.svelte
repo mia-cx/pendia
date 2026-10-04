@@ -235,8 +235,8 @@ async function removeKey(name: string) {
         id="globalCap"
         name="bitrateCap"
         type="number"
-        min="0.1"
-        step="0.1"
+        min="0"
+        step="any"
         inputmode="decimal"
         value={capValue}
         oninput={(event) => (capInput = event.currentTarget.value)}

@@ -106,6 +106,24 @@ export async function homeRoot(
   return first;
 }
 
+/**
+ * Where an Item's existing colocated assets may sit: its home root first,
+ * then the rest of its Library's roots by position.
+ */
+export async function assetRoots(
+  db: Connection,
+  itemId: string,
+): Promise<LibraryRoot[]> {
+  const home = await homeRoot(db, itemId);
+  const [item] = await db
+    .select({ libraryId: items.libraryId })
+    .from(items)
+    .where(eq(items.id, itemId));
+  if (item === undefined) throw new AuthError("NOT_FOUND");
+  const roots = await rootsOf(db, item.libraryId);
+  return [home, ...roots.filter((root) => root.id !== home.id)];
+}
+
 /** The absolute canonical folder of an Item in its home root. */
 export async function itemFolder(db: Connection, itemId: string) {
   const [item] = await db

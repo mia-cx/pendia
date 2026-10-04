@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import { homeRoot } from "../libraries/roots.ts";
+import { rootsOf } from "../libraries/roots.ts";
 import { emitPluginEvents } from "../plugins/events.ts";
 import type { Database } from "./client.ts";
 import {
@@ -208,8 +208,8 @@ export async function moveItem(
 /** One artwork original to remove after its database owner commits deletion. */
 export interface DeletedArtworkFile {
   backend: (typeof artwork.$inferSelect)["backend"];
-  // The owning Item's home root, which only colocated keys are relative to.
-  rootPath: string;
+  // Every root of the owning Library: a colocated key may sit in any of them.
+  rootPaths: readonly string[];
   storageKey: string;
 }
 
@@ -229,8 +229,11 @@ export async function deleteItemSubtree(
       .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
       .where(eq(itemAncestors.ancestorId, itemId))
       .for("update", { of: items });
-    // Colocated keys of the whole subtree resolve in the top Item's home root.
-    const { path: rootPath } = await homeRoot(tx, itemId);
+    // Colocated keys of the whole subtree resolve in the Library's roots,
+    // which the File deletes below cannot leave unreachable.
+    const rootPaths = (await rootsOf(tx, item.libraryId)).map(
+      (root) => root.path,
+    );
     const deletedFields = {
       backend: artwork.backend,
       storageKey: artwork.storageKey,
@@ -262,13 +265,13 @@ export async function deleteItemSubtree(
       `${row.backend}\n${row.storageKey}`;
     const seen = new Set(orphaned.map(fileKey));
     for (const row of orphaned) {
-      deletedArtwork.push({ ...row, rootPath });
+      deletedArtwork.push({ ...row, rootPaths });
     }
     for (const row of versionOwned) {
       const key = fileKey(row);
       if (seen.has(key)) continue;
       seen.add(key);
-      deletedArtwork.push({ ...row, rootPath });
+      deletedArtwork.push({ ...row, rootPaths });
     }
     await tx.delete(items).where(eq(items.id, itemId));
     await emitPluginEvents(

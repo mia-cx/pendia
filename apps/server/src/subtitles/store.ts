@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { items } from "../db/schema/index.ts";
-import { itemFolder } from "../libraries/roots.ts";
+import { assetRoots } from "../libraries/roots.ts";
 
 /** The formats a stored subtitle track may have. */
 export const subtitleFormats = ["srt", "ass", "vtt"] as const;
@@ -39,44 +39,59 @@ export function trackName(track: StoredSubtitle): string {
 }
 
 /**
- * Where an Item's tracks live: `.pendia/subtitles` in its canonical folder.
+ * The subtitle folders an Item's tracks may sit in, home root first:
+ * `.pendia/subtitles` in its canonical folder under each asset root.
  * Episodes share a Season folder, so each file starts with the Item id.
  */
-export async function subtitleFolder(db: Database, itemId: string) {
+export async function subtitleFolders(db: Database, itemId: string) {
   const [row] = await db
-    .select({ libraryId: items.libraryId })
+    .select({ libraryId: items.libraryId, canonicalFolder: items.canonicalFolder })
     .from(items)
     .where(eq(items.id, itemId));
   if (row === undefined) throw new AuthError("NOT_FOUND");
-  const folder = await itemFolder(db, itemId);
-  return {
-    libraryId: row.libraryId,
-    itemFolder: folder,
-    path: join(folder, ".pendia", "subtitles"),
-    file: (track: StoredSubtitle) =>
-      join(folder, ".pendia", "subtitles", `${itemId}.${trackName(track)}`),
-  };
+  return (await assetRoots(db, itemId)).map((root) => {
+    const folder = join(root.path, row.canonicalFolder);
+    return {
+      libraryId: row.libraryId,
+      itemFolder: folder,
+      path: join(folder, ".pendia", "subtitles"),
+      file: (track: StoredSubtitle) =>
+        join(folder, ".pendia", "subtitles", `${itemId}.${trackName(track)}`),
+    };
+  });
 }
 
-/** Lists an Item's stored tracks by language; a missing folder means none. */
+/** Where an Item's tracks are written: the first of its asset roots' subtitle folders. */
+export async function subtitleFolder(db: Database, itemId: string) {
+  const [home] = await subtitleFolders(db, itemId);
+  if (home === undefined) throw new AuthError("NOT_FOUND");
+  return home;
+}
+
+/** Lists an Item's stored tracks by language across its asset roots; a missing folder means none. */
 export async function listSubtitles(
   db: Database,
   itemId: string,
 ): Promise<StoredSubtitle[]> {
-  const { path } = await subtitleFolder(db, itemId);
-  let names: string[];
-  try {
-    names = await readdir(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
+  const tracks = new Map<string, StoredSubtitle>();
   const prefix = `${itemId}.`;
-  return names
-    .filter((name) => name.startsWith(prefix))
-    .map((name) => readTrackName(name.slice(prefix.length)))
-    .filter((track) => track !== null)
-    .sort((a, b) => a.language.localeCompare(b.language));
+  for (const folder of await subtitleFolders(db, itemId)) {
+    let names: string[];
+    try {
+      names = await readdir(folder.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const name of names) {
+      if (!name.startsWith(prefix)) continue;
+      const track = readTrackName(name.slice(prefix.length));
+      if (track !== null) tracks.set(trackName(track), track);
+    }
+  }
+  return [...tracks.values()].sort((a, b) =>
+    a.language.localeCompare(b.language),
+  );
 }
 
 /** Writes one track atomically. The Item folder must exist; only `.pendia/subtitles` is created. */

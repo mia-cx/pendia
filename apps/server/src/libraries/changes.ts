@@ -13,7 +13,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { type DeletedArtworkFile, deleteItemSubtree } from "../db/tree.ts";
-import { absolutePath, homeRoot, rootedKey } from "./roots.ts";
+import { absolutePath, assetRoots, rootedKey } from "./roots.ts";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
@@ -238,9 +238,9 @@ export async function updateItemCanonicalFolder(
 ): Promise<void> {
   if (item.canonicalFolder === canonicalFolder) return;
   const marker = "/.pendia/artwork/";
-  const home = await homeRoot(db, item.id);
-  const inHome = (storageKey: string) =>
-    absolutePath(db, { rootId: home.id, path: storageKey });
+  const roots = await assetRoots(db, item.id);
+  const inRoot = (rootId: string, storageKey: string) =>
+    absolutePath(db, { rootId, path: storageKey });
   const rows = await db
     .select({ id: artwork.id, storageKey: artwork.storageKey })
     .from(artwork)
@@ -249,9 +249,17 @@ export async function updateItemCanonicalFolder(
     const index = row.storageKey.lastIndexOf(marker);
     if (index < 0) throw new Error("Invalid artwork storage key.");
     const nextStorageKey = `${canonicalFolder}${row.storageKey.slice(index)}`;
+    // The file moved with the Item folder in whichever root actually holds it.
+    let holder: string | undefined;
+    for (const root of roots) {
+      if (await pathExists(await inRoot(root.id, row.storageKey))) {
+        holder = root.id;
+        break;
+      }
+    }
     if (
-      (await pathExists(await inHome(nextStorageKey))) ||
-      !(await pathExists(await inHome(row.storageKey)))
+      holder === undefined ||
+      (await pathExists(await inRoot(holder, nextStorageKey)))
     ) {
       await db
         .update(artwork)

@@ -357,7 +357,7 @@ export async function deleteLibrary(
       );
     await tx.delete(libraries).where(eq(libraries.id, id));
     // Only colocated keys resolve in a root, and those are not removed here.
-    return stored.map((row) => ({ ...row, rootPath: "" }));
+    return stored.map((row) => ({ ...row, rootPaths: [""] }));
   });
   await removeArtworkFiles(orphaned, store);
   return { ok: true };

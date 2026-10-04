@@ -346,7 +346,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         await deleteItemSubtree(db, item.id, deletedArtwork);
         expect(await db.select().from(artwork)).toEqual([]);
         expect(deletedArtwork).toEqual([
-          { backend: "colocated", rootPath: root, storageKey },
+          { backend: "colocated", rootPaths: [root], storageKey },
         ]);
         await removeArtworkFiles(deletedArtwork);
         await expect(access(target)).rejects.toThrow();

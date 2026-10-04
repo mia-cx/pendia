@@ -1,5 +1,13 @@
 import type { MetadataProvider } from "@pendia/plugin-api";
-import { readBoundedBytes } from "./bounded-body.ts";
+import {
+  assertRequestLimits,
+  dateYear,
+  jsonDecoders,
+  normalizeTitle,
+  type RequestLimits,
+  requestJson,
+  titleConfidence,
+} from "./provider-http.ts";
 
 const baseUrl = "https://api.themoviedb.org/3";
 const imageBaseUrl = "https://image.tmdb.org/t/p/original";
@@ -13,111 +21,13 @@ type MetadataResult = NonNullable<
 type Credit = MetadataResult["credits"][number];
 type Artwork = MetadataResult["artwork"][number];
 
-function invalid(): never {
-  throw new Error("Invalid TMDB response.");
-}
+const decoders = jsonDecoders("TMDB");
+// An explicit type lets `invalid()` narrow like a `never` function declaration.
+const invalid: () => never = decoders.invalid;
+const { asObject, requiredId, requiredString, optionalString, optionalDate } =
+  decoders;
 
-function asObject(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    invalid();
-  return value as Record<string, unknown>;
-}
-
-function requiredId(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
-    invalid();
-  return value;
-}
-
-function requiredString(value: unknown): string {
-  if (typeof value !== "string" || value.trim().length === 0) invalid();
-  return value;
-}
-
-function optionalString(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "string") invalid();
-  return value;
-}
-
-function releaseYear(value: unknown): number | null {
-  if (value === undefined || value === null || value === "") return null;
-  if (typeof value !== "string") invalid();
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (match === null) invalid();
-  const month = Number(match[2] ?? "");
-  const day = Number(match[3] ?? "");
-  if (month < 1 || month > 12 || day < 1 || day > 31) invalid();
-  return Number(match[1]);
-}
-
-function normalizeTitle(title: string): string {
-  return (
-    title
-      .normalize("NFKD")
-      .toLowerCase()
-      .replace(/\p{M}/gu, "")
-      // Radarr's CleanTitle writes "&" as "and" and drops apostrophes.
-      .replace(/&/g, " and ")
-      .replace(/['’]/g, "")
-      .replace(/[^\p{L}\p{N}]+/gu, " ")
-      .trim()
-  );
-}
-
-async function readJsonBody(
-  response: Response,
-  signal: AbortSignal,
-  maxResponseBytes: number,
-): Promise<unknown> {
-  const declared = response.headers.get("content-length")?.trim() ?? "";
-  if (/^\d+$/.test(declared) && Number(declared) > maxResponseBytes) {
-    await response.body?.cancel().catch(() => {});
-    throw new Error("TMDB response too large.");
-  }
-  if (response.body === null) invalid();
-  let bytes: Uint8Array;
-  try {
-    bytes = await readBoundedBytes(
-      response.body,
-      maxResponseBytes,
-      () => new Error("TMDB response too large."),
-    );
-  } catch (error) {
-    if (signal.aborted) throw signal.reason;
-    throw error;
-  }
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    if (signal.aborted) throw signal.reason;
-    invalid();
-  }
-}
-
-const notFoundStatus = 404;
-
-/** Reads one TMDB JSON body; with `allowMissing`, a 404 resolves undefined, which no JSON body can produce. */
-async function requestJson(
-  request: typeof fetch,
-  url: URL,
-  timeoutMs: number,
-  maxResponseBytes: number,
-  allowMissing = false,
-): Promise<unknown> {
-  const signal = AbortSignal.timeout(timeoutMs);
-  const response = await request(url, {
-    headers: { accept: "application/json" },
-    signal,
-  });
-  if (allowMissing && response.status === notFoundStatus) {
-    await response.body?.cancel();
-    return undefined;
-  }
-  if (!response.ok)
-    throw new Error(`TMDB request failed with status ${response.status}.`);
-  return readJsonBody(response, signal, maxResponseBytes);
-}
+const releaseYear = (value: unknown) => dateYear(optionalDate(value));
 
 function readGenres(value: unknown): string[] {
   if (value === undefined) return [];
@@ -250,21 +160,22 @@ function readArtwork(
   return artwork;
 }
 
+/** Reads one TMDB path; with `allowMissing`, a 404 resolves undefined. */
+type TmdbGet = (
+  path: string,
+  params?: Record<string, string>,
+  allowMissing?: boolean,
+) => Promise<unknown>;
+
 const imdbIdPattern = /^tt[0-9]+$/;
 
 /** Resolves an IMDb id through /find; a single movie result is a certain match. */
 async function findByImdb(
-  request: typeof fetch,
-  key: string,
+  get: TmdbGet,
   imdbId: string,
-  timeoutMs: number,
-  maxResponseBytes: number,
 ): Promise<MetadataMatch | undefined> {
-  const url = new URL(`${baseUrl}/find/${imdbId}`);
-  url.searchParams.set("api_key", key);
-  url.searchParams.set("external_source", "imdb_id");
   const data = asObject(
-    await requestJson(request, url, timeoutMs, maxResponseBytes),
+    await get(`/find/${imdbId}`, { external_source: "imdb_id" }),
   );
   if (!Array.isArray(data.movie_results)) invalid();
   if (data.movie_results.length !== 1) return undefined;
@@ -281,22 +192,8 @@ async function findByImdb(
 const translationLookupLimit = 5;
 
 /** Reads a movie's translated titles; a movie TMDB no longer knows has none. */
-async function translatedTitles(
-  request: typeof fetch,
-  key: string,
-  id: number,
-  timeoutMs: number,
-  maxResponseBytes: number,
-): Promise<string[]> {
-  const url = new URL(`${baseUrl}/movie/${id}/translations`);
-  url.searchParams.set("api_key", key);
-  const body = await requestJson(
-    request,
-    url,
-    timeoutMs,
-    maxResponseBytes,
-    true,
-  );
+async function translatedTitles(get: TmdbGet, id: number): Promise<string[]> {
+  const body = await get(`/movie/${id}/translations`, {}, true);
   if (body === undefined) return [];
   const data = asObject(body);
   if (!Array.isArray(data.translations)) invalid();
@@ -312,33 +209,19 @@ async function translatedTitles(
 }
 
 async function searchMovies(
-  request: typeof fetch,
-  key: string,
+  get: TmdbGet,
   query: SearchQuery,
-  timeoutMs: number,
-  maxResponseBytes: number,
 ): Promise<MetadataMatch[]> {
   if (query.kind !== "movie") throw new Error("TMDB only supports movies.");
   // An IMDb id from the folder or an arr pins the movie before any title guess.
   const imdbId = query.providerIds?.imdb;
   if (imdbId !== undefined && imdbIdPattern.test(imdbId)) {
-    const found = await findByImdb(
-      request,
-      key,
-      imdbId,
-      timeoutMs,
-      maxResponseBytes,
-    );
+    const found = await findByImdb(get, imdbId);
     if (found !== undefined) return [found];
   }
-  const url = new URL(`${baseUrl}/search/movie`);
-  url.searchParams.set("api_key", key);
-  url.searchParams.set("query", query.title);
-  if (query.year !== undefined)
-    url.searchParams.set("year", String(query.year));
-  const data = asObject(
-    await requestJson(request, url, timeoutMs, maxResponseBytes),
-  );
+  const params: Record<string, string> = { query: query.title };
+  if (query.year !== undefined) params.year = String(query.year);
+  const data = asObject(await get("/search/movie", params));
   if (!Array.isArray(data.results)) invalid();
   const wanted = normalizeTitle(query.title);
   const matches = (title: string) => normalizeTitle(title) === wanted;
@@ -360,51 +243,29 @@ async function searchMovies(
   if (!candidates.some((candidate) => candidate.titleMatches))
     await Promise.all(
       candidates.slice(0, translationLookupLimit).map(async (candidate) => {
-        const titles = await translatedTitles(
-          request,
-          key,
-          candidate.id,
-          timeoutMs,
-          maxResponseBytes,
-        );
+        const titles = await translatedTitles(get, candidate.id);
         candidate.titleMatches = titles.some(matches);
       }),
     );
-  return candidates.map(({ id, title, year, titleMatches }) => {
-    let confidence = titleMatches ? 0.8 : 0.5;
-    if (query.year === undefined) confidence += 0.1;
-    else if (year === query.year) confidence += 0.2;
-    return {
-      providerId: String(id),
-      title,
-      year,
-      confidence: Math.min(confidence, 1),
-    };
-  });
+  return candidates.map(({ id, title, year, titleMatches }) => ({
+    providerId: String(id),
+    title,
+    year,
+    confidence: titleConfidence(titleMatches, query.year, year),
+  }));
 }
 
 async function fetchMovie(
-  request: typeof fetch,
-  key: string,
+  get: TmdbGet,
   match: FetchQuery,
-  timeoutMs: number,
-  maxResponseBytes: number,
 ): Promise<MetadataResult | null> {
   if (match.kind !== "movie") throw new Error("TMDB only supports movies.");
   if (!/^\d+$/.test(match.providerId) || Number(match.providerId) <= 0)
     throw new Error("Invalid TMDB provider id.");
-  const url = new URL(`${baseUrl}/movie/${match.providerId}`);
-  url.searchParams.set("api_key", key);
-  url.searchParams.set(
-    "append_to_response",
-    "credits,release_dates,external_ids,images",
-  );
   // TMDB answers 404 for deleted or merged movies.
-  const body = await requestJson(
-    request,
-    url,
-    timeoutMs,
-    maxResponseBytes,
+  const body = await get(
+    `/movie/${match.providerId}`,
+    { append_to_response: "credits,release_dates,external_ids,images" },
     true,
   );
   if (body === undefined) return null;
@@ -438,16 +299,19 @@ export function createTmdbMetadataProvider(
 ): MetadataProvider {
   const key = apiKey.trim();
   if (key.length === 0) throw new Error("TMDB API key is required.");
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)
-    throw new Error("Invalid TMDB request timeout.");
-  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1)
-    throw new Error("Invalid TMDB response limit.");
+  const limits: RequestLimits = { label: "TMDB", timeoutMs, maxResponseBytes };
+  assertRequestLimits(limits);
+  const get: TmdbGet = (path, params = {}, allowMissing = false) => {
+    const url = new URL(`${baseUrl}${path}`);
+    url.searchParams.set("api_key", key);
+    for (const [name, value] of Object.entries(params))
+      url.searchParams.set(name, value);
+    return requestJson(request, url, limits, { allowMissing });
+  };
   return {
     id: "tmdb",
     kinds: ["movie"],
-    search: (query) =>
-      searchMovies(request, key, query, timeoutMs, maxResponseBytes),
-    fetch: (match) =>
-      fetchMovie(request, key, match, timeoutMs, maxResponseBytes),
+    search: (query) => searchMovies(get, query),
+    fetch: (match) => fetchMovie(get, match),
   };
 }

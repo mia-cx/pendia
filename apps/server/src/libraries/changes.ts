@@ -58,14 +58,52 @@ export async function leavesRoot(
   return root !== undefined && root.id !== (await rootItemId(db, itemId));
 }
 
-/** Lists a size and mtime key for every File under one root Item. */
-const rootFileStamps = async (db: Connection, rootId: string) => {
-  const rows = await db
-    .select({ bytes: files.bytes, modifiedAt: files.modifiedAt })
+/**
+ * Reports whether a root holds only Files an early scan recorded from Files
+ * this batch moves in: each sits at a move's destination with the size and
+ * mtime of the File moving there, which a rename keeps.
+ */
+const isEarlyDuplicate = async (
+  db: Connection,
+  libraryId: string,
+  rootId: string,
+  movedFrom: ReadonlyMap<string, string>,
+): Promise<boolean> => {
+  const stamp = (file: { bytes: bigint; modifiedAt: Date }) =>
+    `${file.bytes}:${file.modifiedAt.getTime()}`;
+  const held = await db
+    .select({
+      path: files.path,
+      bytes: files.bytes,
+      modifiedAt: files.modifiedAt,
+    })
     .from(files)
     .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
     .where(eq(itemAncestors.ancestorId, rootId));
-  return rows.map((row) => `${row.bytes}:${row.modifiedAt.getTime()}`);
+  const pairs: [string, string][] = [];
+  for (const file of held) {
+    const from = movedFrom.get(file.path);
+    if (from === undefined) return false;
+    pairs.push([from, stamp(file)]);
+  }
+  const sources = await db
+    .select({
+      path: files.path,
+      bytes: files.bytes,
+      modifiedAt: files.modifiedAt,
+    })
+    .from(files)
+    .where(
+      and(
+        eq(files.libraryId, libraryId),
+        inArray(
+          files.path,
+          pairs.map(([from]) => from),
+        ),
+      ),
+    );
+  const sourceStamps = new Map(sources.map((file) => [file.path, stamp(file)]));
+  return pairs.every(([from, held]) => sourceStamps.get(from) === held);
 };
 
 /** Removes one File, or its Version when no other File remains, and returns the Item that may now be empty. */
@@ -245,6 +283,11 @@ export async function applyScanChanges(
         ? requireRelativePath(change.previousPath, false)
         : undefined,
   }));
+  const movedFrom = new Map(
+    normalized.flatMap(({ path, previousPath }) =>
+      previousPath === undefined ? [] : [[path, previousPath] as const],
+    ),
+  );
   const emptiedItemIds: string[] = [];
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
@@ -263,24 +306,21 @@ export async function applyScanChanges(
       if (file && destination) {
         if (file.id === destination.id) continue;
         // A collision replaces only the colliding Item. The exception is a
-        // duplicate root an early scan made of a moved folder. A rename keeps
-        // size and mtime, so each of its Files matches one of the source's.
+        // duplicate root an early scan made of a moved folder.
         if (destination.itemId === file.itemId) {
           await db
             .delete(versions)
             .where(eq(versions.id, destination.versionId));
         } else {
-          const sourceRootId = await rootItemId(db, file.itemId);
           const destinationRootId = await rootItemId(db, destination.itemId);
-          let duplicate = false;
-          if (sourceRootId !== destinationRootId) {
-            const sourceStamps = new Set(
-              await rootFileStamps(db, sourceRootId),
-            );
-            duplicate = (await rootFileStamps(db, destinationRootId)).every(
-              (stamp) => sourceStamps.has(stamp),
-            );
-          }
+          const duplicate =
+            destinationRootId !== (await rootItemId(db, file.itemId)) &&
+            (await isEarlyDuplicate(
+              db,
+              libraryId,
+              destinationRootId,
+              movedFrom,
+            ));
           await deleteItemSubtree(
             db,
             duplicate ? destinationRootId : destination.itemId,

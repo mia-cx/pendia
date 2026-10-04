@@ -122,11 +122,16 @@ const showBEpisodes = [
   "Show B/Season 02/Show B S02E01.mkv",
 ] as const;
 
-/** Scans Show A with one Season and Show B with two into a new shows library. */
+/**
+ * Scans Show A with one Season and Show B with two into a new shows library.
+ * Every file shares one size and mtime, like timestamp-preserving copies.
+ */
 async function scanTwoShows(db: Database, root: string) {
+  const mtime = new Date("2026-01-01T00:00:00Z");
   for (const path of [...showAEpisodes, ...showBEpisodes]) {
     await mkdir(join(root, dirname(path)), { recursive: true });
     await createVideoFixture(join(root, path));
+    await utimes(join(root, path), mtime, mtime);
   }
   const library = await insertLibrary(db, root, "shows");
   await scanShowDirectory(db, library.id, "Show A");

@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { asc } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
+import { sessionRegistry } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
@@ -50,6 +52,17 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
       gopSeconds: 2,
       audioCodec: "truehd",
       audioChannels: 6,
+    });
+    await mkdir(join(root, "Dubbed (2026)"));
+    // Streams: 0 video, 1 and 2 audio, 3 SRT, 4 PGS.
+    await createVideoFixture(join(root, "Dubbed (2026)", "Dubbed.mkv"), {
+      width: 320,
+      height: 180,
+      durationSeconds: 4,
+      frameRate: 25,
+      gopSeconds: 2,
+      toneAudio: true,
+      subtitles: ["srt", "pgs"],
     });
   }, 60_000);
 
@@ -224,5 +237,93 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
         toGuid(movie.versionId),
       ]);
       expect(detailBody.MediaStreams).toHaveLength(3);
+    }));
+
+  test("passes AudioStreamIndex and SubtitleStreamIndex through to the session and its URLs", () =>
+    withDatabase(async (db) => {
+      const { movies } = await seedMovies(db, root, ["Dubbed"]);
+      const movie = movies.get("Dubbed");
+      if (movie === undefined) throw new Error("Expected the movie.");
+      const handle = createJellyfinHandler(
+        db,
+        jellyfinRoutes(createArtworkHandler(db), createHlsHandler(db)),
+      );
+      const send = async (request: Request) => {
+        const response = await handle(request, "127.0.0.1");
+        if (response === undefined) throw new Error("Unrouted.");
+        return response;
+      };
+      const token = await jellyfinLogin(send, swiftfin);
+      const playbackInfo = async (query: string, body: object) => {
+        const response = await send(
+          new Request(
+            `http://pendia.test/Items/${toGuid(movie.itemId)}/PlaybackInfo${query}`,
+            {
+              method: "POST",
+              headers: {
+                authorization: `${swiftfin}, Token="${token}"`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                DeviceProfile: deviceProfiles.swiftfin,
+                ...body,
+              }),
+            },
+          ),
+        );
+        expect(response.status).toBe(200);
+        const info = (await response.json()) as PlaybackInfo;
+        const [source] = info.MediaSources;
+        if (source === undefined) throw new Error("Expected a source.");
+        return {
+          source,
+          url: new URL(source.TranscodingUrl ?? "", "http://pendia.test"),
+        };
+      };
+
+      // No choice: the first audio Stream, and the forced SRT as default.
+      const plain = await playbackInfo("", {});
+      expect(plain.source).toMatchObject({
+        DefaultAudioStreamIndex: 1,
+        DefaultSubtitleStreamIndex: 3,
+      });
+      expect(plain.url.searchParams.get("AudioStreamIndex")).toBe("1");
+      expect(plain.url.searchParams.has("SubtitleStreamIndex")).toBe(false);
+
+      const off = await playbackInfo("", {
+        AudioStreamIndex: 2,
+        SubtitleStreamIndex: -1,
+      });
+      expect(off.source).toMatchObject({
+        SupportsTranscoding: true,
+        DefaultAudioStreamIndex: 2,
+        DefaultSubtitleStreamIndex: -1,
+      });
+      expect(off.url.searchParams.get("AudioStreamIndex")).toBe("2");
+      expect(off.url.searchParams.get("SubtitleStreamIndex")).toBe("-1");
+
+      // The query works too, and the chosen PGS burns in.
+      const burned = await playbackInfo(
+        "?AudioStreamIndex=2&SubtitleStreamIndex=4",
+        {},
+      );
+      expect(burned.source).toMatchObject({
+        DefaultAudioStreamIndex: 2,
+        DefaultSubtitleStreamIndex: 4,
+      });
+      expect(burned.url.searchParams.get("SubtitleStreamIndex")).toBe("4");
+      const decisions = await db
+        .select({ decision: sessionRegistry.decision })
+        .from(sessionRegistry)
+        .orderBy(asc(sessionRegistry.createdAt));
+      expect(decisions.map((row) => row.decision?.selection)).toEqual([
+        { audio: 0 },
+        { audio: 1, subtitle: null },
+        { audio: 1, subtitle: 1 },
+      ]);
+      expect(decisions[2]?.decision).toMatchObject({
+        method: "transcode",
+        video: { burnSubtitles: true },
+      });
     }));
 });

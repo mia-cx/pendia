@@ -17,6 +17,12 @@ const sections = [
     blurb: "Create custom groups and edit the permissions they grant.",
   },
   {
+    href: "/admin/plugins",
+    label: "Plugins",
+    blurb:
+      "Install plugins from a source or a registry, enable them, and switch their file access.",
+  },
+  {
     href: "/admin/settings",
     label: "Settings",
     blurb:

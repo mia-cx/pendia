@@ -9,6 +9,7 @@ const sections = [
   { href: "/admin/libraries", label: "Libraries" },
   { href: "/admin/users", label: "Users" },
   { href: "/admin/groups", label: "Groups" },
+  { href: "/admin/plugins", label: "Plugins" },
   { href: "/admin/settings", label: "Settings" },
 ];
 </script>

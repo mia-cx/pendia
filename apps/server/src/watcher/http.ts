@@ -52,7 +52,7 @@ const EventBatch = Schema.Struct({
   changes: readonly WatchedChange[];
 }>;
 
-const ClaimRequest = Schema.Struct({
+const WatchedLibraries = Schema.Struct({
   libraryIds: Schema.NonEmptyArray(Schema.UUID),
 });
 
@@ -121,11 +121,8 @@ async function readBody<A, I>(request: Request, schema: Schema.Schema<A, I>) {
   }
 }
 
-/** Records the watcher's heartbeat on its Libraries and claims one of their scans. */
-async function claim(
-  db: Database,
-  libraryIds: readonly string[],
-): Promise<WatcherClaim> {
+/** Records the watcher's heartbeat on its Libraries, which keeps their scans away from workers. */
+async function beat(db: Database, libraryIds: readonly string[]) {
   const watched = await db
     .update(libraries)
     .set({ watcherSeenAt: sql`statement_timestamp()` })
@@ -133,6 +130,15 @@ async function claim(
     .returning({ id: libraries.id, medium: libraries.medium });
   if (watched.length !== new Set(libraryIds).size)
     throw new AuthError("NOT_FOUND");
+  return watched;
+}
+
+/** Records the watcher's heartbeat and claims one scan of its Libraries. */
+async function claim(
+  db: Database,
+  libraryIds: readonly string[],
+): Promise<WatcherClaim> {
+  const watched = await beat(db, libraryIds);
   const job = await createJobQueue(db).claim(["scan"], { libraryIds });
   if (job === undefined) return { job: null };
   if (job.payload.type !== "scan") throw new Error("Claimed a non-scan job.");
@@ -286,8 +292,16 @@ export function createWatcherHandler(
         return respond({ accepted }, 202);
       }
       if (pathname === "/api/watcher/claim") {
-        const { libraryIds } = await readBody(request, ClaimRequest);
+        const { libraryIds } = await readBody(request, WatchedLibraries);
         return respond(await claim(db, libraryIds), 200);
+      }
+      if (pathname === "/api/watcher/heartbeat") {
+        const { libraryIds } = await readBody(request, WatchedLibraries);
+        await beat(db, libraryIds);
+        return new Response(null, {
+          status: 204,
+          headers: { "Cache-Control": "no-store" },
+        });
       }
       const jobId = pathname.match(jobPattern)?.[1];
       if (jobId !== undefined && Schema.is(Schema.UUID)(jobId))

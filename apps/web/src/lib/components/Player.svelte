@@ -69,7 +69,8 @@ onDestroy(() => {
 });
 
 afterNavigate(({ from }) => {
-  cameFrom = from?.url.pathname;
+  // from.url is null when the player is the page the app hydrated on.
+  cameFrom = from?.url?.pathname;
 });
 
 // Back returns through history when the detail page opened the player, so

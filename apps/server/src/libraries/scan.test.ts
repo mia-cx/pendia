@@ -1384,44 +1384,42 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
       });
     }));
 
-  test("a Show folder move without provider ids keeps the Show tree", () =>
+  test("one Episode moved to a new folder without provider ids leaves its Show in place", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withVideoFixture(async (root) => {
-        const before = "Old Show/Season 01/Show S01E01.mkv";
-        const after = "New Show/Season 01/Show S01E01.mkv";
-        await mkdir(join(root, "Old Show", "Season 01"), { recursive: true });
+        const before = "Show A/Season 01/Show S01E01.mkv";
+        const after = "Show B/Season 01/Show S01E01.mkv";
+        await mkdir(join(root, "Show A", "Season 01"), { recursive: true });
+        await mkdir(join(root, "Show B", "Season 01"), { recursive: true });
         await createVideoFixture(join(root, before));
+        await createVideoFixture(
+          join(root, "Show A/Season 01/Show S01E02.mkv"),
+        );
         const [library] = await db
           .insert(libraries)
           .values({ name: "Shows", medium: "shows", rootPath: root })
           .returning();
         if (!library) throw new Error("Fixture library missing.");
-        await scanShowDirectory(db, library.id, "Old Show");
+        await scanShowDirectory(db, library.id, "Show A");
         const itemsBefore = await db.select().from(items);
-        const versionsBefore = await db.select().from(versions);
 
-        await rename(join(root, "Old Show"), join(root, "New Show"));
-        await scanShowDirectory(db, library.id, "New Show", {
-          changes: [
-            {
-              kind: "move",
-              path: after,
-              previousPath: before,
-              providerIds: {},
-            },
-          ],
-        });
+        await rename(join(root, before), join(root, after));
+        // The moved File still belongs to Show A's Episode, so a new Show B cannot take it.
+        await expect(
+          scanShowDirectory(db, library.id, "Show B", {
+            changes: [
+              {
+                kind: "move",
+                path: after,
+                previousPath: before,
+                providerIds: {},
+              },
+            ],
+          }),
+        ).rejects.toThrow("Auth record already exists.");
 
-        const itemsAfter = await db.select().from(items);
-        expect(itemsAfter.map((row) => row.id).sort()).toEqual(
-          itemsBefore.map((row) => row.id).sort(),
-        );
-        expect(
-          itemsAfter.find((row) => row.kind === "show")?.canonicalFolder,
-        ).toBe("New Show");
-        expect(await db.select().from(versions)).toEqual(versionsBefore);
-        expect(await db.select().from(files)).toMatchObject([{ path: after }]);
+        expect(await db.select().from(items)).toEqual(itemsBefore);
       });
     }));
 });

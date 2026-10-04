@@ -187,7 +187,11 @@ export function localScanSource(
   };
 }
 
-/** Finds the Show that owns any of these Files: a queued move re-paths Files before the scan finds their Show. */
+/**
+ * Finds the Show whose Files all sit at these paths: a queued folder move
+ * re-paths Files before the scan finds their Show. A Show with Files
+ * elsewhere only lost some of them, so it stays put.
+ */
 async function findShowOwningFiles(
   tx: Transaction,
   libraryId: string,
@@ -204,7 +208,19 @@ async function findShowOwningFiles(
     )
     .where(and(eq(files.libraryId, libraryId), inArray(files.path, [...paths])))
     .limit(1);
-  return owner?.item;
+  if (owner === undefined) return undefined;
+  const [elsewhere] = await tx
+    .select({ id: files.id })
+    .from(files)
+    .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
+    .where(
+      and(
+        eq(itemAncestors.ancestorId, owner.item.id),
+        notInArray(files.path, [...paths]),
+      ),
+    )
+    .limit(1);
+  return elsewhere === undefined ? owner.item : undefined;
 }
 
 /** Deletes leaf Items still holding no Versions after queued file deletes. */

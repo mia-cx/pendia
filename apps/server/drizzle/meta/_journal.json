@@ -61,8 +61,15 @@
     {
       "idx": 8,
       "version": "7",
-      "when": 1791074494871,
-      "tag": "0008_fixed_warbound",
+      "when": 1791076723293,
+      "tag": "0008_quick_connect",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791080953392,
+      "tag": "0009_uneven_tyrannus",
       "breakpoints": true
     }
   ]

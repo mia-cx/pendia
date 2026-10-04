@@ -61,7 +61,8 @@ function errorResponse(error: unknown): Response {
   );
 }
 
-async function readJsonObject(
+/** Reads a size-capped `application/json` object body or throws INVALID_INPUT. */
+export async function readJsonObject(
   request: Request,
 ): Promise<Record<string, unknown>> {
   const contentType = request.headers.get("content-type");

@@ -32,7 +32,7 @@ const sections = [
     href: "/admin/settings",
     label: "Settings",
     blurb:
-      "Set trusted proxies and provider keys, toggle artwork auth and check OIDC.",
+      "Set trusted proxies, the bitrate cap, the store window and provider keys, toggle artwork auth, and check the artwork store and OIDC.",
   },
 ];
 </script>

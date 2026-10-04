@@ -3,6 +3,7 @@ import { untrack } from "svelte";
 import { goto, invalidateAll } from "$app/navigation";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
+import { fromMbps, toMbps } from "$lib/bitrate.ts";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { type Permission, permissionNames } from "$lib/permissions.ts";
@@ -105,7 +106,10 @@ function resetRouteState() {
 }
 
 const capValue = $derived(
-  capInput ?? String(access.data?.settings.bitrateCapBps ?? ""),
+  capInput ??
+    (access.data?.settings.bitrateCapBps == null
+      ? ""
+      : toMbps(access.data.settings.bitrateCapBps)),
 );
 const ratingValue = $derived(
   ratingInput ?? access.data?.settings.contentRatingCeiling ?? "",
@@ -124,15 +128,11 @@ async function saveSettings(event: SubmitEvent) {
   try {
     const submittedCap = capValue;
     const submittedRating = ratingValue;
-    const cap = submittedCap.trim();
-    const capNumber = cap === "" ? null : Number(cap);
-    if (
-      capNumber !== null &&
-      (!Number.isSafeInteger(capNumber) || capNumber < 1)
-    ) {
+    const capNumber = fromMbps(submittedCap);
+    if (capNumber === undefined) {
       settingsFailure = {
         code: "BAD_REQUEST",
-        message: "The bitrate cap must be a whole number of bits per second.",
+        message: "The bitrate cap must be a positive number of Mbit/s.",
       };
       return;
     }
@@ -390,13 +390,14 @@ async function revoke(sessionId: string) {
       {#if settingsFailure}
         <Failure failure={settingsFailure} />
       {/if}
-      <label for="bitrateCap">Bitrate cap in bits per second</label>
+      <label for="bitrateCap">Bitrate cap in Mbit/s</label>
       <input
         id="bitrateCap"
         name="bitrateCap"
         type="number"
-        min="1"
-        inputmode="numeric"
+        min="0.1"
+        step="0.1"
+        inputmode="decimal"
         value={capValue}
         oninput={(event) => (capInput = event.currentTarget.value)}
         disabled={!access.data}

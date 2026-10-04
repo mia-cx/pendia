@@ -668,6 +668,21 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(splitVersion?.durationSeconds).toBe(
           (part1.durationSeconds ?? 0) + (part2.durationSeconds ?? 0),
         );
+        expect(splitVersion).toMatchObject({
+          keyframesSeconds: null,
+          lazyIndexPending: true,
+        });
+        for (const single of [range, special]) {
+          const version = versionRows.find(
+            (row) => row.id === single.versionId,
+          );
+          const probed = await probeVideo(join(root, single.path));
+          expect(probed.keyframesSeconds).not.toBeNull();
+          expect(version).toMatchObject({
+            keyframesSeconds: probed.keyframesSeconds,
+            lazyIndexPending: false,
+          });
+        }
 
         const snapshotIds = async () => ({
           items: (await db.select({ id: items.id }).from(items))

@@ -12,7 +12,7 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
 
 ## Acceptance criteria
 
-- [ ] An episode whose probe has keyframes is stored indexed (`lazyIndexPending` false).
+- [x] An episode whose probe has keyframes is stored indexed (`lazyIndexPending` false).
 - [ ] `S01E01-E03` plus `S01E02-E04` in one scan succeed as one widened Episode with both files as Versions.
 - [ ] A new `S01E01-E03` next to a retained `S01E02` succeeds without an exclusion constraint error.
 - [ ] The show reconciler deletes File rows only for imported Versions, like the movie reconciler.
@@ -24,8 +24,8 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
 
 - [x] #73: filter `waitForBlockedScan` to `datname = current_database()` and `pid <> pg_backend_pid()`.
   - Validation: the existing lock tests in `scan.test.ts` pass. `bun test src/libraries/scan.test.ts -t revalidates`: 2 pass.
-- [ ] #67: store `keyframesSeconds` and `lazyIndexPending` on show Versions, as the movie path does.
-  - Validation: the show tree test asserts single-file episode Versions are indexed.
+- [x] #67: store `keyframesSeconds` and `lazyIndexPending` on show Versions, as the movie path does.
+  - Validation: the show tree test asserts single-file episode Versions are indexed. It failed before the change; `scan.test.ts`: 18 pass after.
 - [ ] #68: merge overlapping discovered episode ranges per Season before writing, and drop the widening checks the merge makes dead.
   - Validation: new tests for `S01E01-E03` plus `S01E02-E04`, and `S01E01-E03` next to a retained `S01E02`; existing range tests still pass.
 - [ ] #70: the show reconciler selects only Files of imported Versions before deleting stale ones.

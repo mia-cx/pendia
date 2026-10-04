@@ -792,6 +792,13 @@ export async function scanShowDirectory(
           const first = members[0];
           if (!first) throw new Error("Show Version has no Files.");
           const label = videoVersionLabel(first.path, first.probe);
+          // Each split File has its own index, so only a single File indexes the Version.
+          const keyframesSeconds =
+            members.length === 1 ? first.probe.keyframesSeconds : null;
+          const index = {
+            keyframesSeconds,
+            lazyIndexPending: keyframesSeconds === null,
+          };
 
           const existingFiles = await tx
             .select()
@@ -827,7 +834,7 @@ export async function scanShowDirectory(
             }
             await tx
               .update(versions)
-              .set({ label, bytes, durationSeconds })
+              .set({ label, bytes, durationSeconds, ...index })
               .where(eq(versions.id, version.id));
             versionId = version.id;
           } else {
@@ -841,6 +848,7 @@ export async function scanShowDirectory(
                 format: "video",
                 bytes,
                 durationSeconds,
+                ...index,
               })
               .returning();
             if (!version) {

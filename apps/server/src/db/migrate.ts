@@ -5,7 +5,8 @@ import { migrate } from "drizzle-orm/bun-sql/migrator";
 import { createDatabase, type Database } from "./client.ts";
 import { groups, permissions } from "./schema/index.ts";
 
-const migrationLockKey = 0x70656e646961n;
+/** The Postgres advisory lock migrations hold, so replicas wait for each other. */
+export const migrationLockKey = 0x70656e646961n;
 
 function migrationsFolder() {
   const candidates = [

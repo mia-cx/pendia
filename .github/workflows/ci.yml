@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -28,6 +30,15 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - name: Start S3-compatible server
+        # versitygw serves each directory under /data as a bucket.
+        run: |
+          mkdir -p "$RUNNER_TEMP/s3/pendia"
+          docker run --detach --rm --publish 127.0.0.1:7070:7070 \
+            --volume "$RUNNER_TEMP/s3:/data" \
+            --env ROOT_ACCESS_KEY=pendia --env ROOT_SECRET_KEY=pendia-secret \
+            --env VGW_BACKEND=posix --env VGW_BACKEND_ARG=/data \
+            versity/versitygw:v1.8.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
@@ -43,9 +54,51 @@ jobs:
       - run: bun test
         env:
           DATABASE_URL: postgresql://pendia:pendia@127.0.0.1:5432/pendia
+          TEST_S3_URL: http://pendia:pendia-secret@127.0.0.1:7070/pendia
 
   image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag pendia:ci .
+      - name: Record the image size and ffmpeg version
+        run: |
+          size="$(docker image ls pendia:ci --format '{{.Size}}')"
+          ffmpeg="$(docker run --rm --entrypoint ffmpeg pendia:ci -version | head -n 1)"
+          echo "Image size: $size. $ffmpeg"
+          {
+            echo "| Image size | ffmpeg |"
+            echo "| --- | --- |"
+            echo "| $size | $ffmpeg |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Pushing a v1.2.3 tag publishes ghcr.io/mia-cx/pendia:1.2.3, :1.2 and :latest.
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [checks, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      # Third-party actions pin a commit: this job can push the image.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

@@ -8,6 +8,29 @@ One image, one binary. Movies, series, music, photos, ebooks, audiobooks, live T
 
 Planning. The architecture is decided ticket by ticket on the [Pendia v1 map](https://github.com/mia-cx/pendia/issues?q=label%3Awayfinder%3Amap). The glossary is [CONTEXT.md](./CONTEXT.md), decisions live in [docs/adr](./docs/adr).
 
+## Run
+
+You need git and Docker with Compose. The image is private: log in to GHCR with a GitHub token that has `read:packages`.
+
+```sh
+git clone https://github.com/mia-cx/pendia.git
+cd pendia
+docker login ghcr.io
+docker compose up -d
+```
+
+Open http://localhost:3000 and create the admin account in the setup wizard. Inside Pendia, your media lives under `/media`: put it in `./media`, or set `PENDIA_MEDIA` to its folder before `docker compose up`.
+
+Movie metadata and artwork come from TMDB. Put your TMDB v3 API key, the 32-character one, in `.env` as `TMDB_API_KEY=<key>`, or run `scripts/tmdb-key-wizard.sh` to write it there. Then run `docker compose up -d` again. Pendia does not use the Read Access Token.
+
+Without access to the image, build it from the clone instead:
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+[docs/operations.md](./docs/operations.md) covers roles, environment variables, health, logs and releases.
+
 ## License
 
 [MCX](./LICENSE): MPL 2.0 with network use counted as distribution.
@@ -36,8 +59,10 @@ Run the tests.
 bun test
 ```
 
-Build the image and start Pendia with Postgres. Set `PENDIA_HOST_PORT` when 3000 is taken on the host.
+Build the image from your checkout and start it with Postgres. Set `PENDIA_HOST_PORT` when 3000 is taken on the host.
 
 ```sh
-docker compose up --build
+docker compose -f compose.yaml -f compose.build.yaml up --build
 ```
+
+Database and S3 tests skip without a server. Set `DATABASE_URL` to a test Postgres and `TEST_S3_URL` to a test S3-compatible server, such as `http://<key>:<secret>@127.0.0.1:7070/<bucket>`.

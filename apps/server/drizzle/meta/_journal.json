@@ -50,6 +50,48 @@
       "when": 1790711462241,
       "tag": "0006_far_dazzler",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790870246370,
+      "tag": "0007_hesitant_sandman",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791076723293,
+      "tag": "0008_quick_connect",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791080953392,
+      "tag": "0009_uneven_tyrannus",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791091664734,
+      "tag": "0010_subtitle_fetch_job",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791101028881,
+      "tag": "0011_session_client",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791103186844,
+      "tag": "0012_session_credential",
+      "breakpoints": true
     }
   ]
 }

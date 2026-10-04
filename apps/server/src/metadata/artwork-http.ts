@@ -6,6 +6,10 @@ import { authenticate } from "../auth/sessions.ts";
 import { readAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, versions } from "../db/schema/index.ts";
+import {
+  type ArtworkStoreConfig,
+  artworkStoreConfig,
+} from "./artwork-backends.ts";
 import { readArtworkOriginal } from "./artwork-store.ts";
 
 /** A resize operation used by the process-local artwork cache. */
@@ -25,7 +29,8 @@ const routePrefix = "/api/artwork/";
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const widthPattern = /^[0-9]+$/;
-const maxWidth = 4096;
+/** The widest resize the artwork route serves. */
+export const maxArtworkWidth = 4096;
 
 const imageTypes: Record<string, string> = {
   avif: "image/avif",
@@ -85,8 +90,10 @@ export function createArtworkHandler(
     maxCacheBytes?: number;
     maxConcurrentResizes?: number;
     maxQueuedResizes?: number;
+    store?: ArtworkStoreConfig;
   } = {},
 ): (request: Request) => Promise<Response | undefined> {
+  const store = options.store ?? artworkStoreConfig();
   const maxCacheEntries = options.maxCacheEntries ?? 128;
   const maxCacheBytes = options.maxCacheBytes ?? 64 * 1024 * 1024;
   const maxConcurrentResizes = options.maxConcurrentResizes ?? 4;
@@ -201,7 +208,7 @@ export function createArtworkHandler(
         value === undefined || !widthPattern.test(value)
           ? Number.NaN
           : Number(value);
-      if (!Number.isSafeInteger(width) || width < 1 || width > maxWidth)
+      if (!Number.isSafeInteger(width) || width < 1 || width > maxArtworkWidth)
         return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
       if (caller !== undefined) {
         // Auth enabled: the caller needs view on the artwork owner's Library.
@@ -238,7 +245,7 @@ export function createArtworkHandler(
           "Artwork service is busy.",
         );
       try {
-        const original = await readArtworkOriginal(db, id);
+        const original = await readArtworkOriginal(db, id, store);
         if (original === null)
           return jsonError(404, "NOT_FOUND", "Artwork not found.");
 

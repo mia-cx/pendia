@@ -1,26 +1,37 @@
 import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
 import { isBuiltInAdmin } from "../auth/permissions.ts";
+import { refreshItem as queueItemRefresh } from "../metadata/jobs.ts";
+import { RungName } from "../stored/policy.ts";
+import { requestStoredVersion } from "../stored/service.ts";
+import { readStoreStatus } from "../stored/status.ts";
 import {
   groupProcedures,
   settingsProcedures,
   setupProcedures,
   userProcedures,
 } from "./admin.ts";
-import { authenticated, authenticateRequest } from "./context.ts";
-import { runApi } from "./errors.ts";
-import { getItemDetail, listItemCards } from "./items.ts";
+import {
+  authenticated,
+  authenticatedMutation,
+  authenticateRequest,
+} from "./context.ts";
+import { fromHost, runApi } from "./errors.ts";
+import { getItemDetail, listItemCards, searchItems } from "./items.ts";
 import { libraryProcedures } from "./libraries.ts";
 import { markProcedures, shelfProcedures } from "./marks.ts";
 import { playbackProcedures } from "./playback.ts";
+import { pluginProcedures, registryProcedures } from "./plugins.ts";
 import {
   ApiEvent,
   connection,
   ItemCard,
   ItemDetail,
   ItemKind,
+  ItemSort,
   Me,
   PageSize,
+  StoreStatus,
 } from "./schema.ts";
 
 const me = authenticated
@@ -38,6 +49,7 @@ const listItems = authenticated
       Schema.Struct({
         libraryId: Schema.optional(Schema.UUID),
         kind: Schema.optional(ItemKind),
+        sort: Schema.optional(ItemSort),
         limit: Schema.optional(PageSize),
         cursor: Schema.optional(Schema.String),
       }),
@@ -56,6 +68,60 @@ const getItem = authenticated
     runApi(getItemDetail(context.db, context.caller, input.id)),
   );
 
+const storedVersionRequest = authenticatedMutation
+  .route({ method: "POST", path: "/items/{id}/stored-versions" })
+  .input(
+    Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID, rung: RungName })),
+  )
+  .output(Schema.standardSchemaV1(Schema.Struct({ queued: Schema.Boolean })))
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        requestStoredVersion(
+          context.db,
+          context.caller.user.id,
+          input.id,
+          input.rung,
+        ),
+      ),
+    ),
+  );
+
+const storeStatus = authenticated
+  .route({ method: "GET", path: "/store/status" })
+  .output(Schema.standardSchemaV1(StoreStatus))
+  .handler(async ({ context }) =>
+    runApi(fromHost(() => readStoreStatus(context.db, context.caller.user.id))),
+  );
+
+const refreshItem = authenticatedMutation
+  .route({ method: "POST", path: "/items/{id}/refresh" })
+  .input(Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID })))
+  .output(Schema.standardSchemaV1(Schema.Struct({ jobId: Schema.UUID })))
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        queueItemRefresh(context.db, context.caller.user.id, input.id),
+      ),
+    ),
+  );
+
+const SearchQuery = Schema.Trim.pipe(
+  Schema.minLength(1),
+  Schema.maxLength(200),
+  Schema.filter((query) => !query.includes("\0"), {
+    message: () => "query must not contain NUL",
+  }),
+);
+
+const search = authenticated
+  .route({ method: "GET", path: "/search" })
+  .input(Schema.standardSchemaV1(Schema.Struct({ query: SearchQuery })))
+  .output(Schema.standardSchemaV1(Schema.Array(ItemCard)))
+  .handler(async ({ context, input }) =>
+    runApi(searchItems(context.db, context.caller, input.query)),
+  );
+
 const streamEvents = authenticated
   .route({ method: "GET", path: "/events" })
   .output(eventIterator(Schema.standardSchemaV1(ApiEvent)))
@@ -72,8 +138,15 @@ const streamEvents = authenticated
 /** The API router: procedures defined once, served over both RPC and REST. */
 export const pendiaRouter = {
   me,
-  items: { list: listItems, get: getItem },
+  items: {
+    list: listItems,
+    get: getItem,
+    search,
+    refresh: refreshItem,
+    requestStoredVersion: storedVersionRequest,
+  },
   libraries: libraryProcedures,
+  store: { status: storeStatus },
   playback: playbackProcedures,
   marks: markProcedures,
   shelves: shelfProcedures,
@@ -81,5 +154,7 @@ export const pendiaRouter = {
   users: userProcedures,
   groups: groupProcedures,
   settings: settingsProcedures,
+  plugins: pluginProcedures,
+  registries: registryProcedures,
   events: { stream: streamEvents },
 };

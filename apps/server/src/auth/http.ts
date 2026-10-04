@@ -61,8 +61,10 @@ function errorResponse(error: unknown): Response {
   );
 }
 
-async function readJsonObject(
+/** Reads a size-capped `application/json` object body or throws INVALID_INPUT. */
+export async function readJsonObject(
   request: Request,
+  maxBytes = maxBodyBytes,
 ): Promise<Record<string, unknown>> {
   const contentType = request.headers.get("content-type");
   if (
@@ -71,7 +73,7 @@ async function readJsonObject(
   )
     throw new AuthError("INVALID_INPUT");
   const declared = request.headers.get("content-length");
-  if (declared !== null && Number(declared) > maxBodyBytes)
+  if (declared !== null && Number(declared) > maxBytes)
     throw new AuthError("BODY_TOO_LARGE");
   const body = request.body;
   if (body === null) throw new AuthError("INVALID_INPUT");
@@ -83,7 +85,7 @@ async function readJsonObject(
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > maxBodyBytes) {
+      if (size > maxBytes) {
         await reader.cancel();
         throw new AuthError("BODY_TOO_LARGE");
       }

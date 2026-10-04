@@ -3,8 +3,31 @@ import { postgresCode } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { sessionRegistry, transcoderCapabilities } from "../db/schema/index.ts";
 import { errorResponse, standardHeaders } from "../playback/direct.ts";
-import { authorizeHlsRequest, parseHlsPath } from "../playback/hls.ts";
+import {
+  authorizeHlsRequest,
+  parseHlsPath,
+  parseVariantHlsPath,
+} from "../playback/hls.ts";
+import { loadPlaybackSource } from "../playback/planning.ts";
+import { serveStoredHls } from "../stored/playback.ts";
 import type { Transcoder } from "../transcoder/index.ts";
+import { sessionOutputs } from "../transcoder/outputs.ts";
+
+/** The WebVTT renditions a stored session's master lists: the same ones its live session would. */
+async function storedSubtitles(
+  db: Database,
+  userId: string,
+  itemId: string,
+  session: Awaited<ReturnType<typeof authorizeHlsRequest>>["session"],
+) {
+  const { source, subtitleDetails } = await loadPlaybackSource(
+    db,
+    userId,
+    itemId,
+    session.versionId,
+  );
+  return sessionOutputs(session.decision, source, subtitleDetails).subtitles;
+}
 
 function respond(
   body: unknown,
@@ -84,10 +107,11 @@ async function assignOwner(
 export function createHlsHandler(db: Database, local?: Transcoder) {
   return async (
     request: Request,
-    server: Bun.Server<undefined>,
+    server: Pick<Bun.Server<undefined>, "timeout">,
   ): Promise<Response | undefined> => {
     const url = new URL(request.url);
-    const hls = parseHlsPath(url.pathname, "/api/playback");
+    const variant = parseVariantHlsPath(url.pathname);
+    const hls = variant ?? parseHlsPath(url.pathname, "/api/playback");
     if (hls === null) return undefined;
     try {
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -106,6 +130,28 @@ export function createHlsHandler(db: Database, local?: Transcoder) {
       server.timeout(request, 30);
       const scope = { sessionId: hls.sessionId, itemId: hls.itemId };
       const { userId, session } = await authorizeHlsRequest(db, url, scope);
+      // Stored rungs live on the library share, which the api reads itself.
+      // Their subtitles do not: those come from the transcoder like a live
+      // session's, so subtitle requests fall through to it.
+      const variantIds = session.decision?.storedVariantIds ?? [];
+      const subtitleRequest =
+        hls.name.kind === "subtitles" || hls.name.kind === "subtitle";
+      if (variantIds.length > 0 && (variant !== null || !subtitleRequest))
+        return await serveStoredHls(
+          db,
+          { itemId: hls.itemId, variantIds },
+          variant?.variantId ?? null,
+          hls.name,
+          url.search,
+          hls.name.kind === "master"
+            ? await storedSubtitles(db, userId, hls.itemId, session)
+            : [],
+        );
+      if (variant !== null)
+        return respond(
+          { error: { code: "NOT_FOUND", message: "Not found." } },
+          404,
+        );
       const ownerId =
         session.transcoderNodeId ??
         (await assignOwner(db, hls.sessionId, local?.nodeId));

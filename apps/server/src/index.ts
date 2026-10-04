@@ -1,9 +1,13 @@
 import { startEventBroker } from "./api/events.ts";
 import { createApiHandler } from "./api/handler.ts";
+import { createHlsHandler } from "./api/hls.ts";
 import { startApiServer } from "./api.ts";
 import { createAuthHandler } from "./auth/http.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
+import { createJellyfinHandler } from "./jellyfin/http.ts";
+import { jellyfinRoutes } from "./jellyfin/routes.ts";
+import { createJellyfinSocket } from "./jellyfin/socket.ts";
 import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
 import { registerLibraryJobs } from "./libraries/jobs.ts";
@@ -13,13 +17,30 @@ import {
   createChangeDebouncer,
   createServarrWebhookHandler,
 } from "./libraries/webhooks.ts";
+import { artworkStoreConfig } from "./metadata/artwork-backends.ts";
 import { createArtworkHandler } from "./metadata/artwork-http.ts";
 import { registerMetadataJobs } from "./metadata/jobs.ts";
+import { createPluginRouteHandler } from "./plugins/http.ts";
+import {
+  createPluginRuntime,
+  type PluginRuntime,
+  type PluginRuntimeOptions,
+} from "./plugins/runtime.ts";
+import { registerStoreJobs } from "./stored/jobs.ts";
+import { createSubtitleHandler } from "./subtitles/http.ts";
+import { registerSubtitleJobs } from "./subtitles/jobs.ts";
 import {
   startTranscoder,
   type Transcoder,
   type TranscoderOptions,
 } from "./transcoder/index.ts";
+import { createWatcherHandler } from "./watcher/http.ts";
+import {
+  readWatcherConfig,
+  startWatcher,
+  type WatcherConfig,
+  type WatcherOptions,
+} from "./watcher/index.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -107,9 +128,10 @@ function log(
 
 function startRoles(
   role: Role,
-  apiServer: Bun.Server<undefined> | undefined,
+  apiServer: ReturnType<typeof startApiServer> | undefined,
   workerStarted: boolean,
   transcoder: Transcoder | undefined,
+  watcherStarted: boolean,
 ): void {
   const activeRoles = role === "all" ? roles.slice(0, -1) : [role];
 
@@ -122,6 +144,8 @@ function startRoles(
     }
 
     if (activeRole === "worker" && workerStarted) continue;
+
+    if (activeRole === "watcher" && watcherStarted) continue;
 
     if (activeRole === "transcoder" && transcoder) {
       log(activeRole, "transcoder.listening", {
@@ -145,6 +169,10 @@ type StartOptions = {
   changeOptions?: ChangeDebouncerOptions;
   repairOptions?: RepairOptions;
   transcoderOptions?: TranscoderOptions;
+  pluginOptions?: Omit<PluginRuntimeOptions, "schedules">;
+  /** The watcher's config; read from the environment when absent. */
+  watcherConfig?: WatcherConfig;
+  watcherOptions?: WatcherOptions;
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -159,28 +187,39 @@ export async function startPendia(
     changeOptions,
     repairOptions,
     transcoderOptions,
+    pluginOptions,
+    watcherConfig,
+    watcherOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
   const runsJobs = role === "worker" || role === "all";
   const runsTranscoder = role === "transcoder" || role === "all";
+  // A bad artwork store setting fails startup, not the first poster.
+  if (servesApi || runsJobs) artworkStoreConfig();
   const database =
     servesApi || runsJobs || runsTranscoder
       ? createDatabase(databaseUrl)
       : undefined;
-  let apiServer: Bun.Server<undefined> | undefined;
+  let apiServer: ReturnType<typeof startApiServer> | undefined;
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
   let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
   let changeDebouncer: ReturnType<typeof createChangeDebouncer> | undefined;
   let repair: ReturnType<typeof createLibraryRepair> | undefined;
   let transcoder: Transcoder | undefined;
+  let plugins: PluginRuntime | undefined;
+  let watcher: Awaited<ReturnType<typeof startWatcher>> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops accepting API work, then stops the transcoder, debouncer, repair, worker, broker, API drain and database pool once. */
+  // Aborting stops a running store encode so the worker can drain.
+  const storeShutdown = new AbortController();
+  /** Stops accepting API work and store encodes, then stops the watcher, transcoder, debouncer, repair, worker, broker, API drain, plugins and database pool once. */
   function stop() {
     stopping ??= (async () => {
+      storeShutdown.abort();
       const apiStopped = Promise.resolve(apiServer?.stop());
       apiStopped.catch(() => {});
       try {
+        await watcher?.stop();
         await transcoder?.stop();
       } finally {
         try {
@@ -198,7 +237,11 @@ export async function startPendia(
                 try {
                   await apiStopped;
                 } finally {
-                  await database?.close();
+                  try {
+                    await plugins?.stop();
+                  } finally {
+                    await database?.close();
+                  }
                 }
               }
             }
@@ -242,6 +285,13 @@ export async function startPendia(
             )),
       });
     }
+    if ((servesApi || runsJobs) && database) {
+      plugins = createPluginRuntime(database.db, {
+        ...pluginOptions,
+        schedules: runsJobs,
+      });
+      await plugins.start();
+    }
     if (runsTranscoder && database) {
       transcoder = await startTranscoder(
         database.db,
@@ -255,18 +305,30 @@ export async function startPendia(
       database &&
       databaseUrl &&
       eventBroker &&
-      changeDebouncer
+      changeDebouncer &&
+      plugins
     ) {
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
+      // Jellyfin images share the artwork handler, so they share its resize cache.
+      const artwork = createArtworkHandler(database.db);
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
-        api: createApiHandler(database.db, eventBroker, transcoder),
+        api: createApiHandler(database.db, eventBroker, transcoder, plugins),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
-        artwork: createArtworkHandler(database.db),
+        artwork,
+        subtitles: createSubtitleHandler(database.db),
+        plugins: createPluginRouteHandler(database.db, plugins),
+        jellyfin: createJellyfinHandler(
+          database.db,
+          jellyfinRoutes(artwork, createHlsHandler(database.db, transcoder)),
+        ),
+        socket: createJellyfinSocket(database.db, eventBroker),
+        watcher: createWatcherHandler(database.db, changeDebouncer),
       });
     }
-    if (runsJobs && database) {
+    if (runsJobs && database && plugins) {
+      const runtime = plugins;
       const runtimeRegistry = createJobRegistry();
       for (const type of registry.types())
         runtimeRegistry.register(type, async (_payload, job) =>
@@ -275,7 +337,17 @@ export async function startPendia(
       if (!runtimeRegistry.types().includes("scan"))
         registerLibraryJobs(database.db, runtimeRegistry);
       if (!runtimeRegistry.types().includes("provider-fetch"))
-        registerMetadataJobs(database.db, runtimeRegistry);
+        registerMetadataJobs(database.db, runtimeRegistry, fetch, runtime);
+      if (!runtimeRegistry.types().includes("subtitle-fetch"))
+        registerSubtitleJobs(database.db, runtimeRegistry, fetch, runtime);
+      if (!runtimeRegistry.types().includes("plugin"))
+        runtimeRegistry.register("plugin", (payload) =>
+          runtime.runJob(payload),
+        );
+      if (!runtimeRegistry.types().includes("store"))
+        registerStoreJobs(database.db, runtimeRegistry, {
+          signal: storeShutdown.signal,
+        });
       worker = await startJobWorker(database.db, runtimeRegistry, {
         ...workerOptions,
         onError:
@@ -291,8 +363,33 @@ export async function startPendia(
             )),
       });
     }
+    if (role === "watcher") {
+      watcher = await startWatcher(
+        watcherConfig ?? readWatcherConfig(Bun.env),
+        {
+          ...watcherOptions,
+          onError:
+            watcherOptions?.onError ??
+            ((error: unknown) =>
+              console.error(
+                JSON.stringify({
+                  level: "error",
+                  role: "watcher",
+                  message: "watcher.error",
+                  error: error instanceof Error ? error.message : String(error),
+                }),
+              )),
+        },
+      );
+    }
     repair?.start();
-    startRoles(role, apiServer, worker !== undefined, transcoder);
+    startRoles(
+      role,
+      apiServer,
+      worker !== undefined,
+      transcoder,
+      watcher !== undefined,
+    );
     return { apiServer, transcoder, stop };
   } catch (error) {
     await stop();
@@ -316,7 +413,13 @@ async function run(): Promise<void> {
 
 if (import.meta.main) {
   void run().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(
+      JSON.stringify({
+        level: "error",
+        message: "server.failed",
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
     process.exitCode = 1;
   });
 }

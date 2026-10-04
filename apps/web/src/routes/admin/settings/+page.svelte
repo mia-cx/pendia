@@ -1,5 +1,6 @@
 <script lang="ts">
 import { client } from "$lib/api.ts";
+import { fromMbps, toMbps } from "$lib/bitrate.ts";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
@@ -24,9 +25,34 @@ let keyFailure = $state<FailureShape | undefined>(undefined);
 let removeBusy = $state<Record<string, boolean>>({});
 let removeFailures = $state<Record<string, FailureShape>>({});
 
+let capInput = $state<string | null>(null);
+let capBusy = $state(false);
+let capFailure = $state<FailureShape | undefined>(undefined);
+
+let windowStart = $state<string | null>(null);
+let windowEnd = $state<string | null>(null);
+let windowBusy = $state(false);
+let windowFailure = $state<FailureShape | undefined>(undefined);
+
 const proxyValue = $derived(
   proxyInput ?? (settings.data?.trustedProxyAddresses ?? []).join("\n"),
 );
+const capValue = $derived(
+  capInput ??
+    (settings.data?.bitrateCapBps == null
+      ? ""
+      : toMbps(settings.data.bitrateCapBps)),
+);
+const startValue = $derived(
+  windowStart ?? settings.data?.idleWindow.start ?? "",
+);
+const endValue = $derived(windowEnd ?? settings.data?.idleWindow.end ?? "");
+
+const artworkBackends = {
+  colocated: "Next to the media",
+  "configured-path": "A directory",
+  s3: "S3",
+};
 
 let pending: Promise<unknown> = Promise.resolve();
 
@@ -56,6 +82,50 @@ async function saveProxies(event: SubmitEvent) {
     proxyFailure = readFailure(error);
   } finally {
     proxyBusy = false;
+  }
+}
+
+async function saveCap(event: SubmitEvent) {
+  event.preventDefault();
+  capFailure = undefined;
+  const submitted = capValue;
+  const bitrateCapBps = fromMbps(submitted);
+  if (bitrateCapBps === undefined) {
+    capFailure = {
+      code: "BAD_REQUEST",
+      message: "The bitrate cap must be a positive number of Mbit/s.",
+    };
+    return;
+  }
+  capBusy = true;
+  try {
+    settings.set(await serial(() => client.settings.update({ bitrateCapBps })));
+    if (capInput === submitted) capInput = null;
+  } catch (error) {
+    capFailure = readFailure(error);
+  } finally {
+    capBusy = false;
+  }
+}
+
+async function saveWindow(event: SubmitEvent) {
+  event.preventDefault();
+  windowBusy = true;
+  windowFailure = undefined;
+  const start = startValue;
+  const end = endValue;
+  try {
+    settings.set(
+      await serial(() =>
+        client.settings.update({ idleWindow: { start, end } }),
+      ),
+    );
+    if (windowStart === start) windowStart = null;
+    if (windowEnd === end) windowEnd = null;
+  } catch (error) {
+    windowFailure = readFailure(error);
+  } finally {
+    windowBusy = false;
   }
 }
 
@@ -131,6 +201,7 @@ async function removeKey(name: string) {
 {:else if !settings.data}
   <p class="muted">Loading.</p>
 {:else}
+  {@const store = settings.data.artworkStore}
   <section>
     <h3>Trusted proxies</h3>
     <p class="muted">
@@ -150,6 +221,64 @@ async function removeKey(name: string) {
         oninput={(event) => (proxyInput = event.currentTarget.value)}
       ></textarea>
       <button type="submit" disabled={proxyBusy}>Save</button>
+    </form>
+  </section>
+
+  <section>
+    <h3>Bitrate cap</h3>
+    <form onsubmit={saveCap} class="stack">
+      {#if capFailure}
+        <Failure failure={capFailure} />
+      {/if}
+      <label for="globalCap">Default bitrate cap in Mbit/s</label>
+      <input
+        id="globalCap"
+        name="bitrateCap"
+        type="number"
+        min="0"
+        step="any"
+        inputmode="decimal"
+        value={capValue}
+        oninput={(event) => (capInput = event.currentTarget.value)}
+      />
+      <p class="muted">Leave this empty for no cap.</p>
+      <button type="submit" disabled={capBusy}>Save</button>
+    </form>
+  </section>
+
+  <section>
+    <h3>Store window</h3>
+    <p class="muted">
+      Store jobs run between these times, in the server's time zone. The same
+      start and end means all day.
+    </p>
+    <form onsubmit={saveWindow} class="stack">
+      {#if windowFailure}
+        <Failure failure={windowFailure} />
+      {/if}
+      <div class="times">
+        <div>
+          <label for="windowStart">Start</label>
+          <input
+            id="windowStart"
+            type="time"
+            required
+            value={startValue}
+            oninput={(event) => (windowStart = event.currentTarget.value)}
+          />
+        </div>
+        <div>
+          <label for="windowEnd">End</label>
+          <input
+            id="windowEnd"
+            type="time"
+            required
+            value={endValue}
+            oninput={(event) => (windowEnd = event.currentTarget.value)}
+          />
+        </div>
+      </div>
+      <button type="submit" disabled={windowBusy}>Save</button>
     </form>
   </section>
 
@@ -175,6 +304,27 @@ async function removeKey(name: string) {
     {#if artFailure}
       <Failure failure={artFailure} />
     {/if}
+  </section>
+
+  <section>
+    <h3>Artwork store</h3>
+    <dl class="store">
+      <dt>Originals</dt>
+      <dd>{artworkBackends[store.backend]}</dd>
+      {#if store.path !== null}
+        <dt>{store.backend === "colocated" ? "Fallback path" : "Path"}</dt>
+        <dd>{store.path}</dd>
+      {/if}
+      {#if store.bucket !== null}
+        <dt>Bucket</dt>
+        <dd>{store.bucket}</dd>
+      {/if}
+      {#if store.endpoint !== null}
+        <dt>Endpoint</dt>
+        <dd>{store.endpoint}</dd>
+      {/if}
+    </dl>
+    <p class="muted">Pendia reads this from PENDIA_ARTWORK_STORE at start.</p>
   </section>
 
   <section>
@@ -253,6 +403,10 @@ section {
   align-content: start;
 }
 
+.stack p {
+  margin: 0;
+}
+
 .keys {
   margin-top: 16px;
 }
@@ -275,6 +429,33 @@ td {
 
 .actions {
   white-space: nowrap;
+}
+
+.times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.times input {
+  display: block;
+  margin-top: 4px;
+}
+
+.store {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0 0 8px;
+}
+
+.store dt {
+  color: var(--muted);
+}
+
+.store dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .check {

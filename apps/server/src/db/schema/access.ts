@@ -193,6 +193,41 @@ export const sessions = pgTable(
   ],
 );
 
+// A pending Quick Connect login: a device waits on its secret while a
+// signed-in user approves its code. The row is deleted when it logs in.
+export const quickConnectRequests = pgTable(
+  "quick_connect_requests",
+  {
+    id: id(),
+    secretHash: tokenHash("secret_hash").notNull().unique(),
+    code: text("code").notNull().unique(),
+    clientName: text("client_name").notNull(),
+    clientVersion: text("client_version").notNull(),
+    deviceId: text("device_id").notNull(),
+    deviceName: text("device_name").notNull(),
+    // Where the request came from, so one address cannot hold unbounded rows.
+    address: text("address").notNull(),
+    userId: uuid("user_id").references(() => users.id, owned),
+    createdAt: instant("created_at").notNull().defaultNow(),
+    expiresAt: instant("expires_at").notNull(),
+  },
+  (table) => [
+    check(
+      "quick_connect_requests_secret_hash_check",
+      sql`octet_length(${table.secretHash}) = ${tokenHashBytes}`,
+    ),
+    check(
+      "quick_connect_requests_code_check",
+      sql`${table.code} ~ '^[0-9]{6}$'`,
+    ),
+    index("quick_connect_requests_expires_idx").on(table.expiresAt),
+    index("quick_connect_requests_address_idx").on(
+      table.address,
+      table.expiresAt,
+    ),
+  ],
+);
+
 export const apiKeys = pgTable(
   "api_keys",
   {

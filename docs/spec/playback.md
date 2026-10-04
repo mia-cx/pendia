@@ -36,6 +36,10 @@ One per Item, or one per cut when an Item has several cuts. Pendia derives it on
 - Audio: one rendition per audio Stream of the selected Version, tagged with `CODECS` and `CHANNELS`, so a headphone client picks stereo and a receiver picks 5.1 or Atmos. When no stereo track exists, an AAC stereo rendition is transcoded on demand. Audio is selected per session and switched per track. A stored Version carries the tracks it was encoded with; no separate audio renditions are stored.
 - Subtitles: text tracks as WebVTT renditions, converted on demand.
 
+## Fetched subtitles
+
+Subtitle providers, OpenSubtitles first, fetch the admin's subtitle languages for each matched movie and episode. A track lands in the Item's folder as `.pendia/subtitles/<item id>.<language>.<format>`, in the provider's format: SubRip, ASS or WebVTT. The file is the record: the play plan lists the tracks found there for every play method, each with a URL that serves the file to callers who may view the Item, and deleting the file removes the track. One track per language; a forced-only track does not count.
+
 ## Stored Versions
 
 Pendia owns pre-transcoding, with the quality profile, never the live profile. When transcoding is enabled for a library or an Item, a store job segments the source into a folder next to the source file, named after it with a `.pendia` suffix, one subfolder per rung. The source rung is a remux. A Stored Version is offered only when every segment is present; otherwise the client gets a live transcode for that rung. A per-library policy names the rungs to store and the condition, for example a 1080p H.264 8 Mbit/s AAC stereo Version for every Item whose best Version is 4K, HEVC or HDR. Manual per-Item requests exist. Store jobs run on workers at low priority inside an idle window. When the source file is deleted, its derived folder goes with it. Files transcoded elsewhere still become Versions when they land in the canonical folder, and join the adaptive group only when aligned. Live transcodes are never kept.

@@ -48,6 +48,8 @@ export const libraries = pgTable("libraries", {
     .$type<JsonObject>()
     .notNull()
     .default({}),
+  // A watcher's last claim. While it is recent, the watcher runs the Library's scans.
+  watcherSeenAt: instant("watcher_seen_at"),
 });
 
 export const items = pgTable(
@@ -98,6 +100,8 @@ export const items = pgTable(
       table.id.desc(),
     ),
     index("items_folder_idx").on(table.libraryId, table.canonicalFolder),
+    index("items_kind_title_idx").on(table.kind, table.title, table.id),
+    index("items_title_trgm_idx").using("gin", table.title.op("gin_trgm_ops")),
   ],
 );
 

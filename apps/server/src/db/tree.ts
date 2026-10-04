@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import { emitPluginEvents } from "../plugins/events.ts";
 import type { Database } from "./client.ts";
 import {
   artwork,
@@ -127,6 +128,9 @@ export async function insertItem(db: Connection, input: NewItem) {
         depth: ancestor.depth + 1,
       })),
     ]);
+    await emitPluginEvents(tx, [
+      { event: "item.added", payload: { itemId: item.id, kind: item.kind } },
+    ]);
     return item;
   });
 }
@@ -200,8 +204,10 @@ export async function moveItem(
   });
 }
 
-/** One colocated artwork file to remove after its database owner commits deletion. */
+/** One artwork original to remove after its database owner commits deletion. */
 export interface DeletedArtworkFile {
+  backend: (typeof artwork.$inferSelect)["backend"];
+  // The Library root, which only colocated keys are relative to.
   rootPath: string;
   storageKey: string;
 }
@@ -216,17 +222,19 @@ export async function deleteItemSubtree(
     const item = await getItem(tx, itemId);
     await lockLibrary(tx, item.libraryId);
     // Serialize the artwork snapshot against concurrent stores on descendants.
-    await tx
-      .select({ id: items.id })
+    const removed = await tx
+      .select({ itemId: items.id, kind: items.kind })
       .from(items)
       .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
       .where(eq(itemAncestors.ancestorId, itemId))
       .for("update", { of: items });
+    const deletedFields = {
+      backend: artwork.backend,
+      rootPath: libraries.rootPath,
+      storageKey: artwork.storageKey,
+    };
     const orphaned = await tx
-      .select({
-        rootPath: libraries.rootPath,
-        storageKey: artwork.storageKey,
-      })
+      .select(deletedFields)
       .from(artwork)
       .innerJoin(items, eq(artwork.itemId, items.id))
       .innerJoin(
@@ -236,13 +244,9 @@ export async function deleteItemSubtree(
           eq(itemAncestors.ancestorId, itemId),
         ),
       )
-      .innerJoin(libraries, eq(items.libraryId, libraries.id))
-      .where(eq(artwork.backend, "colocated"));
+      .innerJoin(libraries, eq(items.libraryId, libraries.id));
     const versionOwned = await tx
-      .select({
-        rootPath: libraries.rootPath,
-        storageKey: artwork.storageKey,
-      })
+      .select(deletedFields)
       .from(artwork)
       .innerJoin(versions, eq(artwork.versionId, versions.id))
       .innerJoin(items, eq(versions.itemId, items.id))
@@ -253,20 +257,23 @@ export async function deleteItemSubtree(
           eq(itemAncestors.ancestorId, itemId),
         ),
       )
-      .innerJoin(libraries, eq(items.libraryId, libraries.id))
-      .where(eq(artwork.backend, "colocated"));
-    const seen = new Set(
-      orphaned.map((row) => `${row.rootPath}\n${row.storageKey}`),
-    );
+      .innerJoin(libraries, eq(items.libraryId, libraries.id));
+    const fileKey = (row: DeletedArtworkFile) =>
+      `${row.backend}\n${row.rootPath}\n${row.storageKey}`;
+    const seen = new Set(orphaned.map(fileKey));
     for (const row of orphaned) {
       deletedArtwork.push(row);
     }
     for (const row of versionOwned) {
-      const key = `${row.rootPath}\n${row.storageKey}`;
+      const key = fileKey(row);
       if (seen.has(key)) continue;
       seen.add(key);
       deletedArtwork.push(row);
     }
     await tx.delete(items).where(eq(items.id, itemId));
+    await emitPluginEvents(
+      tx,
+      removed.map((payload) => ({ event: "item.removed", payload })),
+    );
   });
 }

@@ -3,7 +3,6 @@ import { goto } from "$app/navigation";
 import { signIn } from "$lib/auth.ts";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
-import "$lib/admin.css";
 
 let username = $state("");
 let password = $state("");
@@ -16,7 +15,7 @@ async function submit(event: SubmitEvent) {
   failure = undefined;
   try {
     await signIn({ username, password });
-    await goto("/admin");
+    await goto("/");
   } catch (error) {
     failure = readFailure(error);
     busy = false;

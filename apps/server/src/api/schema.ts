@@ -5,6 +5,9 @@ import { maxPageSize } from "./pagination.ts";
 /** The kinds of library item the API exposes. */
 export const ItemKind = Schema.Literal("movie", "show", "season", "episode");
 
+/** The orders items.list pages through: newest first, or title A to Z. */
+export const ItemSort = Schema.Literal("added", "title");
+
 /** The item shape returned by list endpoints. */
 export const ItemCard = Schema.Struct({
   id: Schema.UUID,
@@ -16,16 +19,67 @@ export const ItemCard = Schema.Struct({
   posterArtworkId: Schema.NullOr(Schema.UUID),
 });
 
-/** The item shape returned by detail endpoints. */
-export const ItemDetail = Schema.Struct({
+/** A card that also places a Season or Episode: its numbers and owning Show. */
+export const BrowseCard = Schema.Struct({
   ...ItemCard.fields,
   parentId: Schema.NullOr(Schema.UUID),
+  seasonNumber: Schema.NullOr(Schema.Int),
+  episodeNumber: Schema.NullOr(Schema.Int),
+  episodeEndNumber: Schema.NullOr(Schema.Int),
+  show: Schema.NullOr(
+    Schema.Struct({
+      id: Schema.UUID,
+      title: Schema.String,
+      posterArtworkId: Schema.NullOr(Schema.UUID),
+    }),
+  ),
+});
+
+/** One named row of Home, with resume progress on in-progress entries. */
+export const Shelf = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  entries: Schema.Array(
+    Schema.Struct({
+      item: BrowseCard,
+      progress: Schema.NullOr(
+        Schema.Struct({
+          positionSeconds: Schema.Number,
+          durationSeconds: Schema.NullOr(Schema.Number),
+        }),
+      ),
+    }),
+  ),
+});
+
+/** The item shape returned by detail endpoints. */
+export const ItemDetail = Schema.Struct({
+  ...BrowseCard.fields,
   overview: Schema.NullOr(Schema.String),
   contentRating: Schema.NullOr(Schema.String),
   genres: Schema.Array(Schema.String),
   tags: Schema.Array(Schema.String),
   metadataState: Schema.Literal("pending", "matched", "unmatched"),
   updatedAt: Schema.String,
+  backdropArtworkId: Schema.NullOr(Schema.UUID),
+  credits: Schema.Array(
+    Schema.Struct({
+      contributorId: Schema.UUID,
+      name: Schema.String,
+      role: Schema.String,
+      character: Schema.NullOr(Schema.String),
+    }),
+  ),
+  versions: Schema.Array(
+    Schema.Struct({
+      id: Schema.UUID,
+      label: Schema.String,
+      format: Schema.Literal("video", "audio", "ebook", "image"),
+      durationSeconds: Schema.NullOr(Schema.Number),
+      bytes: Schema.Number,
+    }),
+  ),
+  children: Schema.Array(BrowseCard),
 });
 
 /** The library shape returned by library endpoints. */
@@ -145,6 +199,54 @@ export const ServerSettings = Schema.Struct({
   artworkRequiresAuth: Schema.Boolean,
   oidcConfigured: Schema.Boolean,
   providerKeys: Schema.Array(Schema.String),
+  bitrateCapBps: Schema.NullOr(Schema.Int),
+  idleWindow: Schema.Struct({ start: Schema.String, end: Schema.String }),
+  artworkStore: Schema.Struct({
+    backend: Schema.Literal("colocated", "configured-path", "s3"),
+    path: Schema.NullOr(Schema.String),
+    bucket: Schema.NullOr(Schema.String),
+    endpoint: Schema.NullOr(Schema.String),
+  }),
+});
+
+/** A live or queued playback session as the sessions dashboard lists it. */
+export const PlaybackSession = Schema.Struct({
+  id: Schema.UUID,
+  state: Schema.Literal("queued", "starting", "playing", "stopped"),
+  playMethod: Schema.Literal("direct-play", "remux", "transcode"),
+  user: Schema.Struct({ id: Schema.UUID, displayName: Schema.String }),
+  clientName: Schema.NullOr(Schema.String),
+  deviceName: Schema.NullOr(Schema.String),
+  item: BrowseCard,
+  // Stored rung names, the live transcode height such as "720p", or "source".
+  rungs: Schema.Array(Schema.String),
+  transcoder: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  lastSeenAt: Schema.String,
+});
+
+/** Store job progress: running encodes with finished segments, and the queue. */
+export const StoreStatus = Schema.Struct({
+  running: Schema.Array(
+    Schema.Struct({
+      jobId: Schema.UUID,
+      item: BrowseCard,
+      rung: Schema.String,
+      segmentsDone: Schema.Int,
+      segmentsTotal: Schema.Int,
+    }),
+  ),
+  queued: Schema.Struct({
+    total: Schema.Int,
+    next: Schema.Array(
+      Schema.Struct({
+        jobId: Schema.UUID,
+        item: BrowseCard,
+        rung: Schema.String,
+        runAfter: Schema.String,
+      }),
+    ),
+  }),
 });
 
 /** The newest scan run's job counts and newest job for one library. */
@@ -186,5 +288,11 @@ export const ApiEvent = Schema.Union(
     kind: Schema.Literal("segment.ready"),
     sessionId: Schema.UUID,
     index: Schema.Int,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("user-data.changed"),
+    userId: Schema.UUID,
+    // Mutable, as the events table's JSON column types its arrays.
+    itemIds: Schema.mutable(Schema.Array(Schema.UUID)),
   }),
 );

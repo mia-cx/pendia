@@ -1,8 +1,9 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, or, sql } from "drizzle-orm";
 import { Schema } from "effect";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
+import type { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import {
   items,
@@ -10,7 +11,10 @@ import {
   sessionRegistry,
   versions,
 } from "../db/schema/index.ts";
+import { emitPluginEvents } from "../plugins/events.ts";
+import { callerClient } from "./planning.ts";
 
+type Caller = Awaited<ReturnType<typeof authenticate>>;
 type ProgressDb = Pick<Database, "select">;
 type LifecycleDb = Pick<
   Database,
@@ -215,6 +219,12 @@ async function upsertProgress(
         ...(countPlay ? { playCount: sql`${progress.playCount} + 1` } : {}),
       },
     });
+  await emitPluginEvents(tx, [
+    {
+      event: "progress.updated",
+      payload: { itemId, userId, positionSeconds, completed },
+    },
+  ]);
 }
 
 async function touchSession(tx: LifecycleDb, sessionId: string) {
@@ -222,6 +232,101 @@ async function touchSession(tx: LifecycleDb, sessionId: string) {
     .update(sessionRegistry)
     .set({ lastSeenAt: sql`clock_timestamp()` })
     .where(eq(sessionRegistry.id, sessionId));
+}
+
+/**
+ * Finds the play session a client reports against, for clients that play
+ * without asking Pendia to plan. The named session wins when it is the
+ * caller's and on this Item, in any state, so a repeated or late report
+ * changes only its own play. A client may name a session Pendia never
+ * issued, or none, so next comes the newest live session the same device
+ * opened on the Item and Version; else a new direct-play session on the
+ * named Version, or the Item's first.
+ */
+export async function resolvePlaySession(
+  db: Database,
+  caller: Caller,
+  report: { itemId: string; sessionId?: string; versionId?: string },
+) {
+  const { itemId, sessionId, versionId } = report;
+  const userId = caller.user.id;
+  const credentialId = caller.credential.id;
+  await requireViewableItem(db, userId, itemId);
+  await requirePermission(db, userId, "play");
+  const [found] = await db
+    .select({
+      id: sessionRegistry.id,
+      versionId: sessionRegistry.versionId,
+      state: sessionRegistry.state,
+    })
+    .from(sessionRegistry)
+    .where(
+      and(
+        eq(sessionRegistry.userId, userId),
+        eq(sessionRegistry.itemId, itemId),
+        or(
+          sessionId === undefined
+            ? undefined
+            : eq(sessionRegistry.id, sessionId),
+          and(
+            ne(sessionRegistry.state, "stopped"),
+            eq(sessionRegistry.credentialId, credentialId),
+            versionId === undefined
+              ? undefined
+              : eq(sessionRegistry.versionId, versionId),
+          ),
+        ),
+      ),
+    )
+    .orderBy(
+      sql`${sessionRegistry.id} = ${sessionId ?? null} desc nulls last`,
+      desc(sessionRegistry.createdAt),
+      desc(sessionRegistry.id),
+    )
+    .limit(1);
+  const [version] = await db
+    .select({ id: versions.id, durationSeconds: versions.durationSeconds })
+    .from(versions)
+    .where(
+      and(
+        eq(versions.itemId, itemId),
+        eq(versions.origin, "imported"),
+        found !== undefined
+          ? eq(versions.id, found.versionId)
+          : versionId === undefined
+            ? undefined
+            : eq(versions.id, versionId),
+      ),
+    )
+    .orderBy(asc(versions.label), asc(versions.id))
+    .limit(1);
+  if (version === undefined) throw new AuthError("NOT_FOUND");
+  const { durationSeconds } = version;
+  if (found !== undefined)
+    return { sessionId: found.id, state: found.state, durationSeconds };
+  const client = await callerClient(db, caller);
+  const opened = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(sessionRegistry)
+      .values({
+        userId,
+        itemId,
+        versionId: version.id,
+        playMethod: "direct-play",
+        state: "starting",
+        ...client,
+        credentialId,
+      })
+      .returning({ id: sessionRegistry.id, state: sessionRegistry.state });
+    if (row === undefined) throw new Error("Session insert returned no row.");
+    await publishEvent(tx, {
+      kind: "session.state",
+      sessionId: row.id,
+      state: "starting",
+    });
+    return row;
+  });
+  return { sessionId: opened.id, state: opened.state, durationSeconds };
 }
 
 /** Marks a planned session playing and records its first position. */
@@ -262,6 +367,12 @@ export async function startPlayback(
       sessionId: scope.sessionId,
       state: "playing",
     });
+    await emitPluginEvents(tx, [
+      {
+        event: "playback.started",
+        payload: { itemId: scope.itemId, userId, sessionId: scope.sessionId },
+      },
+    ]);
     return {
       state: "playing" as const,
       progress: await readProgress(tx, userId, scope.itemId),
@@ -298,12 +409,12 @@ export async function updatePlayback(
   });
 }
 
-/** Stops a session, persisting the final position when it was playing. */
+/** Stops a session, persisting the final position when it was playing and one is given; a queued or starting session stops without one. */
 export async function stopPlayback(
   db: Database,
   userId: string,
   scope: Scope,
-  input: { positionSeconds: number; completed?: boolean },
+  input: { positionSeconds?: number; completed?: boolean },
 ) {
   checkScope(scope);
   return db.transaction(async (tx) => {
@@ -313,8 +424,7 @@ export async function stopPlayback(
         state: "stopped" as const,
         progress: await readProgress(tx, userId, scope.itemId),
       };
-    if (session.state === "queued") throw new AuthError("CONFLICT");
-    if (session.state === "playing") {
+    if (session.state === "playing" && input.positionSeconds !== undefined) {
       checkPosition(input.positionSeconds, version.durationSeconds);
       await upsertProgress(
         tx,
@@ -325,6 +435,11 @@ export async function stopPlayback(
         input.completed ?? false,
         false,
       );
+      await publishEvent(tx, {
+        kind: "user-data.changed",
+        userId,
+        itemIds: [scope.itemId],
+      });
     }
     await tx
       .update(sessionRegistry)
@@ -335,6 +450,12 @@ export async function stopPlayback(
       sessionId: scope.sessionId,
       state: "stopped",
     });
+    await emitPluginEvents(tx, [
+      {
+        event: "playback.stopped",
+        payload: { itemId: scope.itemId, userId, sessionId: scope.sessionId },
+      },
+    ]);
     return {
       state: "stopped" as const,
       progress: await readProgress(tx, userId, scope.itemId),

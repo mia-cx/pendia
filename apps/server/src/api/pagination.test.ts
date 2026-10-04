@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   decodeCursor,
+  decodeTitleCursor,
   encodeCursor,
+  encodeTitleCursor,
   type PageKey,
   toPage,
 } from "./pagination.ts";
@@ -32,6 +34,23 @@ describe("pagination", () => {
       encode(`2026-02-03T04:05:06.7890000Z|${key.id}`),
     ];
     for (const cursor of cases) expect(decodeCursor(cursor)).toBeUndefined();
+  });
+
+  test("a title cursor round-trips and rejects anything else", () => {
+    const titleKey = { title: "Alien | Director's Cut", id: key.id };
+    expect(decodeTitleCursor(encodeTitleCursor(titleKey))).toEqual(titleKey);
+    expect(decodeCursor(encodeTitleCursor(titleKey))).toBeUndefined();
+    const cases = [
+      encodeCursor(key),
+      "t1.%%%",
+      `t1.${encode("not json")}`,
+      `t1.${encode(JSON.stringify(["Alien"]))}`,
+      `t1.${encode(JSON.stringify([1, key.id]))}`,
+      `t1.${encode(JSON.stringify(["Alien", "not-a-uuid"]))}`,
+      `t1.${encode(JSON.stringify(["Ali\0en", key.id]))}`,
+    ];
+    for (const cursor of cases)
+      expect(decodeTitleCursor(cursor)).toBeUndefined();
   });
 
   test("toPage returns a null cursor when the rows fit", () => {

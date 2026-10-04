@@ -15,11 +15,25 @@ describe.skipIf(!databaseUrl)("metadata settings", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       expect(await readMetadataSettings(db)).toEqual({
-        providerOrder: ["tmdb"],
+        providerOrder: ["tmdb", "tvdb"],
         confidenceThreshold: 0.9,
         libraries: {},
         tmdb: null,
+        subtitleLanguages: [],
       });
+    }));
+
+  test("subtitle languages are lowercased and deduplicated", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await db.insert(settings).values({
+        key: "metadata",
+        value: { subtitleLanguages: ["en", "PT-BR", "en"] },
+      });
+      expect((await readMetadataSettings(db)).subtitleLanguages).toEqual([
+        "en",
+        "pt-br",
+      ]);
     }));
 
   test("configured values trim the TMDB key and preserve unknown fields", () =>
@@ -88,7 +102,7 @@ describe.skipIf(!databaseUrl)("metadata settings", () => {
         .where(eq(settings.key, "metadata"));
       const lowest = await readMetadataSettings(db);
       expect(lowest.confidenceThreshold).toBe(0);
-      expect(providersForLibrary(lowest, "movies")).toEqual(["tmdb"]);
+      expect(providersForLibrary(lowest, "movies")).toEqual(["tmdb", "tvdb"]);
     }));
 
   test("providersForLibrary returns fresh arrays callers cannot mutate", () => {
@@ -97,6 +111,7 @@ describe.skipIf(!databaseUrl)("metadata settings", () => {
       confidenceThreshold: 0.9,
       libraries: { movies: ["tmdb"] },
       tmdb: null,
+      subtitleLanguages: [],
     };
     const enabled = providersForLibrary(config, "movies");
     enabled.push("bogus");
@@ -145,6 +160,10 @@ describe.skipIf(!databaseUrl)("metadata settings", () => {
         { tmdb: { apiKey: "" } },
         { tmdb: { apiKey: "   " } },
         { tmdb: { apiKey: 42 } },
+        { subtitleLanguages: "en" },
+        { subtitleLanguages: null },
+        { subtitleLanguages: ["en/.."] },
+        { subtitleLanguages: [42] },
       ];
       for (const value of malformed) {
         await db

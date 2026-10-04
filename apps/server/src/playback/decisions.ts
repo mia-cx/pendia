@@ -190,7 +190,7 @@ function decideVideo(
 }
 
 /** Video codecs the fMP4 muxer takes on a stream copy; anything else transcodes over HLS. */
-const hlsCopyVideo = new Set([
+export const hlsCopyVideo = new Set([
   "h264",
   "hevc",
   "av1",
@@ -200,7 +200,7 @@ const hlsCopyVideo = new Set([
 ]);
 
 /** Audio codecs the fMP4 muxer takes on a stream copy; anything else transcodes over HLS. */
-const hlsCopyAudio = new Set([
+export const hlsCopyAudio = new Set([
   "aac",
   "ac3",
   "eac3",
@@ -257,6 +257,13 @@ function decideSubtitle(
   return { action: "burn" as const, format: subtitle.format };
 }
 
+/** Reports whether the client needs a subtitle burned into the video: a bitmap Stream it cannot draw. Holds whatever the video and audio decide. */
+export function requiresBurnIn(source: PlaybackSource, client: ClientProfile) {
+  return source.subtitles.some(
+    (subtitle) => decideSubtitle(subtitle, client, false).action === "burn",
+  );
+}
+
 /** Returns the play method and per-Stream decisions for a source on one client. */
 export function decidePlayback(
   source: PlaybackSource,
@@ -268,9 +275,7 @@ export function decidePlayback(
   const subtitles = source.subtitles.map((subtitle) =>
     decideSubtitle(subtitle, client, false),
   );
-  const burnSubtitles = subtitles.some(
-    (subtitle) => subtitle.action === "burn",
-  );
+  const burnSubtitles = requiresBurnIn(source, client);
   const video = decideVideo(
     source.video,
     client,
@@ -320,3 +325,8 @@ export function decidePlayback(
 
 /** The engine's full output for one plan, persisted on the session. */
 export type PlaybackDecision = ReturnType<typeof decidePlayback>;
+
+/** A session's persisted plan: the decision, or "stored" when no live path exists, plus the stored rungs served instead of a live run. */
+export type SessionDecision = (PlaybackDecision | { method: "stored" }) & {
+  storedVariantIds?: string[];
+};

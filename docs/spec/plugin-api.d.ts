@@ -29,7 +29,7 @@ export interface PluginManifest {
   /** Semver range of the host API this plugin was written against. */
   api: string;
   capabilities: Capability[];
-  /** Hosts this plugin may reach with `host.fetch`. */
+  /** Hosts this plugin may reach with `host.fetch`; `"*"` means any host. */
   network?: string[];
   /** JSON Schema for `host.config`, rendered as the plugin's settings form. */
   config?: object;
@@ -38,6 +38,7 @@ export interface PluginManifest {
 
 export interface Item {
   id: string;
+  libraryId: string;
   kind: ItemKind;
   parentId: string | null;
   title: string;
@@ -97,14 +98,15 @@ export interface PluginHost {
   /**
    * Present with "files", which the admin approves at install behind a warning
    * and can switch off per plugin or globally, temporarily or for good. Paths
-   * are library-relative. There are no file handles: a plugin asks Pendia to
-   * act on a path.
+   * are relative to the root of the library `libraryId` names, as in
+   * `Version.files`. There are no file handles: a plugin asks Pendia to act
+   * on a path.
    */
   readonly files?: {
-    stat(path: string): Promise<{ bytes: number; modifiedAt: string } | null>;
-    read(path: string, range?: { offset: number; length: number }): Promise<Uint8Array>;
-    write(path: string, bytes: Uint8Array): Promise<void>;
-    delete(path: string): Promise<void>;
+    stat(libraryId: string, path: string): Promise<{ bytes: number; modifiedAt: string } | null>;
+    read(libraryId: string, path: string, range?: { offset: number; length: number }): Promise<Uint8Array>;
+    write(libraryId: string, path: string, bytes: Uint8Array): Promise<void>;
+    delete(libraryId: string, path: string): Promise<void>;
   };
 
   /** Present with "providers". */
@@ -173,12 +175,16 @@ export interface PluginResponse {
 export interface MetadataProvider {
   id: string;
   kinds: ItemKind[];
-  /** `providerIds` carries ids other providers already assert, such as an IMDb id from the folder name. */
+  /**
+   * `providerIds` carries ids other providers already assert, such as an IMDb id from the folder name.
+   * `show` is present for seasons and episodes: the parent Show's provider ids and the Item's numbers.
+   */
   search(query: {
     title: string;
     year?: number;
     kind: ItemKind;
     providerIds?: Record<string, string>;
+    show?: { providerIds: Record<string, string>; seasonNumber: number; episodeNumber?: number };
   }): Promise<MetadataMatch[]>;
   /** Resolves null when the provider has no record for `providerId`, so the host can mark the Item unmatched. */
   fetch(match: { providerId: string; kind: ItemKind }): Promise<MetadataResult | null>;
@@ -200,6 +206,12 @@ export interface MetadataResult {
   credits: { name: string; role: string; character?: string; order: number }[];
   artwork: { type: "poster" | "backdrop" | "logo" | "thumb"; url: string }[];
   providerIds: Record<string, string>;
+  /** The first release or air date as `YYYY-MM-DD`. */
+  releaseDate?: string | null;
+  /** Shows only: the last air date as `YYYY-MM-DD`. */
+  lastAirDate?: string | null;
+  /** Shows only: the lowercase airing status, such as "continuing", "ended" or "upcoming". */
+  status?: string | null;
 }
 
 export interface SubtitleProvider {

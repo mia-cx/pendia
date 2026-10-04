@@ -10,27 +10,38 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
     volumes:
       - postgres-data:/var/lib/postgresql
 
   pendia:
-    image: pendia:dev
-    build:
-      context: .
+    # A published release. compose.build.yaml builds this checkout instead.
+    image: ghcr.io/mia-cx/pendia:${PENDIA_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://pendia:pendia@postgres:5432/pendia
+      # Artwork goes here when the media folder is read-only to Pendia.
+      PENDIA_ARTWORK_PATH: /var/lib/pendia/artwork
+      # Optional; set it in .env or the shell. A key stored in Pendia wins.
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:3000/readyz"]
       interval: 5s
       timeout: 5s
       retries: 10
+      # Migrations and the transcoder trial run before the first answer.
+      start_period: 30s
     ports:
       # Host port; override with PENDIA_HOST_PORT when 3000 is taken.
       - "${PENDIA_HOST_PORT:-3000}:3000"
+    restart: unless-stopped
+    volumes:
+      # Your media folder, seen as /media inside the container.
+      - ${PENDIA_MEDIA:-./media}:/media
+      - pendia-data:/var/lib/pendia
 
 volumes:
   postgres-data:
+  pendia-data:

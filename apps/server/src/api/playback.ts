@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { planPlayback, refreshPlayback } from "../playback/planning.ts";
 import { authenticatedMutation } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
+import { playbackSessions } from "./playback-sessions.ts";
 import { progressProcedures } from "./progress.ts";
 
 const shortString = Schema.String.pipe(
@@ -41,13 +42,24 @@ const PlanInput = Schema.Struct({
   bitrateCapBps: Schema.optional(positiveInt),
 });
 
-const PlanOutput = Schema.Struct({
+const RefreshOutput = Schema.Struct({
   method: Schema.Literal("direct-play", "remux", "transcode"),
   itemId: Schema.UUID,
   versionId: Schema.UUID,
   sessionId: Schema.NullOr(Schema.UUID),
   url: Schema.NullOr(Schema.String),
   expiresAt: Schema.NullOr(Schema.String),
+});
+
+const PlanOutput = Schema.Struct({
+  ...RefreshOutput.fields,
+  subtitles: Schema.Array(
+    Schema.Struct({
+      language: Schema.String,
+      format: Schema.Literal("srt", "ass", "vtt"),
+      url: Schema.String,
+    }),
+  ),
 });
 
 const plan = authenticatedMutation
@@ -72,7 +84,7 @@ const refresh = authenticatedMutation
       Schema.Struct({ sessionId: Schema.UUID, itemId: Schema.UUID }),
     ),
   )
-  .output(Schema.standardSchemaV1(PlanOutput))
+  .output(Schema.standardSchemaV1(RefreshOutput))
   .handler(async ({ context, input }) =>
     runApi(
       fromHost(() =>
@@ -86,5 +98,10 @@ const refresh = authenticatedMutation
     ),
   );
 
-/** The playback planning and lifecycle procedures mounted under `playback`. */
-export const playbackProcedures = { plan, refresh, ...progressProcedures };
+/** The playback planning, lifecycle and dashboard procedures mounted under `playback`. */
+export const playbackProcedures = {
+  plan,
+  refresh,
+  sessions: playbackSessions,
+  ...progressProcedures,
+};

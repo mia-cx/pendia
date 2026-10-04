@@ -274,13 +274,13 @@ const fromRaw = (raw: RawProbe, extension: string): ProbeResult => {
   };
 };
 
-/** Decode raw ffprobe JSON into a normalized {@link ProbeResult}. */
-export function parseProbeOutput(input: unknown): ProbeResult {
-  return fromRaw(Schema.decodeUnknownSync(RawProbe)(input), "");
+/** Decode raw ffprobe JSON of a file with this lowercase extension into a normalized {@link ProbeResult}. */
+export function parseProbeOutput(input: unknown, extension = ""): ProbeResult {
+  return fromRaw(Schema.decodeUnknownSync(RawProbe)(input), extension);
 }
 
-/** Probe a media file with ffprobe plus the container keyframe index and return normalized JSON-safe output. */
-export async function probeVideo(path: string): Promise<ProbeResult> {
+/** Run ffprobe on a media file and return its raw JSON output. */
+export async function readFfprobe(path: string): Promise<unknown> {
   const proc = Bun.spawn(
     [
       "ffprobe",
@@ -304,8 +304,13 @@ export async function probeVideo(path: string): Promise<ProbeResult> {
   if (exitCode !== 0) {
     throw new Error(`ffprobe failed (${exitCode}): ${stderr.trim()}`);
   }
-  const result = fromRaw(
-    Schema.decodeUnknownSync(RawProbe)(JSON.parse(output)),
+  return JSON.parse(output);
+}
+
+/** Probe a media file with ffprobe plus the container keyframe index and return normalized JSON-safe output. */
+export async function probeVideo(path: string): Promise<ProbeResult> {
+  const result = parseProbeOutput(
+    await readFfprobe(path),
     extname(path).toLowerCase(),
   );
   const { keyframesSeconds } = await readKeyframeIndex(path);

@@ -42,7 +42,9 @@ describe("openapi document", () => {
         "/me",
         "/items",
         "/items/{id}",
+        "/items/{id}/refresh",
         "/playback/plan",
+        "/playback/sessions",
         "/playback/{sessionId}/{itemId}/refresh",
         "/playback/{sessionId}/{itemId}/start",
         "/playback/{sessionId}/{itemId}/progress",
@@ -68,6 +70,7 @@ describe("openapi document", () => {
         "/settings",
         "/settings/providers/{name}",
         "/libraries/{id}/scan-status",
+        "/store/status",
       ]),
     );
   });

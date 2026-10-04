@@ -24,7 +24,24 @@ export function parseHlsPath(pathname: string, prefix: HlsPrefix) {
   return { sessionId: match[1] ?? "", itemId: match[2] ?? "", name };
 }
 
-/** Verifies the playback token in the URL and loads the live remux session it names. */
+const variantPath =
+  /^\/api\/playback\/([^/]+)\/([^/]+)\/hls\/([0-9a-f-]{36})\/([^/]+)$/;
+
+/** Parses `/api/playback/{sessionId}/{itemId}/hls/{versionId}/{name}`, a stored rung's file; null otherwise. */
+export function parseVariantHlsPath(pathname: string) {
+  const match = variantPath.exec(pathname);
+  if (match === null) return null;
+  const name = parseHlsName(match[4] ?? "");
+  if (name === null || name.kind === "master") return null;
+  return {
+    sessionId: match[1] ?? "",
+    itemId: match[2] ?? "",
+    variantId: match[3] ?? "",
+    name,
+  };
+}
+
+/** Verifies the playback token in the URL and loads the live remux or transcode session it names. */
 export async function authorizeHlsRequest(
   db: Database,
   url: URL,
@@ -50,6 +67,7 @@ export async function authorizeHlsRequest(
       playMethod: sessionRegistry.playMethod,
       state: sessionRegistry.state,
       transcoderNodeId: sessionRegistry.transcoderNodeId,
+      decision: sessionRegistry.decision,
     })
     .from(sessionRegistry)
     .where(
@@ -62,7 +80,7 @@ export async function authorizeHlsRequest(
   if (
     session === undefined ||
     session.userId !== claims.userId ||
-    session.playMethod !== "remux" ||
+    session.playMethod === "direct-play" ||
     session.state === "stopped"
   ) {
     throw new AuthError("UNAUTHENTICATED");

@@ -8,6 +8,11 @@ import {
   scanLibrary,
   updateLibrary,
 } from "../libraries/service.ts";
+import { StoredVersionPolicy } from "../stored/policy.ts";
+import {
+  getStoredVersionPolicy,
+  setStoredVersionPolicy,
+} from "../stored/service.ts";
 import { authenticated, authenticatedMutation } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
 import { Library, LibraryInput, ScanStatus } from "./schema.ts";
@@ -106,6 +111,46 @@ const scanStatus = authenticated
     ),
   );
 
+const policyOutput = Schema.standardSchemaV1(
+  Schema.Struct({ policy: Schema.NullOr(StoredVersionPolicy) }),
+);
+
+const storedVersions = authenticated
+  .route({ method: "GET", path: "/libraries/{id}/stored-versions" })
+  .input(idInput)
+  .output(policyOutput)
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        getStoredVersionPolicy(context.db, context.caller.user.id, input.id),
+      ),
+    ),
+  );
+
+const setStoredVersions = authenticatedMutation
+  .route({ method: "PUT", path: "/libraries/{id}/stored-versions" })
+  .input(
+    Schema.standardSchemaV1(
+      Schema.Struct({
+        id: Schema.UUID,
+        policy: Schema.NullOr(StoredVersionPolicy),
+      }),
+    ),
+  )
+  .output(policyOutput)
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        setStoredVersionPolicy(
+          context.db,
+          context.caller.user.id,
+          input.id,
+          input.policy,
+        ),
+      ),
+    ),
+  );
+
 /** The library administration procedures mounted under `libraries`. */
 export const libraryProcedures = {
   list,
@@ -115,4 +160,6 @@ export const libraryProcedures = {
   delete: remove,
   scan,
   scanStatus,
+  storedVersions,
+  setStoredVersions,
 };

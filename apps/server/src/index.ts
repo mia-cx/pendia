@@ -261,12 +261,14 @@ export async function startPendia(
     ) {
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
+      // Jellyfin images share the artwork handler, so they share its resize cache.
+      const artwork = createArtworkHandler(database.db);
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
         api: createApiHandler(database.db, eventBroker, transcoder),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
-        artwork: createArtworkHandler(database.db),
-        jellyfin: createJellyfinHandler(database.db, jellyfinRoutes()),
+        artwork,
+        jellyfin: createJellyfinHandler(database.db, jellyfinRoutes(artwork)),
       });
     }
     if (runsJobs && database) {

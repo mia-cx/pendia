@@ -25,7 +25,8 @@ const routePrefix = "/api/artwork/";
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const widthPattern = /^[0-9]+$/;
-const maxWidth = 4096;
+/** The widest resize the artwork route serves. */
+export const maxArtworkWidth = 4096;
 
 const imageTypes: Record<string, string> = {
   avif: "image/avif",
@@ -201,7 +202,7 @@ export function createArtworkHandler(
         value === undefined || !widthPattern.test(value)
           ? Number.NaN
           : Number(value);
-      if (!Number.isSafeInteger(width) || width < 1 || width > maxWidth)
+      if (!Number.isSafeInteger(width) || width < 1 || width > maxArtworkWidth)
         return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
       if (caller !== undefined) {
         // Auth enabled: the caller needs view on the artwork owner's Library.

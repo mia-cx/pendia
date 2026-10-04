@@ -5,6 +5,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { quickConnectRequests } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { createJellyfinHandler } from "./http.ts";
 import { toGuid } from "./request.ts";
 import { jellyfinRoutes } from "./routes.ts";
@@ -30,7 +31,10 @@ async function setup(db: Database) {
     username: "mia",
     password: "secret-pass",
   });
-  const handle = createJellyfinHandler(db, jellyfinRoutes());
+  const handle = createJellyfinHandler(
+    db,
+    jellyfinRoutes(createArtworkHandler(db)),
+  );
   const call = async (
     method: string,
     path: string,

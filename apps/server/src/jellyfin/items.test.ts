@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { seedBrowse } from "../api/view-fixtures.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { createJellyfinHandler } from "./http.ts";
 import { toGuid } from "./request.ts";
 import { jellyfinRoutes } from "./routes.ts";
@@ -30,7 +31,10 @@ describe.skipIf(!databaseUrl)("jellyfin browse", () => {
   test("browses movies and shows as Swiftfin and Findroid do", () =>
     withDatabase(async (db) => {
       const s = await seedBrowse(db);
-      const handle = createJellyfinHandler(db, jellyfinRoutes());
+      const handle = createJellyfinHandler(
+        db,
+        jellyfinRoutes(createArtworkHandler(db)),
+      );
       const send = async (path: string, header: string) => {
         const response = await handle(
           new Request(`http://pendia.test${path}`, {

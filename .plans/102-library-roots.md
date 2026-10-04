@@ -66,18 +66,18 @@ Every non-test use of `libraries.rootPath`, of `files.path` joined to a root, an
   - Adding or repointing roots queues one full scan of the Library, which also covers a new root.
   - Removing a root deletes its Files, the Versions left without Files, the leaf Items left without Versions, and then Seasons and Shows left without children.
   - The Jellyfin layer reports no Library folders today (`VirtualFolders` is unimplemented), so nothing there lists roots.
-  - Plugin file access keeps `(libraryId, path)`. A path resolves in the first root by position that holds it, or its folder, and otherwise in the first root.
+  - Plugin file access accepts a root id or a library id. A root id resolves in that root only; a library id resolves in the first root by position that holds the path, or its folder, and otherwise in the first root.
   - A watcher claims the scans of a Library only when it watches every root of it, because a scan walks every root. Its events still count for any root it watches.
   - The WIP checkpoint `aa09cf1` stays in history as one commit. It covers the first four TODOs of the original plan, so they collapse into one server TODO whose remaining fixes land as their own commit. Every later TODO gets its own commit.
   - The UI says "folder" where the API says "root", matching the server's error messages ("This folder overlaps another folder of this library.").
   - The Library page's heading and the library read move into a new `LibraryEditor.svelte`, so a rename shows in the heading at once. `PolicyEditor.svelte` keeps only the Stored Versions form.
-  - A scan that walked a root which an update removes before the scan writes fails on the `files_root_library_fk` foreign key, and the job retries against the new roots. A repoint during a scan is reconciled by the full scan the update queues.
-  - Colocated artwork stays in the Item's home root on disk. Removing that root leaves the artwork rows of Items another root still holds pointing at the old folder, until artwork is fetched again. The issue does not ask to move artwork, so this PR does not.
-- Gate (e6ef32e):
-  - `bun install --frozen-lockfile`: pass.
+  - `libraries.rootsRevision` increments when roots are added, repointed or removed, and scan sources carry it so a scan that read roots before an edit fails and retries instead of reconciling a stale snapshot.
+  - A watcher report naming a removed root builds its scan source inside the error handler, so the job fails and retries instead of renewing its lease and throwing a 500 forever.
+  - An Item's existing colocated artwork and subtitles are found in every root, home root first, and removed from every root, while new writes still go to the home root.
+- Gate (5fa322b):
+  - `bun run --cwd apps/server check`: pass.
+  - `bun run --cwd apps/web check`: pass.
   - `bun run lint`: pass.
-  - `bun run check`: pass.
-  - `bun run build`: pass.
-  - `bun test` with `DATABASE_URL`: 1369 pass, 3 skip, 0 fail.
-  - `bun test` without `DATABASE_URL`: 796 pass, 594 skip, 0 fail.
+  - `DATABASE_URL bun test` on the touched areas: 462 pass, 3 skip, 0 fail.
+  - `DATABASE_URL bun test` from the repo root: 1375 pass, 3 skip, 0 fail.
 - Browser journey (headless Chromium, this branch): created a two-folder Library through the create form, then on its page added a folder, repointed one (its ID stayed), and removed one through the confirmation. Each save showed the expected status, and `library_roots` matched the page after a reload.

@@ -16,6 +16,7 @@ import {
   userSettings,
   versions,
 } from "../db/schema/index.ts";
+import { selectStoredVariants } from "../stored/playback.ts";
 import {
   type AudioStream,
   decidePlayback,
@@ -51,7 +52,8 @@ const hdrFlavours: readonly string[] = [
   "dolby-vision",
 ];
 
-function isHdr(value: string | null): value is Hdr {
+/** Narrows a probed HDR flavour to one the engine knows. */
+export function isHdr(value: string | null): value is Hdr {
   return value !== null && hdrFlavours.includes(value);
 }
 
@@ -255,7 +257,7 @@ export async function planPlayback(
   input: PlanInput,
   transport: PlanningTransport,
 ) {
-  const { item, version, source } = await loadPlaybackSource(
+  const { item, version, file, source } = await loadPlaybackSource(
     db,
     caller.user.id,
     input.itemId,
@@ -279,22 +281,38 @@ export async function planPlayback(
   } catch {
     throw new AuthError("INVALID_INPUT");
   }
+  // Stored rungs that pass replace the live session; the api serves them from disk.
+  const storedVariantIds = await selectStoredVariants(
+    db,
+    {
+      itemId: item.id,
+      fileId: file.id,
+      segmentTimelineId: version.timelineAligned
+        ? version.segmentTimelineId
+        : null,
+      decision,
+    },
+    input.profile,
+    caps,
+  );
+  const stored = storedVariantIds.length > 0;
   const base = {
-    method: decision.method,
+    method: stored ? ("remux" as const) : decision.method,
     itemId: item.id,
     versionId: version.id,
     sessionId: null as string | null,
     url: null as string | null,
     expiresAt: null as string | null,
   };
-  if (decision.method === "transcode") return base;
+  if (base.method === "transcode") return base;
   // A Version without an aligned timeline cannot be segmented for remux.
   if (
-    decision.method === "remux" &&
+    !stored &&
+    base.method === "remux" &&
     (version.segmentTimelineId === null || !version.timelineAligned)
   )
     throw new AuthError("CONFLICT");
-  const method = decision.method;
+  const method = base.method;
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -304,7 +322,7 @@ export async function planPlayback(
         versionId: version.id,
         playMethod: method,
         state: "starting",
-        decision,
+        decision: stored ? { ...decision, storedVariantIds } : decision,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");

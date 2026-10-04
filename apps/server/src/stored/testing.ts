@@ -4,11 +4,15 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
 import { files, libraries, versions } from "../db/schema/index.ts";
+import { createJobQueue } from "../jobs/queue.ts";
+import { createJobRegistry } from "../jobs/registry.ts";
+import { registerLibraryJobs } from "../libraries/jobs.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
+import { registerStoreJobs } from "./jobs.ts";
 
 /** The folder and file of the scanned fixture movie. */
 export const fixtureFolder = "Movie (2020)";
@@ -66,3 +70,26 @@ export async function withStoredLibrary(
     await run({ root, library, itemId, ...row });
   });
 }
+
+/** Runs every ready scan and store job, the way a worker inside the idle window would. */
+export async function drain(db: Database) {
+  const registry = createJobRegistry();
+  registerLibraryJobs(db, registry);
+  registerStoreJobs(db, registry, { now: () => new Date(2026, 9, 4, 2, 0) });
+  const queue = createJobQueue(db);
+  for (;;) {
+    const job = await queue.claim(["scan", "store"]);
+    if (job === undefined) return;
+    await registry.run(job);
+    await queue.complete(job);
+  }
+}
+
+/** Queues a reconciling scan of the fixture folder. */
+export const scanFolder = (db: Database, libraryId: string) =>
+  createJobQueue(db).enqueue({
+    type: "scan",
+    libraryId,
+    path: fixtureFolder,
+    reconcileMissing: true,
+  });

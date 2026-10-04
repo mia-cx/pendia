@@ -10,42 +10,16 @@ import type { JsonObject } from "../db/schema/common.ts";
 import { files, jobs, libraries, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
-import { createJobQueue } from "../jobs/queue.ts";
-import { createJobRegistry } from "../jobs/registry.ts";
-import { registerLibraryJobs } from "../libraries/jobs.ts";
 import { readStoreManifest } from "./encode.ts";
-import { registerStoreJobs } from "./jobs.ts";
 import { requestStoredVersion, setStoredVersionPolicy } from "./service.ts";
 import {
+  drain,
   fixtureFolder,
   fixturePath,
+  scanFolder,
   twoRungPolicy,
   withStoredLibrary,
 } from "./testing.ts";
-
-const inside = () => new Date(2026, 9, 4, 2, 0);
-
-/** Runs every ready scan and store job, the way a worker inside the idle window would. */
-async function drain(db: Database) {
-  const registry = createJobRegistry();
-  registerLibraryJobs(db, registry);
-  registerStoreJobs(db, registry, { now: inside });
-  const queue = createJobQueue(db);
-  for (;;) {
-    const job = await queue.claim(["scan", "store"]);
-    if (job === undefined) return;
-    await registry.run(job);
-    await queue.complete(job);
-  }
-}
-
-const scanFolder = (db: Database, libraryId: string) =>
-  createJobQueue(db).enqueue({
-    type: "scan",
-    libraryId,
-    path: fixtureFolder,
-    reconcileMissing: true,
-  });
 
 const stored = (db: Database) =>
   db

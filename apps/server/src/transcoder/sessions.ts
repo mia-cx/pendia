@@ -347,6 +347,7 @@ export function createSessionManager(
       decision.video.stripDolbyVision === true;
     const audio = source.audio[0];
     const variant: PlaylistVariant = {
+      uri: "media.m3u8",
       bandwidth: Math.round(source.video.bitrate + (audio?.bitrate ?? 0)),
       width: source.video.width,
       height: source.video.height,
@@ -528,7 +529,7 @@ export function createSessionManager(
         await ensureStarted(session);
         return playlist(
           name.kind === "master"
-            ? buildMasterPlaylist(session.variant, query)
+            ? buildMasterPlaylist([session.variant], query)
             : buildMediaPlaylist(session.boundariesSeconds, query),
         );
       }

@@ -320,3 +320,8 @@ export function decidePlayback(
 
 /** The engine's full output for one plan, persisted on the session. */
 export type PlaybackDecision = ReturnType<typeof decidePlayback>;
+
+/** A session's persisted plan: the decision, plus the stored rungs served instead of a live run. */
+export type SessionDecision = PlaybackDecision & {
+  storedVariantIds?: string[];
+};

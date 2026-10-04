@@ -1,0 +1,268 @@
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
+import { ffprobeKeyframeTimes } from "../mediums/video-common/keyframe-fixtures.ts";
+import { probeVideo } from "../mediums/video-common/probe.ts";
+import { deriveSegmentTimeline } from "../playback/timeline.ts";
+import {
+  readStoreManifest,
+  runStore,
+  type StoreRun,
+  storeArguments,
+} from "./encode.ts";
+
+const valueAfter = (args: readonly string[], flag: string) =>
+  args[args.indexOf(flag) + 1];
+
+const sdr = { codec: "h264", hdr: "sdr", audioCodec: "aac" };
+const source = { name: "source" as const };
+const p360 = { name: "360p", height: 360, bitrate: 1_000_000 };
+
+describe("storeArguments", () => {
+  const base = {
+    inputPath: "/media/movie.mkv",
+    boundariesSeconds: [0, 3, 6, 9.5],
+    timelineId: "timeline",
+    folder: "/media/movie.mkv.pendia/source",
+  };
+
+  test("the source rung copies video and fMP4-safe audio", () => {
+    const args = storeArguments(
+      { ...base, rung: source, source: sdr },
+      0,
+      "/p",
+    );
+    expect(valueAfter(args, "-c:v")).toBe("copy");
+    expect(valueAfter(args, "-c:a")).toBe("copy");
+    expect(args).not.toContain("-vf");
+    expect(args).not.toContain("-tag:v");
+  });
+
+  test("the source rung tags HEVC and encodes other audio to AAC stereo", () => {
+    const args = storeArguments(
+      {
+        ...base,
+        rung: source,
+        source: { codec: "hevc", hdr: "hdr10", audioCodec: "truehd" },
+      },
+      0,
+      "/p",
+    );
+    expect(valueAfter(args, "-tag:v")).toBe("hvc1");
+    expect(valueAfter(args, "-c:a")).toBe("aac");
+    expect(valueAfter(args, "-ac")).toBe("2");
+  });
+
+  test("an encoded rung scales, caps the bitrate and forces keyframes on the cuts", () => {
+    const args = storeArguments({ ...base, rung: p360, source: sdr }, 2, "/p");
+    expect(valueAfter(args, "-c:v")).toBe("libx264");
+    expect(valueAfter(args, "-vf")).toBe("scale=-2:360,format=yuv420p");
+    expect(valueAfter(args, "-maxrate")).toBe("1000000");
+    expect(valueAfter(args, "-force_key_frames")).toBe(
+      valueAfter(args, "-segment_times"),
+    );
+    expect(valueAfter(args, "-segment_times")).toBe("3000000us,6000000us");
+    expect(valueAfter(args, "-ss")).toBe("6000000us");
+    expect(valueAfter(args, "-segment_start_number")).toBe("2");
+    expect(valueAfter(args, "-c:a")).toBe("aac");
+  });
+
+  test("an encoded rung tone maps an HDR source", () => {
+    const args = storeArguments(
+      { ...base, rung: p360, source: { ...sdr, hdr: "hdr10" } },
+      0,
+      "/p",
+    );
+    expect(valueAfter(args, "-vf")).toContain("tonemap=tonemap=hable");
+    expect(valueAfter(args, "-vf")?.endsWith("format=yuv420p")).toBe(true);
+  });
+});
+
+describe("runStore", () => {
+  let dir: string;
+  let inputPath: string;
+  let boundaries: number[];
+  const never = new AbortController().signal;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pendia-store-"));
+    inputPath = join(dir, "movie.mkv");
+    await createVideoFixture(inputPath, {
+      width: 1280,
+      height: 720,
+      durationSeconds: 12,
+      frameRate: 25,
+      gopSeconds: 3,
+      pattern: "testsrc2",
+    });
+    const probe = await probeVideo(inputPath);
+    if (probe.durationSeconds === null || probe.keyframesSeconds === null)
+      throw new Error("Fixture probe returned no duration or keyframes.");
+    boundaries = deriveSegmentTimeline(
+      probe.keyframesSeconds,
+      probe.durationSeconds,
+    );
+    expect(boundaries.slice(0, 4)).toEqual([0, 3, 6, 9]);
+  }, 60_000);
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const runFor = (rung: StoreRun["rung"]): StoreRun => ({
+    inputPath,
+    boundariesSeconds: boundaries,
+    timelineId: "timeline-1",
+    rung,
+    source: sdr,
+    folder: join(dir, "movie.mkv.pendia", rung.name),
+  });
+
+  const joined = async (folder: string, indexes: number[], name: string) => {
+    const parts = await Promise.all(
+      ["init.mp4", ...indexes.map((index) => `${index}.m4s`)].map((part) =>
+        readFile(join(folder, part)),
+      ),
+    );
+    const path = join(dir, name);
+    await Bun.write(path, Buffer.concat(parts));
+    return path;
+  };
+
+  const expectOnTimeline = async (folder: string) => {
+    const count = boundaries.length - 1;
+    for (let index = 0; index < count; index++) {
+      const path = await joined(folder, [index], `segment-${index}.mp4`);
+      const keyframes = await ffprobeKeyframeTimes(path);
+      expect(keyframes[0]).toBeCloseTo(boundaries[index] ?? -1, 3);
+    }
+    const all = await joined(
+      folder,
+      Array.from({ length: count }, (_, index) => index),
+      "all.mp4",
+    );
+    const decode = Bun.spawnSync([
+      "ffmpeg",
+      "-v",
+      "error",
+      "-i",
+      all,
+      "-f",
+      "null",
+      "-",
+    ]);
+    expect(decode.exitCode).toBe(0);
+    expect(decode.stderr.toString()).toBe("");
+  };
+
+  test("both rungs cut every segment on the timeline and write the manifest last", async () => {
+    for (const rung of [source, p360]) {
+      const run = runFor(rung);
+      expect(await runStore(run, never)).toBe("complete");
+      expect((await readdir(run.folder)).sort()).toEqual(
+        [
+          "0.m4s",
+          "1.m4s",
+          "2.m4s",
+          "3.m4s",
+          "init.mp4",
+          "manifest.json",
+        ].sort(),
+      );
+      expect(await readStoreManifest(run.folder)).toEqual({
+        timelineId: "timeline-1",
+        rung: rung.name,
+        segments: ["0.m4s", "1.m4s", "2.m4s", "3.m4s"],
+        complete: true,
+      });
+      await expectOnTimeline(run.folder);
+    }
+    const encoded = await probeVideo(
+      await joined(runFor(p360).folder, [0], "probe.mp4"),
+    );
+    expect(encoded.streams.find((s) => s.kind === "video")).toMatchObject({
+      codec: "h264",
+      profile: "high",
+      width: 640,
+      height: 360,
+    });
+  }, 120_000);
+
+  test("a complete folder is left alone", async () => {
+    const run = runFor(source);
+    const before = await stat(join(run.folder, "manifest.json"));
+    expect(await runStore(run, never)).toBe("complete");
+    const after = await stat(join(run.folder, "manifest.json"));
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  test.skipIf(process.platform !== "linux")(
+    "a stopped run resumes at the first missing segment without rewriting present ones",
+    async () => {
+      const run = { ...runFor({ ...p360, name: "resume" }) };
+      const controller = new AbortController();
+      const stopped = runStore(
+        { ...run, readRate: { rate: 2, initialBurstSeconds: 0 } },
+        controller.signal,
+      );
+      const first = join(run.folder, "0.m4s");
+      const deadline = Date.now() + 20_000;
+      while (!(await Bun.file(first).exists())) {
+        if (Date.now() > deadline) throw new Error("Segment 0 never landed.");
+        await Bun.sleep(25);
+      }
+      expect(await Bun.file(join(run.folder, "manifest.json")).exists()).toBe(
+        false,
+      );
+      // ffmpeg runs at the lowest CPU priority.
+      expect(await niceOf(join(run.folder, ".partial"))).toBe(19);
+      controller.abort();
+      expect(await stopped).toBe("stopped");
+      const present = (await readdir(run.folder)).filter((name) =>
+        name.endsWith(".m4s"),
+      );
+      expect(present.length).toBeLessThan(4);
+      const kept = await Promise.all(
+        present.map(async (name) => {
+          const info = await stat(join(run.folder, name));
+          return { name, ino: info.ino, mtimeMs: info.mtimeMs };
+        }),
+      );
+      const init = await readFile(join(run.folder, "init.mp4"));
+
+      expect(await runStore(run, never)).toBe("complete");
+      for (const segment of kept) {
+        const info = await stat(join(run.folder, segment.name));
+        expect({
+          name: segment.name,
+          ino: info.ino,
+          mtimeMs: info.mtimeMs,
+        }).toEqual(segment);
+      }
+      expect((await readFile(join(run.folder, "init.mp4"))).equals(init)).toBe(
+        true,
+      );
+      expect(await Bun.file(join(run.folder, ".partial")).exists()).toBe(false);
+      await expectOnTimeline(run.folder);
+    },
+    60_000,
+  );
+});
+
+/** Finds the process whose command line names the directory and reads its nice value. */
+async function niceOf(directory: string) {
+  for (const pid of await readdir("/proc")) {
+    if (!/^\d+$/.test(pid)) continue;
+    const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8").catch(
+      () => "",
+    );
+    if (!cmdline.includes(directory) || !cmdline.startsWith("ffmpeg")) continue;
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    // Field 19 of stat is the nice value; the slice starts at field 3.
+    return Number(fields[16]);
+  }
+  return null;
+}

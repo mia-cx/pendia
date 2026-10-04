@@ -11,7 +11,7 @@ const picture = ["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=2"];
 const head = ["-hide_banner", "-loglevel", "error", "-nostdin"];
 
 describe("trial arguments", () => {
-  test("a CPU trial encodes 2 s with the live encoder and discards it", () => {
+  test("a CPU trial encodes 2 s with the live settings and forces a keyframe at 1 s", () => {
     expect(cpuTrialArguments("h264")).toEqual([
       ...head,
       ...picture,
@@ -23,11 +23,22 @@ describe("trial arguments", () => {
       "0",
       "-x264-params",
       "scenecut=0:keyint=infinite",
+      "-b:v",
+      "1000000",
+      "-maxrate",
+      "1000000",
+      "-bufsize",
+      "2000000",
+      "-force_key_frames:v",
+      "1",
       "-f",
-      "null",
+      "matroska",
       "-",
     ]);
-    expect(cpuTrialArguments("av1")).toContain("libsvtav1");
+    // The live AV1 rate control: a target bitrate, no ceiling.
+    const av1 = cpuTrialArguments("av1");
+    expect(av1).toContain("libsvtav1");
+    expect(av1).not.toContain("-maxrate");
     expect(() => cpuTrialArguments("vp9")).toThrow(RangeError);
   });
 

@@ -64,6 +64,20 @@ export const liveEncoders: Record<string, readonly string[]> = {
   ],
 };
 
+/** The live profile's rate control for a codec at a target bitrate in bits per second. */
+export function rateArguments(codec: string, bitrate: number) {
+  // SVT-AV1 takes a bitrate ceiling only in CRF mode; with -b:v it runs VBR.
+  if (codec === "av1") return ["-b:v", String(bitrate)];
+  return [
+    "-b:v",
+    String(bitrate),
+    "-maxrate",
+    String(bitrate),
+    "-bufsize",
+    String(bitrate * 2),
+  ];
+}
+
 // Probe profile names to encoder profile names; anything else lets the encoder choose.
 const encoderProfiles: Record<string, Record<string, string>> = {
   h264: {
@@ -149,16 +163,7 @@ function videoArguments(run: LiveRun) {
   if (video.codec === "h264" && video.level !== null) {
     args.push("-level:v", (video.level / 10).toFixed(1));
   }
-  args.push("-b:v", String(video.bitrate));
-  // SVT-AV1 takes a bitrate ceiling only in CRF mode; with -b:v it runs VBR.
-  if (video.codec !== "av1") {
-    args.push(
-      "-maxrate",
-      String(video.bitrate),
-      "-bufsize",
-      String(video.bitrate * 2),
-    );
-  }
+  args.push(...rateArguments(video.codec, video.bitrate));
   if (video.maxFrameRate !== null) {
     args.push("-fpsmax", String(video.maxFrameRate));
   }

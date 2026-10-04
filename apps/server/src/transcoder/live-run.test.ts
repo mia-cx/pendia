@@ -16,6 +16,7 @@ import {
   startLiveRun,
   type VideoDecision,
 } from "./live-run.ts";
+import { runStartupTrial } from "./trial.ts";
 
 type TranscodeDecision = Extract<VideoDecision, { action: "transcode" }>;
 
@@ -761,12 +762,11 @@ describe("live runs", () => {
       capped,
     ]);
     const timeline = [0, 4.04, 8, 12, 16];
-    const codecs = [
-      "h264",
-      ...(hasEncoder("libx265") ? ["hevc"] : []),
-      ...(hasEncoder("libsvtav1") ? ["av1"] : []),
-    ];
-    for (const codec of codecs) {
+    // Every codec this node's startup trial would offer; one that ignores
+    // forced keyframes on this ffmpeg is never planned, so it is not here.
+    const [cpu] = await runStartupTrial();
+    expect(cpu?.codecs).toContain("h264");
+    for (const codec of cpu?.codecs ?? []) {
       for (const startIndex of [0, 1]) {
         const run = await runToEnd(`capped-${codec}-${startIndex}`, {
           inputPath: capped,

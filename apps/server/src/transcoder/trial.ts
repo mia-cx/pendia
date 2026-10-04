@@ -1,6 +1,6 @@
 import { stat } from "node:fs/promises";
 import type { TranscoderBackend } from "../db/schema/index.ts";
-import { liveEncoders, toneMapFilter } from "./live-run.ts";
+import { liveEncoders, rateArguments, toneMapFilter } from "./live-run.ts";
 
 // Two seconds of a small moving picture: enough to open and drive an encoder.
 const trialPicture = ["-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=2"];
@@ -55,13 +55,28 @@ export const hardwareBackends = [
   },
 ] as const;
 
-/** Builds the 2 s CPU encode of one codec with the live encoder settings. */
+// A CPU trial asks for one keyframe here, the way a live run forces one per
+// boundary, at a bitrate the live rate control accepts.
+const forcedSecond = 1;
+const trialBitrate = 1_000_000;
+
+/** Builds the 2 s CPU encode of one codec with the live settings and one forced keyframe, written as Matroska to stdout. */
 export function cpuTrialArguments(codec: string) {
   const encoder = liveEncoders[codec];
   if (encoder === undefined) {
     throw new RangeError(`No live encoder for ${codec}.`);
   }
-  return [...quiet, ...trialPicture, ...encoder, ...discard];
+  return [
+    ...quiet,
+    ...trialPicture,
+    ...encoder,
+    ...rateArguments(codec, trialBitrate),
+    "-force_key_frames:v",
+    String(forcedSecond),
+    "-f",
+    "matroska",
+    "-",
+  ];
 }
 
 /** Builds the 2 s CPU tone map of one HDR flavour from a 10-bit picture. */
@@ -101,6 +116,46 @@ const succeeds = async (args: string[]) => {
   return (await proc.exited) === 0;
 };
 
+// A live run cuts segments on forced keyframes, so an encoder that ignores
+// them with the live settings cannot serve one. SVT-AV1 1.7 under ffmpeg 6.1
+// is one: it honours forced keyframes only in CRF mode.
+const forcesKeyframe = async (args: string[]) => {
+  const encode = Bun.spawn(["ffmpeg", ...args], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const probe = Bun.spawn(
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-select_streams",
+      "v",
+      "-show_entries",
+      "packet=pts_time,flags",
+      "-of",
+      "csv=p=0",
+      "-i",
+      "pipe:0",
+    ],
+    { stdin: encode.stdout, stdout: "pipe", stderr: "ignore" },
+  );
+  const [packets, encoded, probed] = await Promise.all([
+    new Response(probe.stdout).text(),
+    encode.exited,
+    probe.exited,
+  ]);
+  if (encoded !== 0 || probed !== 0) return false;
+  return packets.split("\n").some((line) => {
+    const [pts, flags] = line.split(",");
+    return (
+      flags?.startsWith("K") === true &&
+      Math.abs(Number(pts) - forcedSecond) < 0.05
+    );
+  });
+};
+
 const exists = (path: string) =>
   stat(path).then(
     () => true,
@@ -108,18 +163,25 @@ const exists = (path: string) =>
   );
 
 /**
- * Runs the startup trial and returns the node's capability table. The CPU must
- * encode at least one codec, or the trial throws. A hardware backend is
- * recorded when its device exists and it encodes at least one codec.
+ * Runs the startup trial and returns the node's capability table. A CPU codec
+ * passes when its live encoder writes the keyframe the trial forces; the CPU
+ * must pass at least one, or the trial throws. A hardware backend is recorded
+ * when its device exists and it encodes at least one codec.
  */
 export async function runStartupTrial(): Promise<TranscoderBackend[]> {
   const codecs = Object.keys(liveEncoders);
-  const passing = async <T>(trials: [T, string[]][]) => {
-    const results = await Promise.all(trials.map(([, args]) => succeeds(args)));
+  const passing = async <T>(
+    trials: [T, string[]][],
+    check: (args: string[]) => Promise<boolean> = succeeds,
+  ) => {
+    const results = await Promise.all(trials.map(([, args]) => check(args)));
     return trials.filter((_, index) => results[index]).map(([value]) => value);
   };
   const [cpuCodecs, toneMapping, hardware] = await Promise.all([
-    passing(codecs.map((codec) => [codec, cpuTrialArguments(codec)])),
+    passing(
+      codecs.map((codec) => [codec, cpuTrialArguments(codec)]),
+      forcesKeyframe,
+    ),
     passing(
       toneMapGroups.map((group) => [
         group.flavours,

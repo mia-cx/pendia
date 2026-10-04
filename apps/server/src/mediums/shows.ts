@@ -275,6 +275,66 @@ export interface ShowPathGroup {
   seasons: SeasonPathGroup[];
 }
 
+const episodeTitle = (start: number, end: number | null) =>
+  end === null ? `Episode ${start}` : `Episodes ${start}-${end}`;
+
+/**
+ * Merges one Season's overlapping Episode ranges into single Episodes that
+ * hold every Version. A Version stays at the start of the Episode that
+ * already owns its Files, and no range reaches the next persisted start.
+ */
+export function mergeEpisodeRanges(
+  discovered: readonly EpisodePathGroup[],
+  persistedStarts: readonly number[],
+  ownerStarts: ReadonlyMap<string, number>,
+): EpisodePathGroup[] {
+  const limit = (start: number) =>
+    Math.min(...persistedStarts.filter((persisted) => persisted > start)) - 1;
+  const entries = discovered
+    .flatMap((episode) =>
+      episode.versions.map((version) => {
+        const start =
+          version.paths
+            .map((path) => ownerStarts.get(path))
+            .find((owner) => owner !== undefined) ?? episode.episodeNumber;
+        const end = episode.episodeEndNumber ?? episode.episodeNumber;
+        return { start, end: Math.max(start, end), version };
+      }),
+    )
+    .sort(
+      (a, b) =>
+        a.start - b.start ||
+        (a.version.paths[0] ?? "").localeCompare(b.version.paths[0] ?? ""),
+    );
+  const merged: {
+    start: number;
+    end: number;
+    versions: ShowVersionPathGroup[];
+  }[] = [];
+  for (const { start, end, version } of entries) {
+    const last = merged.at(-1);
+    if (last !== undefined && start <= last.end) {
+      last.end = Math.max(last.end, Math.min(end, limit(last.start)));
+      last.versions.push(version);
+    } else {
+      merged.push({
+        start,
+        end: Math.min(end, limit(start)),
+        versions: [version],
+      });
+    }
+  }
+  return merged.map(({ start, end, versions }) => {
+    const endNumber = end === start ? null : end;
+    return {
+      episodeNumber: start,
+      episodeEndNumber: endNumber,
+      title: episodeTitle(start, endNumber),
+      versions,
+    };
+  });
+}
+
 /** Group accepted library-relative paths into canonical Shows, Seasons, Episodes and Versions. */
 export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
   const groups = new Map<
@@ -354,10 +414,7 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
             .map(([episodeNumber, episode]) => ({
               episodeNumber,
               episodeEndNumber: episode.end,
-              title:
-                episode.end === null
-                  ? `Episode ${episodeNumber}`
-                  : `Episodes ${episodeNumber}-${episode.end}`,
+              title: episodeTitle(episodeNumber, episode.end),
               versions: [...episode.versions.values()]
                 .map(
                   (files): ShowVersionPathGroup => ({

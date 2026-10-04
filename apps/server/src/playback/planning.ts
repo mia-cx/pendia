@@ -410,11 +410,11 @@ export async function planPlayback(
     decision = null;
   }
   // Stored rungs that pass replace the live session; the api serves them from
-  // disk. They carry no subtitle pixels and only the first audio Stream, so a
-  // required burn-in or another audio Stream stays live, or fails the plan
-  // when no live path exists.
+  // disk over HLS. They carry no subtitle pixels and only the first audio
+  // Stream, so a burn-in over HLS or another audio Stream stays live, or
+  // fails the plan when no live path exists.
   const storedVariantIds =
-    requiresBurnIn(source, input.profile) || (selection.audio ?? 0) !== 0
+    requiresBurnIn(source, input.profile, true) || (selection.audio ?? 0) !== 0
       ? []
       : await selectStoredVariants(
           db,

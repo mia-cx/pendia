@@ -1201,7 +1201,11 @@ describe("decidePlayback stream selection", () => {
     expect(result.subtitles).toEqual([]);
     expect(result.selection).toEqual({ audio: 0, subtitle: null });
     expect(
-      requiresBurnIn({ ...signs, selection: { subtitle: null } }, textOnly),
+      requiresBurnIn(
+        { ...signs, selection: { subtitle: null } },
+        textOnly,
+        true,
+      ),
     ).toBe(false);
   });
 
@@ -1230,8 +1234,40 @@ describe("decidePlayback stream selection", () => {
     ]);
   });
 
+  test("a chosen bitmap subtitle the client draws burns once HLS is needed", () => {
+    const dubbedSigns: PlaybackSource = {
+      ...signs,
+      container: "mkv",
+      audio: [
+        { codec: "aac", channels: 2 },
+        { codec: "aac", channels: 2 },
+      ],
+    };
+    const mkv: ClientProfile = { ...client, containers: ["mkv"] };
+    const direct = decidePlayback(
+      { ...dubbedSigns, selection: { audio: 0, subtitle: 1 } },
+      mkv,
+      { isLan: false },
+    );
+    expect(direct.method).toBe("direct-play");
+    expect(direct.subtitles).toEqual([
+      { stream: 1, action: "copy", format: "pgs" },
+    ]);
+    const chosen = { ...dubbedSigns, selection: { audio: 1, subtitle: 1 } };
+    const hls = decidePlayback(chosen, mkv, { isLan: false });
+    expect(hls.method).toBe("transcode");
+    expect(hls.video).toMatchObject({ burnSubtitles: true });
+    expect(hls.subtitles).toEqual([
+      { stream: 1, action: "burn", format: "pgs" },
+    ]);
+    expect(requiresBurnIn(chosen, mkv, false)).toBe(false);
+    expect(requiresBurnIn(chosen, mkv, true)).toBe(true);
+    // Without a choice, a drawable bitmap track over HLS stays as before.
+    expect(requiresBurnIn(dubbedSigns, mkv, true)).toBe(false);
+  });
+
   test("no subtitle choice keeps every subtitle Stream", () => {
-    expect(requiresBurnIn(signs, textOnly)).toBe(true);
+    expect(requiresBurnIn(signs, textOnly, false)).toBe(true);
     expect(decidePlayback(signs, textOnly, { isLan: false }).subtitles).toEqual(
       [
         { stream: 0, action: "convert", format: "webvtt", delivery: "sidecar" },

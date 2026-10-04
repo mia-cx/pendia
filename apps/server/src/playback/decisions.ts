@@ -287,10 +287,14 @@ function decideSubtitle(
   subtitle: SubtitleStream,
   client: ClientProfile,
   hls: boolean,
+  chosen = false,
 ) {
+  // HLS carries only WebVTT: a chosen bitmap subtitle reaches the client
+  // only burned in, so it never copies there.
   if (
     client.subtitleFormats.includes(subtitle.format) &&
-    !(hls && subtitle.kind === "text" && subtitle.format !== "webvtt")
+    !(hls && subtitle.kind === "text" && subtitle.format !== "webvtt") &&
+    !(hls && chosen && subtitle.kind === "bitmap")
   ) {
     return { action: "copy" as const, format: subtitle.format };
   }
@@ -304,11 +308,32 @@ function decideSubtitle(
   return { action: "burn" as const, format: subtitle.format };
 }
 
-/** Reports whether the client needs a selected subtitle burned into the video: a bitmap Stream it cannot draw. Holds whatever the video and audio decide. */
-export function requiresBurnIn(source: PlaybackSource, client: ClientProfile) {
-  return selectedSubtitles(source).some(
-    ({ subtitle }) => decideSubtitle(subtitle, client, false).action === "burn",
+/**
+ * Reports whether delivering the selected subtitles, directly or over HLS,
+ * burns one into the video: a bitmap Stream the client cannot draw, or over
+ * HLS a chosen one. Holds whatever the video and audio decide.
+ */
+export function requiresBurnIn(
+  source: PlaybackSource,
+  client: ClientProfile,
+  hls: boolean,
+) {
+  return decideSubtitles(source, client, hls).some(
+    (subtitle) => subtitle.action === "burn",
   );
+}
+
+/** Decides each selected subtitle Stream, naming its position among subtitle Streams. */
+function decideSubtitles(
+  source: PlaybackSource,
+  client: ClientProfile,
+  hls: boolean,
+) {
+  const chosen = source.selection?.subtitle != null;
+  return selectedSubtitles(source).map(({ stream, subtitle }) => ({
+    stream,
+    ...decideSubtitle(subtitle, client, hls, chosen),
+  }));
 }
 
 /** Returns the play method and the decisions for the selected Streams of a source on one client. */
@@ -322,19 +347,13 @@ export function decidePlayback(
   const selection = resolveSelection(source);
   const selectedAudio =
     selection.audio === null ? undefined : source.audio[selection.audio];
-  const decideSubtitles = (hls: boolean) =>
-    selectedSubtitles(source).map(({ stream, subtitle }) => ({
-      stream,
-      ...decideSubtitle(subtitle, client, hls),
-    }));
-  const subtitles = decideSubtitles(false);
-  const burnSubtitles = requiresBurnIn(source, client);
+  const subtitles = decideSubtitles(source, client, false);
   const video = decideVideo(
     source.video,
     client,
     cap,
     capabilities,
-    burnSubtitles,
+    subtitles.some((subtitle) => subtitle.action === "burn"),
     false,
   );
   const directAudio =
@@ -362,12 +381,13 @@ export function decidePlayback(
     selectedAudio === undefined
       ? null
       : decideAudio(selectedAudio, client, true);
+  const hlsSubtitles = decideSubtitles(source, client, true);
   const hlsVideo = decideVideo(
     source.video,
     client,
     cap,
     capabilities,
-    burnSubtitles,
+    hlsSubtitles.some((subtitle) => subtitle.action === "burn"),
     true,
   );
   const transcodes =
@@ -376,7 +396,7 @@ export function decidePlayback(
     method: transcodes ? ("transcode" as const) : ("remux" as const),
     video: hlsVideo,
     audio,
-    subtitles: decideSubtitles(true),
+    subtitles: hlsSubtitles,
     selection,
   };
 }

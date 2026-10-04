@@ -28,6 +28,7 @@ A plan may name one audio Stream and one subtitle Stream, or no subtitles, by th
 - No subtitle named: every subtitle Stream counts, so a bitmap one the client cannot draw is burned in.
 - Subtitles off: nothing is burned in and the master playlist lists no subtitle rendition.
 - A named text subtitle is the only WebVTT rendition, marked `DEFAULT`.
+- A named bitmap subtitle is burned in whenever the session plays over HLS, since HLS carries only WebVTT, even for a client that draws it.
 - A direct play gets the File's default audio, so naming another audio Stream plays over HLS. Stored rungs carry the first audio Stream, so naming another plays live.
 
 ## Play method

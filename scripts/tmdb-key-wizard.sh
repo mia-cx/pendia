@@ -110,7 +110,8 @@ ask() {
   printf -v "$key" '%s' "$input"
 }
 
-# ask_secret KEY "Prompt" is like ask, but input is hidden.
+# ask_secret KEY "Prompt" is like ask, but input is hidden. Fails on closed
+# input, so EOF never falls back to the saved value.
 ask_secret() {
   local key="$1" prompt="$2" current input
   current=$(_existing "$key" || true)
@@ -119,7 +120,7 @@ ask_secret() {
   else
     printf '  %s%s%s ' "$BOLD" "$prompt" "$RESET"
   fi
-  read -rs input || true
+  read -rs input || [[ -n "$input" ]] || { printf '\n'; return 1; }
   printf '\n'
   [[ -z "$input" && -n "$current" ]] && input="$current"
   printf -v "$key" '%s' "$input"
@@ -203,9 +204,9 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 while true; do
-  ask_secret TMDB_API_KEY "Paste the API key:"
+  # Closed input or a bare Enter with nothing saved: stop instead of looping.
+  ask_secret TMDB_API_KEY "Paste the API key:" || TMDB_API_KEY=""
   TMDB_API_KEY="${TMDB_API_KEY//[[:space:]]/}"
-  # Closed input or a bare Enter gives an empty key: stop instead of looping.
   if [[ -z "$TMDB_API_KEY" ]]; then
     warn "No key entered; nothing was written."
     exit 1

@@ -224,11 +224,14 @@ async function walkExisting(root: string, directory: string) {
 async function openOriginal(
   openFile: ArtworkOpen,
   target: string,
-  flags: number,
 ): Promise<FileHandle | null> {
   let handle: FileHandle;
   try {
-    handle = await openFile(target, flags | constants.O_NOFOLLOW);
+    // O_NONBLOCK keeps a planted FIFO from hanging until a writer appears.
+    handle = await openFile(
+      target,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return null;
@@ -261,7 +264,7 @@ function directoryBackend(
     async read(key) {
       const { root, target } = resolveStoragePath(rootPath, key);
       if (!(await walkExisting(root, dirname(target)))) return null;
-      const handle = await openOriginal(openFile, target, constants.O_RDONLY);
+      const handle = await openOriginal(openFile, target);
       if (handle === null) return null;
       try {
         return new Uint8Array(await handle.readFile());
@@ -272,12 +275,7 @@ function directoryBackend(
     async exists(key) {
       const { root, target } = resolveStoragePath(rootPath, key);
       if (!(await walkExisting(root, dirname(target)))) return false;
-      // O_NONBLOCK keeps a planted FIFO from hanging the check.
-      const handle = await openOriginal(
-        openFile,
-        target,
-        constants.O_RDONLY | constants.O_NONBLOCK,
-      );
+      const handle = await openOriginal(openFile, target);
       await handle?.close();
       return handle !== null;
     },

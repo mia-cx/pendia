@@ -939,6 +939,22 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
       );
     }));
 
+  test("rejects a FIFO at the original instead of waiting for a writer", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        const target = join(root, row.storageKey);
+        await rm(target);
+        expect(Bun.spawnSync(["mkfifo", target]).exitCode).toBe(0);
+        await expect(readArtworkOriginal(db, row.id)).rejects.toThrow(
+          "Invalid artwork storage path.",
+        );
+      });
+    }));
+
   test("rejects a .pendia symlink in read mode", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

@@ -184,6 +184,7 @@ export async function startWatcher(
       } catch (error) {
         onError(error);
       }
+      if (stopped) break;
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, pollIntervalMs);
         wake = () => {

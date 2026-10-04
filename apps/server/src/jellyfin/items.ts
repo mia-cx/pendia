@@ -4,6 +4,7 @@ import {
   type ItemViewQuery,
   type ItemViewSort,
   listItemViews,
+  listVersionViews,
   viewableLibraries,
 } from "../api/views.ts";
 import { AuthError } from "../auth/errors.ts";
@@ -12,12 +13,17 @@ import { nextUp } from "../mediums/shows.ts";
 import { continueWatching } from "../playback/marks.ts";
 import { readServerId } from "../server-id.ts";
 import { json, type Route, type UserContext } from "./http.ts";
-import { parseGuid, type Query, toGuid } from "./request.ts";
+import { mediaSource } from "./media.ts";
+import {
+  parseGuid,
+  type Query,
+  requiredGuid,
+  ticksPerSecond,
+  toGuid,
+} from "./request.ts";
 
 type Kind = ItemView["kind"];
 type Library = Awaited<ReturnType<typeof viewableLibraries>>[number];
-
-const ticksPerSecond = 10_000_000;
 
 const itemTypes = {
   movie: "Movie",
@@ -274,12 +280,6 @@ async function shelfResult(
   );
 }
 
-function requiredGuid(text: string | undefined) {
-  const id = text === undefined ? undefined : parseGuid(text);
-  if (id === undefined) throw new AuthError("NOT_FOUND");
-  return id;
-}
-
 async function showViews(
   context: UserContext,
   query: Omit<ItemViewQuery, "sort" | "offset" | "limit">,
@@ -353,7 +353,17 @@ export const browseRoutes: Route[] = [
       if (library !== undefined) return json(libraryDto(library, serverId));
       const [view] = page.items;
       if (view === undefined) throw new AuthError("NOT_FOUND");
-      return json(baseItemDto(view, serverId));
+      if (!playableKinds.has(view.kind))
+        return json(baseItemDto(view, serverId));
+      // Swiftfin and Infuse pick a Version from the detail before they play.
+      const sources = (await listVersionViews(db, caller.user.id, id)).map(
+        (version) => mediaSource(id, version),
+      );
+      return json({
+        ...baseItemDto(view, serverId),
+        MediaSources: sources,
+        MediaStreams: sources[0]?.MediaStreams ?? [],
+      });
     },
   },
   {

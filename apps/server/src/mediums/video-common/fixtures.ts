@@ -14,7 +14,7 @@ export interface VideoFixtureOptions {
   videoCodec?: "h264" | "hevc";
   /** Tags a 10-bit HEVC video with this transfer function; needs videoCodec "hevc". */
   hdr?: "hdr10" | "hlg";
-  audioCodec?: "aac" | "ac3" | "flac";
+  audioCodec?: "aac" | "ac3" | "flac" | "truehd";
   audioChannels?: 2 | 6;
   /** Subtitle Streams in order, each showing "Fixture" from 0 to 0.8 s; default one SRT. */
   subtitles?: readonly ("srt" | "ass" | "pgs")[];
@@ -247,6 +247,8 @@ export async function createVideoFixture(
         ...(videoCodec === "hevc" ? hevc : h264),
         "-c:a",
         audioCodec,
+        // ffmpeg's TrueHD encoder is still marked experimental.
+        ...(audioCodec === "truehd" ? ["-strict", "experimental"] : []),
         ...subtitleFiles.flatMap(({ format }, index) => [
           `-c:s:${index}`,
           format === "pgs" ? "copy" : format,

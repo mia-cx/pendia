@@ -179,9 +179,10 @@ export async function issuePlaybackToken(
   caller: PlaybackCaller,
   scope: PlaybackScope,
   now = Date.now(),
+  lifetimeSeconds = playbackTokenLifetimeSeconds,
 ) {
   await gate(db, scope, caller.user.id, caller.credential);
-  const exp = Math.floor(now / 1000) + playbackTokenLifetimeSeconds;
+  const exp = Math.floor(now / 1000) + lifetimeSeconds;
   const claims: Claims = {
     v: 1,
     sessionId: scope.sessionId,

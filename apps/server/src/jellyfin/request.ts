@@ -69,6 +69,9 @@ export function readClient(request: Request): ClientInfo {
   return { ...client, token: token?.trim() || undefined };
 }
 
+/** Jellyfin counts time in ticks of 100 ns. */
+export const ticksPerSecond = 10_000_000;
+
 /** Formats a Pendia UUID as a Jellyfin GUID: the same UUID without dashes. */
 export function toGuid(id: string): string {
   return id.replaceAll("-", "");
@@ -80,6 +83,13 @@ export function parseGuid(text: string): string | undefined {
   if (!guidPattern.test(text)) return undefined;
   const hex = text.toLowerCase();
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Reads a GUID naming an Item or other resource; anything else is not found. */
+export function requiredGuid(text: string | undefined) {
+  const id = text === undefined ? undefined : parseGuid(text);
+  if (id === undefined) throw new AuthError("NOT_FOUND");
+  return id;
 }
 
 /** Query parameters looked up by name case-insensitively, as ASP.NET does. */
@@ -121,16 +131,33 @@ export function readQuery(params: URLSearchParams) {
 }
 
 /** Reads a JSON object body whose keys match case-insensitively, as ASP.NET binds them. */
-export async function readBody(request: Request) {
-  const body = await readJsonObject(request);
+export async function readBody(request: Request, maxBytes?: number) {
+  const body = await readJsonObject(request, maxBytes);
   const fields = new Map(
     Object.entries(body).map(([key, value]) => [key.toLowerCase(), value]),
   );
+  // Clients send null for fields they leave unset.
+  const get = (name: string) => fields.get(name.toLowerCase()) ?? undefined;
+  const optional = <T>(name: string, is: (value: unknown) => value is T) => {
+    const value = get(name);
+    if (value === undefined) return undefined;
+    if (!is(value)) throw new AuthError("INVALID_INPUT");
+    return value;
+  };
   return {
+    value: get,
     string: (name: string) => {
-      const value = fields.get(name.toLowerCase());
+      const value = get(name);
       if (typeof value !== "string") throw new AuthError("INVALID_INPUT");
       return value;
     },
+    optionalString: (name: string) =>
+      optional(name, (value) => typeof value === "string"),
+    number: (name: string) =>
+      optional(
+        name,
+        (value): value is number =>
+          typeof value === "number" && Number.isFinite(value),
+      ),
   };
 }

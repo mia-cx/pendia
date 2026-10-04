@@ -116,10 +116,12 @@
       "Id": "string",
       "ExtraType": "?enum:ExtraType",
       "Video3DFormat": "?enum:Video3DFormat",
+      "MediaSources": "?array:MediaSourceInfo",
       "PlayAccess": "?enum:PlayAccess",
       "Type": "enum:BaseItemKind",
       "UserData": "?UserItemDataDto",
       "CollectionType": "?enum:CollectionType",
+      "MediaStreams": "?array:MediaStream",
       "VideoType": "?enum:VideoType",
       "LocationType": "?enum:LocationType",
       "IsoType": "?enum:IsoType",
@@ -141,9 +143,55 @@
       "Played": "boolean",
       "Key": "string",
       "ItemId": "string"
+    },
+    "MediaSourceInfo": {
+      "Protocol": "enum:MediaProtocol",
+      "EncoderProtocol": "?enum:MediaProtocol",
+      "Type": "enum:MediaSourceType",
+      "IsRemote": "boolean",
+      "ReadAtNativeFramerate": "boolean",
+      "IgnoreDts": "boolean",
+      "IgnoreIndex": "boolean",
+      "GenPtsInput": "boolean",
+      "SupportsTranscoding": "boolean",
+      "SupportsDirectStream": "boolean",
+      "SupportsDirectPlay": "boolean",
+      "IsInfiniteStream": "boolean",
+      "UseMostCompatibleTranscodingProfile": "boolean",
+      "RequiresOpening": "boolean",
+      "RequiresClosing": "boolean",
+      "RequiresLooping": "boolean",
+      "SupportsProbing": "boolean",
+      "VideoType": "?enum:VideoType",
+      "IsoType": "?enum:IsoType",
+      "Video3DFormat": "?enum:Video3DFormat",
+      "MediaStreams": "?array:MediaStream",
+      "Timestamp": "?enum:TransportStreamTimestamp",
+      "TranscodingSubProtocol": "enum:MediaStreamProtocol",
+      "HasSegments": "boolean"
+    },
+    "MediaStream": {
+      "VideoRange": "enum:VideoRange",
+      "VideoRangeType": "enum:VideoRangeType",
+      "AudioSpatialFormat": "enum:AudioSpatialFormat",
+      "IsInterlaced": "boolean",
+      "IsDefault": "boolean",
+      "IsForced": "boolean",
+      "IsHearingImpaired": "boolean",
+      "Type": "enum:MediaStreamType",
+      "Index": "integer",
+      "IsExternal": "boolean",
+      "DeliveryMethod": "?enum:SubtitleDeliveryMethod",
+      "IsTextSubtitleStream": "boolean",
+      "SupportsExternalStream": "boolean"
+    },
+    "PlaybackInfoResponse": {
+      "MediaSources": "array:MediaSourceInfo",
+      "ErrorCode": "?enum:PlaybackErrorCode"
     }
   },
   "enums": {
+    "AudioSpatialFormat": ["None", "DolbyAtmos", "DTSX"],
     "BaseItemKind": [
       "AggregateFolder",
       "Audio",
@@ -225,12 +273,29 @@
     ],
     "IsoType": ["Dvd", "BluRay"],
     "LocationType": ["FileSystem", "Remote", "Virtual", "Offline"],
+    "MediaProtocol": ["File", "Http", "Rtmp", "Rtsp", "Udp", "Rtp", "Ftp"],
+    "MediaSourceType": ["Default", "Grouping", "Placeholder"],
+    "MediaStreamProtocol": ["http", "hls"],
+    "MediaStreamType": [
+      "Audio",
+      "Video",
+      "Subtitle",
+      "EmbeddedImage",
+      "Data",
+      "Lyric"
+    ],
     "MediaType": ["Unknown", "Video", "Audio", "Photo", "Book"],
     "PlayAccess": ["Full", "None"],
     "PlayMethod": ["Transcode", "DirectStream", "DirectPlay"],
+    "PlaybackErrorCode": [
+      "NotAllowed",
+      "NoCompatibleStream",
+      "RateLimitExceeded"
+    ],
     "PlaybackOrder": ["Default", "Shuffle"],
     "ProgramAudio": ["Mono", "Stereo", "Dolby", "DolbyDigital", "Thx", "Atmos"],
     "RepeatMode": ["RepeatNone", "RepeatAll", "RepeatOne"],
+    "SubtitleDeliveryMethod": ["Encode", "Embed", "External", "Hls", "Drop"],
     "SubtitlePlaybackMode": [
       "Default",
       "Always",
@@ -239,12 +304,29 @@
       "Smart"
     ],
     "SyncPlayUserAccessType": ["CreateAndJoinGroups", "JoinGroups", "None"],
+    "TransportStreamTimestamp": ["None", "Zero", "Valid"],
     "Video3DFormat": [
       "HalfSideBySide",
       "FullSideBySide",
       "FullTopAndBottom",
       "HalfTopAndBottom",
       "MVC"
+    ],
+    "VideoRange": ["Unknown", "SDR", "HDR"],
+    "VideoRangeType": [
+      "Unknown",
+      "SDR",
+      "HDR10",
+      "HLG",
+      "DOVI",
+      "DOVIWithHDR10",
+      "DOVIWithHLG",
+      "DOVIWithSDR",
+      "DOVIWithEL",
+      "DOVIWithHDR10Plus",
+      "DOVIWithELHDR10Plus",
+      "DOVIInvalid",
+      "HDR10Plus"
     ],
     "VideoType": ["VideoFile", "Iso", "Dvd", "BluRay"]
   }

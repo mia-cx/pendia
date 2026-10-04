@@ -57,7 +57,8 @@ function hashToken(token: string) {
   return createHash("sha256").update(token).digest();
 }
 
-function prepareDevice(input: DeviceInput) {
+/** Trims and validates the client and device names a session records. */
+export function prepareDevice(input: DeviceInput) {
   const clientName = input.clientName.trim();
   const deviceName = input.deviceName.trim();
   if (

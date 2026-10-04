@@ -43,4 +43,5 @@ The `retryAfter` test stores a whole-second `expiresAt`, so the `Math.ceil` boun
 - CodeRabbit on c5466ba: rows running at migration time now get a 60-second lease in `0013_job_lease` (7fcdd87).
 - Gate at 7fcdd87, after merging `origin/main` at c684ac6: lint clean, check 6/6, build 4/4, `bun test` with `DATABASE_URL` 1334 pass, 3 skip, 0 fail; without it 774 pass, 581 skip, 0 fail.
 - `main` added `0013_jsonb_values` (#100) first, so the merge regenerated this migration as `0014_job_lease` on main's snapshot, kept the backfill, and counts 15 migrations. If `main` adds another first, do the same again.
+- Gate after merging `origin/main` at ed57bf2: lint clean (382 files), check 6/6, build 4/4, `bun test` with `DATABASE_URL` 1337 pass, 3 skip, 0 fail; without it 775 pass, 583 skip, 0 fail.
 - Gate after merging `origin/main` at f6a8b90: `bun install --frozen-lockfile` no changes; `bun run lint` clean (380 files); `bun run check` 6/6; `bun run build` 4/4; `bun test` with `DATABASE_URL`: 1327 pass, 3 skip, 0 fail; without: 774 pass, 574 skip, 0 fail.

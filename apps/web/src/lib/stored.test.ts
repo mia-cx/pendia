@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  droppedRungs,
+  deletedRungs,
   fromDraft,
   type StoredPolicy,
   toDraft,
@@ -39,11 +39,20 @@ describe("stored policy drafts", () => {
     expect(fromDraft(toDraft(null))).toBeNull();
   });
 
-  test("a save names the rungs it drops", () => {
-    expect(droppedRungs(policy, { rungs: [{ name: "source" }] })).toEqual([
+  test("a save names the rungs it drops or redefines", () => {
+    expect(deletedRungs(policy, { rungs: [{ name: "source" }] })).toEqual([
       "1080p",
     ]);
-    expect(droppedRungs(policy, null)).toEqual(["source", "1080p"]);
-    expect(droppedRungs(null, policy)).toEqual([]);
+    expect(deletedRungs(policy, null)).toEqual(["source", "1080p"]);
+    expect(deletedRungs(null, policy)).toEqual([]);
+    const lowered = {
+      rungs: [
+        { name: "source" },
+        { name: "1080p", height: 1080, bitrate: 6_000_000 },
+        { name: "720p", height: 720, bitrate: 3_000_000 },
+      ],
+    } satisfies StoredPolicy;
+    expect(deletedRungs(policy, lowered)).toEqual(["1080p"]);
+    expect(deletedRungs(policy, { ...policy, when: undefined })).toEqual([]);
   });
 });

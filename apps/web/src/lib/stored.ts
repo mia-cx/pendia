@@ -75,13 +75,21 @@ export function fromDraft(draft: PolicyDraft): StoredPolicy {
   return Object.keys(when).length === 0 ? { rungs } : { rungs, when };
 }
 
-/** The rung names a saved policy has and the next one drops; their stored Versions get deleted. */
-export function droppedRungs(
+/** The saved rungs whose stored Versions the next policy deletes: dropped, or redefined under the same name and stored again. */
+export function deletedRungs(
   saved: StoredPolicy,
   next: StoredPolicy,
 ): string[] {
-  const kept = new Set(next?.rungs.map((rung) => rung.name));
+  const after = new Map(next?.rungs.map((rung) => [rung.name, rung]));
   return (saved?.rungs ?? [])
-    .map((rung) => rung.name)
-    .filter((name) => !kept.has(name));
+    .filter((rung) => {
+      const kept = after.get(rung.name);
+      if (kept === undefined) return true;
+      return (
+        "height" in rung &&
+        "height" in kept &&
+        (rung.height !== kept.height || rung.bitrate !== kept.bitrate)
+      );
+    })
+    .map((rung) => rung.name);
 }

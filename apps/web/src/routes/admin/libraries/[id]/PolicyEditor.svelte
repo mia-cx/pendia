@@ -4,7 +4,7 @@ import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 import {
-  droppedRungs,
+  deletedRungs,
   fromDraft,
   type PolicyDraft,
   type StoredPolicy,
@@ -46,9 +46,9 @@ function removeRung(index: number) {
 function submit(event: SubmitEvent) {
   event.preventDefault();
   if (draft === null || !policy.data) return;
-  const dropped = droppedRungs(policy.data.policy, fromDraft(draft));
-  if (dropped.length > 0) {
-    confirming = dropped;
+  const deleted = deletedRungs(policy.data.policy, fromDraft(draft));
+  if (deleted.length > 0) {
+    confirming = deleted;
     return;
   }
   void save();
@@ -149,7 +149,7 @@ async function save() {
                       required
                       min="0.1"
                       max="200"
-                      step="0.1"
+                      step="any"
                       value={rung.bitrateMbps}
                       oninput={(event) =>
                         (rung.bitrateMbps = event.currentTarget.value)}

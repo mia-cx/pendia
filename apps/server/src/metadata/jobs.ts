@@ -2,6 +2,7 @@ import type { MetadataProvider } from "@pendia/plugin-api";
 import { and, eq, lte, sql } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
+import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import { episodes, items, jobs, seasons, shows } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
@@ -16,8 +17,12 @@ import { readMetadataSettings } from "./settings.ts";
 import { createTmdbMetadataProvider } from "./tmdb.ts";
 import { createTvdbMetadataProvider } from "./tvdb.ts";
 
-/** Queues one Item's provider-fetch, or returns the due one already queued. */
-export async function queueProviderFetch(db: Database, itemId: string) {
+/** Queues one Item's provider-fetch at `priority`, or returns the due one already queued, raised to it. */
+export async function queueProviderFetch(
+  db: Database,
+  itemId: string,
+  priority = 0,
+) {
   const concurrencyKey = `provider:${itemId}`;
   // A running fetch never blocks: a pending Item after a provider change
   // earns one queued successor that replays the fetch. A weekly refresh
@@ -34,13 +39,33 @@ export async function queueProviderFetch(db: Database, itemId: string) {
       ),
     )
     .limit(1);
-  return (
-    due ??
-    createJobQueue(db).enqueue(
+  if (due === undefined)
+    return createJobQueue(db).enqueue(
       { type: "provider-fetch", itemId },
-      { concurrencyKey },
-    )
-  );
+      { concurrencyKey, priority },
+    );
+  if (due.priority >= priority) return due;
+  const [raised] = await db
+    .update(jobs)
+    .set({ priority })
+    .where(and(eq(jobs.id, due.id), eq(jobs.state, "queued")))
+    .returning();
+  return raised ?? due;
+}
+
+// Background scans queue at 0, so a manual refresh runs ahead of them.
+const manualRefreshPriority = 1;
+
+/** Queues a provider-fetch for one Item on demand, for a caller holding manage-libraries. */
+export async function refreshItem(db: Database, actorId: string, id: string) {
+  await requirePermission(db, actorId, "manage-libraries");
+  const [item] = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(eq(items.id, id));
+  if (!item) throw new AuthError("NOT_FOUND");
+  const job = await queueProviderFetch(db, item.id, manualRefreshPriority);
+  return { jobId: job.id };
 }
 
 const weekMs = 7 * 24 * 60 * 60 * 1000;

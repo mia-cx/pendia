@@ -44,3 +44,10 @@ Decisions from the lead:
 - `bun run build`: ok
 - `DATABASE_URL=… bun test`: 1349 pass, 3 skip (S3 tests without `TEST_S3_URL`), 0 fail
 - `bun test` without `DATABASE_URL`: 789 pass, 581 skip, 0 fail
+
+### Review round 1 (Pullfrog on `5b12e33`)
+
+- P1, persisted decisions: rows planned before this PR held an audio array. A transcoder restart reloads them in `loadSession`, and the array reached ffmpeg as `-c:a undefined`. Migration `0015_session_decision_selection` rewrites them to what they played: the first audio decision, subtitles with their `stream`, and `selection`. Test: `db/session-decisions.test.ts`.
+- P2, chosen bitmap over HLS: a client that draws PGS, choosing a non-default audio Stream and a PGS subtitle, got HLS with a copied PGS that the run strips. Over HLS a chosen bitmap subtitle now burns in, and `requiresBurnIn` takes `hls`; stored rungs use the HLS answer. With no choice nothing changes.
+- `main` gained `0014_job_lease` meanwhile, so this migration is `0015` and the journal count test expects 16.
+- Gate after the merge: install, check, build ok; lint ok after formatting the generated snapshot; `bun test` with Postgres 1356 pass, 3 skip, 0 fail; without 790 pass, 587 skip, 0 fail.

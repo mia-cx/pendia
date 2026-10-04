@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/client";
+import { ServerUnreachable } from "./api.ts";
 
 /** A failure from a JSON auth route carrying the server's code and message. */
 export class AuthRouteError extends Error {
@@ -18,6 +19,7 @@ export type FailureCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "BAD_REQUEST"
+  | "UNREACHABLE"
   | "UNKNOWN";
 
 const unauthorized = new Set(["UNAUTHORIZED", "UNAUTHENTICATED"]);
@@ -44,6 +46,11 @@ export function readFailure(error: unknown): {
       ? error.code
       : undefined;
   const message = error instanceof Error ? error.message : "";
+  if (error instanceof ServerUnreachable)
+    return {
+      code: "UNREACHABLE",
+      message: "Pendia cannot reach its server. Check your connection.",
+    };
   if (code !== undefined && unauthorized.has(code))
     return {
       code: "UNAUTHORIZED",

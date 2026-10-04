@@ -1,11 +1,22 @@
+<script lang="ts">
+import { page } from "$app/state";
+
+const unreachable = $derived(page.error?.code === "UNREACHABLE");
+</script>
+
 <svelte:head>
   <title>Pendia</title>
 </svelte:head>
 
 <main>
   <div class="failure" role="alert">
-    <h2>Something went wrong</h2>
-    <p>Pendia could not load this screen.</p>
+    {#if unreachable}
+      <h2>Server unreachable</h2>
+      <p>Pendia cannot reach its server. Check your connection.</p>
+    {:else}
+      <h2>Something went wrong</h2>
+      <p>Pendia could not load this screen.</p>
+    {/if}
   </div>
   <button type="button" onclick={() => location.reload()}>Try again</button>
 </main>

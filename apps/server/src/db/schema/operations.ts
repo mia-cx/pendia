@@ -111,6 +111,10 @@ export const jobs = pgTable(
     concurrencyKey: text("concurrency_key"),
     state: jobState("state").notNull().default("queued"),
     error: text("error"),
+    /** Written fresh by each claim; only its holder may renew, complete or fail the job. */
+    claimToken: uuid("claim_token").notNull().defaultRandom(),
+    /** A running job past this time is claimable again. */
+    leaseExpiresAt: instant("lease_expires_at").notNull().defaultNow(),
   },
   (table) => [
     check(
@@ -127,6 +131,15 @@ export const jobs = pgTable(
     index("jobs_running_idx")
       .on(table.concurrencyKey)
       .where(sql`${table.state} = 'running'`),
+    index("jobs_lease_idx")
+      .on(table.leaseExpiresAt)
+      .where(sql`${table.state} = 'running'`),
+    index("jobs_scan_library_idx")
+      .on(sql`(${table.payload}->>'libraryId')`)
+      .where(sql`${table.type} = 'scan'`),
+    index("jobs_scan_run_idx")
+      .on(sql`(${table.payload}->>'runId')`)
+      .where(sql`${table.type} = 'scan'`),
   ],
 );
 

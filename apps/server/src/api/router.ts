@@ -2,6 +2,8 @@ import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
 import { isBuiltInAdmin } from "../auth/permissions.ts";
 import { refreshItem as queueItemRefresh } from "../metadata/jobs.ts";
+import { RungName } from "../stored/policy.ts";
+import { requestStoredVersion } from "../stored/service.ts";
 import {
   groupProcedures,
   settingsProcedures,
@@ -18,6 +20,7 @@ import { getItemDetail, listItemCards, searchItems } from "./items.ts";
 import { libraryProcedures } from "./libraries.ts";
 import { markProcedures, shelfProcedures } from "./marks.ts";
 import { playbackProcedures } from "./playback.ts";
+import { pluginProcedures, registryProcedures } from "./plugins.ts";
 import {
   ApiEvent,
   connection,
@@ -61,6 +64,25 @@ const getItem = authenticated
   .output(Schema.standardSchemaV1(ItemDetail))
   .handler(async ({ context, input }) =>
     runApi(getItemDetail(context.db, context.caller, input.id)),
+  );
+
+const storedVersionRequest = authenticatedMutation
+  .route({ method: "POST", path: "/items/{id}/stored-versions" })
+  .input(
+    Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID, rung: RungName })),
+  )
+  .output(Schema.standardSchemaV1(Schema.Struct({ queued: Schema.Boolean })))
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        requestStoredVersion(
+          context.db,
+          context.caller.user.id,
+          input.id,
+          input.rung,
+        ),
+      ),
+    ),
   );
 
 const refreshItem = authenticatedMutation
@@ -107,7 +129,13 @@ const streamEvents = authenticated
 /** The API router: procedures defined once, served over both RPC and REST. */
 export const pendiaRouter = {
   me,
-  items: { list: listItems, get: getItem, search, refresh: refreshItem },
+  items: {
+    list: listItems,
+    get: getItem,
+    search,
+    refresh: refreshItem,
+    requestStoredVersion: storedVersionRequest,
+  },
   libraries: libraryProcedures,
   playback: playbackProcedures,
   marks: markProcedures,
@@ -116,5 +144,7 @@ export const pendiaRouter = {
   users: userProcedures,
   groups: groupProcedures,
   settings: settingsProcedures,
+  plugins: pluginProcedures,
+  registries: registryProcedures,
   events: { stream: streamEvents },
 };

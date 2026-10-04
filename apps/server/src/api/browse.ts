@@ -6,6 +6,7 @@ import type { CoreShelf, Medium } from "../mediums/medium.ts";
 import { moviesMedium } from "../mediums/movies.ts";
 import { createShowsMedium } from "../mediums/shows.ts";
 import { continueWatching } from "../playback/marks.ts";
+import type { PluginRuntime } from "../plugins/runtime.ts";
 import { browseCards, browseCardsById } from "./items.ts";
 
 /** The most entries one Home shelf holds. */
@@ -89,12 +90,56 @@ const coreShelves = {
   "recently-added": { title: "Recently added", load: recentlyAdded },
 } satisfies Partial<Record<CoreShelf, { title: string; load: ShelfLoader }>>;
 
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
- * Assembles Home from the mediums: continue watching, then each medium's own
- * shelves such as next up, then recently added. A core shelf appears only when
- * some medium joins it, and a shelf with no entries is left out.
+ * Resolves the plugin shelves for one placement into cards the user may view,
+ * in the plugin's order. A shelf id is prefixed with its plugin's name.
  */
-export async function homeShelves(db: Database, userId: string) {
+export async function pluginShelves(
+  db: Database,
+  userId: string,
+  plugins: PluginRuntime,
+  placement: "home" | "item",
+  itemId?: string,
+) {
+  const resolved = await plugins.shelves(placement, { userId, itemId });
+  if (resolved.length === 0) return [];
+  const viewable = await viewableLibraryIds(db, userId);
+  return Promise.all(
+    resolved.map(async (shelf) => {
+      const ids = shelf.itemIds
+        .filter((id) => uuidPattern.test(id))
+        .slice(0, shelfSize);
+      const cards =
+        ids.length === 0 || viewable.length === 0
+          ? []
+          : await browseCards(
+              db,
+              and(inArray(items.id, ids), inArray(items.libraryId, viewable)),
+            );
+      const byId = new Map(cards.map((card) => [card.id, card]));
+      return {
+        id: `${shelf.plugin}:${shelf.id}`,
+        title: shelf.title,
+        entries: ids.flatMap((id) => byId.get(id) ?? []).map(bare),
+      };
+    }),
+  );
+}
+
+/**
+ * Assembles Home from the mediums and plugins: continue watching, then each
+ * medium's own shelves such as next up, then plugin shelves, then recently
+ * added. A core shelf appears only when some medium joins it, and a shelf
+ * with no entries is left out.
+ */
+export async function homeShelves(
+  db: Database,
+  userId: string,
+  plugins?: PluginRuntime,
+) {
   const mediums: Medium[] = [moviesMedium, createShowsMedium(db)];
   const core = (id: keyof typeof coreShelves) => {
     const joined = mediums.filter((medium) =>
@@ -113,10 +158,12 @@ export async function homeShelves(db: Database, userId: string) {
       return { id: shelf.id, title: shelf.title, entries };
     }),
   );
-  const shelves = await Promise.all([
-    ...core("continue-watching"),
-    ...own,
-    ...core("recently-added"),
+  const [leading, fromPlugins, trailing] = await Promise.all([
+    Promise.all([...core("continue-watching"), ...own]),
+    plugins === undefined ? [] : pluginShelves(db, userId, plugins, "home"),
+    Promise.all(core("recently-added")),
   ]);
-  return shelves.filter((shelf) => shelf.entries.length > 0);
+  return [...leading, ...fromPlugins, ...trailing].filter(
+    (shelf) => shelf.entries.length > 0,
+  );
 }

@@ -396,8 +396,10 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           playMethod: "remux",
           transcoderNodeId: null,
         });
-        expect(remuxRow?.decision?.method).toBe("remux");
-        expect(remuxRow?.decision?.video.action).toBe("copy");
+        expect(remuxRow?.decision).toMatchObject({
+          method: "remux",
+          video: { action: "copy" },
+        });
 
         const [sequelVersion] = await db
           .select()
@@ -432,11 +434,9 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           playMethod: "transcode",
           state: "starting",
         });
-        expect(transcodeRow?.decision?.video.action).toBe("copy");
-        expect(transcodeRow?.decision?.audio[0]).toEqual({
-          action: "transcode",
-          codec: "aac",
-          channels: 2,
+        expect(transcodeRow?.decision).toMatchObject({
+          video: { action: "copy" },
+          audio: [{ action: "transcode", codec: "aac", channels: 2 }],
         });
 
         const refreshed = await client.playback.refresh({
@@ -1030,9 +1030,8 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         .select({ decision: sessionRegistry.decision })
         .from(sessionRegistry)
         .where(eq(sessionRegistry.id, planned.sessionId));
-      expect(row?.decision?.video).toMatchObject({
-        action: "transcode",
-        bitrate: 3_000_000,
+      expect(row?.decision).toMatchObject({
+        video: { action: "transcode", bitrate: 3_000_000 },
       });
     }));
 

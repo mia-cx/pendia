@@ -37,8 +37,9 @@ export type SubtitleRendition = {
   forced: boolean;
 };
 
-/** The single variant a remux master playlist advertises. */
+/** One variant a master playlist advertises. */
 export type PlaylistVariant = {
+  uri: string; // the media playlist, relative to the master
   bandwidth: number; // bits per second, integer
   width: number;
   height: number;
@@ -129,22 +130,12 @@ const quoted = (value: string) =>
     .replace(/ {2,}/g, " ")
     .trim()}"`;
 
-/** Builds the master playlist: one variant, plus a WebVTT rendition per text subtitle; every URI carries the query. */
+/** Builds the master playlist over its variants, lowest first, plus a WebVTT rendition per text subtitle; every URI carries the query. */
 export function buildMasterPlaylist(
-  variant: PlaylistVariant,
+  variants: readonly PlaylistVariant[],
   query: string,
   subtitles: readonly SubtitleRendition[] = [],
 ) {
-  const attributes = [
-    `BANDWIDTH=${variant.bandwidth}`,
-    `RESOLUTION=${variant.width}x${variant.height}`,
-  ];
-  if (variant.codecs.length > 0) {
-    attributes.push(`CODECS="${variant.codecs.join(",")}"`);
-  }
-  if (subtitles.length > 0) {
-    attributes.push('SUBTITLES="subs"');
-  }
   const renditions = subtitles.map((subtitle) =>
     [
       "#EXT-X-MEDIA:TYPE=SUBTITLES",
@@ -159,15 +150,29 @@ export function buildMasterPlaylist(
       `URI="subs-${subtitle.index}.m3u8${query}"`,
     ].join(","),
   );
-  return [
+  const lines = [
     "#EXTM3U",
     "#EXT-X-VERSION:7",
     "#EXT-X-INDEPENDENT-SEGMENTS",
     ...renditions,
-    `#EXT-X-STREAM-INF:${attributes.join(",")}`,
-    `media.m3u8${query}`,
-    "",
-  ].join("\n");
+  ];
+  for (const variant of variants) {
+    const attributes = [
+      `BANDWIDTH=${variant.bandwidth}`,
+      `RESOLUTION=${variant.width}x${variant.height}`,
+    ];
+    if (variant.codecs.length > 0) {
+      attributes.push(`CODECS="${variant.codecs.join(",")}"`);
+    }
+    if (subtitles.length > 0) {
+      attributes.push('SUBTITLES="subs"');
+    }
+    lines.push(
+      `#EXT-X-STREAM-INF:${attributes.join(",")}`,
+      `${variant.uri}${query}`,
+    );
+  }
+  return [...lines, ""].join("\n");
 }
 
 /** Builds a subtitle rendition's VOD playlist: the whole track as one WebVTT segment. */

@@ -62,6 +62,40 @@ On SIGTERM, shutdown stops new claim loops and drains active handlers before clo
 Abrupt process loss does not recover running jobs in this slice. Handlers must be safe to retry after a reported failure.
 Plugin cron scheduling belongs to the plugin host, not this queue.
 
+## Plugins
+
+The api, worker and all roles each run a plugin runtime. At startup it listens on `pendia_plugins` and installs every plugin in the lockfile into `PENDIA_PLUGIN_DIR`, default `pendia-plugins` under the OS temp dir, in the background. Use local disk. Each package lands in a folder named after its integrity, written to a staging folder and renamed, so two versions never share a folder and a half-written install is never imported. A fresh process with an empty folder refetches each source and refuses one whose bytes no longer match the lockfile.
+
+A source is an absolute folder path, an http(s) tarball URL or an npm spec such as `pendia-plugin-prunarr@^1`. Npm specs resolve through `PENDIA_NPM_REGISTRY`, default `https://registry.npmjs.org`, and the lockfile records the exact version served. Integrity is SRI sha512 of the tarball, which matches npm's own, or of the sorted file listing for a folder. A folder skips `node_modules` and `.git`, so a plugin ships a bundled entry. Tarballs are capped at 64 MiB.
+
+The `plugin_lockfile` table holds name, pinned source, version and integrity. The `settings` row with key `plugins` holds the rest:
+
+```json
+{
+  "filesOff": null,
+  "registries": ["https://github.com/mia-cx/pendia"],
+  "plugins": {
+    "pendia-plugin-prunarr": {
+      "capabilities": ["items:read", "progress:read", "shelves", "jobs", "network"],
+      "enabled": true,
+      "failure": null,
+      "filesOff": { "until": "2026-10-05T12:00:00.000Z" },
+      "config": { "radarrUrl": "http://radarr:7878" }
+    }
+  }
+}
+```
+
+`capabilities` are the approved ones: the manifest's at the installed integrity. A files switch is `null` when on, `{ "until": null }` when off for good, or off until an instant. Every write takes the settings lock and NOTIFYs `pendia_plugins`, and every process then rebuilds the hosts whose state changed. A config change instead calls the plugin's `config.onChange` handlers.
+
+A plugin is imported on first use: a route request, a provider-fetch, a shelf, or a plugin job. Workers also import plugins with `jobs` at startup, because their schedules live in setup. Every call into plugin code is guarded. A throw, a bad default export, or a result that is not plain data marks the plugin failed in its settings, logs `plugin.failed` with the error, and unloads it in every process. Re-enabling it in the admin is the restart.
+
+Item, progress and playback writes enqueue one `plugin` job per event and per enabled plugin with `events`, inside the write's transaction. A schedule tick enqueues a `plugin` job whose id is derived from the plugin, schedule and minute, so every worker that fires the same tick enqueues it once. Workers need clocks within the same minute. `scan.completed` is declared but not emitted yet.
+
+Routes are served at `/plugins/<name>/<path>`, a scoped name taking two segments, for GET and POST. The handler gets the caller's user id when a session or API key authenticates, and null otherwise. POST passes the same origin check as API mutations. Plugin metadata providers join provider-fetch and take part in matching once their id is in the metadata `providerOrder`. Plugin home shelves appear on Home after the medium shelves; `GET /api/shelves/item/{id}` lists item shelves. Both show only items the caller may view.
+
+`plugins.*` and `registries.*` are the admin procedures, all behind `manage-server`: list, preview a source, install at the previewed integrity, enable and disable, files switches, config, and adding, listing and removing registries.
+
 ## Transcoder
 
 The transcoder and all roles run live HLS sessions. When the playback engine decides remux or transcode, `playback.plan` returns `/api/playback/{sessionId}/{itemId}/hls/master.m3u8?token=...`. The api serves `media.m3u8`, `init.mp4`, `N.m4s`, and per text subtitle Stream `subs-N.m3u8` and `subs-N.vtt`, under the same path. Every HLS URL carries the playback token.
@@ -71,7 +105,34 @@ Each transcoder runs at most `PENDIA_TRANSCODE_SLOTS` sessions that re-encode vi
 At startup a transcoder runs a 2 s trial encode per CPU codec, a tone map per transfer function, and a 2 s encode per codec on each hardware backend whose device exists. It records the passing ones on its node row and answers `/readyz` only after that. A CPU that encodes nothing stops startup. Planning uses the CPU entries every node shares; hardware backends are recorded, not used yet.
 `PENDIA_SCRATCH_DIR` chooses the scratch root, default `pendia-scratch` under the OS temp dir. Use local disk, never NFS. `PENDIA_TRANSCODER_PORT` defaults to 3001. `PENDIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
 The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `PENDIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
-Stored Versions are #35. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
+Stored Versions are below and need no transcoder. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
+
+## Stored Versions
+
+A library's policy names the rungs Pendia stores next to each source and an optional condition. It lives in the library configuration under `storedVersions`:
+
+```json
+{
+  "rungs": [{ "name": "source" }, { "name": "1080p", "height": 1080, "bitrate": 8000000 }],
+  "when": { "minHeight": 2160, "codecs": ["hevc"], "hdr": true }
+}
+```
+
+`source` is a remux of the source video. Every other rung is H.264 High at its height, capped at its bitrate, with AAC stereo; HDR sources are tone mapped to SDR. A source matches when any one `when` criterion holds, and every source matches without `when`. `hdr` only takes `true`. A rung taller than the source is skipped, and so is the source rung when fMP4 cannot carry its codec.
+
+| Procedure | REST route | Input | Output |
+| --- | --- | --- | --- |
+| `libraries.storedVersions` | GET `/api/libraries/{id}/stored-versions` | `id` | `{ policy }`, null when the library stores nothing |
+| `libraries.setStoredVersions` | PUT `/api/libraries/{id}/stored-versions` | `id`, nullable `policy` | `{ policy }` |
+| `items.requestStoredVersion` | POST `/api/items/{id}/stored-versions` | `id`, `rung` | `{ queued }`, false when the rung is complete or already queued |
+
+All three need `manage-transcoding`. A manual request names a rung the policy defines and skips only its condition. An unknown rung answers 400, a rung the source cannot make answers 409.
+
+Every folder scan queues the wanted rungs of each Item's best aligned source and deletes the rows of rungs the policy no longer names. A low-priority `store` sweep job on a worker then removes their folders and any `<file>.pendia` folder whose source left the disk, because the api, which runs a watcher's scans, may only read the share. Replacing a policy reconciles the whole library at once.
+
+A `store` job writes `<source file>.pendia/<rung>/`: `rung.json` with the rung definition, `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Editing a rung's height or bitrate under the same name stores it again. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
+
+When a plan is not direct play, the complete stored rungs that pass the client become the variants of one master playlist. A remux plan takes them only when they include the source rung. The api serves `hls/<versionId>/media.m3u8`, `init.mp4` and `N.m4s` from the library share, so every api needs read access to the libraries. The live session answers only when no stored rung passes.
 
 ## Auth
 
@@ -389,7 +450,7 @@ The `settings` row with key `metadata` holds one JSON object. Missing fields use
 }
 ```
 
-`providerOrder` sets the enabled providers in priority order. `tmdb` and `tvdb` are built in. TMDB handles movies and TVDB handles Shows, Seasons and Episodes, so each Item only reaches the provider for its kind. A `metadata` row that sets `providerOrder` without `tvdb` keeps TVDB off. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
+`providerOrder` sets the enabled providers in priority order. `tmdb` and `tvdb` are built in, and a plugin metadata provider joins by its id. TMDB handles movies and TVDB handles Shows, Seasons and Episodes, so each Item only reaches the provider for its kind. A `metadata` row that sets `providerOrder` without `tvdb` keeps TVDB off. `confidenceThreshold` is the inclusive minimum match confidence from 0 to 1.
 
 TMDB title search compares the folder title with each result's `title` and `original_title`. When neither matches for any result, it also reads `/movie/{id}/translations` for the first five results, so a Radarr folder named with a translated title, such as `Die Verurteilten (1994)`, still matches. A search with a plain match makes no extra request.
 

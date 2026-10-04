@@ -18,9 +18,11 @@ import {
   userSettings,
   versions,
 } from "../db/schema/index.ts";
+import { selectStoredVariants } from "../stored/playback.ts";
 import {
   type AudioStream,
   decidePlayback,
+  type PlaybackDecision,
   type PlaybackSource,
   type SubtitleStream,
 } from "./decisions.ts";
@@ -59,7 +61,8 @@ const hdrFlavours: readonly string[] = [
   "dolby-vision",
 ];
 
-function isHdr(value: string | null): value is Hdr {
+/** Narrows a probed HDR flavour to one the engine knows. */
+export function isHdr(value: string | null): value is Hdr {
   return value !== null && hdrFlavours.includes(value);
 }
 
@@ -309,7 +312,7 @@ export async function planPlayback(
   input: PlanInput,
   transport: PlanningTransport,
 ) {
-  const { item, version, source } = await loadPlaybackSource(
+  const { item, version, file, source } = await loadPlaybackSource(
     db,
     caller.user.id,
     input.itemId,
@@ -327,7 +330,9 @@ export async function planPlayback(
     sessionRequest: input.bitrateCapBps ?? null,
     isLan: isLanAddress(identity.address),
   };
-  let decision: ReturnType<typeof decidePlayback>;
+  // No live path, such as a cap under every ladder rung, can still leave a
+  // stored rung that fits.
+  let decision: PlaybackDecision | null;
   try {
     decision = decidePlayback(
       source,
@@ -336,17 +341,35 @@ export async function planPlayback(
       await readCapabilityTable(db),
     );
   } catch {
-    throw new AuthError("INVALID_INPUT");
+    decision = null;
   }
-  // HLS cuts on the Item's timeline. A copy cuts on the Version's own
-  // keyframes, and a re-encode restarts on the frame at a boundary, so both
-  // need the Version's frames on that timeline.
+  // Stored rungs that pass replace the live session; the api serves them from disk.
+  const storedVariantIds = await selectStoredVariants(
+    db,
+    {
+      itemId: item.id,
+      fileId: file.id,
+      segmentTimelineId: version.timelineAligned
+        ? version.segmentTimelineId
+        : null,
+      liveMethod: decision?.method ?? null,
+    },
+    input.profile,
+    caps,
+  );
+  const stored = storedVariantIds.length > 0;
+  if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
+  const method =
+    stored || decision === null ? ("remux" as const) : decision.method;
+  // A live HLS session cuts on the Item's timeline. A copy cuts on the
+  // Version's own keyframes, and a re-encode restarts on the frame at a
+  // boundary, so both need the Version's frames on that timeline.
   if (
-    decision.method !== "direct-play" &&
+    !stored &&
+    method !== "direct-play" &&
     (version.segmentTimelineId === null || !version.timelineAligned)
   )
     throw new AuthError("CONFLICT");
-  const method = decision.method;
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -356,7 +379,9 @@ export async function planPlayback(
         versionId: version.id,
         playMethod: method,
         state: "starting",
-        decision,
+        decision: stored
+          ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
+          : decision,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");

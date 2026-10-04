@@ -1,7 +1,4 @@
-import type {
-  PlaybackDecision,
-  PlaybackSource,
-} from "../playback/decisions.ts";
+import type { PlaybackSource, SessionDecision } from "../playback/decisions.ts";
 import {
   type PlaylistVariant,
   type SubtitleRendition,
@@ -36,14 +33,17 @@ const audioOutput = (audio: AudioDecision) =>
 
 /**
  * Derives a session's outputs from the decision persisted at plan time. A
- * session without one copies the video and the first audio Stream.
+ * session without a live decision copies the video and the first audio Stream.
  * Subtitle Streams are counted in File order, details aligned with the source.
  */
 export function sessionOutputs(
-  decision: PlaybackDecision | null | undefined,
+  persisted: SessionDecision | null | undefined,
   source: PlaybackSource,
   details: readonly SubtitleDetails[],
 ): SessionOutputs {
+  // A stored-only plan carries no live decision.
+  const decision =
+    persisted != null && "video" in persisted ? persisted : undefined;
   const video: VideoDecision = decision?.video ?? {
     action: "copy",
     codec: source.video.codec,
@@ -100,6 +100,7 @@ export function sessionOutputs(
           },
         };
   const variant: PlaylistVariant = {
+    uri: "media.m3u8",
     bandwidth: Math.round(picture.bitrate + (outputAudio?.bitrate ?? 0)),
     width: picture.width,
     height: picture.height,

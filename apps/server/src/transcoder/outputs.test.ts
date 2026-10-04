@@ -51,6 +51,7 @@ describe("sessionOutputs", () => {
     expect(outputs.audio).toBeUndefined();
     expect(outputs.burnSubtitle).toBeUndefined();
     expect(outputs.variant).toEqual({
+      uri: "media.m3u8",
       bandwidth: 8_448_000,
       width: 1920,
       height: 1080,
@@ -79,6 +80,7 @@ describe("sessionOutputs", () => {
     });
     expect(outputs.burnSubtitle).toBe(1);
     expect(outputs.variant).toEqual({
+      uri: "media.m3u8",
       bandwidth: 20_000_000 + 192_000,
       width: 1920,
       height: 1080,

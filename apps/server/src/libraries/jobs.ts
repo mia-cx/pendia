@@ -13,6 +13,7 @@ import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths } from "../mediums/movies.ts";
 import { groupShowPaths } from "../mediums/shows.ts";
 import { queueProviderFetch } from "../metadata/jobs.ts";
+import { reconcileStoredVersions } from "../stored/reconcile.ts";
 import {
   localScanSource,
   type ScanSource,
@@ -93,6 +94,7 @@ export async function runScanJob(
         if (pending !== undefined) await queueProviderFetch(db, result.itemId);
       }
     }
+    await reconcileStoredVersions(db, library, payload.path);
     await publishEvent(db, {
       kind: "library.changed",
       libraryId: library.id,

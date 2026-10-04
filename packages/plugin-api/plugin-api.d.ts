@@ -38,6 +38,7 @@ export interface PluginManifest {
 
 export interface Item {
   id: string;
+  libraryId: string;
   kind: ItemKind;
   parentId: string | null;
   title: string;
@@ -97,14 +98,15 @@ export interface PluginHost {
   /**
    * Present with "files", which the admin approves at install behind a warning
    * and can switch off per plugin or globally, temporarily or for good. Paths
-   * are library-relative. There are no file handles: a plugin asks Pendia to
-   * act on a path.
+   * are relative to the root of the library `libraryId` names, as in
+   * `Version.files`. There are no file handles: a plugin asks Pendia to act
+   * on a path.
    */
   readonly files?: {
-    stat(path: string): Promise<{ bytes: number; modifiedAt: string } | null>;
-    read(path: string, range?: { offset: number; length: number }): Promise<Uint8Array>;
-    write(path: string, bytes: Uint8Array): Promise<void>;
-    delete(path: string): Promise<void>;
+    stat(libraryId: string, path: string): Promise<{ bytes: number; modifiedAt: string } | null>;
+    read(libraryId: string, path: string, range?: { offset: number; length: number }): Promise<Uint8Array>;
+    write(libraryId: string, path: string, bytes: Uint8Array): Promise<void>;
+    delete(libraryId: string, path: string): Promise<void>;
   };
 
   /** Present with "providers". */

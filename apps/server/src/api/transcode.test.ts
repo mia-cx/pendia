@@ -272,10 +272,12 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
           .select({ decision: sessionRegistry.decision })
           .from(sessionRegistry)
           .where(eq(sessionRegistry.id, planned.sessionId ?? ""));
-        expect(row?.decision?.subtitles).toEqual([
-          { action: "convert", format: "webvtt", delivery: "sidecar" },
-          { action: "convert", format: "webvtt", delivery: "sidecar" },
-        ]);
+        expect(row?.decision).toMatchObject({
+          subtitles: [
+            { action: "convert", format: "webvtt", delivery: "sidecar" },
+            { action: "convert", format: "webvtt", delivery: "sidecar" },
+          ],
+        });
       }),
     90_000,
   );

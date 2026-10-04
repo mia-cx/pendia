@@ -2,6 +2,7 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { Database } from "../db/client.ts";
 import { createDirectPlayHandler } from "../playback/direct.ts";
+import { createPluginRuntime, type PluginRuntime } from "../plugins/runtime.ts";
 import type { Transcoder } from "../transcoder/index.ts";
 import type { ApiContext } from "./context.ts";
 import type { EventBroker } from "./events.ts";
@@ -16,6 +17,7 @@ export function createApiHandler(
   db: Database,
   events: EventBroker,
   transcoder?: Transcoder,
+  plugins: PluginRuntime = createPluginRuntime(db),
 ) {
   const rpc = new RPCHandler<ApiContext>(pendiaRouter);
   const openapi = new OpenAPIHandler<ApiContext>(pendiaRouter);
@@ -35,7 +37,7 @@ export function createApiHandler(
     if (streamed !== undefined) return streamed;
     // Bun.serve drops connections idle for ten seconds; the event stream must outlive that.
     if (eventStreamPaths.has(pathname)) server.timeout(request, 0);
-    const context: ApiContext = { db, request, peerAddress, events };
+    const context: ApiContext = { db, request, peerAddress, events, plugins };
     const result =
       pathname === "/rpc" || pathname.startsWith("/rpc/")
         ? await rpc.handle(request, { prefix: "/rpc", context })

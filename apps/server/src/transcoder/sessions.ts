@@ -705,7 +705,7 @@ export function createSessionManager(
         return playlist(
           name.kind === "master"
             ? buildMasterPlaylist(
-                session.outputs.variant,
+                [session.outputs.variant],
                 query,
                 session.outputs.subtitles,
               )

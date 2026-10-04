@@ -195,6 +195,12 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
           registry,
           workerOptions: { pollIntervalMs: 20 },
           transcoderOptions: { port: 0 },
+          watcherConfig: {
+            apiUrl: new URL("http://127.0.0.1:9"),
+            token: "unused",
+            roots: new Map(),
+          },
+          watcherOptions: { onError: () => {} },
         });
         try {
           await Bun.sleep(100);

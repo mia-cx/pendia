@@ -29,6 +29,13 @@ import {
   type Transcoder,
   type TranscoderOptions,
 } from "./transcoder/index.ts";
+import { createWatcherHandler } from "./watcher/http.ts";
+import {
+  readWatcherConfig,
+  startWatcher,
+  type WatcherConfig,
+  type WatcherOptions,
+} from "./watcher/index.ts";
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
@@ -119,6 +126,7 @@ function startRoles(
   apiServer: Bun.Server<undefined> | undefined,
   workerStarted: boolean,
   transcoder: Transcoder | undefined,
+  watcherStarted: boolean,
 ): void {
   const activeRoles = role === "all" ? roles.slice(0, -1) : [role];
 
@@ -131,6 +139,8 @@ function startRoles(
     }
 
     if (activeRole === "worker" && workerStarted) continue;
+
+    if (activeRole === "watcher" && watcherStarted) continue;
 
     if (activeRole === "transcoder" && transcoder) {
       log(activeRole, "transcoder.listening", {
@@ -155,6 +165,9 @@ type StartOptions = {
   repairOptions?: RepairOptions;
   transcoderOptions?: TranscoderOptions;
   pluginOptions?: Omit<PluginRuntimeOptions, "schedules">;
+  /** The watcher's config; read from the environment when absent. */
+  watcherConfig?: WatcherConfig;
+  watcherOptions?: WatcherOptions;
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -170,6 +183,8 @@ export async function startPendia(
     repairOptions,
     transcoderOptions,
     pluginOptions,
+    watcherConfig,
+    watcherOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
@@ -188,13 +203,15 @@ export async function startPendia(
   let repair: ReturnType<typeof createLibraryRepair> | undefined;
   let transcoder: Transcoder | undefined;
   let plugins: PluginRuntime | undefined;
+  let watcher: Awaited<ReturnType<typeof startWatcher>> | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops accepting API work, then stops the transcoder, debouncer, repair, worker, broker, API drain, plugins and database pool once. */
+  /** Stops accepting API work, then stops the watcher, transcoder, debouncer, repair, worker, broker, API drain, plugins and database pool once. */
   function stop() {
     stopping ??= (async () => {
       const apiStopped = Promise.resolve(apiServer?.stop());
       apiStopped.catch(() => {});
       try {
+        await watcher?.stop();
         await transcoder?.stop();
       } finally {
         try {
@@ -294,6 +311,7 @@ export async function startPendia(
         artwork,
         plugins: createPluginRouteHandler(database.db, plugins),
         jellyfin: createJellyfinHandler(database.db, jellyfinRoutes(artwork)),
+        watcher: createWatcherHandler(database.db, changeDebouncer),
       });
     }
     if (runsJobs && database && plugins) {
@@ -326,8 +344,33 @@ export async function startPendia(
             )),
       });
     }
+    if (role === "watcher") {
+      watcher = await startWatcher(
+        watcherConfig ?? readWatcherConfig(Bun.env),
+        {
+          ...watcherOptions,
+          onError:
+            watcherOptions?.onError ??
+            ((error: unknown) =>
+              console.error(
+                JSON.stringify({
+                  level: "error",
+                  role: "watcher",
+                  message: "watcher.error",
+                  error: error instanceof Error ? error.message : String(error),
+                }),
+              )),
+        },
+      );
+    }
     repair?.start();
-    startRoles(role, apiServer, worker !== undefined, transcoder);
+    startRoles(
+      role,
+      apiServer,
+      worker !== undefined,
+      transcoder,
+      watcher !== undefined,
+    );
     return { apiServer, transcoder, stop };
   } catch (error) {
     await stop();

@@ -1,6 +1,22 @@
-import { and, desc, eq, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import { type JobPayload, jobs, jobType } from "../db/schema/index.ts";
+import {
+  type JobPayload,
+  jobs,
+  jobType,
+  libraries,
+} from "../db/schema/index.ts";
 
 /** A persisted queue job. */
 export type Job = typeof jobs.$inferSelect;
@@ -17,6 +33,9 @@ type EnqueueOptions = Partial<
 
 const claimLockKey = 0x70656e646a6fn;
 const maxRetryDelayMs = 60_000;
+
+/** How long a watcher's claim keeps its Libraries' scans away from workers. */
+export const watcherHeartbeatMs = 30_000;
 
 /** The Postgres NOTIFY channel that wakes idle workers. */
 export const jobChannel = "pendia_jobs";
@@ -51,9 +70,17 @@ export function createJobQueue(
       });
     },
 
-    /** Claims the highest-priority ready job once across workers. */
-    async claim(types: readonly Job["type"][] = jobType.enumValues) {
+    /**
+     * Claims the highest-priority ready job once across workers. Scans of a
+     * Library with a live watcher are left to that watcher, which claims them
+     * by passing its `libraryIds`.
+     */
+    async claim(
+      types: readonly Job["type"][] = jobType.enumValues,
+      { libraryIds }: { libraryIds?: readonly string[] } = {},
+    ) {
       if (types.length === 0) return undefined;
+      const libraryId = sql`${jobs.payload}->>'libraryId'`;
       return db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(${claimLockKey})`);
         const [job] = await tx
@@ -65,6 +92,15 @@ export function createJobQueue(
               lt(jobs.attempts, jobs.maxAttempts),
               lte(jobs.runAfter, sql`statement_timestamp()`),
               inArray(jobs.type, [...types]),
+              libraryIds === undefined
+                ? or(
+                    ne(jobs.type, "scan"),
+                    sql`not exists (select 1 from ${libraries} where ${libraries.id}::text = ${libraryId} and ${libraries.watcherSeenAt} > statement_timestamp() - ${watcherHeartbeatMs} * interval '1 millisecond')`,
+                  )
+                : and(
+                    eq(jobs.type, "scan"),
+                    inArray(libraryId, [...libraryIds]),
+                  ),
               or(
                 isNull(jobs.concurrencyKey),
                 sql`(select count(*) from ${jobs} as running_jobs where running_jobs.state = 'running' and running_jobs.concurrency_key = ${jobs.concurrencyKey}) < ${concurrencyLimit}`,

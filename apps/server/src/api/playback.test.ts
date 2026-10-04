@@ -395,8 +395,10 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           playMethod: "remux",
           transcoderNodeId: null,
         });
-        expect(remuxRow?.decision?.method).toBe("remux");
-        expect(remuxRow?.decision?.video.action).toBe("copy");
+        expect(remuxRow?.decision).toMatchObject({
+          method: "remux",
+          video: { action: "copy" },
+        });
 
         const [sequelVersion] = await db
           .select({ id: versions.id })

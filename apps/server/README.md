@@ -68,7 +68,34 @@ The transcoder and all roles run live remux sessions. When the playback engine d
 One ffmpeg remuxes each session into transcoder-local scratch, cutting segments on the Item's segment timeline. A segment that is not ready yet waits up to twenty seconds, then answers 503. A seek restarts ffmpeg at that segment; segments already in scratch serve without a restart. Sixty seconds idle stops ffmpeg and deletes scratch while the session row stays live; the next request revives it.
 `PENDIA_SCRATCH_DIR` chooses the scratch root, default `pendia-scratch` under the OS temp dir. Use local disk, never NFS. `PENDIA_TRANSCODER_PORT` defaults to 3001. `PENDIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
 The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `PENDIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
-This slice is remux only. Live transcoding, subtitles and the admission cap are #34; stored Versions are #35. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
+This slice is remux only. Live transcoding, subtitles and the admission cap are #34; stored Versions are below and need no transcoder. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
+
+## Stored Versions
+
+A library's policy names the rungs Pendia stores next to each source and an optional condition. It lives in the library configuration under `storedVersions`:
+
+```json
+{
+  "rungs": [{ "name": "source" }, { "name": "1080p", "height": 1080, "bitrate": 8000000 }],
+  "when": { "minHeight": 2160, "codecs": ["hevc"], "hdr": true }
+}
+```
+
+`source` is a remux of the source video. Every other rung is H.264 High at its height, capped at its bitrate, with AAC stereo; HDR sources are tone mapped to SDR. A source matches when any one `when` criterion holds, and every source matches without `when`. `hdr` only takes `true`. A rung taller than the source is skipped, and so is the source rung when fMP4 cannot carry its codec.
+
+| Procedure | REST route | Input | Output |
+| --- | --- | --- | --- |
+| `libraries.storedVersions` | GET `/api/libraries/{id}/stored-versions` | `id` | `{ policy }`, null when the library stores nothing |
+| `libraries.setStoredVersions` | PUT `/api/libraries/{id}/stored-versions` | `id`, nullable `policy` | `{ policy }` |
+| `items.requestStoredVersion` | POST `/api/items/{id}/stored-versions` | `id`, `rung` | `{ queued }`, false when the rung is complete or already queued |
+
+All three need `manage-transcoding`. A manual request names a rung the policy defines and skips only its condition. An unknown rung answers 400, a rung the source cannot make answers 409.
+
+Every folder scan queues the wanted rungs of each Item's best aligned source and deletes the rows of rungs the policy no longer names. A low-priority `store` sweep job on a worker then removes their folders and any `<file>.pendia` folder whose source left the disk, because the api, which runs a watcher's scans, may only read the share. Replacing a policy reconciles the whole library at once.
+
+A `store` job writes `<source file>.pendia/<rung>/`: `rung.json` with the rung definition, `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Editing a rung's height or bitrate under the same name stores it again. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
+
+When a plan is not direct play, the complete stored rungs that pass the client become the variants of one master playlist. A remux plan takes them only when they include the source rung. The api serves `hls/<versionId>/media.m3u8`, `init.mp4` and `N.m4s` from the library share, so every api needs read access to the libraries. The live session answers only when no stored rung passes.
 
 ## Auth
 

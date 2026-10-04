@@ -17,8 +17,9 @@ export function parseHlsName(name: string): HlsName | null {
   return { kind: "segment", index: Number(segment) };
 }
 
-/** The single variant a remux master playlist advertises. */
+/** One variant a master playlist advertises. */
 export type PlaylistVariant = {
+  uri: string; // the media playlist, relative to the master
   bandwidth: number; // bits per second, integer
   width: number;
   height: number;
@@ -102,23 +103,26 @@ export function variantCodecs(
   return [videoCodec, audioCodec];
 }
 
-/** Builds the master playlist: one variant whose media playlist URI carries the query. */
-export function buildMasterPlaylist(variant: PlaylistVariant, query: string) {
-  const attributes = [
-    `BANDWIDTH=${variant.bandwidth}`,
-    `RESOLUTION=${variant.width}x${variant.height}`,
-  ];
-  if (variant.codecs.length > 0) {
-    attributes.push(`CODECS="${variant.codecs.join(",")}"`);
+/** Builds the master playlist over its variants, lowest first; every media playlist URI carries the query. */
+export function buildMasterPlaylist(
+  variants: readonly PlaylistVariant[],
+  query: string,
+) {
+  const lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"];
+  for (const variant of variants) {
+    const attributes = [
+      `BANDWIDTH=${variant.bandwidth}`,
+      `RESOLUTION=${variant.width}x${variant.height}`,
+    ];
+    if (variant.codecs.length > 0) {
+      attributes.push(`CODECS="${variant.codecs.join(",")}"`);
+    }
+    lines.push(
+      `#EXT-X-STREAM-INF:${attributes.join(",")}`,
+      `${variant.uri}${query}`,
+    );
   }
-  return [
-    "#EXTM3U",
-    "#EXT-X-VERSION:7",
-    "#EXT-X-INDEPENDENT-SEGMENTS",
-    `#EXT-X-STREAM-INF:${attributes.join(",")}`,
-    `media.m3u8${query}`,
-    "",
-  ].join("\n");
+  return [...lines, ""].join("\n");
 }
 
 /** Returns the number of segments a timeline describes. */

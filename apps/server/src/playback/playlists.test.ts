@@ -16,12 +16,15 @@ describe("buildMasterPlaylist", () => {
   test("advertises one variant carrying the query", () => {
     const playlist = HLS.parse(
       buildMasterPlaylist(
-        {
-          bandwidth: 5_000_000,
-          width: 1920,
-          height: 1080,
-          codecs: ["avc1.640028", "mp4a.40.2"],
-        },
+        [
+          {
+            uri: "media.m3u8",
+            bandwidth: 5_000_000,
+            width: 1920,
+            height: 1080,
+            codecs: ["avc1.640028", "mp4a.40.2"],
+          },
+        ],
         "?token=t",
       ),
     );
@@ -39,7 +42,15 @@ describe("buildMasterPlaylist", () => {
   test("omits CODECS when the list is empty", () => {
     const playlist = HLS.parse(
       buildMasterPlaylist(
-        { bandwidth: 5_000_000, width: 1920, height: 1080, codecs: [] },
+        [
+          {
+            uri: "media.m3u8",
+            bandwidth: 5_000_000,
+            width: 1920,
+            height: 1080,
+            codecs: [],
+          },
+        ],
         "",
       ),
     );
@@ -49,6 +60,43 @@ describe("buildMasterPlaylist", () => {
     const variant = playlist.variants[0];
     expect(variant?.codecs).toBeUndefined();
     expect(variant?.uri).toBe("media.m3u8");
+  });
+
+  test("lists stored rungs in order, each with its own media playlist", () => {
+    const playlist = HLS.parse(
+      buildMasterPlaylist(
+        [
+          {
+            uri: "low/media.m3u8",
+            bandwidth: 1_160_000,
+            width: 640,
+            height: 360,
+            codecs: ["avc1.64001E", "mp4a.40.2"],
+          },
+          {
+            uri: "high/media.m3u8",
+            bandwidth: 8_160_000,
+            width: 1920,
+            height: 1080,
+            codecs: ["avc1.640028", "mp4a.40.2"],
+          },
+        ],
+        "?token=t",
+      ),
+    );
+    if (!playlist.isMasterPlaylist) {
+      throw new Error("Expected a master playlist.");
+    }
+    expect(
+      playlist.variants.map((variant) => [
+        variant.uri,
+        variant.bandwidth,
+        variant.resolution?.height,
+      ]),
+    ).toEqual([
+      ["low/media.m3u8?token=t", 1_160_000, 360],
+      ["high/media.m3u8?token=t", 8_160_000, 1080],
+    ]);
   });
 });
 

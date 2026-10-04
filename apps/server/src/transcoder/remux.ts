@@ -12,32 +12,41 @@ export type RemuxRun = {
   stripDolbyVision?: boolean;
 };
 
-/** Builds the ffmpeg argument list for a remux run. */
-export function remuxArguments(run: RemuxRun) {
-  if (run.boundariesSeconds.length < 2) {
-    throw new RangeError("A timeline needs at least two boundaries.");
-  }
-  if (
-    !Number.isInteger(run.startIndex) ||
-    run.startIndex < 0 ||
-    run.startIndex >= run.boundariesSeconds.length - 1
-  ) {
-    throw new RangeError("Segment index out of range.");
-  }
+/** The input options of a segmenting run: optional throttle, then the seek to its first segment. */
+export function inputArguments(
+  boundariesSeconds: readonly number[],
+  startIndex: number,
+  readRate?: RemuxRun["readRate"],
+) {
   const args = ["-hide_banner", "-loglevel", "error", "-nostdin"];
-  if (run.readRate !== undefined) {
+  if (readRate !== undefined) {
     args.push(
       "-readrate",
-      String(run.readRate.rate),
+      String(readRate.rate),
       "-readrate_initial_burst",
-      String(run.readRate.initialBurstSeconds),
+      String(readRate.initialBurstSeconds),
     );
   }
-  if (run.startIndex > 0) {
+  if (startIndex > 0) {
     // The seek time is ceiled so a keyframe exactly at the boundary stays in the run.
-    const boundary = run.boundariesSeconds[run.startIndex] ?? 0;
+    const boundary = boundariesSeconds[startIndex] ?? 0;
     args.push("-seek_timestamp", "1", "-ss", `${Math.ceil(boundary * 1e6)}us`);
   }
+  return args;
+}
+
+/** Builds the ffmpeg argument list for a remux run. */
+export function remuxArguments(run: RemuxRun) {
+  const segments = segmentArguments(
+    run.boundariesSeconds,
+    run.startIndex,
+    run.directory,
+  );
+  const args = inputArguments(
+    run.boundariesSeconds,
+    run.startIndex,
+    run.readRate,
+  );
   args.push(
     "-i",
     run.inputPath,
@@ -57,7 +66,26 @@ export function remuxArguments(run: RemuxRun) {
   if (run.stripDolbyVision === true) {
     args.push("-bsf:v", "dovi_rpu=strip=1");
   }
-  args.push(
+  return [...args, ...segments];
+}
+
+/** The output options that cut fMP4 segments on the timeline into a directory, with a shared init and ffmpeg's own list. */
+export function segmentArguments(
+  boundariesSeconds: readonly number[],
+  startIndex: number,
+  directory: string,
+) {
+  if (boundariesSeconds.length < 2) {
+    throw new RangeError("A timeline needs at least two boundaries.");
+  }
+  if (
+    !Number.isInteger(startIndex) ||
+    startIndex < 0 ||
+    startIndex >= boundariesSeconds.length - 1
+  ) {
+    throw new RangeError("Segment index out of range.");
+  }
+  const args = [
     "-copyts",
     "-avoid_negative_ts",
     "disabled",
@@ -66,30 +94,53 @@ export function remuxArguments(run: RemuxRun) {
     "-segment_format",
     "mp4",
     "-segment_format_options",
-    "movflags=+frag_keyframe+empty_moov+default_base_moof+frag_discont:avoid_negative_ts=disabled",
+    // Without use_editlist=0 a discontinuous fragment starts its decode time
+    // at the first pts, which delays B-frame video by its reorder depth.
+    "movflags=+frag_keyframe+empty_moov+default_base_moof+frag_discont:avoid_negative_ts=disabled:use_editlist=0",
     "-individual_header_trailer",
     "0",
     "-segment_header_filename",
-    `${run.directory}/init.mp4`,
+    `${directory}/init.mp4`,
+  ];
+  // The muxer measures its cut list from the run's first pts and starts at
+  // the list's first entry, so a run from segment N lists the later cuts
+  // relative to boundary N. Absolute times only line up on a uniform timeline.
+  const interior = cutTimes(
+    boundariesSeconds.slice(startIndex),
+    boundariesSeconds[startIndex],
   );
-  const interior = run.boundariesSeconds.slice(1, -1);
-  if (interior.length > 0) {
-    // Cut times are floored so a keyframe at the boundary falls inside its segment.
-    args.push(
-      "-segment_times",
-      interior.map((time) => `${Math.floor(time * 1e6)}us`).join(","),
-    );
-  }
+  // With no later cut, ffmpeg would fall back to its 2 s segment_time; a
+  // segment as long as a day keeps the rest of the timeline in one file.
+  args.push(
+    ...(interior === null
+      ? ["-segment_time", String(oneSegmentSeconds)]
+      : ["-segment_times", interior]),
+  );
   args.push(
     "-segment_start_number",
-    String(run.startIndex),
+    String(startIndex),
     "-segment_list",
-    `${run.directory}/segments.m3u8`,
+    `${directory}/segments.m3u8`,
     "-segment_list_type",
     "m3u8",
-    `${run.directory}/%d.m4s`,
+    `${directory}/%d.m4s`,
   );
   return args;
+}
+
+const oneSegmentSeconds = 86_400;
+
+/** The interior timeline boundaries as an ffmpeg time list measured from an origin; null for a one-segment timeline. */
+export function cutTimes(
+  boundariesSeconds: readonly number[],
+  originSeconds = 0,
+) {
+  const interior = boundariesSeconds.slice(1, -1);
+  if (interior.length === 0) return null;
+  // Cut times are floored so a frame at the boundary falls inside its segment.
+  return interior
+    .map((time) => `${Math.floor((time - originSeconds) * 1e6)}us`)
+    .join(",");
 }
 
 /** Reads the segment indexes ffmpeg's own m3u8 list declares complete. */
@@ -114,12 +165,33 @@ export type RunHandle = {
   kill(): Promise<void>;
 };
 
-/** Spawns ffmpeg for a run and reports each finished segment through onReady. */
+/** Spawns ffmpeg for a remux run and reports each finished segment through onReady. */
 export function startRemuxRun(
   run: RemuxRun,
   onReady: (indexes: number[]) => void,
 ): RunHandle {
-  const args = remuxArguments(run);
+  return startSegmentRun(
+    {
+      command: ["ffmpeg", ...remuxArguments(run)],
+      directory: run.directory,
+      log: { role: "transcoder", message: "remux.failed" },
+    },
+    onReady,
+  );
+}
+
+/** A segmenting command, the directory its list lands in, and the log line a failed exit writes. */
+export type SegmentRun = {
+  command: readonly string[];
+  directory: string;
+  log: { role: string; message: string };
+};
+
+/** Spawns a segmenting ffmpeg command and reports each segment its own list declares finished. */
+export function startSegmentRun(
+  run: SegmentRun,
+  onReady: (indexes: number[]) => void,
+): RunHandle {
   const listPath = `${run.directory}/segments.m3u8`;
   const reported = new Set<number>();
   let killed = false;
@@ -153,7 +225,7 @@ export function startRemuxRun(
   });
 
   const spawnFfmpeg = () =>
-    Bun.spawn(["ffmpeg", ...args], {
+    Bun.spawn([...run.command], {
       stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",
@@ -182,8 +254,7 @@ export function startRemuxRun(
       console.error(
         JSON.stringify({
           level: "error",
-          role: "transcoder",
-          message: "remux.failed",
+          ...run.log,
           exitCode: code,
           stderr: (await stderr).trim().slice(-2000),
         }),

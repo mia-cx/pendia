@@ -1,0 +1,172 @@
+import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
+import type { Database } from "../db/client.ts";
+import {
+  files,
+  jobs,
+  type libraries,
+  streams,
+  versions,
+} from "../db/schema/index.ts";
+import { enqueueStore, enqueueStoreSweep, storedFolderOf } from "./jobs.ts";
+import { policyMatches, readStoredVersionPolicy, rungFits } from "./policy.ts";
+import { inFolder } from "./sweep.ts";
+
+type Library = typeof libraries.$inferSelect;
+
+/** The aligned single-file source of each Item that stored rungs derive from: the tallest, then the highest bitrate. */
+export async function bestSources(db: Database, where: SQL | undefined) {
+  const rows = await db
+    .select({
+      itemId: files.itemId,
+      versionId: files.versionId,
+      fileId: files.id,
+      codec: streams.codec,
+      height: streams.height,
+      hdr: streams.hdr,
+      bitrate: streams.bitrate,
+      disposition: streams.disposition,
+    })
+    .from(files)
+    .innerJoin(versions, eq(versions.id, files.versionId))
+    .innerJoin(
+      streams,
+      and(eq(streams.fileId, files.id), eq(streams.kind, "video")),
+    )
+    .where(and(eq(versions.timelineAligned, true), where));
+  const filesPerVersion = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const set = filesPerVersion.get(row.versionId) ?? new Set();
+    set.add(row.fileId);
+    filesPerVersion.set(row.versionId, set);
+  }
+  const best = new Map<
+    string,
+    {
+      fileId: string;
+      bitrate: bigint;
+      video: { codec: string; height: number; hdr: string };
+    }
+  >();
+  for (const row of rows) {
+    if (row.disposition.attached_pic === true) continue;
+    if (row.height === null || row.hdr === null) continue;
+    if (filesPerVersion.get(row.versionId)?.size !== 1) continue;
+    const bitrate = row.bitrate ?? 0n;
+    const current = best.get(row.itemId);
+    if (
+      current !== undefined &&
+      (row.height < current.video.height ||
+        (row.height === current.video.height && bitrate <= current.bitrate))
+    )
+      continue;
+    best.set(row.itemId, {
+      fileId: row.fileId,
+      bitrate,
+      video: { codec: row.codec, height: row.height, hdr: row.hdr },
+    });
+  }
+  return best;
+}
+
+/** Enqueues a store job for a rung unless it is complete or already queued or running; true when it enqueued. */
+export async function requestStore(
+  db: Database,
+  sourceFileId: string,
+  rung: string,
+) {
+  const [complete] = await db
+    .select({ id: versions.id })
+    .from(versions)
+    .where(
+      and(
+        eq(versions.sourceFileId, sourceFileId),
+        eq(versions.rung, rung),
+        eq(versions.complete, true),
+      ),
+    )
+    .limit(1);
+  if (complete !== undefined) return false;
+  const [pending] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.type, "store"),
+        inArray(jobs.state, ["queued", "running"]),
+        sql`${jobs.payload}->>'sourceFileId' = ${sourceFileId}`,
+        sql`${jobs.payload}->>'rung' = ${rung}`,
+      ),
+    )
+    .limit(1);
+  if (pending !== undefined) return false;
+  await enqueueStore(db, { sourceFileId, rung });
+  return true;
+}
+
+/** Brings the stored rungs of a library folder in line with its policy: drops the rows of rungs it no longer names, whose definition changed or whose source moved, queues a sweep for their folders, and enqueues missing wanted rungs. */
+export async function reconcileStoredVersions(
+  db: Database,
+  library: Library,
+  folder = ".",
+) {
+  const policy = readStoredVersionPolicy(library.configuration);
+  const stored = await db
+    .select({
+      id: versions.id,
+      rung: versions.rung,
+      storedFolder: versions.storedFolder,
+      sourcePath: files.path,
+      height: streams.height,
+      bitrate: streams.bitrate,
+    })
+    .from(versions)
+    .innerJoin(files, eq(files.id, versions.sourceFileId))
+    .leftJoin(
+      streams,
+      and(eq(streams.versionId, versions.id), eq(streams.kind, "video")),
+    )
+    .where(
+      and(
+        eq(versions.libraryId, library.id),
+        eq(versions.origin, "stored"),
+        inFolder(files.path, folder),
+      ),
+    );
+  let dropped = false;
+  for (const row of stored) {
+    if (row.rung === null || row.storedFolder === null) continue;
+    const rung = policy?.rungs.find((candidate) => candidate.name === row.rung);
+    // A finished encode records the rung's height and bitrate on its video
+    // Stream; an edited definition under the same name stores it again.
+    const edited =
+      rung !== undefined &&
+      "height" in rung &&
+      row.height !== null &&
+      (row.height !== rung.height || row.bitrate !== BigInt(rung.bitrate));
+    if (
+      rung !== undefined &&
+      !edited &&
+      row.storedFolder === storedFolderOf(row.sourcePath, row.rung)
+    )
+      continue;
+    await db.delete(versions).where(eq(versions.id, row.id));
+    dropped = true;
+  }
+  // Folders go on a worker: whoever runs this may only read the share, as
+  // the api does for a watcher's scan report. Without a policy there is no
+  // stored output left to sweep once its rows are gone.
+  if (policy !== null || dropped)
+    await enqueueStoreSweep(db, library.id, folder);
+  if (policy === null) return;
+  const sources = await bestSources(
+    db,
+    and(eq(files.libraryId, library.id), inFolder(files.path, folder)),
+  );
+  for (const source of sources.values()) {
+    if (!policyMatches(policy.when, source.video)) continue;
+    for (const rung of policy.rungs) {
+      if (rungFits(rung, source.video))
+        await requestStore(db, source.fileId, rung.name);
+    }
+  }
+}

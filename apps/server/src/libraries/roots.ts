@@ -123,13 +123,3 @@ export async function assetRoots(
   const roots = await rootsOf(db, item.libraryId);
   return [home, ...roots.filter((root) => root.id !== home.id)];
 }
-
-/** The absolute canonical folder of an Item in its home root. */
-export async function itemFolder(db: Connection, itemId: string) {
-  const [item] = await db
-    .select({ canonicalFolder: items.canonicalFolder })
-    .from(items)
-    .where(eq(items.id, itemId));
-  if (item === undefined) throw new AuthError("NOT_FOUND");
-  return resolve((await homeRoot(db, itemId)).path, item.canonicalFolder);
-}

@@ -1443,6 +1443,12 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         if (!part1File) throw new Error("Fixture File missing.");
         const [firstVersion] = await db.select().from(versions);
         if (!firstVersion) throw new Error("Fixture Version missing.");
+        expect(firstVersion).toMatchObject({
+          keyframesSeconds: null,
+          lazyIndexPending: true,
+        });
+        const remainingProbe = await probeVideo(part1);
+        expect(remainingProbe.keyframesSeconds).not.toBeNull();
 
         await rm(part2);
 
@@ -1467,6 +1473,10 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const [keptVersion] = await db.select().from(versions);
         expect(keptVersion?.id).toBe(firstVersion.id);
         expect(keptVersion?.bytes).toBe(part1File.bytes);
+        expect(keptVersion).toMatchObject({
+          keyframesSeconds: remainingProbe.keyframesSeconds,
+          lazyIndexPending: false,
+        });
         const itemRows = await db.select().from(items);
         expect(itemRows.map((row) => row.kind).sort()).toEqual([
           "episode",

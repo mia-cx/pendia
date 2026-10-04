@@ -277,6 +277,40 @@ async function findByImdb(
   };
 }
 
+/** Search candidates, in TMDB's relevance order, whose translations a search may read. */
+const translationLookupLimit = 5;
+
+/** Reads a movie's translated titles; a movie TMDB no longer knows has none. */
+async function translatedTitles(
+  request: typeof fetch,
+  key: string,
+  id: number,
+  timeoutMs: number,
+  maxResponseBytes: number,
+): Promise<string[]> {
+  const url = new URL(`${baseUrl}/movie/${id}/translations`);
+  url.searchParams.set("api_key", key);
+  const body = await requestJson(
+    request,
+    url,
+    timeoutMs,
+    maxResponseBytes,
+    true,
+  );
+  if (body === undefined) return [];
+  const data = asObject(body);
+  if (!Array.isArray(data.translations)) invalid();
+  const titles: string[] = [];
+  for (const entry of data.translations) {
+    const translation = asObject(entry);
+    if (translation.data === undefined || translation.data === null) continue;
+    // TMDB leaves `title` empty when a translation only covers the overview.
+    const title = optionalString(asObject(translation.data).title);
+    if (title) titles.push(title);
+  }
+  return titles;
+}
+
 async function searchMovies(
   request: typeof fetch,
   key: string,
@@ -307,16 +341,36 @@ async function searchMovies(
   );
   if (!Array.isArray(data.results)) invalid();
   const wanted = normalizeTitle(query.title);
-  return data.results.map((entry) => {
+  const matches = (title: string) => normalizeTitle(title) === wanted;
+  const candidates = data.results.map((entry) => {
     const result = asObject(entry);
-    const id = requiredId(result.id);
     const title = requiredString(result.title);
     const originalTitle = optionalString(result.original_title);
-    const year = releaseYear(result.release_date);
-    // `title` follows the request language; folders often use the original.
-    const titleMatches =
-      normalizeTitle(title) === wanted ||
-      (originalTitle !== null && normalizeTitle(originalTitle) === wanted);
+    return {
+      id: requiredId(result.id),
+      title,
+      year: releaseYear(result.release_date),
+      // `title` follows the request language; folders often use the original.
+      titleMatches:
+        matches(title) || (originalTitle !== null && matches(originalTitle)),
+    };
+  });
+  // Radarr can name folders with a translated title. Translations cost one
+  // request per candidate, so only a search with no plain match reads them.
+  if (!candidates.some((candidate) => candidate.titleMatches))
+    await Promise.all(
+      candidates.slice(0, translationLookupLimit).map(async (candidate) => {
+        const titles = await translatedTitles(
+          request,
+          key,
+          candidate.id,
+          timeoutMs,
+          maxResponseBytes,
+        );
+        candidate.titleMatches = titles.some(matches);
+      }),
+    );
+  return candidates.map(({ id, title, year, titleMatches }) => {
     let confidence = titleMatches ? 0.8 : 0.5;
     if (query.year === undefined) confidence += 0.1;
     else if (year === query.year) confidence += 0.2;

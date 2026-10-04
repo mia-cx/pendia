@@ -876,13 +876,13 @@ export async function scanShowDirectory(
               .select({ id: files.id, path: files.path, order: files.order })
               .from(files)
               .where(eq(files.versionId, versionId));
-            // A scan without reconciliation keeps Files it did not find.
-            const retained =
-              options.reconcileMissing === true
-                ? 0
-                : versionFiles.filter(
-                    (file) => !versionGroup.paths.includes(file.path),
-                  ).length;
+            // Reconciliation deletes only Files the walk missed; the rest stay.
+            const retained = versionFiles.filter(
+              (file) =>
+                !versionGroup.paths.includes(file.path) &&
+                (options.reconcileMissing !== true ||
+                  memberByPath.has(file.path)),
+            ).length;
             await tx
               .update(versions)
               .set({

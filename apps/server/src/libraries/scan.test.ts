@@ -1486,6 +1486,46 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
       });
     }));
 
+  test("keeps a split Version pending when a move regroups its Files", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
+        await createVideoFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await scanShowDirectory(db, library.id, show);
+
+        const renamed = `${show}/Season 01/Show S01E01 1080p.mkv`;
+        await rename(
+          join(seasonDir, "Show S01E01 - part2.mkv"),
+          join(root, renamed),
+        );
+        await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+          changes: [
+            {
+              kind: "move",
+              path: renamed,
+              previousPath: `${show}/Season 01/Show S01E01 - part2.mkv`,
+              providerIds: {},
+            },
+          ],
+        });
+
+        expect(await db.select().from(files)).toHaveLength(2);
+        expect(await db.select().from(versions)).toMatchObject([
+          { keyframesSeconds: null, lazyIndexPending: true },
+        ]);
+      });
+    }));
+
   test("an emptied show folder revalidates before deleting the subtree", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);

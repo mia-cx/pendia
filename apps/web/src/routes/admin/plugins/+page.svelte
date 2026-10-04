@@ -385,7 +385,7 @@ h4 {
 }
 
 .title {
-  flex: 1;
+  flex: 1 1 16rem;
   min-width: 0;
 }
 
@@ -424,6 +424,10 @@ h4 {
   margin: 0;
 }
 
+.stack button {
+  justify-self: start;
+}
+
 .review {
   display: grid;
   gap: 12px;
@@ -459,16 +463,16 @@ h4 {
 }
 
 .entries li {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
+  gap: 16px;
 }
 
 .entries .name {
-  margin-right: 8px;
+  display: block;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 summary {

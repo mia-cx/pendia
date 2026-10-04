@@ -171,7 +171,7 @@ The two OIDC routes answer a browser, so a failure is a 303 to `/login?error=<co
 Only `email_verified: true` can link an existing account. An unverified email never links, but a matching live invite can create a separate account.
 OIDC uses discovery, authorization code, state, nonce, PKCE S256, signed ID-token validation, confidential Basic client authentication, and UserInfo subject validation when advertised.
 
-Setup, local login, invite creation and local invite acceptance require `Content-Type: application/json`. Request bodies have a 16 KiB limit.
+Setup, local login, invite creation, invite status and local invite acceptance require `Content-Type: application/json`. Request bodies have a 16 KiB limit.
 Usernames use ASCII letters, digits, dots, underscores and hyphens, start with a letter or digit, and have at most 64 characters.
 Usernames ignore surrounding whitespace and case. Passwords retain whitespace and allow 1 to 1024 characters.
 Display names, client names and device names have at most 128 characters. Device IDs allow 1 to 128 characters.

@@ -6,9 +6,9 @@ Add the two remaining artwork store backends next to the colocated one from #28:
 
 ## Acceptance criteria
 
-- [ ] Artwork round-trips through the path backend and through S3 against a local S3-compatible server in tests.
-- [ ] A fresh install on each backend serves artwork.
-- [ ] The read-only fallback is exercised in a test.
+- [x] Artwork round-trips through the path backend and through S3 against a local S3-compatible server in tests.
+- [x] A fresh install on each backend serves artwork.
+- [x] The read-only fallback is exercised in a test.
 
 ## TODOs
 
@@ -22,7 +22,7 @@ Add the two remaining artwork store backends next to the colocated one from #28:
   - Validation: a test makes the Item folder unwritable and proves the poster lands in the configured path and reads back.
 - [x] Remove artwork from every backend when its Item, its selection or its Library goes away.
   - Validation: tests prove scan deletes, `removeSelectedArtwork` and library deletion remove path and S3 originals.
-- [ ] Prove a fresh install serves artwork on each backend and document the settings.
+- [x] Prove a fresh install serves artwork on each backend and document the settings.
   - Validation: an artwork route test per backend on a freshly migrated database; README and topology spec updated.
 
 ## Notes
@@ -34,3 +34,8 @@ Add the two remaining artwork store backends next to the colocated one from #28:
 - Rows whose backend is not configured in this process read as missing. Colocated rows always resolve, because their root is the Library root.
 - Read-only means `EROFS` or `EACCES` from the colocated write. Without `PENDIA_ARTWORK_PATH` the error stands.
 - MinIO no longer publishes images on Docker Hub or Quay, so the S3 tests run against `versity/versitygw` (101 MB, posix backend), started with `docker run --rm`.
+- versitygw serves each directory under its data root as a bucket, so CI makes the bucket with `mkdir` before the server starts. Bun signs custom endpoints for region `auto`, which versitygw rejects, so the test client sets `us-east-1`. Operators on such servers set `S3_REGION`.
+- `TEST_S3_URL` carries the endpoint, credentials and bucket in one URL, like `DATABASE_URL`.
+- The read-only fallback shipped in the backend-interface commit; its TODO commit adds the test. The test skips as root, which ignores directory permissions.
+- Library deletion removes path and S3 originals. Colocated originals stay, because deleting a Library never touches the media folder.
+- Scan deletes go through `deleteItemSubtree` and `removeArtworkFiles`, which the removal tests call directly.

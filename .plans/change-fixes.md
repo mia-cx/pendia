@@ -27,7 +27,7 @@ Two change-detection bugs, both in `apps/server/src/libraries/changes.ts` and `w
   - `submitChanges` computes one scan folder per path: the Show folder for Sonarr, the Movie folder for Radarr, `"."` at the library root. A `"."` folder for the change or a move's source throws `Webhook path must name a folder inside the library root.` A move between folders also queues the move on the source folder, without provider ids.
   - Validation: `webhooks.test.ts` covers a Radarr file directly in the root, a delete of the root itself, and a cross-show Sonarr move that queues both folders.
   - Done: both new tests fail on the old `webhooks.ts` and pass now. `bun test src/libraries/webhooks.test.ts` with `DATABASE_URL`: 15 pass, 0 fail.
-- [ ] 3. Document the root rejection and cross-show moves in `apps/server/README.md`.
+- [x] 3. Document the root rejection and cross-show moves in `apps/server/README.md`.
   - Validation: the webhook section states the root 400 and that a cross-show move does not carry Progress.
 - [ ] 4. Run the full repository gate.
   - From the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55563/pendia bun test`, and `bun test` without `DATABASE_URL`.

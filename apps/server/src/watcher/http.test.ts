@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
 import { join } from "node:path";
-import { eq, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
@@ -11,6 +11,7 @@ import {
   items,
   libraries,
   probeCache,
+  progress,
   streams,
   versions,
 } from "../db/schema/index.ts";
@@ -47,7 +48,7 @@ async function setup(db: Database) {
     .values({ name: "Movies", medium: "movies", rootPath: "/media/movies" })
     .returning();
   if (!library) throw new Error("Library insert returned no row.");
-  return { token, library };
+  return { admin, token, library };
 }
 
 function post(path: string, body: unknown, token?: string) {
@@ -273,6 +274,151 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           modifiedNs: file.modifiedNs,
         });
         expect(cached?.result.streams.length).toBe(kinds.length);
+      }),
+    ));
+
+  test("a watcher Show folder move preserves hierarchy and Progress without provider ids", () =>
+    withVideoFixture((root) =>
+      withDatabase(async (db) => {
+        const { admin, token, library } = await setup(db);
+        await db
+          .update(libraries)
+          .set({ name: "Shows", medium: "shows", rootPath: "/media/shows" })
+          .where(eq(libraries.id, library.id));
+        expect(root).not.toBe("/media/shows");
+        const oldShow = "Old Show";
+        const newShow = "New Show";
+        const oldPath = `${oldShow}/Season 01/Show S01E01.mkv`;
+        const newPath = `${newShow}/Season 01/Show S01E01.mkv`;
+        await mkdir(join(root, oldShow, "Season 01"), { recursive: true });
+        await createVideoFixture(join(root, oldPath));
+        const debouncer = createChangeDebouncer(db, { delayMs: 60_000 });
+        const handler = createWatcherHandler(db, debouncer);
+        const finishScan = async (path: string, scope: string) => {
+          const claimed: WatcherClaim = await (
+            await handler(post("claim", { libraryIds: [library.id] }, token))
+          )?.json();
+          if (claimed.job === null) throw new Error("No scan was claimed.");
+          expect(claimed.job).toMatchObject({ path: scope, medium: "shows" });
+          const file = await readLibraryFile(root, path);
+          const response = await handler(
+            post(
+              `jobs/${claimed.job.id}`,
+              {
+                attempts: claimed.job.attempts,
+                files: [
+                  {
+                    path,
+                    bytes: String(file.bytes),
+                    modifiedNs: String(file.modifiedNs),
+                  },
+                ],
+                probes: [
+                  {
+                    path,
+                    ffprobe: await readFfprobe(join(root, path)),
+                    keyframesSeconds: (
+                      await readKeyframeIndex(join(root, path))
+                    ).keyframesSeconds,
+                  },
+                ],
+              } satisfies WatcherReport,
+              token,
+            ),
+          );
+          expect(response?.status).toBe(200);
+          expect(await response?.json()).toEqual({ state: "completed" });
+        };
+        try {
+          await createJobQueue(db).enqueue({
+            type: "scan",
+            libraryId: library.id,
+            path: oldShow,
+          });
+          await finishScan(oldPath, oldShow);
+          const before = await db.select().from(items).orderBy(asc(items.id));
+          expect(before.map((item) => item.kind).sort()).toEqual([
+            "episode",
+            "season",
+            "show",
+          ]);
+          const [file] = await db.select().from(files);
+          if (!file) throw new Error("Initial scan produced no File.");
+          await db.insert(progress).values({
+            userId: admin.id,
+            itemId: file.itemId,
+            versionId: file.versionId,
+            format: "video",
+            positionSeconds: 33,
+            playCount: 2,
+          });
+          const progressBefore = await db.select().from(progress);
+
+          await rename(join(root, oldShow), join(root, newShow));
+          const response = await handler(
+            post(
+              "events",
+              {
+                libraryId: library.id,
+                changes: [
+                  { kind: "move", previousPath: oldPath, path: newPath },
+                ],
+              },
+              token,
+            ),
+          );
+          expect(response?.status).toBe(202);
+          await debouncer.close();
+          const [queued] = await listJobs(db, {
+            type: "scan",
+            state: "queued",
+          });
+          expect(queued?.payload).toEqual({
+            type: "scan",
+            libraryId: library.id,
+            path: newShow,
+            changes: [
+              {
+                kind: "move",
+                previousPath: oldPath,
+                path: newPath,
+                providerIds: {},
+              },
+            ],
+          });
+          await finishScan(newPath, newShow);
+
+          const after = await db.select().from(items).orderBy(asc(items.id));
+          expect(
+            after.map(({ id, kind, parentId, canonicalFolder }) => ({
+              id,
+              kind,
+              parentId,
+              canonicalFolder,
+            })),
+          ).toEqual(
+            before.map(({ id, kind, parentId, canonicalFolder }) => ({
+              id,
+              kind,
+              parentId,
+              canonicalFolder: canonicalFolder?.replace(oldShow, newShow),
+            })),
+          );
+          expect(await db.select().from(files)).toMatchObject([
+            {
+              id: file.id,
+              itemId: file.itemId,
+              versionId: file.versionId,
+              path: newPath,
+            },
+          ]);
+          expect(
+            (await db.select().from(versions)).map((version) => version.id),
+          ).toEqual([file.versionId]);
+          expect(await db.select().from(progress)).toEqual(progressBefore);
+        } finally {
+          await debouncer.close();
+        }
       }),
     ));
 

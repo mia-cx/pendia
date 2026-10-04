@@ -4,14 +4,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
-import { libraries, probeCache, streams } from "../db/schema/index.ts";
+import { migrateDatabase } from "../db/migrate.ts";
+import { jobs, libraries, probeCache, streams } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
-import type { WatchedChange } from "../libraries/webhooks.ts";
+import { createJobQueue } from "../jobs/queue.ts";
+import { libraryConcurrencyKey } from "../libraries/jobs.ts";
+import {
+  createChangeDebouncer,
+  type WatchedChange,
+} from "../libraries/webhooks.ts";
 import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
+import { createWatcherHandler } from "./http.ts";
 import { readWatcherConfig, startWatcher } from "./index.ts";
 
 const libraryId = "0199a000-0000-7000-8000-000000000001";
@@ -176,6 +183,94 @@ test("retries a scan report the api failed to take", async () => {
 });
 
 describe.skipIf(!databaseUrl)("watcher scans", () => {
+  test.each(["before", "after"])(
+    "retries a report that fails %s processing and unblocks the next scan",
+    (failure) =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const { token } = await createApiKey(db, admin.id, "Watcher");
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Movies", medium: "movies", rootPath: "/nfs/movies" })
+          .returning();
+        if (!library) throw new Error("Library insert returned no row.");
+        const queue = createJobQueue(db);
+        const first = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "Empty" },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const second = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "Empty" },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const debouncer = createChangeDebouncer(db);
+        const handler = createWatcherHandler(db, debouncer);
+        const reports: unknown[] = [];
+        const errors: unknown[] = [];
+        let nextClaimed = false;
+        const api = Bun.serve({
+          port: 0,
+          async fetch(request) {
+            const path = new URL(request.url).pathname;
+            if (path.endsWith(`jobs/${first.id}`)) {
+              reports.push(await request.clone().json());
+              if (reports.length === 1) {
+                if (failure === "after") await handler(request);
+                return new Response("Unavailable", { status: 503 });
+              }
+            }
+            const response = await handler(request);
+            if (path.endsWith("/claim")) {
+              const claimed = await response?.clone().json();
+              if (claimed?.job?.id === second.id) nextClaimed = true;
+            }
+            return response ?? new Response(null, { status: 404 });
+          },
+        });
+        const root = await mkdtemp(join(tmpdir(), "pendia-watch-retry-"));
+        const watcher = await startWatcher(
+          {
+            apiUrl: new URL(api.url),
+            token,
+            roots: new Map([[library.id, root]]),
+          },
+          { pollIntervalMs: 20, onError: (error) => errors.push(error) },
+        );
+        try {
+          const deadline = Date.now() + 3_000;
+          let written = await db.select().from(jobs);
+          while (
+            written.some((job) => job.state !== "completed") &&
+            Date.now() < deadline
+          ) {
+            await Bun.sleep(20);
+            written = await db.select().from(jobs);
+          }
+          expect(written).toHaveLength(2);
+          expect(written.map((job) => job.state)).toEqual([
+            "completed",
+            "completed",
+          ]);
+          expect(written.map((job) => job.attempts)).toEqual([1, 1]);
+          expect(reports).toHaveLength(2);
+          expect(reports[1]).toEqual(reports[0]);
+          expect(nextClaimed).toBe(true);
+          expect(errors).toHaveLength(failure === "after" ? 2 : 1);
+          if (failure === "after")
+            expect(String(errors[1])).toContain("answered 404");
+        } finally {
+          await watcher.stop();
+          await api.stop();
+          await debouncer.close();
+          await rm(root, { recursive: true, force: true });
+        }
+      }),
+  );
+
   test("a Library scan requested through the api runs on the watcher", () =>
     withVideoFixture((dir) =>
       withDatabase(async (db, url) => {

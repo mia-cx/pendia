@@ -1,181 +1,313 @@
 <script lang="ts">
-import { onDestroy } from "svelte";
-import { afterNavigate, beforeNavigate, goto } from "$app/navigation";
+import ChevronUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
+import ClapperboardIcon from "@lucide/svelte/icons/clapperboard";
+import HouseIcon from "@lucide/svelte/icons/house";
+import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
+import SearchIcon from "@lucide/svelte/icons/search";
+import SettingsIcon from "@lucide/svelte/icons/settings";
+import TvIcon from "@lucide/svelte/icons/tv";
+import { onNavigate } from "$app/navigation";
 import { page } from "$app/state";
-import SignOut from "$lib/components/SignOut.svelte";
-import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+import AccountMenu from "$lib/components/AccountMenu.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
+import { isCurrent, type NavEntry, navigation } from "$lib/shell.ts";
 import type { LayoutProps } from "./$types";
 
 const { data, children }: LayoutProps = $props();
 
-const sections = [
-  { href: "/", label: "Home" },
-  { href: "/movies", label: "Movies" },
-  { href: "/shows", label: "Shows" },
-];
+const entries = $derived(navigation(data.me.admin, data.libraries));
+const settings = $derived(entries.find((e) => e.icon === "settings"));
+const tabs = $derived(
+  ["home", "movies", "shows", "search", "settings"]
+    .map((icon) => entries.find((e) => e.icon === icon))
+    .filter((e): e is NavEntry => e !== undefined),
+);
 
-const searchDelayMs = 250;
+const icons = {
+  search: SearchIcon,
+  home: HouseIcon,
+  movies: ClapperboardIcon,
+  shows: TvIcon,
+  settings: SettingsIcon,
+};
 
-let query = $state("");
-let timer: ReturnType<typeof setTimeout> | undefined;
+let collapsed = $state(
+  typeof document !== "undefined" &&
+    document.documentElement.dataset.sidebar === "collapsed",
+);
 
-const current = (href: string) =>
-  href === "/"
-    ? page.url.pathname === "/"
-    : page.url.pathname === href || page.url.pathname.startsWith(`${href}/`);
-
-// A link, back or forward wins over a search still waiting to fire.
-beforeNavigate(({ type }) => {
-  if (type !== "goto") clearTimeout(timer);
-});
-onDestroy(() => clearTimeout(timer));
-
-// The field follows the URL on back, forward and links, but never mid-typing.
-afterNavigate(({ type }) => {
-  if (type === "goto") return;
-  query =
-    page.url.pathname === "/search"
-      ? (page.url.searchParams.get("q") ?? "")
-      : "";
-});
-
-function search() {
-  clearTimeout(timer);
-  const target =
-    query.trim() === ""
-      ? "/search"
-      : `/search?q=${encodeURIComponent(query.trim())}`;
-  void goto(target, {
-    replaceState: page.url.pathname === "/search",
-    keepFocus: true,
-    noScroll: true,
-  });
+function toggle() {
+  collapsed = !collapsed;
+  try {
+    if (collapsed) localStorage.setItem("pendia.sidebar", "collapsed");
+    else localStorage.removeItem("pendia.sidebar");
+  } catch {
+    // Storage can be blocked; the sidebar simply reverts on the next load.
+  }
+  if (collapsed) document.documentElement.dataset.sidebar = "collapsed";
+  else delete document.documentElement.dataset.sidebar;
 }
 
-function typed() {
-  clearTimeout(timer);
-  timer = setTimeout(search, searchDelayMs);
-}
-
-function submit(event: SubmitEvent) {
+function skipToContent(event: MouseEvent) {
   event.preventDefault();
-  search();
+  document.getElementById("content")?.focus();
 }
+
+onNavigate((nav) => {
+  if (!document.startViewTransition) return;
+  // Query-only changes (typing, sorting, filtering) never flicker.
+  if (nav.to?.url.pathname === nav.from?.url.pathname) return;
+  return new Promise<void>((resolve) => {
+    document.startViewTransition(async () => {
+      resolve();
+      await nav.complete;
+    });
+  });
+});
 </script>
 
-<header class="legacy">
-  <a class="brand" href="/">Pendia</a>
-  <nav aria-label="Library">
-    {#each sections as section (section.href)}
-      <a
-        href={section.href}
-        aria-current={current(section.href) ? "page" : undefined}
-        >{section.label}</a
-      >
-    {/each}
-  </nav>
-  <form role="search" onsubmit={submit}>
-    <label class="sr-only" for="search">Search titles</label>
-    <input
-      id="search"
-      type="search"
-      placeholder="Search"
-      autocomplete="off"
-      bind:value={query}
-      oninput={typed}
-    />
-  </form>
-  <div class="account">
-    {#if data.me.admin}
-      <a href="/admin">Admin</a>
+<svelte:head>
+  <title>Pendia</title>
+</svelte:head>
+
+{#snippet navRow(entry: NavEntry, children: boolean)}
+  {@const Icon = icons[entry.icon]}
+  {@const current = isCurrent(page.url, entry.href)}
+  <Tooltip.Root disabled={!collapsed}>
+    <Tooltip.Trigger>
+      {#snippet child({ props })}
+        <a
+          {...props}
+          href={entry.href}
+          aria-current={current ? "page" : undefined}
+          class="flex items-center gap-3 rounded-md px-2.5 text-subheadline font-medium text-label no-underline transition-colors duration-(--duration-quick) hover:bg-fill"
+          class:bg-tint-fill={current}
+          class:font-semibold={current}
+          class:text-tint={current}
+          class:h-9={!collapsed}
+          class:size-11={collapsed}
+          class:justify-center={collapsed}
+          class:px-0={collapsed}
+        >
+          <Icon
+            class="size-4.5 shrink-0 {current
+              ? 'text-tint'
+              : 'text-label-secondary'}"
+          />
+          <span class:sr-only={collapsed}>{entry.label}</span>
+        </a>
+      {/snippet}
+    </Tooltip.Trigger>
+    {#if collapsed}
+      <Tooltip.Content side="right">{entry.label}</Tooltip.Content>
     {/if}
-    <SignOut />
-  </div>
-</header>
+  </Tooltip.Root>
+  {#if !collapsed && children}
+    <ul class="mt-0.5 flex flex-col gap-0.5">
+      {#each entry.children as child (child.href)}
+        <li>
+          <a
+            href={child.href}
+            aria-current={isCurrent(page.url, child.href) ? "page" : undefined}
+            class="flex h-8 items-center rounded-md ps-10 text-subheadline font-medium text-label no-underline transition-colors duration-(--duration-quick) hover:bg-fill"
+            class:bg-tint-fill={isCurrent(page.url, child.href)}
+            class:font-semibold={isCurrent(page.url, child.href)}
+            class:text-tint={isCurrent(page.url, child.href)}
+            >{child.label}</a
+          >
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}
 
 <Tooltip.Provider>
-<main>
-  {@render children()}
-</main>
+<div class="shell" class:collapsed>
+  <a
+    href="#content"
+    class="sr-only focus-visible:not-sr-only focus-visible:fixed focus-visible:top-3 focus-visible:left-3 focus-visible:z-60 focus-visible:inline-flex focus-visible:h-10 focus-visible:items-center focus-visible:rounded-full focus-visible:bg-label focus-visible:px-4 focus-visible:text-subheadline focus-visible:font-semibold focus-visible:text-background"
+    onclick={skipToContent}>Skip to content</a
+  >
+
+  <aside
+    id="sidebar"
+    class="fixed inset-y-(--sidebar-inset) left-(--sidebar-inset) z-40 hidden flex-col material rounded-2xl shadow-float transition-[width] duration-(--duration-fast) ease-smooth-out motion-reduce:transition-none lg:flex"
+    style:width={collapsed ? "var(--sidebar-rail)" : "var(--sidebar-width)"}
+    class:p-3={!collapsed}
+    class:p-2.5={collapsed}
+  >
+    <div
+      class="flex h-10 shrink-0 items-center"
+      class:justify-center={collapsed}
+      class:justify-between={!collapsed}
+      class:px-2={!collapsed}
+    >
+      {#if !collapsed}
+        <a href="/" class="text-title-3 font-bold tracking-tight text-label">Pendia</a>
+      {/if}
+      <Tooltip.Root>
+        <Tooltip.Trigger>
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              variant="ghost"
+              size="icon-sm"
+              onclick={toggle}
+              aria-expanded={!collapsed}
+              aria-controls="sidebar"
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              <PanelLeftIcon />
+            </Button>
+          {/snippet}
+        </Tooltip.Trigger>
+        <Tooltip.Content side="right">
+          {collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        </Tooltip.Content>
+      </Tooltip.Root>
+    </div>
+
+    <nav aria-label="Main" class="mt-4 min-h-0 flex-1 overflow-y-auto">
+      <ul class="flex flex-col gap-0.5">
+        {#each entries.filter((e) => e.icon !== "settings") as entry (entry.href)}
+          <li>{@render navRow(entry, true)}</li>
+        {/each}
+      </ul>
+    </nav>
+
+    {#if settings}
+      <div class="mt-auto">{@render navRow(settings, false)}</div>
+    {/if}
+
+    <hr class="my-2 h-px border-0 bg-separator" />
+
+    <AccountMenu
+      side={collapsed ? "right" : "top"}
+      align="start"
+      user={data.me.user}
+    >
+      {#snippet trigger(props, monogram)}
+        <Tooltip.Root disabled={!collapsed}>
+          <Tooltip.Trigger>
+            {#snippet child({ props: tip })}
+              <button
+                {...tip}
+                {...props}
+                onclick={(event: MouseEvent) => {
+                  (tip.onclick as ((e: MouseEvent) => void) | undefined)?.(
+                    event,
+                  );
+                  (props.onclick as ((e: MouseEvent) => void) | undefined)?.(
+                    event,
+                  );
+                }}
+                type="button"
+                class="flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 transition-colors duration-(--duration-quick) hover:bg-fill"
+                class:justify-center={collapsed}
+                class:px-0={collapsed}
+              >
+                <span
+                  class="flex size-8 shrink-0 items-center justify-center rounded-full bg-fill-strong text-footnote font-semibold text-label"
+                  >{monogram}</span
+                >
+                <span class="min-w-0 flex-1 text-left" class:sr-only={collapsed}>
+                  <span class="block truncate text-subheadline font-semibold text-label"
+                    >{data.me.user.displayName}</span
+                  >
+                  <span class="block truncate text-footnote text-label-secondary"
+                    >{data.me.user.username}</span
+                  >
+                </span>
+                {#if !collapsed}
+                  <ChevronUpDownIcon class="size-4 shrink-0 text-label-secondary" />
+                {/if}
+              </button>
+            {/snippet}
+          </Tooltip.Trigger>
+          {#if collapsed}
+            <Tooltip.Content side="right">{data.me.user.displayName}</Tooltip.Content>
+          {/if}
+        </Tooltip.Root>
+      {/snippet}
+    </AccountMenu>
+  </aside>
+
+  <nav
+    aria-label="Main"
+    class="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-40 mx-auto grid h-16 max-w-md auto-cols-fr grid-flow-col items-stretch material rounded-full shadow-float lg:hidden"
+  >
+    {#each tabs as tab (tab.href)}
+      {@const Icon = icons[tab.icon]}
+      {@const current = isCurrent(page.url, tab.href)}
+      <a
+        href={tab.href}
+        aria-current={current ? "page" : undefined}
+        class="relative flex flex-col items-center justify-center gap-0.5 text-label-secondary"
+        class:text-tint={current}
+      >
+        {#if current}
+          <span class="absolute inset-x-1 inset-y-1.5 rounded-full bg-tint-fill" aria-hidden="true"></span>
+        {/if}
+        <Icon class="relative size-6" />
+        <span class="relative text-caption-2 font-semibold">{tab.label}</span>
+      </a>
+    {/each}
+  </nav>
+
+  <div class="relative">
+    <div class="absolute top-3 right-(--gutter) z-30 lg:hidden">
+      <AccountMenu align="end" user={data.me.user}>
+        {#snippet trigger(props, monogram)}
+          <Button
+            {...props}
+            variant="glass"
+            size="icon"
+            aria-label="Account"
+            class="rounded-full"
+          >
+            <span class="text-footnote font-semibold">{monogram}</span>
+          </Button>
+        {/snippet}
+      </AccountMenu>
+    </div>
+
+    <main
+      id="content"
+      tabindex="-1"
+      class="min-h-svh ps-(--shell-start) pe-(--gutter) pb-[calc(5rem+env(safe-area-inset-bottom))] outline-none [view-transition-name:content] lg:pb-8"
+    >
+      {@render children()}
+    </main>
+  </div>
+</div>
 </Tooltip.Provider>
 
 <style>
-  header {
-    display: grid;
-    grid-template-columns: auto 1fr minmax(160px, 280px) auto;
-    align-items: center;
-    gap: 12px 32px;
-    padding: 12px var(--gutter);
-    border-bottom: 1px solid var(--line);
+  @property --shell-start {
+    syntax: "<length>";
+    inherits: true;
+    initial-value: 0px;
   }
-
-  .brand {
-    color: var(--ink);
-    font-size: 20px;
-    font-weight: 750;
-    letter-spacing: -0.03em;
-    text-decoration: none;
+  .shell {
+    --shell-start: var(--gutter);
+    transition: --shell-start var(--duration-fast) var(--ease-smooth-out);
   }
-
-  nav {
-    display: flex;
-    gap: 20px;
-  }
-
-  nav a,
-  .account a {
-    padding: 6px 0;
-    color: var(--muted);
-    text-decoration: none;
-  }
-
-  nav a:hover,
-  .account a:hover {
-    color: var(--ink);
-  }
-
-  nav a[aria-current="page"] {
-    color: var(--ink);
-    text-decoration: underline;
-    text-decoration-color: var(--signal);
-    text-decoration-thickness: 2px;
-    text-underline-offset: 8px;
-  }
-
-  input {
-    width: 100%;
-    min-height: 36px;
-  }
-
-  .account {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    white-space: nowrap;
-  }
-
-  main {
-    padding: 24px var(--gutter) 64px;
-  }
-
-  @media (max-width: 720px) {
-    header {
-      grid-template-columns: 1fr auto;
+  @media (min-width: 64rem) {
+    .shell {
+      --shell-start: calc(
+        var(--sidebar-inset) + var(--sidebar-width) + var(--gutter)
+      );
     }
-
-    nav {
-      grid-column: 1 / -1;
-      grid-row: 2;
+    .shell.collapsed {
+      --shell-start: calc(
+        var(--sidebar-inset) + var(--sidebar-rail) + var(--gutter)
+      );
     }
+  }
 
-    form {
-      grid-column: 1 / -1;
-      grid-row: 3;
-    }
-
-    .account {
-      grid-row: 1;
-      grid-column: 2;
-    }
+  :global(::view-transition-old(content)),
+  :global(::view-transition-new(content)) {
+    animation-duration: var(--duration-fast);
   }
 </style>

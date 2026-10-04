@@ -23,9 +23,12 @@ const item = resource(() => client.items.get({ id }));
 
 let video = $state<HTMLVideoElement>();
 let notice = $state<PlayerNotice>();
-let switching = $state(false);
+// True while a retry or Version switch waits for the old session to stop.
+let busy = $state(false);
 let session: ReturnType<typeof play> | undefined;
 let cameFrom: string | undefined;
+let destroyed = false;
+let hiddenAt: number | null = null;
 
 const detail = $derived(item.data);
 const version = $derived(
@@ -60,7 +63,10 @@ $effect(() => {
     untrack(() => start(startAt));
 });
 
-onDestroy(() => void session?.close());
+onDestroy(() => {
+  destroyed = true;
+  void session?.close();
+});
 
 afterNavigate(({ from }) => {
   cameFrom = from?.url.pathname;
@@ -75,16 +81,31 @@ function leave(event: MouseEvent) {
 }
 
 async function retry() {
+  if (busy) return;
+  busy = true;
   const at = video?.currentTime ?? 0;
   await session?.close();
-  start(at);
+  busy = false;
+  if (!destroyed) start(at);
 }
 
 // Stop first, so the next session resumes from the position stop recorded.
 async function switchVersion(next: string) {
-  switching = true;
+  busy = true;
   await session?.close();
-  await goto(`/play/${id}?version=${next}`, { replaceState: true });
+  if (!destroyed)
+    await goto(`/play/${id}?version=${next}`, { replaceState: true });
+}
+
+// The back/forward cache keeps this page alive with its session stopped, so
+// a restored page starts a new session where the old one left off.
+function hide() {
+  hiddenAt = video?.currentTime ?? null;
+  void session?.close();
+}
+
+function show(event: PageTransitionEvent) {
+  if (event.persisted) start(hiddenAt);
 }
 </script>
 
@@ -92,7 +113,7 @@ async function switchVersion(next: string) {
   <title>{detail ? `${detail.title} · Pendia` : "Pendia"}</title>
 </svelte:head>
 
-<svelte:window onpagehide={() => void session?.close()} />
+<svelte:window onpagehide={hide} onpageshow={show} />
 
 <div class="player">
   <div class="bar">
@@ -111,7 +132,7 @@ async function switchVersion(next: string) {
           <span>Version</span>
           <select
             value={version.id}
-            disabled={switching}
+            disabled={busy}
             onchange={(event) => switchVersion(event.currentTarget.value)}
           >
             {#each detail.versions as option (option.id)}
@@ -144,7 +165,9 @@ async function switchVersion(next: string) {
         <h2>{notice.title}</h2>
         <p>{notice.message}</p>
         {#if notice.retry}
-          <button type="button" onclick={retry}>Try again</button>
+          <button type="button" disabled={busy} onclick={retry}
+            >Try again</button
+          >
         {/if}
       </div>
     {/if}

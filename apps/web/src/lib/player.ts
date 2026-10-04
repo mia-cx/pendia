@@ -22,6 +22,8 @@ const heartbeatMs = 10_000;
 // Tokens live five minutes; refresh with a minute to spare.
 const refreshLeadMs = 60_000;
 const refreshRetryMs = 15_000;
+// How long close waits for pending reports before it sends stop.
+const closeWaitMs = 3_000;
 
 // The last report as a tab closes has to outlive the page.
 const lastWord = createPendiaClient({ keepalive: true });
@@ -227,7 +229,12 @@ export function play(options: PlaybackOptions) {
       if (hls === undefined) onNotice(stalled);
     });
     schedule(planned.expiresAt);
-    await attach(planned.method, planned.url, at);
+    try {
+      await attach(planned.method, planned.url, at);
+    } catch (error) {
+      // hls.js is a lazy chunk; losing the server can fail its import.
+      if (closing === undefined) onNotice(refusal(error));
+    }
   }
 
   const opened = open();
@@ -245,8 +252,11 @@ export function play(options: PlaybackOptions) {
         video.load();
         await opened;
         if (scope === undefined) return;
-        await reports;
-        await started;
+        // A hung report must not keep stop from going out.
+        await Promise.race([
+          Promise.all([reports, started]),
+          new Promise((resolve) => setTimeout(resolve, closeWaitMs)),
+        ]);
         await lastWord.playback.stop({ ...scope, ...final }).catch(() => {
           // Nothing is left to tell; the server keeps the last heartbeat.
         });

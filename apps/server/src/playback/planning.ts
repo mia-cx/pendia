@@ -23,12 +23,16 @@ import {
 import { selectStoredVariants } from "../stored/playback.ts";
 import { subtitleUrl } from "../subtitles/http.ts";
 import { listSubtitles } from "../subtitles/store.ts";
+import { sessionOutputs } from "../transcoder/outputs.ts";
 import {
   type AudioStream,
   decidePlayback,
   type PlaybackDecision,
   type PlaybackSource,
   requiresBurnIn,
+  resolveSelection,
+  type SessionDecision,
+  type StreamSelection,
   type SubtitleStream,
 } from "./decisions.ts";
 import {
@@ -48,6 +52,10 @@ export type PlanInput = {
   bitrateCapBps?: number;
   /** How long the playback token lives; the token's default when absent. */
   tokenLifetimeSeconds?: number;
+  /** The source Stream index of the audio to play; the default audio Stream when absent. */
+  audioStreamIndex?: number;
+  /** The source Stream index of the subtitle to show, null for none; every subtitle Stream when absent. */
+  subtitleStreamIndex?: number | null;
 };
 
 /** The request details planning needs to judge network locality and URL style. */
@@ -103,6 +111,7 @@ function toAudioStream(row: StreamRow): AudioStream {
     channels: row.channels,
     profile: row.profile,
     bitrate: row.bitrate === null ? null : Number(row.bitrate),
+    default: row.disposition.default === true,
   };
 }
 
@@ -188,15 +197,53 @@ export async function loadPlaybackSource(
       .filter((row) => row.kind === "subtitle")
       .map(toSubtitleStream),
   };
-  // Aligned with source.subtitles: what names each rendition.
-  const subtitleDetails = streamRows
-    .filter((row) => row.kind === "subtitle")
-    .map(({ language, title, disposition }) => ({
-      language,
-      title,
-      disposition,
-    }));
-  return { item, version, file, source, subtitleDetails };
+  // Aligned with source.audio and source.subtitles: what names each Stream.
+  const details = (kind: "audio" | "subtitle") =>
+    streamRows
+      .filter((row) => row.kind === kind)
+      .map(({ index, codec, channels, language, title, disposition }) => ({
+        index,
+        codec,
+        channels,
+        language,
+        title,
+        disposition,
+      }));
+  return {
+    item,
+    version,
+    file,
+    source,
+    audioDetails: details("audio"),
+    subtitleDetails: details("subtitle"),
+  };
+}
+
+/** Turns a plan's source Stream indexes into a selection among Streams of each kind; a bad index is invalid input. */
+function streamSelection(
+  input: Pick<PlanInput, "audioStreamIndex" | "subtitleStreamIndex">,
+  audio: readonly { index: number }[],
+  subtitles: readonly { index: number }[],
+): StreamSelection {
+  const position = (streams: readonly { index: number }[], index: number) => {
+    const found = streams.findIndex((stream) => stream.index === index);
+    if (found < 0) throw new AuthError("INVALID_INPUT");
+    return found;
+  };
+  const { audioStreamIndex, subtitleStreamIndex } = input;
+  return {
+    ...(audioStreamIndex === undefined
+      ? {}
+      : { audio: position(audio, audioStreamIndex) }),
+    ...(subtitleStreamIndex === undefined
+      ? {}
+      : {
+          subtitle:
+            subtitleStreamIndex === null
+              ? null
+              : position(subtitles, subtitleStreamIndex),
+        }),
+  };
 }
 
 const toneMapFlavours: readonly string[] = hdrFlavours.filter(
@@ -325,12 +372,18 @@ export async function planPlayback(
   input: PlanInput,
   transport: PlanningTransport,
 ) {
-  const { item, version, file, source } = await loadPlaybackSource(
+  const loaded = await loadPlaybackSource(
     db,
     caller.user.id,
     input.itemId,
     input.versionId,
   );
+  const { item, version, file, audioDetails, subtitleDetails } = loaded;
+  const source: PlaybackSource = {
+    ...loaded.source,
+    selection: streamSelection(input, audioDetails, subtitleDetails),
+  };
+  const selection = resolveSelection(source);
   const config = await readAuthSettings(db);
   const identity = requestIdentity(
     transport.request,
@@ -357,23 +410,25 @@ export async function planPlayback(
     decision = null;
   }
   // Stored rungs that pass replace the live session; the api serves them from
-  // disk. They carry no subtitle pixels, so a required burn-in stays live, or
+  // disk over HLS. They carry no subtitle pixels and only the first audio
+  // Stream, so a burn-in over HLS or another audio Stream stays live, or
   // fails the plan when no live path exists.
-  const storedVariantIds = requiresBurnIn(source, input.profile)
-    ? []
-    : await selectStoredVariants(
-        db,
-        {
-          itemId: item.id,
-          fileId: file.id,
-          segmentTimelineId: version.timelineAligned
-            ? version.segmentTimelineId
-            : null,
-          liveMethod: decision?.method ?? null,
-        },
-        input.profile,
-        caps,
-      );
+  const storedVariantIds =
+    requiresBurnIn(source, input.profile, true) || (selection.audio ?? 0) !== 0
+      ? []
+      : await selectStoredVariants(
+          db,
+          {
+            itemId: item.id,
+            fileId: file.id,
+            segmentTimelineId: version.timelineAligned
+              ? version.segmentTimelineId
+              : null,
+            liveMethod: decision?.method ?? null,
+          },
+          input.profile,
+          caps,
+        );
   const stored = storedVariantIds.length > 0;
   if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
   const method =
@@ -393,6 +448,28 @@ export async function planPlayback(
     ...track,
     url: subtitleUrl(item.id, track),
   }));
+  const sessionDecision: SessionDecision | null = stored
+    ? {
+        ...(decision ?? { method: "stored" as const, selection }),
+        storedVariantIds,
+      }
+    : decision;
+  // Over HLS the session shows a burned subtitle, else the rendition it
+  // marks default; a direct play leaves the choice to the client.
+  const outputs =
+    method === "direct-play"
+      ? null
+      : sessionOutputs(sessionDecision, source, subtitleDetails);
+  const shownSubtitle =
+    selection.subtitle !== undefined
+      ? selection.subtitle
+      : (outputs?.burnSubtitle ??
+        outputs?.subtitles.find((subtitle) => subtitle.default)?.index ??
+        null);
+  const indexOf = (
+    streams: readonly { index: number }[],
+    position: number | null,
+  ) => (position === null ? null : (streams[position]?.index ?? null));
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -402,9 +479,7 @@ export async function planPlayback(
         versionId: version.id,
         playMethod: method,
         state: "starting",
-        decision: stored
-          ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
-          : decision,
+        decision: sessionDecision,
         ...client,
         credentialId: caller.credential.id,
       })
@@ -436,6 +511,26 @@ export async function planPlayback(
         issued,
       ),
       subtitles,
+      audioStreamIndex: indexOf(audioDetails, selection.audio),
+      subtitleStreamIndex: indexOf(subtitleDetails, shownSubtitle),
+      audioStreams: audioDetails.map(
+        ({ index, codec, channels, language, title }) => ({
+          index,
+          codec,
+          channels,
+          language,
+          title,
+        }),
+      ),
+      subtitleStreams: subtitleDetails.map(
+        ({ index, codec, language, title, disposition }) => ({
+          index,
+          codec,
+          language,
+          title,
+          forced: disposition.forced === true,
+        }),
+      ),
     };
   });
 }

@@ -22,16 +22,25 @@ export type VideoStream = {
   dvProfile?: number | null;
 };
 
-/** A normalized audio Stream: codec, channel count and probed bitrate. */
+/** A normalized audio Stream: codec, channel count, probed bitrate and default flag. */
 export type AudioStream = {
   codec: string;
   profile?: string | null;
   channels: number;
   bitrate?: number | null;
+  default?: boolean;
 };
 
 /** A normalized subtitle Stream: format and text-or-bitmap kind. */
 export type SubtitleStream = { format: string; kind: "text" | "bitmap" };
+
+/**
+ * The audio and subtitle Streams a session plays, counted among Streams of
+ * their kind as ffmpeg counts them. No audio plays the default-flagged audio
+ * Stream, else the first. No subtitle keeps every subtitle Stream; null
+ * turns subtitles off.
+ */
+export type StreamSelection = { audio?: number; subtitle?: number | null };
 
 /** The selected container and Streams of the Version being played. */
 export type PlaybackSource = {
@@ -39,7 +48,45 @@ export type PlaybackSource = {
   video: VideoStream;
   audio: readonly AudioStream[];
   subtitles: readonly SubtitleStream[];
+  selection?: StreamSelection;
 };
+
+/** A session's resolved selection: the audio Stream it plays, null without audio, and the subtitle choice as given. */
+export type ResolvedSelection = {
+  audio: number | null;
+  subtitle?: number | null;
+};
+
+/** The audio Stream a File plays by default: the default-flagged one, else the first; null without audio. */
+export function defaultAudio(source: PlaybackSource) {
+  if (source.audio.length === 0) return null;
+  return Math.max(
+    source.audio.findIndex((audio) => audio.default === true),
+    0,
+  );
+}
+
+/** Resolves a source's selection; throws a RangeError for a Stream the source lacks. */
+export function resolveSelection(source: PlaybackSource): ResolvedSelection {
+  const audio = source.selection?.audio;
+  if (audio !== undefined && source.audio[audio] === undefined)
+    throw new RangeError(`No audio Stream ${audio}.`);
+  const subtitle = source.selection?.subtitle;
+  if (subtitle != null && source.subtitles[subtitle] === undefined)
+    throw new RangeError(`No subtitle Stream ${subtitle}.`);
+  return {
+    audio: audio ?? defaultAudio(source),
+    ...(subtitle === undefined ? {} : { subtitle }),
+  };
+}
+
+/** The subtitle Streams a source's selection keeps, each with its position among subtitle Streams. */
+function selectedSubtitles(source: PlaybackSource) {
+  const choice = source.selection?.subtitle;
+  return source.subtitles.flatMap((subtitle, stream) =>
+    choice === undefined || choice === stream ? [{ stream, subtitle }] : [],
+  );
+}
 
 function videoCap(client: ClientProfile, cap: number | null) {
   const limit = Math.min(cap ?? Infinity, client.maxBitrate ?? Infinity);
@@ -240,10 +287,14 @@ function decideSubtitle(
   subtitle: SubtitleStream,
   client: ClientProfile,
   hls: boolean,
+  chosen = false,
 ) {
+  // HLS carries only WebVTT: a chosen bitmap subtitle reaches the client
+  // only burned in, so it never copies there.
   if (
     client.subtitleFormats.includes(subtitle.format) &&
-    !(hls && subtitle.kind === "text" && subtitle.format !== "webvtt")
+    !(hls && subtitle.kind === "text" && subtitle.format !== "webvtt") &&
+    !(hls && chosen && subtitle.kind === "bitmap")
   ) {
     return { action: "copy" as const, format: subtitle.format };
   }
@@ -257,14 +308,35 @@ function decideSubtitle(
   return { action: "burn" as const, format: subtitle.format };
 }
 
-/** Reports whether the client needs a subtitle burned into the video: a bitmap Stream it cannot draw. Holds whatever the video and audio decide. */
-export function requiresBurnIn(source: PlaybackSource, client: ClientProfile) {
-  return source.subtitles.some(
-    (subtitle) => decideSubtitle(subtitle, client, false).action === "burn",
+/**
+ * Reports whether delivering the selected subtitles, directly or over HLS,
+ * burns one into the video: a bitmap Stream the client cannot draw, or over
+ * HLS a chosen one. Holds whatever the video and audio decide.
+ */
+export function requiresBurnIn(
+  source: PlaybackSource,
+  client: ClientProfile,
+  hls: boolean,
+) {
+  return decideSubtitles(source, client, hls).some(
+    (subtitle) => subtitle.action === "burn",
   );
 }
 
-/** Returns the play method and per-Stream decisions for a source on one client. */
+/** Decides each selected subtitle Stream, naming its position among subtitle Streams. */
+function decideSubtitles(
+  source: PlaybackSource,
+  client: ClientProfile,
+  hls: boolean,
+) {
+  const chosen = source.selection?.subtitle != null;
+  return selectedSubtitles(source).map(({ stream, subtitle }) => ({
+    stream,
+    ...decideSubtitle(subtitle, client, hls, chosen),
+  }));
+}
+
+/** Returns the play method and the decisions for the selected Streams of a source on one client. */
 export function decidePlayback(
   source: PlaybackSource,
   client: ClientProfile,
@@ -272,26 +344,29 @@ export function decidePlayback(
   capabilities: CapabilityTable = cpuCapabilities,
 ) {
   const cap = effectiveCap(caps);
-  const subtitles = source.subtitles.map((subtitle) =>
-    decideSubtitle(subtitle, client, false),
-  );
-  const burnSubtitles = requiresBurnIn(source, client);
+  const selection = resolveSelection(source);
+  const selectedAudio =
+    selection.audio === null ? undefined : source.audio[selection.audio];
+  const subtitles = decideSubtitles(source, client, false);
   const video = decideVideo(
     source.video,
     client,
     cap,
     capabilities,
-    burnSubtitles,
+    subtitles.some((subtitle) => subtitle.action === "burn"),
     false,
   );
-  const directAudio = source.audio.map((audio) =>
-    decideAudio(audio, client, false),
-  );
+  const directAudio =
+    selectedAudio === undefined
+      ? null
+      : decideAudio(selectedAudio, client, false);
   if (
     client.containers.includes(source.container) &&
     video.action === "copy" &&
     !video.stripDolbyVision &&
-    directAudio.every((audio) => audio.action === "copy") &&
+    (directAudio === null || directAudio.action === "copy") &&
+    // A direct play gets the File's default audio Stream.
+    selection.audio === defaultAudio(source) &&
     subtitles.every((subtitle) => subtitle.action === "copy")
   ) {
     return {
@@ -299,34 +374,43 @@ export function decidePlayback(
       video,
       audio: directAudio,
       subtitles,
+      selection,
     };
   }
-  const audio = source.audio.map((stream) => decideAudio(stream, client, true));
+  const audio =
+    selectedAudio === undefined
+      ? null
+      : decideAudio(selectedAudio, client, true);
+  const hlsSubtitles = decideSubtitles(source, client, true);
   const hlsVideo = decideVideo(
     source.video,
     client,
     cap,
     capabilities,
-    burnSubtitles,
+    hlsSubtitles.some((subtitle) => subtitle.action === "burn"),
     true,
   );
   const transcodes =
-    hlsVideo.action === "transcode" ||
-    audio.some((stream) => stream.action === "transcode");
+    hlsVideo.action === "transcode" || audio?.action === "transcode";
   return {
     method: transcodes ? ("transcode" as const) : ("remux" as const),
     video: hlsVideo,
     audio,
-    subtitles: source.subtitles.map((subtitle) =>
-      decideSubtitle(subtitle, client, true),
-    ),
+    subtitles: hlsSubtitles,
+    selection,
   };
 }
 
 /** The engine's full output for one plan, persisted on the session. */
 export type PlaybackDecision = ReturnType<typeof decidePlayback>;
 
-/** A session's persisted plan: the decision, or "stored" when no live path exists, plus the stored rungs served instead of a live run. */
-export type SessionDecision = (PlaybackDecision | { method: "stored" }) & {
+/** What the engine decided for one subtitle Stream: copy, convert to WebVTT or burn in. */
+export type SubtitleDecision = ReturnType<typeof decideSubtitle>;
+
+/** A session's persisted plan: the decision, or "stored" with its selection when no live path exists, plus the stored rungs served instead of a live run. */
+export type SessionDecision = (
+  | PlaybackDecision
+  | { method: "stored"; selection: ResolvedSelection }
+) & {
   storedVariantIds?: string[];
 };

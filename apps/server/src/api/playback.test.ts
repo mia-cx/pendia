@@ -439,7 +439,8 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         });
         expect(transcodeRow?.decision).toMatchObject({
           video: { action: "copy" },
-          audio: [{ action: "transcode", codec: "aac", channels: 2 }],
+          audio: { action: "transcode", codec: "aac", channels: 2 },
+          selection: { audio: 0 },
         });
 
         const refreshed = await client.playback.refresh({
@@ -657,6 +658,25 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           }),
         );
         expect(badCap.status).toBe(400);
+        // Stream 0 is video and stream 2 a subtitle; neither is audio.
+        const badStreams = [
+          { audioStreamIndex: 0 },
+          { audioStreamIndex: 2 },
+          { audioStreamIndex: -1 },
+          { subtitleStreamIndex: 1 },
+          { subtitleStreamIndex: 99 },
+        ];
+        for (const streams of badStreams) {
+          const error = await capture(
+            client.playback.plan({
+              itemId: fx.item.id,
+              versionId: fx.version.id,
+              profile,
+              ...streams,
+            }),
+          );
+          expect(error.status).toBe(400);
+        }
       } finally {
         await server.stop();
       }

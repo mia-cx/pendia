@@ -5,11 +5,15 @@ import { ticksPerSecond, toGuid } from "./request.ts";
 type Stream = VersionView["streams"][number];
 type Method = "direct-play" | "remux" | "transcode";
 
-/** A planned play of one Version: its method, and the session query its URLs carry. */
+/** A planned play of one Version: its method, the session query its URLs carry and its Stream selection. */
 export type PlannedSource = {
   method: Method;
-  /** `PlaySessionId`, `MediaSourceId` and the playback token; null when planning issued no token into a URL. */
+  /** `PlaySessionId`, `MediaSourceId`, the selection and the playback token; null when planning issued no token into a URL. */
   query: URLSearchParams | null;
+  /** The audio Stream the session plays; null without audio. */
+  audioStreamIndex: number | null;
+  /** The subtitle Stream the client chose, null for none; undefined when it chose nothing. */
+  subtitleStreamIndex?: number | null;
 };
 
 const streamTypes = {
@@ -134,13 +138,18 @@ export function mediaSource(
   const subtitles = version.streams.filter(
     (stream) => stream.kind === "subtitle",
   );
-  // An HLS session carries the first audio Stream; a file plays its default.
-  const defaultAudio = hls
-    ? audio[0]
-    : (audio.find((stream) => stream.disposition.default) ?? audio[0]);
-  const defaultSubtitle = subtitles.find(
-    (stream) => stream.disposition.forced || stream.disposition.default,
-  );
+  // A planned session plays its selection; a file plays its default.
+  const defaultAudio =
+    planned == null
+      ? (audio.find((stream) => stream.disposition.default) ?? audio[0])?.index
+      : (planned.audioStreamIndex ?? undefined);
+  const chosenSubtitle = planned?.subtitleStreamIndex;
+  const defaultSubtitle =
+    chosenSubtitle === undefined
+      ? subtitles.find(
+          (stream) => stream.disposition.forced || stream.disposition.default,
+        )?.index
+      : (chosenSubtitle ?? -1);
   const bitrates = version.streams.flatMap((stream) =>
     stream.bitrate === null ? [] : [Number(stream.bitrate)],
   );
@@ -185,8 +194,8 @@ export function mediaSource(
         : undefined,
     TranscodingSubProtocol: hls ? "hls" : "http",
     TranscodingContainer: hls ? "mp4" : undefined,
-    DefaultAudioStreamIndex: defaultAudio?.index,
-    DefaultSubtitleStreamIndex: defaultSubtitle?.index,
+    DefaultAudioStreamIndex: defaultAudio,
+    DefaultSubtitleStreamIndex: defaultSubtitle,
     HasSegments: false,
   };
 }

@@ -271,6 +271,7 @@ export function createSessionManager(
         startIndex: index,
         directory,
         video: session.outputs.video,
+        audioStream: session.outputs.audioStream,
         audio: session.outputs.audio,
         burnSubtitle: session.outputs.burnSubtitle,
         readRate,
@@ -747,6 +748,7 @@ export function createSessionManager(
           session.outputs.video.stripDolbyVision,
         video: session.outputs.video.action,
         audio: session.outputs.audio?.action ?? "copy",
+        audioStream: session.outputs.audioStream ?? null,
         burnSubtitle: session.outputs.burnSubtitle ?? null,
         queued: session.queued,
       };

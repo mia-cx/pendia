@@ -15,8 +15,27 @@ export type PlaybackOptions = {
   durationSeconds: number | null;
   /** Where to start, in seconds; null resumes where the viewer left off. */
   startAt: number | null;
+  /** The audio and subtitle Streams to play; the server picks what is absent. */
+  streams: StreamChoice;
   onNotice: (notice: PlayerNotice) => void;
+  /** Receives the Version's Streams and the ones the session plays. */
+  onTracks: (tracks: PlannedTracks) => void;
 };
+
+/** Source Stream indexes to play; a null subtitle turns subtitles off. */
+export type StreamChoice = {
+  audioStreamIndex?: number;
+  subtitleStreamIndex?: number | null;
+};
+
+/** What a plan says about Streams: every audio and subtitle Stream, and the ones it plays. */
+export type PlannedTracks = Pick<
+  Awaited<ReturnType<typeof client.playback.plan>>,
+  | "audioStreams"
+  | "subtitleStreams"
+  | "audioStreamIndex"
+  | "subtitleStreamIndex"
+>;
 
 const heartbeatMs = 10_000;
 // Tokens live five minutes; refresh with a minute to spare.
@@ -210,6 +229,7 @@ export function play(options: PlaybackOptions) {
         itemId,
         versionId,
         profile: browserProfile(),
+        ...options.streams,
       });
     } catch (error) {
       if (closing === undefined) onNotice(refusal(error));
@@ -218,6 +238,7 @@ export function play(options: PlaybackOptions) {
     if (planned.sessionId !== null)
       scope = { sessionId: planned.sessionId, itemId };
     if (closing !== undefined) return;
+    options.onTracks(planned);
     if (planned.url === null) {
       onNotice({
         title: cannotPlay,

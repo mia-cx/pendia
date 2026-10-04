@@ -172,7 +172,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const before = await migrationState(db);
-      expect(before.journal).toHaveLength(15);
+      expect(before.journal).toHaveLength(16);
       expect(before.tables).toHaveLength(35);
       expect(before.extensions).toEqual([
         { extname: "btree_gist" },
@@ -221,7 +221,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             { code: 0, stderr: "" },
           ]);
           const state = await migrationState(db);
-          expect(state.journal).toHaveLength(15);
+          expect(state.journal).toHaveLength(16);
           expect(state.tables).toHaveLength(35);
           expect(state.groups).toHaveLength(2);
         } finally {

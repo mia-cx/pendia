@@ -160,7 +160,11 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
         playMethod: "remux",
         state: "starting",
         clientName: "player",
-        decision: { method: "stored", storedVariantIds: [fx.stored.id] },
+        decision: {
+          method: "stored",
+          selection: { audio: 0 },
+          storedVariantIds: [fx.stored.id],
+        },
       });
       const live = await fx.open({
         playMethod: "transcode",

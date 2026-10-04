@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  audioNames,
   clientProfile,
   formatPosition,
   type MediaSupport,
+  subtitleNames,
   withToken,
 } from "./playback.ts";
 
@@ -85,6 +87,49 @@ describe("playback helpers", () => {
     expect(
       withToken("/api/playback/s/i/hls/master.m3u8?token=old", "new", page),
     ).toBe("https://pendia.test/api/playback/s/i/hls/master.m3u8?token=new");
+  });
+
+  test("Streams read by title, else language, and never repeat", () => {
+    const audio = {
+      index: 1,
+      codec: "aac",
+      title: null,
+      language: "eng",
+      channels: 2,
+    };
+    expect(
+      audioNames([
+        audio,
+        { ...audio, language: "jpn", channels: 6 },
+        { ...audio, language: "und", channels: 6 },
+        { ...audio, title: "Commentary", channels: 3 },
+        audio,
+      ]),
+    ).toEqual([
+      "English · Stereo (1)",
+      "Japanese · 5.1",
+      "Audio 3 · 5.1",
+      "Commentary",
+      "English · Stereo (5)",
+    ]);
+    const subtitle = {
+      index: 2,
+      codec: "subrip",
+      title: null,
+      language: "nld",
+    };
+    expect(
+      subtitleNames([
+        { ...subtitle, forced: true },
+        { ...subtitle, language: null, forced: false },
+        {
+          ...subtitle,
+          title: "Signs",
+          codec: "hdmv_pgs_subtitle",
+          forced: false,
+        },
+      ]),
+    ).toEqual(["Dutch · Forced", "Subtitles 2", "Signs"]);
   });
 
   test("positions read as minutes or hours", () => {

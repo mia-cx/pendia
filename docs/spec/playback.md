@@ -20,6 +20,17 @@ How Pendia decides what a client receives for an Item. Every rule here is meant 
 
 Dolby Vision profiles 7 and 8 carry an HDR10 base layer and play as HDR10 on clients without DV. Profile 5 has none and tone maps on the CPU path. An HLS stream copy takes only the fMP4-safe codecs (H.264, HEVC, AV1, VP9, MPEG-4 and MPEG-2 video; AAC, AC-3, E-AC-3, Opus, FLAC, MP3, ALAC and DTS audio); anything else follows the video or audio rule.
 
+## Stream selection
+
+A plan may name one audio Stream and one subtitle Stream, or no subtitles, by the File's Stream index. The session stores the choice with its decision, and only the chosen Streams count for the rules above.
+
+- No audio named: the default-flagged audio Stream, else the first.
+- No subtitle named: every subtitle Stream counts, so a bitmap one the client cannot draw is burned in.
+- Subtitles off: nothing is burned in and the master playlist lists no subtitle rendition.
+- A named text subtitle is the only WebVTT rendition, marked `DEFAULT`.
+- A named bitmap subtitle is burned in whenever the session plays over HLS, since HLS carries only WebVTT, even for a client that draws it.
+- A direct play gets the File's default audio, so naming another audio Stream plays over HLS. Stored rungs carry the first audio Stream, so naming another plays live.
+
 ## Play method
 
 - Direct play: every stream passes and the container is accepted. The file goes out over HTTP range requests.

@@ -35,11 +35,15 @@ const ClientProfileInput = Schema.Struct({
   maxBitrate: Schema.optional(Schema.NullOr(positiveInt)),
 });
 
+const streamIndex = Schema.Int.pipe(Schema.nonNegative());
+
 const PlanInput = Schema.Struct({
   itemId: Schema.UUID,
   versionId: Schema.UUID,
   profile: ClientProfileInput,
   bitrateCapBps: Schema.optional(positiveInt),
+  audioStreamIndex: Schema.optional(streamIndex),
+  subtitleStreamIndex: Schema.optional(Schema.NullOr(streamIndex)),
 });
 
 const RefreshOutput = Schema.Struct({
@@ -58,6 +62,26 @@ const PlanOutput = Schema.Struct({
       language: Schema.String,
       format: Schema.Literal("srt", "ass", "vtt"),
       url: Schema.String,
+    }),
+  ),
+  audioStreamIndex: Schema.NullOr(streamIndex),
+  subtitleStreamIndex: Schema.NullOr(streamIndex),
+  audioStreams: Schema.Array(
+    Schema.Struct({
+      index: streamIndex,
+      codec: Schema.String,
+      channels: Schema.NullOr(Schema.Int),
+      language: Schema.NullOr(Schema.String),
+      title: Schema.NullOr(Schema.String),
+    }),
+  ),
+  subtitleStreams: Schema.Array(
+    Schema.Struct({
+      index: streamIndex,
+      codec: Schema.String,
+      language: Schema.NullOr(Schema.String),
+      title: Schema.NullOr(Schema.String),
+      forced: Schema.Boolean,
     }),
   ),
 });

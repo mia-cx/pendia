@@ -4,7 +4,13 @@ import { afterNavigate, goto } from "$app/navigation";
 import { client } from "$lib/api.ts";
 import { episodeCode, itemHref } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
-import { type PlayerNotice, play } from "$lib/player.ts";
+import { audioNames, subtitleNames } from "$lib/playback.ts";
+import {
+  type PlannedTracks,
+  type PlayerNotice,
+  play,
+  type StreamChoice,
+} from "$lib/player.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
 const {
@@ -23,8 +29,11 @@ const item = resource(() => client.items.get({ id }));
 
 let video = $state<HTMLVideoElement>();
 let notice = $state<PlayerNotice>();
-// True while a retry or Version switch waits for the old session to stop.
+// True while a restart or Version switch waits for the old session to stop.
 let busy = $state(false);
+let tracks = $state<PlannedTracks>();
+// What the viewer picked from the menus; a retry keeps it.
+let streams: StreamChoice = {};
 let session: ReturnType<typeof play> | undefined;
 let cameFrom: string | undefined;
 let destroyed = false;
@@ -54,7 +63,9 @@ function start(at: number | null) {
     versionId: version.id,
     durationSeconds: version.durationSeconds,
     startAt: at,
+    streams,
     onNotice: (next) => (notice = next),
+    onTracks: (next) => (tracks = next),
   });
 }
 
@@ -81,13 +92,27 @@ function leave(event: MouseEvent) {
   history.back();
 }
 
-async function retry() {
+// A retry or a new audio or subtitle Stream starts a new session here.
+async function restart() {
   if (busy) return;
   busy = true;
   const at = video?.currentTime ?? 0;
   await session?.close();
   busy = false;
   if (!destroyed) start(at);
+}
+
+function chooseAudio(value: string) {
+  streams = { ...streams, audioStreamIndex: Number(value) };
+  void restart();
+}
+
+function chooseSubtitles(value: string) {
+  streams = {
+    ...streams,
+    subtitleStreamIndex: value === "off" ? null : Number(value),
+  };
+  void restart();
 }
 
 // Stop first, so the next session resumes from the position stop recorded.
@@ -128,20 +153,55 @@ function show(event: PageTransitionEvent) {
           <p>{context}</p>
         {/if}
       </div>
-      {#if version && detail.versions.length > 1}
-        <label class="version">
-          <span>Version</span>
-          <select
-            value={version.id}
-            disabled={busy}
-            onchange={(event) => switchVersion(event.currentTarget.value)}
-          >
-            {#each detail.versions as option (option.id)}
-              <option value={option.id}>{option.label}</option>
-            {/each}
-          </select>
-        </label>
-      {/if}
+      <div class="menus">
+        {#if version && detail.versions.length > 1}
+          <label class="menu">
+            <span>Version</span>
+            <select
+              value={version.id}
+              disabled={busy}
+              onchange={(event) => switchVersion(event.currentTarget.value)}
+            >
+              {#each detail.versions as option (option.id)}
+                <option value={option.id}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+        {#if tracks && tracks.audioStreams.length > 1}
+          {@const names = audioNames(tracks.audioStreams)}
+          <label class="menu">
+            <span>Audio</span>
+            <select
+              value={String(tracks.audioStreamIndex)}
+              disabled={busy}
+              onchange={(event) => chooseAudio(event.currentTarget.value)}
+            >
+              {#each tracks.audioStreams as stream, position (stream.index)}
+                <option value={String(stream.index)}>{names[position]}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+        {#if tracks && tracks.subtitleStreams.length > 0}
+          {@const names = subtitleNames(tracks.subtitleStreams)}
+          <label class="menu">
+            <span>Subtitles</span>
+            <select
+              value={tracks.subtitleStreamIndex === null
+                ? "off"
+                : String(tracks.subtitleStreamIndex)}
+              disabled={busy}
+              onchange={(event) => chooseSubtitles(event.currentTarget.value)}
+            >
+              <option value="off">Off</option>
+              {#each tracks.subtitleStreams as stream, position (stream.index)}
+                <option value={String(stream.index)}>{names[position]}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+      </div>
     {/if}
   </div>
 
@@ -166,7 +226,7 @@ function show(event: PageTransitionEvent) {
         <h2>{notice.title}</h2>
         <p>{notice.message}</p>
         {#if notice.retry}
-          <button type="button" disabled={busy} onclick={retry}
+          <button type="button" disabled={busy} onclick={restart}
             >Try again</button
           >
         {/if}
@@ -243,19 +303,25 @@ function show(event: PageTransitionEvent) {
     white-space: nowrap;
   }
 
-  .version {
+  .menus {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+  }
+
+  .menu {
     display: flex;
     align-items: center;
     gap: 8px;
     font-weight: 400;
   }
 
-  .version span {
+  .menu span {
     color: var(--muted);
   }
 
   select {
-    max-width: 60vw;
+    max-width: 30vw;
     min-height: 36px;
   }
 
@@ -299,12 +365,21 @@ function show(event: PageTransitionEvent) {
       flex-basis: calc(100% - 96px);
     }
 
-    .version {
+    .menus {
       flex-basis: 100%;
+    }
+
+    .menu {
+      flex: 1 1 100%;
+    }
+
+    .menu span {
+      min-width: 9ch;
     }
 
     select {
       flex: 1;
+      min-width: 0;
       max-width: none;
     }
   }

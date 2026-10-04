@@ -177,6 +177,9 @@ describe.skipIf(!databaseUrl)("jellyfin browse", () => {
         "movies",
         "tvshows",
       ]);
+      const second = await get("/Items?startIndex=1&limit=1");
+      expect(conforms(second)).toEqual(["Shows"]);
+      expect(second).toMatchObject({ TotalRecordCount: 2, StartIndex: 1 });
 
       const grid = `/Items?parentId=${guid(s.films.id)}&recursive=true&includeItemTypes=Movie`;
       expect(conforms(await get(`${grid}&nameStartsWith=h`))).toEqual(["Heat"]);

@@ -157,13 +157,23 @@ function queryResult(items: unknown[], total: number, startIndex: number) {
   return { Items: items, TotalRecordCount: total, StartIndex: startIndex };
 }
 
-async function librariesResult(db: Database, libraries: Library[]) {
+// Pages a list already in memory, as StartIndex and Limit ask.
+function paged<T>(list: T[], page: { offset: number; limit?: number }) {
+  const { offset, limit } = page;
+  return list.slice(offset, limit === undefined ? undefined : offset + limit);
+}
+
+async function librariesResult(
+  db: Database,
+  libraries: Library[],
+  page: { offset: number; limit?: number } = { offset: 0 },
+) {
   const serverId = await readServerId(db);
   return json(
     queryResult(
-      libraries.map((library) => libraryDto(library, serverId)),
+      paged(libraries, page).map((library) => libraryDto(library, serverId)),
       libraries.length,
-      0,
+      page.offset,
     ),
   );
 }
@@ -248,22 +258,18 @@ async function shelfResult(
 ) {
   const { db, caller, query } = context;
   const kinds = kindsOf(query);
-  const [page, serverId] = await Promise.all([
+  const [found, serverId] = await Promise.all([
     listItemViews(db, caller.user.id, { ids, kinds }),
     readServerId(db),
   ]);
-  const byId = new Map(page.items.map((view) => [view.id, view]));
+  const byId = new Map(found.items.map((view) => [view.id, view]));
   const views = select(ids.flatMap((id) => byId.get(id) ?? []));
-  const { offset, limit } = pageOf(query);
-  const shown = views.slice(
-    offset,
-    limit === undefined ? undefined : offset + limit,
-  );
+  const page = pageOf(query);
   return json(
     queryResult(
-      shown.map((view) => baseItemDto(view, serverId)),
+      paged(views, page).map((view) => baseItemDto(view, serverId)),
       views.length,
-      offset,
+      page.offset,
     ),
   );
 }
@@ -308,7 +314,11 @@ export const browseRoutes: Route[] = [
       // Without a parent, a flat listing is the user's root folder: the libraries.
       // Findroid lists libraries this way. No Item kind is a library folder.
       if (parentId === undefined && !recursive && ids.length === 0)
-        return librariesResult(db, kinds === undefined ? libraries : []);
+        return librariesResult(
+          db,
+          kinds === undefined ? libraries : [],
+          pageOf(query),
+        );
       if (kinds?.length === 0)
         return json(queryResult([], 0, pageOf(query).offset));
       return viewsResult(context, {

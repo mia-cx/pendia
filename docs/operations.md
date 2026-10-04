@@ -34,7 +34,7 @@ Environment variables only bootstrap a process. Everything else lives in Postgre
 | `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT`, `S3_REGION` | `api`, `worker`, `all` | none | The bucket for `s3`. The `AWS_` names work too. |
 | `PENDIA_PLUGIN_DIR` | `api`, `worker`, `all` | `pendia-plugins` in the OS temp folder | Where plugins install. Use local disk. |
 | `PENDIA_NPM_REGISTRY` | `api`, `worker`, `all` | `https://registry.npmjs.org` | Where npm plugin specs resolve. |
-| `TMDB_API_KEY` | `worker`, `all` | none | TMDB's v3 API key, the 32-character one, not the Read Access Token. Used when no key is stored in the admin UI. |
+| `TMDB_API_KEY` | `worker`, `all` | none | TMDB's v3 API key, the 32-character one, not the Read Access Token. Used only when Pendia's settings hold no TMDB key, neither a provider key nor the legacy `metadata.tmdb.apiKey`. |
 | `PENDIA_API_URL` | `watcher` | required | The api's origin, such as `http://pendia.lan:3000`. |
 | `PENDIA_WATCHER_TOKEN` | `watcher` | required | An API key whose owner has `manage-libraries`. |
 | `PENDIA_WATCH` | `watcher` | required | `<library-id>=<absolute path>` pairs, separated by commas. |

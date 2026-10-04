@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   open,
@@ -496,6 +497,44 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         });
       });
     }));
+
+  // Root ignores directory permissions, so it cannot fake a read-only share.
+  test.skipIf(process.getuid?.() === 0)(
+    "a read-only Item folder falls back to the configured path",
+    () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withTempRoot(async (root) => {
+          await withTempRoot(async (path) => {
+            const { item } = await fixture(db, root);
+            const folder = join(root, item.canonicalFolder);
+            const { request } = mockRequest(() => new Response(png));
+            await chmod(folder, 0o555);
+            try {
+              await expect(
+                storeArtworkOriginal(db, item.id, poster, request, {
+                  store: { backend: "colocated" },
+                }),
+              ).rejects.toMatchObject({ code: "EACCES" });
+              const store = { backend: "colocated", path } as const;
+              const row = await storeArtworkOriginal(
+                db,
+                item.id,
+                poster,
+                request,
+                { store },
+              );
+              expect(row.backend).toBe("configured-path");
+              expect(await readFile(join(path, row.storageKey))).toEqual(png);
+              const original = await readArtworkOriginal(db, row.id, store);
+              expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+            } finally {
+              await chmod(folder, 0o755);
+            }
+          });
+        });
+      }),
+  );
 
   test("a replacement keeps the row id and removes the old original from its backend", () =>
     withDatabase(async (db) => {

@@ -18,7 +18,7 @@ Add the two remaining artwork store backends next to the colocated one from #28:
   - Validation: disposable Postgres tests round-trip a poster through the path backend; the existing colocated tests stay green.
 - [x] Add the S3 backend on Bun's built-in S3 client and start a local S3-compatible server in CI.
   - Validation: a round-trip test against versitygw, skipped locally without `TEST_S3_URL` and required in CI.
-- [ ] Fall back to the configured path when the colocated write hits a read-only share.
+- [x] Fall back to the configured path when the colocated write hits a read-only share.
   - Validation: a test makes the Item folder unwritable and proves the poster lands in the configured path and reads back.
 - [ ] Remove artwork from every backend when its Item, its selection or its Library goes away.
   - Validation: tests prove scan deletes, `removeSelectedArtwork` and library deletion remove path and S3 originals.

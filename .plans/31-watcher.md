@@ -13,8 +13,8 @@ Add `--role watcher`: a process on the storage host, configured with the api URL
 
 ## TODOs
 
-- [ ] Split each scan into a disk source and a database write: a `ScanSource` walks, probes and re-checks files, with the current local behaviour as the default, so a report from elsewhere can feed the same write.
-  - Validation: existing scan, jobs, changes and webhooks tests pass unchanged against `DATABASE_URL`.
+- [x] Split each scan into a disk source and a database write: a `ScanSource` walks, probes and re-checks files, with the current local behaviour as the default, so a report from elsewhere can feed the same write.
+  - Validation: existing scan, jobs, changes and webhooks tests pass unchanged against `DATABASE_URL`. Done: `bun test src/libraries src/jobs`, 154 pass.
 - [ ] Accept watcher event batches at `POST /api/watcher/events` behind a Bearer API key with `manage-libraries`, feeding library-relative changes into the existing 10 s directory debouncer.
   - Validation: tests for a missing, wrong and session token (401), a path escaping the root (400), and a batch that becomes one scan job with relative paths.
 - [ ] Route scan jobs of watched Libraries to the watcher: `POST /api/watcher/claim` records a heartbeat and claims one scan job for the watcher's Libraries, `POST /api/watcher/jobs/<id>` writes the reported files and probes and completes or fails the job, and workers skip scan jobs of Libraries with a live heartbeat.

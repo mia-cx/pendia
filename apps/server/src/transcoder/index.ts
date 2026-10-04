@@ -11,6 +11,7 @@ import {
   createSessionManager,
   type SessionManagerOptions,
 } from "./sessions.ts";
+import { runStartupTrial } from "./trial.ts";
 
 /** Options for the transcoder role; env fills the gaps. */
 export type TranscoderOptions = {
@@ -18,6 +19,7 @@ export type TranscoderOptions = {
   port?: number; // PENDIA_TRANSCODER_PORT, else 3001
   address?: string; // PENDIA_TRANSCODER_URL, else `http://127.0.0.1:${server.port}`
   ready?: () => Promise<boolean>; // answers the Postgres half of /readyz; startPendia passes probeDatabase
+  trial?: typeof runStartupTrial; // the startup trial; tests replace it
   idleMs?: number;
   waitMs?: number;
   readRate?: SessionManagerOptions["readRate"];
@@ -26,7 +28,7 @@ export type TranscoderOptions = {
 /** The running transcoder role: its node id, address, session manager and shutdown. */
 export type Transcoder = Awaited<ReturnType<typeof startTranscoder>>;
 
-/** Starts the transcoder role: registers the node, serves /healthz, /readyz and the internal HLS route, and owns live sessions. */
+/** Starts the transcoder role: runs the startup trial, registers the node with its capability table, serves /healthz, /readyz and the internal HLS route, and owns live sessions. */
 export async function startTranscoder(
   db: Database,
   options: TranscoderOptions = {},
@@ -147,13 +149,24 @@ export async function startTranscoder(
   ).replace(/\/+$/, "");
   let node: { id: string };
   try {
+    // /readyz answers starting until the node row exists, so readiness waits
+    // for the trial.
+    const backends = await (options.trial ?? runStartupTrial)();
+    console.info(
+      JSON.stringify({
+        level: "info",
+        role: "transcoder",
+        message: "transcoder.trial",
+        backends,
+      }),
+    );
     const [inserted] = await db
       .insert(transcoderCapabilities)
       .values({
         name: hostname(),
         address,
         testedAt: new Date(),
-        backends: [],
+        backends,
       })
       .returning({ id: transcoderCapabilities.id });
     if (!inserted) throw new Error("Transcoder node insert returned no row.");

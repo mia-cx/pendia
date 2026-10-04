@@ -3,7 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { migrateDatabase } from "./db/migrate.ts";
-import { type JobPayload, transcoderCapabilities } from "./db/schema/index.ts";
+import {
+  type JobPayload,
+  type TranscoderBackend,
+  transcoderCapabilities,
+} from "./db/schema/index.ts";
 import { databaseUrl, withDatabase } from "./db/testing.ts";
 import { type Role, startPendia } from "./index.ts";
 import { createJobQueue, type Job, listJobs } from "./jobs/queue.ts";
@@ -100,8 +104,11 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
         }
         const nodes = await db.select().from(transcoderCapabilities);
         expect(nodes).toMatchObject([
-          { id: transcoder.nodeId, address: transcoder.address, backends: [] },
+          { id: transcoder.nodeId, address: transcoder.address },
         ]);
+        // The real startup trial ran: the CPU comes first and encodes H.264.
+        expect(nodes[0]?.backends[0]?.name).toBe("cpu");
+        expect(nodes[0]?.backends[0]?.codecs).toContain("h264");
         expect(transcoder.address).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
 
         const health = await fetch(`${transcoder.address}/healthz`);
@@ -152,6 +159,70 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
         });
       } finally {
         await transcoder.stop();
+        await rm(scratchDir, { recursive: true, force: true });
+      }
+    }));
+
+  test("readiness waits for the startup trial and the node row carries its table", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const scratchDir = await mkdtemp(join(tmpdir(), "pendia-trial-"));
+      // The port must be known while startTranscoder is still awaiting the trial.
+      const probe = Bun.serve({ port: 0, fetch: () => new Response() });
+      const port = probe.port;
+      await probe.stop();
+      const table: TranscoderBackend[] = [
+        { name: "cpu", codecs: ["h264"], toneMapping: ["hdr10"] },
+      ];
+      let finishTrial: (backends: TranscoderBackend[]) => void = () => {};
+      const starting = startTranscoder(db, {
+        port,
+        scratchDir,
+        trial: () =>
+          new Promise((resolve) => {
+            finishTrial = resolve;
+          }),
+      });
+      try {
+        const base = `http://127.0.0.1:${port}`;
+        const deadline = Date.now() + 2_000;
+        while ((await fetch(`${base}/healthz`).catch(() => null)) === null) {
+          if (Date.now() > deadline) throw new Error("No /healthz answer.");
+          await Bun.sleep(10);
+        }
+        const early = await fetch(`${base}/readyz`);
+        expect(early.status).toBe(503);
+        expect(await early.json()).toMatchObject({ status: "starting" });
+        expect(await db.select().from(transcoderCapabilities)).toHaveLength(0);
+
+        finishTrial(table);
+        const transcoder = await starting;
+        expect((await fetch(`${base}/readyz`)).status).toBe(200);
+        const [node] = await db.select().from(transcoderCapabilities);
+        expect(node).toMatchObject({ id: transcoder.nodeId, backends: table });
+      } finally {
+        finishTrial(table);
+        await (await starting.catch(() => null))?.stop();
+        await rm(scratchDir, { recursive: true, force: true });
+      }
+    }));
+
+  test("a failed startup trial stops the transcoder before it registers", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const scratchDir = await mkdtemp(join(tmpdir(), "pendia-trial-"));
+      try {
+        await expect(
+          startTranscoder(db, {
+            port: 0,
+            scratchDir,
+            trial: async () => {
+              throw new Error("The CPU trial encoded no codec.");
+            },
+          }),
+        ).rejects.toThrow("The CPU trial encoded no codec.");
+        expect(await db.select().from(transcoderCapabilities)).toHaveLength(0);
+      } finally {
         await rm(scratchDir, { recursive: true, force: true });
       }
     }));

@@ -24,9 +24,12 @@ export type LiveRun = {
 /** Audio bitrates of the two re-encode paths, in bits per second. */
 export const audioBitrates = { aac: 192_000, eac3: 640_000 } as const;
 
-// The live profile trades quality for start time. No B-frames: with them the
-// fMP4 muxer starts each run's video two frames after its boundary.
-const videoEncoders: Record<string, readonly string[]> = {
+/**
+ * The live profile's CPU encoder per output codec. It trades quality for start
+ * time. No B-frames: with them the fMP4 muxer starts each run's video two
+ * frames after its boundary.
+ */
+export const liveEncoders: Record<string, readonly string[]> = {
   h264: ["-c:v", "libx264", "-preset", "veryfast", "-bf", "0"],
   hevc: [
     "-c:v",
@@ -94,7 +97,7 @@ function videoArguments(run: LiveRun) {
     }
     return args;
   }
-  const encoder = videoEncoders[video.codec];
+  const encoder = liveEncoders[video.codec];
   if (encoder === undefined) {
     throw new RangeError(`No live encoder for ${video.codec}.`);
   }

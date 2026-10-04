@@ -13,6 +13,8 @@ import {
   sessionRegistry,
   settings,
   streams,
+  type TranscoderBackend,
+  transcoderCapabilities,
   userSettings,
   versions,
 } from "../db/schema/index.ts";
@@ -22,7 +24,13 @@ import {
   type PlaybackSource,
   type SubtitleStream,
 } from "./decisions.ts";
-import type { ClientProfile, Hdr, PlaybackCaps } from "./policy.ts";
+import {
+  type CapabilityTable,
+  type ClientProfile,
+  cpuCapabilities,
+  type Hdr,
+  type PlaybackCaps,
+} from "./policy.ts";
 
 /** The decoded input every playback planning call receives. */
 export type PlanInput = {
@@ -171,6 +179,44 @@ export async function loadPlaybackSource(
   return { item, version, file, source };
 }
 
+const toneMapFlavours: readonly string[] = hdrFlavours.filter(
+  (flavour) => flavour !== "sdr",
+);
+
+function isToneMapFlavour(value: string): value is Exclude<Hdr, "sdr"> {
+  return toneMapFlavours.includes(value);
+}
+
+/**
+ * Returns the CPU capabilities every registered transcoder shares, from their
+ * startup trials; the built-in CPU table when no node has reported one.
+ * Hardware backends are recorded but not offered: only CPU arguments exist.
+ */
+export async function readCapabilityTable(
+  db: Pick<Database, "select">,
+): Promise<CapabilityTable> {
+  const nodes = await db
+    .select({ backends: transcoderCapabilities.backends })
+    .from(transcoderCapabilities);
+  const tables = nodes.flatMap(({ backends }) =>
+    backends.filter((backend) => backend.name === "cpu"),
+  );
+  const [first, ...rest] = tables;
+  if (first === undefined) return cpuCapabilities;
+  const shared = (pick: (backend: TranscoderBackend) => string[]) =>
+    pick(first).filter((value) =>
+      rest.every((table) => pick(table).includes(value)),
+    );
+  return {
+    cpu: {
+      codecs: shared((backend) => backend.codecs),
+      toneMapping: shared((backend) => backend.toneMapping).filter(
+        isToneMapFlavour,
+      ),
+    },
+  };
+}
+
 async function globalBitrateCap(db: Database): Promise<number | null> {
   const [row] = await db
     .select({ value: settings.value })
@@ -275,7 +321,12 @@ export async function planPlayback(
   };
   let decision: ReturnType<typeof decidePlayback>;
   try {
-    decision = decidePlayback(source, input.profile, caps);
+    decision = decidePlayback(
+      source,
+      input.profile,
+      caps,
+      await readCapabilityTable(db),
+    );
   } catch {
     throw new AuthError("INVALID_INPUT");
   }

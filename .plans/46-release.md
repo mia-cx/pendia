@@ -8,7 +8,7 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
 
 - [x] On a clean machine, `docker compose up` from the README reaches the admin wizard.
 - [x] Readiness is false until migrations and the trial complete.
-- [ ] CI publishes the image on a tag and the image size is recorded here. (Mia pushes the first tag; the publish job is ready.)
+- [ ] CI publishes the image on a tag and the image size is recorded here. (Mia pushes the first tag; the publish job is ready. Image size from the PR's `image` job: 625 MB.)
 
 ## TODOs
 
@@ -25,7 +25,7 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
 - [x] Follow the README quick start in an empty directory and reach the admin wizard; screenshot it. Run the full gate and record the results here.
   - Validation: wizard screenshot; `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `bun test` with and without `DATABASE_URL`.
   - Quick start: in an empty folder, `git clone --branch feat/46-release` (the branch, since `main` lacks the change), then `PENDIA_HOST_PORT=3846 docker compose -p pendia-46 up -d`. The GHCR pull answered `denied`, compose built the image from the clone, and `/readyz` answered ready. `/` opened the setup wizard: https://i.mia.cx/file/2026/10/pendia-46-wizard-compose.png. Inside the container `/media` was read-only to `pendia` and `/var/lib/pendia` was writable, which confirms the artwork fallback is needed. Torn down with `down -v`; the image and the 19 build cache entries the build made were removed by id.
-  - Local image: 888 MB on disk, 243 MB compressed.
+  - Image size: 625 MB in the PR's CI `image` job, with ffmpeg 7.1.5. The local build showed 888 MB disk usage and 243 MB compressed.
   - Gate at 1972ce0: install no changes; lint clean (376 files); check 6 of 6; build 4 of 4. With DATABASE_URL: 1316 pass, 3 skip, 0 fail. Without: 774 pass, 563 skip, 0 fail.
 
 ## Notes

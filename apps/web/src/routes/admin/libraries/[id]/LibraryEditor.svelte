@@ -1,7 +1,7 @@
 <script lang="ts">
-import { tick } from "svelte";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
+import FolderFields from "$lib/components/FolderFields.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 import {
@@ -19,18 +19,11 @@ const library = resource(() => client.libraries.get({ id }));
 let loaded = false;
 let name = $state("");
 let draft = $state<RootDraft[]>([]);
-let inputs: HTMLInputElement[] = [];
 let busy = $state(false);
 let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
 let refusal = $state<{ index: number; message: string } | undefined>(undefined);
 let notice = $state("");
 let confirming = $state<{ id: string; path: string }[] | null>(null);
-let copied = $state("");
-
-// The clipboard API exists only in a secure context, so plain HTTP selects instead.
-let canCopy = $state(
-  typeof navigator !== "undefined" && "clipboard" in navigator,
-);
 
 $effect(() => {
   if (!loaded && library.data) {
@@ -39,27 +32,6 @@ $effect(() => {
     draft = library.data.roots.map((root) => ({ ...root }));
   }
 });
-
-async function copyId(rootId: string) {
-  try {
-    await navigator.clipboard.writeText(rootId);
-    copied = rootId;
-  } catch {
-    // A denied clipboard leaves the selectable field as the way to copy.
-    canCopy = false;
-  }
-}
-
-async function addFolderRow() {
-  draft = [...draft, { path: "" }];
-  await tick();
-  inputs[draft.length - 1]?.focus();
-}
-
-function removeRow(index: number) {
-  draft = draft.filter((_, i) => i !== index);
-  if (refusal?.index === index) refusal = undefined;
-}
 
 function submit(event: SubmitEvent) {
   event.preventDefault();
@@ -81,7 +53,7 @@ async function save() {
   failure = undefined;
   refusal = undefined;
   notice = "";
-  const sent = draft;
+  const sent = $state.snapshot(draft);
   try {
     const answer = await client.libraries.update({ id, name, roots: sent });
     library.set(answer);
@@ -117,52 +89,7 @@ async function save() {
       <label for="libraryName">Name</label>
       <input id="libraryName" required bind:value={name} />
 
-      <fieldset>
-        <legend>Folders</legend>
-        {#each draft as row, index (index)}
-          <div class="folder">
-            <input
-              aria-label="Folder {index + 1} path"
-              required
-              bind:this={inputs[index]}
-              bind:value={draft[index].path}
-              aria-invalid={refusal?.index === index ? "true" : undefined}
-              aria-describedby={refusal?.index === index
-                ? `folderError${index}`
-                : undefined}
-              oninput={() => {
-                if (refusal?.index === index) refusal = undefined;
-              }}
-            />
-            {#if draft.length > 1}
-              <button type="button" onclick={() => removeRow(index)}
-                >Remove</button
-              >
-            {/if}
-          </div>
-          {#if refusal?.index === index}
-            <p class="field-error" id="folderError{index}">{refusal.message}</p>
-          {/if}
-          {#if row.id}
-            <div class="root-id">
-              <label for="rootId{index}">ID</label>
-              <input
-                id="rootId{index}"
-                class="mono"
-                readonly
-                value={row.id}
-                onclick={(event) => event.currentTarget.select()}
-              />
-              {#if canCopy}
-                <button type="button" onclick={() => copyId(row.id ?? "")}
-                  >{copied === row.id ? "Copied" : "Copy ID"}</button
-                >
-              {/if}
-            </div>
-          {/if}
-        {/each}
-        <button type="button" onclick={addFolderRow}>Add folder</button>
-      </fieldset>
+      <FolderFields bind:rows={draft} bind:refusal idPrefix="edit" />
 
       {#if failure}
         <Failure {failure} />
@@ -213,56 +140,6 @@ form {
   display: grid;
   max-width: 480px;
   gap: 16px;
-}
-
-fieldset {
-  display: grid;
-  gap: 8px;
-  justify-items: start;
-  width: 100%;
-}
-
-fieldset legend {
-  padding: 0;
-  font-weight: 600;
-}
-
-fieldset > p {
-  margin: 0;
-}
-
-.folder {
-  display: flex;
-  width: 100%;
-  gap: 8px;
-}
-
-.folder input {
-  flex: 1;
-  min-width: 0;
-}
-
-.field-error {
-  margin: 0;
-  color: var(--danger);
-}
-
-.root-id {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  width: 100%;
-  gap: 4px 8px;
-}
-
-.root-id label {
-  font-weight: 400;
-}
-
-.root-id .mono {
-  flex: 1;
-  min-width: 0;
-  font-family: monospace;
 }
 
 .submit,

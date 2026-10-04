@@ -33,8 +33,12 @@ export function refusedRoot(
 ): { index: number; message: string } | undefined {
   if (!(error instanceof ORPCError)) return undefined;
   const data: unknown = error.data;
-  if (typeof data !== "object" || data === null) return undefined;
-  const root = (data as Record<string, unknown>).root;
-  if (typeof root !== "number") return undefined;
-  return { index: root, message: error.message };
+  if (
+    typeof data !== "object" ||
+    data === null ||
+    !("root" in data) ||
+    typeof data.root !== "number"
+  )
+    return undefined;
+  return { index: data.root, message: error.message };
 }

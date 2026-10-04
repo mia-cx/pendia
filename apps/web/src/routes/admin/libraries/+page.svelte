@@ -1,10 +1,11 @@
 <script lang="ts">
-import { onDestroy, tick, untrack } from "svelte";
+import { onDestroy, untrack } from "svelte";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
+import FolderFields from "$lib/components/FolderFields.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
-import { refusedRoot } from "$lib/roots.ts";
+import { type RootDraft, refusedRoot } from "$lib/roots.ts";
 import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 
 const list = resource(() => client.libraries.list());
@@ -34,8 +35,7 @@ function holdsStatus(id: string, ticket: number): boolean {
 }
 
 let addName = $state("");
-let addRows = $state<string[]>([""]);
-let addInputs: HTMLInputElement[] = [];
+let addRows = $state<RootDraft[]>([{ path: "" }]);
 let addMedium = $state<LibraryRow["medium"]>("movies");
 let addBusy = $state(false);
 let addFailure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
@@ -90,12 +90,6 @@ async function loadStatuses(rows: readonly LibraryRow[]) {
   );
 }
 
-async function addFolderRow() {
-  addRows = [...addRows, ""];
-  await tick();
-  addInputs[addRows.length - 1]?.focus();
-}
-
 async function addLibrary(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
@@ -104,20 +98,23 @@ async function addLibrary(event: SubmitEvent) {
   addNotice = "";
   const name = addName;
   const medium = addMedium;
-  const rows = addRows;
+  const sent = $state.snapshot(addRows);
   try {
     const created = await client.libraries.create({
       name,
       medium,
-      roots: rows,
+      roots: sent.map((row) => row.path),
     });
     if (addName === name) addName = "";
-    if (addRows === rows) addRows = [""];
+    const unchanged =
+      addRows.length === sent.length &&
+      addRows.every((row, index) => row.path === sent[index]?.path);
+    if (unchanged) addRows = [{ path: "" }];
     addNotice = `Added ${created.name}.`;
     await list.reload();
   } catch (error) {
     const refused = refusedRoot(error);
-    if (refused !== undefined && refused.index < rows.length)
+    if (refused !== undefined && refused.index < sent.length)
       addRefusal = refused;
     else addFailure = readFailure(error);
   } finally {
@@ -328,44 +325,9 @@ function scanCell(row: LibraryRow): string {
   {/if}
   <label for="addName">Name</label>
   <input id="addName" name="name" required bind:value={addName} />
-  <fieldset>
-    <legend>Folders</legend>
-    {#each addRows as row, index (index)}
-      <div class="folder">
-        <input
-          aria-label="Folder {index + 1} path"
-          required
-          bind:this={addInputs[index]}
-          bind:value={addRows[index]}
-          aria-invalid={addRefusal?.index === index ? "true" : undefined}
-          aria-describedby={addRefusal?.index === index
-            ? `addFolderError${index}`
-            : undefined}
-          oninput={() => {
-            if (addRefusal?.index === index) addRefusal = undefined;
-          }}
-        />
-        {#if addRows.length > 1}
-          <button
-            type="button"
-            onclick={() => {
-              addRows = addRows.filter((_, i) => i !== index);
-              if (addRefusal?.index === index) addRefusal = undefined;
-            }}>Remove</button
-          >
-        {/if}
-      </div>
-      {#if addRefusal?.index === index}
-        <p class="field-error" id="addFolderError{index}">
-          {addRefusal.message}
-        </p>
-      {/if}
-    {/each}
-    <button type="button" onclick={addFolderRow}>Add folder</button>
-    <p class="muted">
-      Enter absolute paths on the server, like /srv/movies.
-    </p>
-  </fieldset>
+  <FolderFields bind:rows={addRows} bind:refusal={addRefusal} idPrefix="add">
+    <p class="muted">Enter absolute paths on the server, like /srv/movies.</p>
+  </FolderFields>
   <label for="addMedium">Medium</label>
   <select id="addMedium" name="medium" bind:value={addMedium}>
     {#each Object.entries(mediumNames) as [value, label] (value)}
@@ -420,37 +382,6 @@ form {
 
 form h3 {
   margin: 0 0 8px;
-}
-
-fieldset {
-  display: grid;
-  gap: 8px;
-  justify-items: start;
-  width: 100%;
-}
-
-fieldset legend {
-  padding: 0;
-  font-weight: 600;
-}
-
-fieldset > p {
-  margin: 0;
-}
-
-.folder {
-  display: flex;
-  width: 100%;
-  gap: 8px;
-}
-
-.folder input {
-  flex: 1;
-  min-width: 0;
-}
-
-.field-error {
-  color: var(--danger);
 }
 
 form :global(.failure) {

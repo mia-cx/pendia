@@ -118,8 +118,8 @@ export async function startWatcher(
   }: WatcherOptions = {},
 ) {
   const libraryIds = [...roots.keys()];
-  async function post(path: string, body: unknown) {
-    const response = await fetch(new URL(`/api/watcher/${path}`, apiUrl), {
+  const request = (path: string, body: unknown) =>
+    fetch(new URL(`/api/watcher/${path}`, apiUrl), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -127,6 +127,8 @@ export async function startWatcher(
       },
       body: JSON.stringify(body),
     });
+  async function post(path: string, body: unknown) {
+    const response = await request(path, body);
     if (!response.ok)
       throw new Error(
         `Watcher ${path} failed (${response.status}): ${await response.text()}`,
@@ -161,6 +163,46 @@ export async function startWatcher(
 
   let stopped = false;
   let wake = () => {};
+  /** Waits one poll interval, or until stop. */
+  const nap = () =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, pollIntervalMs);
+      wake = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+
+  /**
+   * Posts a scan report until the api answers below 500. The claimed job
+   * holds its Library's concurrency key, so a lost report would block
+   * every later scan. A 4xx means the job is settled, possibly by an
+   * earlier copy of this report whose answer never arrived.
+   */
+  async function deliver(jobId: string, report: WatcherReport) {
+    for (;;) {
+      try {
+        const response = await request(`jobs/${jobId}`, report);
+        if (response.status < 500) {
+          if (!response.ok)
+            onError(
+              new Error(
+                `Watcher report for ${jobId} answered ${response.status}: ${await response.text()}`,
+              ),
+            );
+          return;
+        }
+        onError(
+          new Error(`Watcher report for ${jobId} failed (${response.status}).`),
+        );
+      } catch (error) {
+        onError(error);
+      }
+      if (stopped) return;
+      await nap();
+    }
+  }
+
   async function loop() {
     while (!stopped) {
       try {
@@ -175,7 +217,7 @@ export async function startWatcher(
             pollIntervalMs,
           );
           try {
-            await post(`jobs/${job.id}`, await runScan(root, job));
+            await deliver(job.id, await runScan(root, job));
           } finally {
             clearInterval(heartbeat);
           }
@@ -185,13 +227,7 @@ export async function startWatcher(
         onError(error);
       }
       if (stopped) break;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, pollIntervalMs);
-        wake = () => {
-          clearTimeout(timer);
-          resolve();
-        };
-      });
+      await nap();
     }
   }
   const running = loop();

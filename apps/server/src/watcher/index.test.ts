@@ -122,6 +122,59 @@ test("pushes adds, moves and deletes within 1 s with library-relative paths", as
   }
 });
 
+test("retries a scan report the api failed to take", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pendia-watch-"));
+  const jobId = "0199a000-0000-7000-8000-000000000002";
+  let claims = 0;
+  const reports: unknown[] = [];
+  const api = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const { pathname } = new URL(request.url);
+      if (pathname === "/api/watcher/claim")
+        return Response.json({
+          job:
+            claims++ === 0
+              ? {
+                  id: jobId,
+                  attempts: 1,
+                  libraryId,
+                  path: ".",
+                  medium: "movies",
+                  cached: [],
+                }
+              : null,
+        });
+      if (pathname !== `/api/watcher/jobs/${jobId}`)
+        return new Response(null, { status: 404 });
+      reports.push(await request.json());
+      return reports.length === 1
+        ? new Response("unavailable", { status: 503 })
+        : Response.json({ state: "completed" });
+    },
+  });
+  const watcher = await startWatcher(
+    {
+      apiUrl: new URL(api.url),
+      token: "t",
+      roots: new Map([[libraryId, root]]),
+    },
+    { pollIntervalMs: 20, onError: () => {} },
+  );
+  try {
+    const deadline = Date.now() + 1_000;
+    while (reports.length < 2 && Date.now() < deadline) await Bun.sleep(10);
+    expect(reports).toEqual([
+      { attempts: 1, files: [], probes: [] },
+      { attempts: 1, files: [], probes: [] },
+    ]);
+  } finally {
+    await watcher.stop();
+    await api.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 describe.skipIf(!databaseUrl)("watcher scans", () => {
   test("a Library scan requested through the api runs on the watcher", () =>
     withVideoFixture((dir) =>

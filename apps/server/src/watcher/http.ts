@@ -17,7 +17,7 @@ import {
 import { createJobQueue } from "../jobs/queue.ts";
 import { runScanJob } from "../libraries/jobs.ts";
 import { cacheProbe } from "../libraries/probe-cache.ts";
-import type { ScanSource } from "../libraries/scan.ts";
+import { inScope, type ScanSource } from "../libraries/scan.ts";
 import type {
   createChangeDebouncer,
   WatchedChange,
@@ -236,11 +236,6 @@ async function filesSharingShow(
   return rows.map((row) => row.path);
 }
 
-const inScope = (scope: string, recursive: boolean, path: string) =>
-  recursive
-    ? scope === "." || path.startsWith(`${scope}/`)
-    : posix.dirname(path) === scope;
-
 /** Reads a scan's files from a watcher's report and its probes into the probe cache. */
 function reportedScanSource(
   db: Database,
@@ -296,6 +291,7 @@ function reportedScanSource(
     // The watcher re-reads each file after its probe, and its walk is the whole scope.
     verify: async () => {},
     confirmEmpty: async () => {},
+    confirmMissing: async () => {},
     // An unchecked path counts as present, which keeps a Show where it is.
     exists: async (path) => !missing.has(path),
   };

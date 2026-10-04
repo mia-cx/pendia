@@ -122,6 +122,23 @@ async function waitForBlockedScan(db: Database) {
   }
 }
 
+/** Records an admin's progress on the Version that owns the File at this path. */
+async function recordProgress(db: Database, path: string) {
+  const [file] = await db.select().from(files).where(eq(files.path, path));
+  if (!file) throw new Error("Fixture File missing.");
+  const admin = await setupAdmin(db, {
+    username: "admin",
+    password: "admin-pass",
+  });
+  await db.insert(progress).values({
+    userId: admin.id,
+    itemId: file.itemId,
+    versionId: file.versionId,
+    format: "video",
+    positionSeconds: 33,
+  });
+}
+
 describe.skipIf(!databaseUrl)("scanDirectory", () => {
   test("writes one Item with two Versions, Files and Streams for a canonical folder", () =>
     withDatabase(async (db) => {
@@ -461,6 +478,40 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
           expect(itemRows.map((row) => row.id)).toEqual([itemId]);
           expect(await db.select().from(versions)).toHaveLength(1);
           expect(await db.select().from(files)).toHaveLength(1);
+          expect(await db.select().from(progress)).toEqual(progressBefore);
+        });
+      });
+    }));
+
+  test("a movie File recreated before the write lock keeps its row and progress", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const dir = join(root, folder);
+        const recreated = join(dir, "Alien.720p.mkv");
+        await mkdir(dir, { recursive: true });
+        await createVideoFixture(join(dir, "Alien.1080p.mkv"));
+        await createVideoFixture(recreated);
+        await withLibrary(db, root, async (library) => {
+          await scanDirectory(db, library.id, folder);
+          await recordProgress(db, `${folder}/Alien.720p.mkv`);
+          const filesBefore = await db.select().from(files);
+          const progressBefore = await db.select().from(progress);
+          await rm(recreated);
+
+          await holdLibraryLock(url, library.id, async (release) => {
+            const scanning = scanDirectory(db, library.id, folder, {
+              reconcileMissing: true,
+            });
+            await waitForBlockedScan(db);
+            await createVideoFixture(recreated);
+            release();
+            await expect(scanning).rejects.toThrow(
+              "Library directory changed before scan write.",
+            );
+          });
+
+          expect(await db.select().from(files)).toEqual(filesBefore);
           expect(await db.select().from(progress)).toEqual(progressBefore);
         });
       });
@@ -1478,6 +1529,44 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         );
         expect(await db.select().from(versions)).toHaveLength(1);
         expect(await db.select().from(files)).toHaveLength(1);
+        expect(await db.select().from(progress)).toEqual(progressBefore);
+      });
+    }));
+
+  test("an Episode File recreated before the write lock keeps its row and progress", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Foundation";
+        const seasonDir = join(root, show, "Season 01");
+        const recreated = join(seasonDir, "Foundation S01E02.mkv");
+        await mkdir(seasonDir, { recursive: true });
+        await createVideoFixture(join(seasonDir, "Foundation S01E01.mkv"));
+        await createVideoFixture(recreated);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await scanShowDirectory(db, library.id, show);
+        await recordProgress(db, `${show}/Season 01/Foundation S01E02.mkv`);
+        const filesBefore = await db.select().from(files);
+        const progressBefore = await db.select().from(progress);
+        await rm(recreated);
+
+        await holdLibraryLock(url, library.id, async (release) => {
+          const scanning = scanShowDirectory(db, library.id, show, {
+            reconcileMissing: true,
+          });
+          await waitForBlockedScan(db);
+          await createVideoFixture(recreated);
+          release();
+          await expect(scanning).rejects.toThrow(
+            "Library directory changed before scan write.",
+          );
+        });
+
+        expect(await db.select().from(files)).toEqual(filesBefore);
         expect(await db.select().from(progress)).toEqual(progressBefore);
       });
     }));

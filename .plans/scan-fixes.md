@@ -16,7 +16,7 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
 - [x] `S01E01-E03` plus `S01E02-E04` in one scan succeed as one widened Episode with both files as Versions.
 - [x] A new `S01E01-E03` next to a retained `S01E02` succeeds without an exclusion constraint error.
 - [x] The show reconciler deletes File rows only for imported Versions, like the movie reconciler.
-- [ ] A file recreated between the walk and the write lock keeps its row and its watch progress, for movies and shows.
+- [x] A file recreated between the walk and the write lock keeps its row and its watch progress, for movies and shows.
 - [x] `waitForBlockedScan` counts only lock waits in the test's own database, from other backends.
 - [ ] Lint, check, build, and `bun test` with and without `DATABASE_URL` pass.
 
@@ -30,8 +30,8 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
   - Validation: new tests for `S01E01-E03` plus `S01E02-E04`, and `S01E01-E03` next to a retained `S01E02`; existing range tests still pass. Both new tests failed on the exclusion constraint before the change. After: `src/libraries` and `src/mediums` 262 pass, 1 fail (the movie tree test timed out at 5 s under load average 15; `scan.test.ts` alone: 20 pass).
 - [x] #70: the show reconciler selects only Files of imported Versions before deleting stale ones.
   - Validation: existing reconcile tests pass. `scan.test.ts` and `jobs.test.ts`: 32 pass.
-- [ ] #71: re-stat the paths a reconciling scan is about to drop, inside the write lock, for movies and shows.
-  - Validation: new tests recreate a file while the scan waits on the lock and expect the existing abort error with rows and progress kept.
+- [x] #71: re-stat the paths a reconciling scan is about to drop, inside the write lock, for movies and shows.
+  - Validation: new tests recreate a file while the scan waits on the lock and expect the existing abort error with rows and progress kept. Both failed before the change. After: `src/libraries` and `src/watcher` 159 pass.
 - [ ] Run the full gate and record the results here.
 
 ## Notes

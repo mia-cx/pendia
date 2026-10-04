@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -52,6 +53,8 @@ export type ScanSource = {
   verify(file: ProbedLibraryFile): Promise<void>;
   /** Fails when an empty scope gained files before the write. Runs under the write lock. */
   confirmEmpty(path: string, recursive: boolean): Promise<void>;
+  /** Fails when a path the walk missed holds a file again before the write. Runs under the write lock. */
+  confirmMissing(paths: readonly string[]): Promise<void>;
   /** Whether a stored File's path outside the scope still holds a file. */
   exists(path: string): Promise<boolean>;
 };
@@ -74,6 +77,12 @@ export function scanScope(
     recursive: path === "." || medium === "shows",
   };
 }
+
+/** Whether a walk of this library-relative scope would reach the path. */
+export const inScope = (scope: string, recursive: boolean, path: string) =>
+  recursive
+    ? scope === "." || path.startsWith(`${scope}/`)
+    : posix.dirname(path) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -161,6 +170,15 @@ export function localScanSource(
   probe: typeof probeVideo = probeVideo,
 ): ScanSource {
   const { rules } = scanScope(library.medium, ".");
+  const exists = async (path: string) => {
+    try {
+      await readLibraryFile(library.rootPath, path);
+      return true;
+    } catch (error) {
+      if (error instanceof MissingLibraryPathError) return false;
+      throw error;
+    }
+  };
   return {
     async walk(path, recursive) {
       const walked: LibraryFile[] = [];
@@ -190,15 +208,12 @@ export function localScanSource(
     },
     confirmEmpty: (path, recursive) =>
       confirmScopeEmpty(library.rootPath, rules, path, recursive),
-    async exists(path) {
-      try {
-        await readLibraryFile(library.rootPath, path);
-        return true;
-      } catch (error) {
-        if (error instanceof MissingLibraryPathError) return false;
-        throw error;
-      }
+    async confirmMissing(paths) {
+      for (const path of paths)
+        if (await exists(path))
+          throw new Error("Library directory changed before scan write.");
     },
+    exists,
   };
 }
 
@@ -454,20 +469,31 @@ export async function scanDirectory(
     }
     if (options.reconcileMissing === true) {
       const itemFiles = await tx
-        .select()
+        .select({ versionId: files.versionId, path: files.path })
         .from(files)
+        .innerJoin(
+          versions,
+          and(
+            eq(versions.id, files.versionId),
+            eq(versions.origin, "imported"),
+          ),
+        )
         .where(eq(files.itemId, itemId));
       const present = new Set(group.paths);
-      for (const file of itemFiles) {
-        if (present.has(file.path)) continue;
-        const [version] = await tx
-          .select({ origin: versions.origin })
-          .from(versions)
-          .where(eq(versions.id, file.versionId));
-        if (version?.origin === "imported") {
-          await tx.delete(versions).where(eq(versions.id, file.versionId));
-        }
-      }
+      const missing = itemFiles.filter((file) => !present.has(file.path));
+      // Only a path inside the scope can have come back since the walk.
+      await source.confirmMissing(
+        missing
+          .map((file) => file.path)
+          .filter((missingPath) => inScope(path, false, missingPath)),
+      );
+      if (missing.length > 0)
+        await tx.delete(versions).where(
+          inArray(
+            versions.id,
+            missing.map((file) => file.versionId),
+          ),
+        );
     }
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
@@ -970,6 +996,12 @@ export async function scanShowDirectory(
           ),
         );
       const stale = showFiles.filter((file) => !memberByPath.has(file.path));
+      // Only a path inside the scope can have come back since the walk.
+      await source.confirmMissing(
+        stale
+          .map((file) => file.path)
+          .filter((stalePath) => inScope(path, true, stalePath)),
+      );
       const staleFileIds = stale.map((file) => file.id);
       if (staleFileIds.length > 0) {
         await tx.delete(files).where(inArray(files.id, staleFileIds));

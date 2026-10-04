@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import type { JobPayload } from "../db/schema/index.ts";
+import { type JobPayload, jobs } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { createJobQueue, listJobs } from "./queue.ts";
+import { createJobQueue, leaseExpiredError, listJobs } from "./queue.ts";
 
 function probePayload(): JobPayload {
   return { type: "probe", fileId: Bun.randomUUIDv7() };
@@ -14,6 +14,22 @@ async function databaseNow(db: Database) {
   const [row] = await db.$client<{ now: Date }[]>`select now() as now`;
   if (!row) throw new Error("Database clock query returned no row.");
   return row.now;
+}
+
+/** Ends a job's lease now, the way a holder that stopped renewing would. */
+async function expireLease(db: Database, id: string) {
+  await db
+    .update(jobs)
+    .set({ leaseExpiresAt: sql`statement_timestamp() - interval '1 second'` })
+    .where(eq(jobs.id, id));
+}
+
+async function until(condition: () => Promise<boolean>) {
+  const deadline = Date.now() + 2_000;
+  while (!(await condition())) {
+    if (Date.now() > deadline) throw new Error("Condition not met in time.");
+    await Bun.sleep(10);
+  }
 }
 
 async function claimWhenReady(queue: ReturnType<typeof createJobQueue>) {
@@ -42,6 +58,15 @@ test("rejects invalid retry delays and concurrency limits", async () => {
     ])
       expect(() => createJobQueue(lazy.db, { concurrencyLimit })).toThrow(
         "Concurrency limit must be a positive integer.",
+      );
+    for (const lease of [
+      { renewMs: 0 },
+      { leaseMs: 20_000 },
+      { renewMs: Number.NaN },
+      { leaseMs: Number.POSITIVE_INFINITY },
+    ])
+      expect(() => createJobQueue(lazy.db, lease)).toThrow(
+        "Lease renewal must be a positive delay below the lease.",
       );
   } finally {
     await lazy.close();
@@ -407,6 +432,102 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
       } finally {
         await second.close();
       }
+    }));
+
+  test("a crashed holder's job is reclaimed, and its late answers change nothing", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const job = await queue.enqueue(probePayload(), {
+        concurrencyKey: "library",
+      });
+      const crashed = await queue.claim();
+      if (!crashed) throw new Error("First claim missing.");
+      expect(crashed.leaseExpiresAt.getTime()).toBeGreaterThan(
+        (await databaseNow(db)).getTime(),
+      );
+      expect(await queue.claim()).toBeUndefined();
+      await expireLease(db, job.id);
+      const reclaimed = await queue.claim();
+      expect(reclaimed).toMatchObject({
+        id: job.id,
+        state: "running",
+        attempts: 2,
+        error: leaseExpiredError,
+      });
+      expect(reclaimed?.claimToken).not.toBe(crashed.claimToken);
+      expect(await queue.complete(crashed)).toBeUndefined();
+      expect(await queue.fail(crashed, "late error")).toBeUndefined();
+      expect(await queue.renew(crashed)).toBe(false);
+      if (!reclaimed) throw new Error("Reclaim missing.");
+      expect(await queue.complete(reclaimed)).toMatchObject({
+        id: job.id,
+        state: "completed",
+        attempts: 2,
+      });
+    }));
+
+  test("an expired lease cannot be renewed back into a taken key", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const late = await queue.enqueue(probePayload(), {
+        concurrencyKey: "library",
+      });
+      const holder = await queue.claim();
+      if (!holder) throw new Error("Claim missing.");
+      await expireLease(db, late.id);
+      const next = await queue.enqueue(probePayload(), {
+        priority: 1,
+        concurrencyKey: "library",
+      });
+      expect((await queue.claim())?.id).toBe(next.id);
+      expect(await queue.renew(holder)).toBe(false);
+      const live = await db.$client<{ count: number }[]>`
+        select count(*)::integer as count from jobs
+        where state = 'running' and lease_expires_at >= now()`;
+      expect(live[0]?.count).toBe(1);
+    }));
+
+  test("a job that keeps losing its lease ends failed with the lease error", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const job = await queue.enqueue(probePayload(), { maxAttempts: 2 });
+      for (const attempts of [1, 2]) {
+        expect((await queue.claim())?.attempts).toBe(attempts);
+        await expireLease(db, job.id);
+      }
+      expect(await queue.claim()).toBeUndefined();
+      expect(await listJobs(db)).toMatchObject([
+        { id: job.id, state: "failed", attempts: 2, error: leaseExpiredError },
+      ]);
+    }));
+
+  test("hold renews the lease while its work runs and reports a lost lease", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db, { leaseMs: 1_000, renewMs: 20 });
+      const job = await queue.enqueue(probePayload());
+      const claimed = await queue.claim();
+      if (!claimed) throw new Error("Claim missing.");
+      const errors: unknown[] = [];
+      await queue.hold(
+        claimed,
+        async () => {
+          const lease = async () =>
+            (await listJobs(db))[0]?.leaseExpiresAt.getTime() ?? 0;
+          await until(
+            async () => (await lease()) > claimed.leaseExpiresAt.getTime(),
+          );
+          expect(await queue.claim()).toBeUndefined();
+          await expireLease(db, job.id);
+          expect((await queue.claim())?.attempts).toBe(2);
+          await until(async () => errors.length > 0);
+        },
+        (error) => errors.push(error),
+      );
+      expect(errors).toEqual([new Error(`Lost the lease on job ${job.id}.`)]);
     }));
 
   test("claims nothing when the type filter is empty", () =>

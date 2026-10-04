@@ -23,6 +23,8 @@ function fakeJob(payload: JobPayload): Job {
     concurrencyKey: null,
     state: "running",
     error: null,
+    claimToken: crypto.randomUUID(),
+    leaseExpiresAt: new Date(),
   };
 }
 

@@ -715,4 +715,65 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       ]);
       expect(await db.select().from(progress)).toEqual(before);
     }));
+
+  test("a report naming a removed root fails the job instead of holding it", () =>
+    withDatabase(async (db) => {
+      const { admin, token, library } = await setup(db);
+      const otherRoot = await addRoot(db, library.id, "/media/transcoded");
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      const job = await createJobQueue(db).enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: ".",
+      });
+      const claimed: WatcherClaim = await (
+        await handler(
+          post("claim", { rootIds: [library.rootId, otherRoot] }, token),
+        )
+      )?.json();
+      const claimedJob = claimed.job;
+      if (claimedJob === null) throw new Error("No scan was claimed.");
+      const leaseOf = async () =>
+        (await listJobs(db)).find((entry) => entry.id === job.id)
+          ?.leaseExpiresAt;
+      const leased = await leaseOf();
+
+      // The removed root is gone from the report's accepted root list.
+      await updateLibrary(db, admin.id, library.id, {
+        roots: [{ id: library.rootId, path: library.rootPath }],
+      });
+      const report = () =>
+        handler(
+          post(
+            `jobs/${job.id}`,
+            {
+              claimToken: claimedJob.claimToken,
+              rootsRevision: claimedJob.rootsRevision,
+              files: [
+                {
+                  rootId: otherRoot,
+                  path: "Alien (1979)/Alien (1979).mkv",
+                  bytes: "1",
+                  modifiedNs: "1",
+                },
+              ],
+              probes: [],
+            } satisfies WatcherReport,
+            token,
+          ),
+        );
+      const first = await report();
+      expect(first?.status).toBe(200);
+      expect(await first?.json()).toEqual({ state: "queued" });
+      expect((await leaseOf())?.getTime()).toBeGreaterThan(
+        leased?.getTime() ?? Number.POSITIVE_INFINITY,
+      );
+
+      const second = await report();
+      // The job settled, so the retry is refused rather than renewing a lease.
+      expect(second?.status).toBe(404);
+      const afterFirst = await leaseOf();
+      await report();
+      expect(await leaseOf()).toEqual(afterFirst);
+    }));
 });

@@ -391,13 +391,14 @@ async function finishJob(db: Database, request: Request, jobId: string) {
     return { state: failed?.state };
   }
   const { payload } = job;
-  const roots = await rootsOf(db, payload.libraryId);
-  const source = reportedScanSource(
-    db,
-    roots.map((root) => root.id),
-    report,
-  );
   try {
+    // A report naming a root a removal deleted fails here; it still settles the job.
+    const roots = await rootsOf(db, payload.libraryId);
+    const source = reportedScanSource(
+      db,
+      roots.map((root) => root.id),
+      report,
+    );
     await queue.hold(held, () => runScanJob(db, payload, job, source));
   } catch (error) {
     const failed = await queue.fail(held, error);

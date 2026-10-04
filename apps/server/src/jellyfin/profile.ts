@@ -148,7 +148,7 @@ const positive = (value: string | null | undefined) => {
 /**
  * Translates a Jellyfin DeviceProfile into the engine's client profile.
  * DirectPlayProfiles give the containers and codecs a client opens as files,
- * HLS TranscodingProfiles add the codecs it decodes over HLS, first in
+ * an empty field meaning any, as in Jellyfin. HLS TranscodingProfiles add the codecs it decodes over HLS, first in
  * preference. Unconditional CodecProfiles narrow video profiles, level, size,
  * audio channels and HDR flavours; a profile without any VideoRangeType
  * condition takes every flavour, as Jellyfin does. Embedded SubtitleProfiles
@@ -168,7 +168,26 @@ export function readDeviceProfile(
   const hls = (profile.transcodingprofiles ?? []).filter(
     (entry) => isVideo(entry) && lowered(entry.protocol) === "hls",
   );
-  const streamed = [...hls, ...direct];
+  // Jellyfin reads an empty DirectPlayProfile field as any value, and
+  // Swiftfin's direct play mode sends only the type.
+  const directNames = (
+    kind: "container" | "video" | "audio",
+    field: "container" | "videocodec" | "audiocodec",
+  ) =>
+    direct.flatMap((entry) =>
+      entry[field]?.trim()
+        ? translate(kind, entry[field])
+        : Object.values(jellyfinNames[kind]).flat(),
+    );
+  const decodes = (
+    kind: "video" | "audio",
+    field: "videocodec" | "audiocodec",
+  ) => [
+    ...new Set([
+      ...hls.flatMap((entry) => translate(kind, entry[field])),
+      ...directNames(kind, field),
+    ]),
+  ];
   const codecProfiles = (profile.codecprofiles ?? []).filter(
     (entry) => (entry.applyconditions ?? []).length === 0,
   );
@@ -207,11 +226,7 @@ export function readDeviceProfile(
       )
       .map((condition) => condition.value ?? "");
 
-  const videoNames = [
-    ...new Set(
-      streamed.flatMap((entry) => translate("video", entry.videocodec)),
-    ),
-  ];
+  const videoNames = decodes("video", "videocodec");
   const videoCodecs = videoNames.map((codec) => {
     const found = conditions(["video"], codec);
     const profiles = equalsAny(found, "videoprofile");
@@ -229,21 +244,13 @@ export function readDeviceProfile(
       maxHeight: limit(found, "height"),
     };
   });
-  const audioNames = [
-    ...new Set(
-      streamed.flatMap((entry) => translate("audio", entry.audiocodec)),
-    ),
-  ];
+  const audioNames = decodes("audio", "audiocodec");
   const ranges = videoNames.flatMap((codec) =>
     equalsAny(conditions(["video"], codec), "videorangetype"),
   );
   const bitrate = maxStreamingBitrate ?? profile.maxstreamingbitrate;
   return {
-    containers: [
-      ...new Set(
-        direct.flatMap((entry) => translate("container", entry.container)),
-      ),
-    ],
+    containers: [...new Set(directNames("container", "container"))],
     videoCodecs,
     audioCodecs: audioNames.map((codec) => ({
       codec,

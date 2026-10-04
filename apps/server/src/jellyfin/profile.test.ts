@@ -148,6 +148,47 @@ describe("DeviceProfile translation", () => {
     expect(profile.videoCodecs[0]?.maxWidth).toBeUndefined();
   });
 
+  test("empty direct-play fields mean any, as Swiftfin's direct play mode sends them", () => {
+    const source = {
+      container: "mkv",
+      video: {
+        codec: "h264",
+        profile: "high",
+        level: 40,
+        width: 1920,
+        height: 1080,
+        bitrate: 8_000_000,
+        hdr: "sdr" as const,
+      },
+      audio: [{ codec: "aac", channels: 2 }],
+      subtitles: [],
+    };
+    // Swiftfin's forced direct play profile is the type alone.
+    const forced = readDeviceProfile({
+      DirectPlayProfiles: [{ Type: "Video" }],
+    });
+    expect(forced.containers).toContain("mkv");
+    expect(decidePlayback(source, forced, { isLan: true }).method).toBe(
+      "direct-play",
+    );
+    // Its VLC profile names codecs but no container.
+    const vlc = readDeviceProfile({
+      DirectPlayProfiles: [
+        { Type: "Video", VideoCodec: "h264,hevc", AudioCodec: "aac,truehd" },
+      ],
+    });
+    expect(vlc.containers).toContain("mkv");
+    expect(vlc.videoCodecs.map((entry) => entry.codec)).toEqual([
+      "h264",
+      "hevc",
+    ]);
+    expect(decidePlayback(source, vlc, { isLan: true }).method).toBe(
+      "direct-play",
+    );
+    // An HLS profile's container is its output, never a file the client opens.
+    expect(readDeviceProfile(deviceProfiles.swiftfin).containers).toEqual([]);
+  });
+
   test("a malformed profile is invalid input", () => {
     expect(() => readDeviceProfile({ DirectPlayProfiles: "mkv" })).toThrow(
       AuthError,

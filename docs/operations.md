@@ -42,7 +42,7 @@ The compose files read three more. They configure Docker, not Pendia.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PENDIA_VERSION` | `latest` | The image tag, such as `1.2.3`. |
+| `PENDIA_VERSION` | `latest` | The release to pull, such as `1.2.3`. |
 | `PENDIA_HOST_PORT` | `3000` | The host port for the api. |
 | `PENDIA_MEDIA` | `./media`; `/srv/media` for the watcher | The media folder, mounted at `/media`. |
 
@@ -99,4 +99,4 @@ docker compose pull
 docker compose up -d
 ```
 
-Set `PENDIA_VERSION` to stay on one release.
+Set `PENDIA_VERSION` to stay on one release. Compose only pulls published releases. `compose.build.yaml` builds the checkout instead and tags it `pendia:local`, so a source build never poses as a release.

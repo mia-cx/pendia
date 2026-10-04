@@ -10,17 +10,24 @@ Planning. The architecture is decided ticket by ticket on the [Pendia v1 map](ht
 
 ## Run
 
-You need git and Docker with Compose.
+You need git and Docker with Compose. The image is private: log in to GHCR with a GitHub token that has `read:packages`.
 
 ```sh
 git clone https://github.com/mia-cx/pendia.git
 cd pendia
+docker login ghcr.io
 docker compose up -d
 ```
 
 Open http://localhost:3000 and create the admin account in the setup wizard. Inside Pendia, your media lives under `/media`: put it in `./media`, or set `PENDIA_MEDIA` to its folder before `docker compose up`.
 
-Compose pulls `ghcr.io/mia-cx/pendia` when you are logged in to GHCR, and builds the image from the clone otherwise. [docs/operations.md](./docs/operations.md) covers roles, environment variables, health, logs and releases.
+Without access to the image, build it from the clone instead:
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+[docs/operations.md](./docs/operations.md) covers roles, environment variables, health, logs and releases.
 
 ## License
 
@@ -53,7 +60,7 @@ bun test
 Build the image from your checkout and start it with Postgres. Set `PENDIA_HOST_PORT` when 3000 is taken on the host.
 
 ```sh
-docker compose up --build
+docker compose -f compose.yaml -f compose.build.yaml up --build
 ```
 
 Database and S3 tests skip without a server. Set `DATABASE_URL` to a test Postgres and `TEST_S3_URL` to a test S3-compatible server, such as `http://<key>:<secret>@127.0.0.1:7070/<bucket>`.

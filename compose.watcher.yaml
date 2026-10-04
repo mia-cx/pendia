@@ -3,8 +3,6 @@
 services:
   watcher:
     image: ghcr.io/mia-cx/pendia:${PENDIA_VERSION:-latest}
-    build:
-      context: .
     command: ["--role", "watcher"]
     environment:
       PENDIA_API_URL: ${PENDIA_API_URL:?set the api origin, such as http://pendia.lan:3000}

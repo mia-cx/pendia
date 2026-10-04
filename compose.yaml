@@ -15,10 +15,8 @@ services:
       - postgres-data:/var/lib/postgresql
 
   pendia:
-    # Pulled from GHCR when this host can; built from this folder when it cannot.
+    # A published release. compose.build.yaml builds this checkout instead.
     image: ghcr.io/mia-cx/pendia:${PENDIA_VERSION:-latest}
-    build:
-      context: .
     depends_on:
       postgres:
         condition: service_healthy

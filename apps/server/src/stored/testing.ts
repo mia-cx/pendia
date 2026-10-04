@@ -10,6 +10,7 @@ import { registerLibraryJobs } from "../libraries/jobs.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import {
   createVideoFixture,
+  type VideoFixtureOptions,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { registerStoreJobs } from "./jobs.ts";
@@ -26,7 +27,7 @@ export const twoRungPolicy: JsonObject = {
   ],
 };
 
-/** Scans a 12 s 720p movie with 3 s keyframes into a library with the given stored-version policy. */
+/** Scans a 12 s 720p movie with 3 s keyframes, one SRT track unless the options say otherwise, into a library with the given stored-version policy. */
 export async function withStoredLibrary(
   db: Database,
   storedVersions: JsonObject | null,
@@ -37,6 +38,7 @@ export async function withStoredLibrary(
     file: typeof files.$inferSelect;
     version: typeof versions.$inferSelect;
   }) => Promise<void>,
+  options: VideoFixtureOptions = {},
 ) {
   await withVideoFixture(async (root) => {
     await mkdir(join(root, fixtureFolder), { recursive: true });
@@ -47,6 +49,7 @@ export async function withStoredLibrary(
       frameRate: 25,
       gopSeconds: 3,
       pattern: "testsrc2",
+      ...options,
     });
     const [library] = await db
       .insert(libraries)

@@ -133,146 +133,151 @@ async function populate(root: string) {
 }
 
 describe.skipIf(!databaseUrl)("libraries api", () => {
-  test("create, read, update, scan and delete over RPC and REST", () =>
-    withDatabase(async (db, url) => {
-      await migrateDatabase(db);
-      const { token } = await seed(db);
-      await withVideoFixture(async (root) => {
-        await populate(root);
-        const server = await startPendia("all", {
-          databaseUrl: url,
-          port: 0,
-          workerOptions: { pollIntervalMs: 20 },
-          transcoderOptions: { port: 0 },
-        });
-        try {
-          const base = `http://127.0.0.1:${server.apiServer?.port}`;
-          const client = createPendiaClient({
-            origin: base,
-            headers: { authorization: `Bearer ${token}` },
+  // Starting the all role includes the real transcoder startup trial.
+  test(
+    "create, read, update, scan and delete over RPC and REST",
+    () =>
+      withDatabase(async (db, url) => {
+        await migrateDatabase(db);
+        const { token } = await seed(db);
+        await withVideoFixture(async (root) => {
+          await populate(root);
+          const server = await startPendia("all", {
+            databaseUrl: url,
+            port: 0,
+            workerOptions: { pollIntervalMs: 20 },
+            transcoderOptions: { port: 0 },
           });
-          const created = await client.libraries.create({
-            name: "Movies",
-            medium: "movies",
-            rootPath: root,
-          });
-          expect(created).toMatchObject({
-            name: "Movies",
-            medium: "movies",
-            rootPath: root,
-          });
-
-          const get = await fetch(`${base}/api/libraries/${created.id}`, {
-            headers: { authorization: `Bearer ${token}` },
-          });
-          expect(get.status).toBe(200);
-          expect(await get.json()).toEqual(created);
-          const list = await fetch(`${base}/api/libraries`, {
-            headers: { authorization: `Bearer ${token}` },
-          });
-          expect(await list.json()).toEqual([created]);
-
-          const patch = await fetch(`${base}/api/libraries/${created.id}`, {
-            method: "PATCH",
-            headers: {
-              authorization: `Bearer ${token}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({ name: "Film Collection" }),
-          });
-          expect(patch.status).toBe(200);
-          expect(await patch.json()).toEqual({
-            ...created,
-            name: "Film Collection",
-          });
-
-          const stream = await openEvents(base, token);
-          let jobId = "";
           try {
-            ({ jobId } = await client.libraries.scan({ id: created.id }));
-            const jobs = await waitForLibraryJobs(db, created.id);
-            expect(jobs.map((job) => job.id)).toContain(jobId);
-            expect(
-              jobs
-                .map((job) => job.payload)
-                .sort((a, b) =>
-                  (a.type === "scan" ? a.path : "").localeCompare(
-                    b.type === "scan" ? b.path : "",
-                  ),
-                ),
-            ).toEqual([
-              { type: "scan", libraryId: created.id, path: "." },
-              {
-                type: "scan",
-                libraryId: created.id,
-                path: "Alien (1979)",
-                reconcileMissing: true,
-                runId: jobId,
-              },
-            ]);
-            for (const job of jobs)
-              expect(job.concurrencyKey).toBe(`library:${created.id}`);
-            const event = await stream.waitForMatch(
-              (data) =>
-                typeof data === "object" &&
-                data !== null &&
-                (data as { libraryId?: string }).libraryId === created.id,
-              10_000,
-            );
-            expect(event).toEqual({
-              kind: "library.changed",
-              libraryId: created.id,
+            const base = `http://127.0.0.1:${server.apiServer?.port}`;
+            const client = createPendiaClient({
+              origin: base,
+              headers: { authorization: `Bearer ${token}` },
             });
-          } finally {
-            await stream.close();
-          }
+            const created = await client.libraries.create({
+              name: "Movies",
+              medium: "movies",
+              rootPath: root,
+            });
+            expect(created).toMatchObject({
+              name: "Movies",
+              medium: "movies",
+              rootPath: root,
+            });
 
-          const scopedStatus = await fetch(
-            `${base}/api/libraries/${created.id}/scan-status?runId=${jobId}`,
-            { headers: { authorization: `Bearer ${token}` } },
-          );
-          expect(scopedStatus.status).toBe(200);
-          const scopedBody = await scopedStatus.json();
-          expect(scopedBody).toMatchObject({
-            runId: jobId,
-            counts: { queued: 0, running: 0, completed: 2, failed: 0 },
-          });
-          const unknownRun = await fetch(
-            `${base}/api/libraries/${created.id}/scan-status?runId=${Bun.randomUUIDv7()}`,
-            { headers: { authorization: `Bearer ${token}` } },
-          );
-          expect(unknownRun.status).toBe(404);
+            const get = await fetch(`${base}/api/libraries/${created.id}`, {
+              headers: { authorization: `Bearer ${token}` },
+            });
+            expect(get.status).toBe(200);
+            expect(await get.json()).toEqual(created);
+            const list = await fetch(`${base}/api/libraries`, {
+              headers: { authorization: `Bearer ${token}` },
+            });
+            expect(await list.json()).toEqual([created]);
 
-          const scanned = await db
-            .select()
-            .from(items)
-            .where(eq(items.libraryId, created.id));
-          expect(scanned).toHaveLength(1);
-          expect(scanned[0]).toMatchObject({
-            kind: "movie",
-            title: "Alien",
-            year: 1979,
-            canonicalFolder: "Alien (1979)",
-          });
-          expect(
-            await db
+            const patch = await fetch(`${base}/api/libraries/${created.id}`, {
+              method: "PATCH",
+              headers: {
+                authorization: `Bearer ${token}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ name: "Film Collection" }),
+            });
+            expect(patch.status).toBe(200);
+            expect(await patch.json()).toEqual({
+              ...created,
+              name: "Film Collection",
+            });
+
+            const stream = await openEvents(base, token);
+            let jobId = "";
+            try {
+              ({ jobId } = await client.libraries.scan({ id: created.id }));
+              const jobs = await waitForLibraryJobs(db, created.id);
+              expect(jobs.map((job) => job.id)).toContain(jobId);
+              expect(
+                jobs
+                  .map((job) => job.payload)
+                  .sort((a, b) =>
+                    (a.type === "scan" ? a.path : "").localeCompare(
+                      b.type === "scan" ? b.path : "",
+                    ),
+                  ),
+              ).toEqual([
+                { type: "scan", libraryId: created.id, path: "." },
+                {
+                  type: "scan",
+                  libraryId: created.id,
+                  path: "Alien (1979)",
+                  reconcileMissing: true,
+                  runId: jobId,
+                },
+              ]);
+              for (const job of jobs)
+                expect(job.concurrencyKey).toBe(`library:${created.id}`);
+              const event = await stream.waitForMatch(
+                (data) =>
+                  typeof data === "object" &&
+                  data !== null &&
+                  (data as { libraryId?: string }).libraryId === created.id,
+                10_000,
+              );
+              expect(event).toEqual({
+                kind: "library.changed",
+                libraryId: created.id,
+              });
+            } finally {
+              await stream.close();
+            }
+
+            const scopedStatus = await fetch(
+              `${base}/api/libraries/${created.id}/scan-status?runId=${jobId}`,
+              { headers: { authorization: `Bearer ${token}` } },
+            );
+            expect(scopedStatus.status).toBe(200);
+            const scopedBody = await scopedStatus.json();
+            expect(scopedBody).toMatchObject({
+              runId: jobId,
+              counts: { queued: 0, running: 0, completed: 2, failed: 0 },
+            });
+            const unknownRun = await fetch(
+              `${base}/api/libraries/${created.id}/scan-status?runId=${Bun.randomUUIDv7()}`,
+              { headers: { authorization: `Bearer ${token}` } },
+            );
+            expect(unknownRun.status).toBe(404);
+
+            const scanned = await db
               .select()
-              .from(versions)
-              .where(eq(versions.libraryId, created.id)),
-          ).toHaveLength(2);
+              .from(items)
+              .where(eq(items.libraryId, created.id));
+            expect(scanned).toHaveLength(1);
+            expect(scanned[0]).toMatchObject({
+              kind: "movie",
+              title: "Alien",
+              year: 1979,
+              canonicalFolder: "Alien (1979)",
+            });
+            expect(
+              await db
+                .select()
+                .from(versions)
+                .where(eq(versions.libraryId, created.id)),
+            ).toHaveLength(2);
 
-          const del = await fetch(`${base}/api/libraries/${created.id}`, {
-            method: "DELETE",
-            headers: { authorization: `Bearer ${token}` },
-          });
-          expect(del.status).toBe(200);
-          expect(await del.json()).toEqual({ ok: true });
-          expect(await client.libraries.list()).toEqual([]);
-        } finally {
-          await server.stop();
-        }
-      });
-    }));
+            const del = await fetch(`${base}/api/libraries/${created.id}`, {
+              method: "DELETE",
+              headers: { authorization: `Bearer ${token}` },
+            });
+            expect(del.status).toBe(200);
+            expect(await del.json()).toEqual({ ok: true });
+            expect(await client.libraries.list()).toEqual([]);
+          } finally {
+            await server.stop();
+          }
+        });
+      }),
+    30_000,
+  );
 
   test("library routes reject bad credentials and input", () =>
     withDatabase(async (db, url) => {
@@ -350,98 +355,102 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
       }
     }));
 
-  test("creates and scans a shows library through the default worker", () =>
-    withDatabase(async (db, url) => {
-      await migrateDatabase(db);
-      const { token } = await seed(db);
-      await withVideoFixture(async (root) => {
-        const specialsDir = join(root, "Show (2020)", "Specials");
-        const seasonDir = join(root, "Show (2020)", "Season 01");
-        await mkdir(specialsDir, { recursive: true });
-        await mkdir(seasonDir, { recursive: true });
-        await createVideoFixture(join(specialsDir, "Show S00E01.mkv"));
-        await createVideoFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
-        await createVideoFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
-        await createVideoFixture(join(seasonDir, "Show S01E02-E03.mkv"));
-        const server = await startPendia("all", {
-          databaseUrl: url,
-          port: 0,
-          workerOptions: { pollIntervalMs: 20 },
-        });
-        try {
-          const base = `http://127.0.0.1:${server.apiServer?.port}`;
-          const client = createPendiaClient({
-            origin: base,
-            headers: { authorization: `Bearer ${token}` },
+  test(
+    "creates and scans a shows library through the default worker",
+    () =>
+      withDatabase(async (db, url) => {
+        await migrateDatabase(db);
+        const { token } = await seed(db);
+        await withVideoFixture(async (root) => {
+          const specialsDir = join(root, "Show (2020)", "Specials");
+          const seasonDir = join(root, "Show (2020)", "Season 01");
+          await mkdir(specialsDir, { recursive: true });
+          await mkdir(seasonDir, { recursive: true });
+          await createVideoFixture(join(specialsDir, "Show S00E01.mkv"));
+          await createVideoFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
+          await createVideoFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
+          await createVideoFixture(join(seasonDir, "Show S01E02-E03.mkv"));
+          const server = await startPendia("all", {
+            databaseUrl: url,
+            port: 0,
+            workerOptions: { pollIntervalMs: 20 },
           });
-          const library = await client.libraries.create({
-            name: "Shows",
-            medium: "shows",
-            rootPath: root,
-          });
-          expect(library).toMatchObject({
-            name: "Shows",
-            medium: "shows",
-            rootPath: root,
-          });
+          try {
+            const base = `http://127.0.0.1:${server.apiServer?.port}`;
+            const client = createPendiaClient({
+              origin: base,
+              headers: { authorization: `Bearer ${token}` },
+            });
+            const library = await client.libraries.create({
+              name: "Shows",
+              medium: "shows",
+              rootPath: root,
+            });
+            expect(library).toMatchObject({
+              name: "Shows",
+              medium: "shows",
+              rootPath: root,
+            });
 
-          const { jobId } = await client.libraries.scan({ id: library.id });
-          const jobs = await waitForLibraryJobs(db, library.id);
-          expect(jobs).toHaveLength(2);
-          expect(
-            jobs
-              .map((job) => job.payload)
-              .sort((a, b) =>
-                (a.type === "scan" ? a.path : "").localeCompare(
-                  b.type === "scan" ? b.path : "",
+            const { jobId } = await client.libraries.scan({ id: library.id });
+            const jobs = await waitForLibraryJobs(db, library.id);
+            expect(jobs).toHaveLength(2);
+            expect(
+              jobs
+                .map((job) => job.payload)
+                .sort((a, b) =>
+                  (a.type === "scan" ? a.path : "").localeCompare(
+                    b.type === "scan" ? b.path : "",
+                  ),
                 ),
-              ),
-          ).toEqual([
-            { type: "scan", libraryId: library.id, path: "." },
-            {
-              type: "scan",
-              libraryId: library.id,
-              path: "Show (2020)",
-              reconcileMissing: true,
-              runId: jobId,
-            },
-          ]);
-          for (const job of jobs) {
-            expect(job.state).toBe("completed");
-            expect(job.concurrencyKey).toBe(`library:${library.id}`);
-          }
+            ).toEqual([
+              { type: "scan", libraryId: library.id, path: "." },
+              {
+                type: "scan",
+                libraryId: library.id,
+                path: "Show (2020)",
+                reconcileMissing: true,
+                runId: jobId,
+              },
+            ]);
+            for (const job of jobs) {
+              expect(job.state).toBe("completed");
+              expect(job.concurrencyKey).toBe(`library:${library.id}`);
+            }
 
-          const scanned = await db
-            .select()
-            .from(items)
-            .where(eq(items.libraryId, library.id));
-          expect(scanned).toHaveLength(6);
-          const kindCounts = new Map<string, number>();
-          for (const item of scanned) {
-            kindCounts.set(item.kind, (kindCounts.get(item.kind) ?? 0) + 1);
+            const scanned = await db
+              .select()
+              .from(items)
+              .where(eq(items.libraryId, library.id));
+            expect(scanned).toHaveLength(6);
+            const kindCounts = new Map<string, number>();
+            for (const item of scanned) {
+              kindCounts.set(item.kind, (kindCounts.get(item.kind) ?? 0) + 1);
+            }
+            expect(Object.fromEntries(kindCounts)).toEqual({
+              show: 1,
+              season: 2,
+              episode: 3,
+            });
+            expect(
+              await db
+                .select()
+                .from(versions)
+                .where(eq(versions.libraryId, library.id)),
+            ).toHaveLength(3);
+            expect(
+              await db
+                .select()
+                .from(files)
+                .where(eq(files.libraryId, library.id)),
+            ).toHaveLength(4);
+          } finally {
+            await server.stop();
           }
-          expect(Object.fromEntries(kindCounts)).toEqual({
-            show: 1,
-            season: 2,
-            episode: 3,
-          });
-          expect(
-            await db
-              .select()
-              .from(versions)
-              .where(eq(versions.libraryId, library.id)),
-          ).toHaveLength(3);
-          expect(
-            await db
-              .select()
-              .from(files)
-              .where(eq(files.libraryId, library.id)),
-          ).toHaveLength(4);
-        } finally {
-          await server.stop();
-        }
-      });
-    }));
+        });
+      }),
+    30_000,
+  );
 
   test("mutations reject foreign origins and cross-site requests", () =>
     withDatabase(async (db, url) => {
@@ -504,55 +513,59 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
       }
     }));
 
-  test("each default runtime binds its own database", () =>
-    withDatabase(async (dbA, urlA) => {
-      await migrateDatabase(dbA);
-      const { token: tokenA } = await seed(dbA);
-      await withDatabase(async (dbB, urlB) => {
-        await migrateDatabase(dbB);
-        const { token: tokenB } = await seed(dbB);
-        await withVideoFixture(async (root) => {
-          await populate(root);
-          for (const [db, url, token, name] of [
-            [dbA, urlA, tokenA, "First"],
-            [dbB, urlB, tokenB, "Second"],
-          ] as const) {
-            const server = await startPendia("all", {
-              databaseUrl: url,
-              port: 0,
-              workerOptions: { pollIntervalMs: 20 },
-              transcoderOptions: { port: 0 },
-            });
-            try {
-              const base = `http://127.0.0.1:${server.apiServer?.port}`;
-              const client = createPendiaClient({
-                origin: base,
-                headers: { authorization: `Bearer ${token}` },
+  test(
+    "each default runtime binds its own database",
+    () =>
+      withDatabase(async (dbA, urlA) => {
+        await migrateDatabase(dbA);
+        const { token: tokenA } = await seed(dbA);
+        await withDatabase(async (dbB, urlB) => {
+          await migrateDatabase(dbB);
+          const { token: tokenB } = await seed(dbB);
+          await withVideoFixture(async (root) => {
+            await populate(root);
+            for (const [db, url, token, name] of [
+              [dbA, urlA, tokenA, "First"],
+              [dbB, urlB, tokenB, "Second"],
+            ] as const) {
+              const server = await startPendia("all", {
+                databaseUrl: url,
+                port: 0,
+                workerOptions: { pollIntervalMs: 20 },
+                transcoderOptions: { port: 0 },
               });
-              const library = await client.libraries.create({
-                name,
-                medium: "movies",
-                rootPath: root,
-              });
-              await client.libraries.scan({ id: library.id });
-              await waitForLibraryJobs(db, library.id);
-              expect(
-                await db
-                  .select()
-                  .from(items)
-                  .where(eq(items.libraryId, library.id)),
-              ).toHaveLength(1);
-            } finally {
-              await server.stop();
+              try {
+                const base = `http://127.0.0.1:${server.apiServer?.port}`;
+                const client = createPendiaClient({
+                  origin: base,
+                  headers: { authorization: `Bearer ${token}` },
+                });
+                const library = await client.libraries.create({
+                  name,
+                  medium: "movies",
+                  rootPath: root,
+                });
+                await client.libraries.scan({ id: library.id });
+                await waitForLibraryJobs(db, library.id);
+                expect(
+                  await db
+                    .select()
+                    .from(items)
+                    .where(eq(items.libraryId, library.id)),
+                ).toHaveLength(1);
+              } finally {
+                await server.stop();
+              }
             }
-          }
-          expect((await dbA.select({ id: items.id }).from(items)).length).toBe(
-            1,
-          );
-          expect((await dbB.select({ id: items.id }).from(items)).length).toBe(
-            1,
-          );
+            expect(
+              (await dbA.select({ id: items.id }).from(items)).length,
+            ).toBe(1);
+            expect(
+              (await dbB.select({ id: items.id }).from(items)).length,
+            ).toBe(1);
+          });
         });
-      });
-    }));
+      }),
+    60_000,
+  );
 });

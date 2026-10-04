@@ -71,6 +71,13 @@
       "when": 1791080953392,
       "tag": "0009_uneven_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791091664734,
+      "tag": "0010_subtitle_fetch_job",
+      "breakpoints": true
     }
   ]
 }

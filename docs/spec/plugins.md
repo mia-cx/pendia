@@ -41,7 +41,7 @@ A registry is a JSON manifest listing plugins and their versions. An admin adds 
 }
 ```
 
-`versions` lists the newest first. A `source` is any install source: an npm spec, a tarball URL, or a folder path on the server.
+`versions` lists the newest first. A `source` is any install source: an npm spec, a tarball URL, or a folder path on the server. The official registry is [`pendia-registry.json`](../../pendia-registry.json) at the root of this repo.
 
 ## The host object
 
@@ -53,7 +53,7 @@ Every argument and result across this boundary is JSON-serialisable, and every c
 
 Declared in the manifest, approved at install. `files` is the loud one: it lets a plugin read, write and delete inside libraries, so its install screen warns that the plugin can change the media collection, and an admin can switch it off per plugin or globally, for a while or for good. There are no file handles. A plugin asks Pendia to act on a path, and Pendia decides.
 
-`network` is restricted to the hosts in the manifest. Redirects come back to the plugin rather than being followed, so every hop passes the same check.
+`network` is restricted to the hosts in the manifest, over http and https. `"*"` in the list means any host, for a plugin such as webhooks that calls whatever URL the admin enters; its install screen says so. Redirects come back to the plugin rather than being followed, so every hop passes the same check.
 
 Files paths are relative to a library root and name that library: `files.read(libraryId, path)`, as in `Version.files`. A path that leaves the library is refused, and every call rechecks both switches, so switching file access off stops a loaded plugin at once.
 
@@ -67,5 +67,5 @@ A plugin that throws, or hands back a value that is not plain data, is marked fa
 
 ## Reference plugins
 
-- Webhooks: any server event to an HTTP endpoint with a body template. First-party, and the plugin the interface is designed against.
+- [Webhooks](../../plugins/webhooks/README.md): any server event to an HTTP endpoint with a body template. First-party, and the plugin the interface is designed against.
 - [Prunarr](https://github.com/mia-riezebos/jellyfin-plugin-prunarr): needs items, per-user progress, scheduled jobs, arr HTTP calls and a "Leaving Soon" shelf. All five are in the v1 interface.

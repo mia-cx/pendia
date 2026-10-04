@@ -49,9 +49,16 @@ export function isPackageName(name: string): boolean {
   return name.length <= maxNameLength && namePattern.test(name);
 }
 
+/** The network entry that lets a plugin reach any host, such as a webhook URL an admin enters. */
+export const anyHost = "*";
+
 function isHostname(value: string): boolean {
   try {
-    return value.length > 0 && new URL(`http://${value}`).hostname === value;
+    // URL keeps `*` in a hostname, so `*.example` would pass as a literal host.
+    return (
+      /^[a-z0-9.:[\]-]+$/.test(value) &&
+      new URL(`http://${value}`).hostname === value
+    );
   } catch {
     return false;
   }
@@ -90,9 +97,12 @@ export function readPluginPackage(json: unknown): PluginPackage {
     return fail("items:write needs items:read.");
   if (
     !Array.isArray(network) ||
-    !network.every((host) => typeof host === "string" && isHostname(host))
+    !network.every(
+      (host) =>
+        typeof host === "string" && (host === anyHost || isHostname(host)),
+    )
   )
-    return fail("pendia.network must list lowercase hostnames.");
+    return fail('pendia.network must list lowercase hostnames or "*".');
   if (typeof entry !== "string" || entry.length === 0)
     return fail("pendia.entry must be a path.");
   const normalized = posix.normalize(entry);

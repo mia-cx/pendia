@@ -29,7 +29,7 @@ export interface PluginManifest {
   /** Semver range of the host API this plugin was written against. */
   api: string;
   capabilities: Capability[];
-  /** Hosts this plugin may reach with `host.fetch`. */
+  /** Hosts this plugin may reach with `host.fetch`; `"*"` means any host. */
   network?: string[];
   /** JSON Schema for `host.config`, rendered as the plugin's settings form. */
   config?: object;

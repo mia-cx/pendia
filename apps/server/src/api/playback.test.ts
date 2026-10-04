@@ -417,6 +417,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           method: "transcode",
           itemId: second.id,
           versionId: sequelVersion.id,
+          subtitles: [],
         });
         if (transcoded.sessionId === null || transcoded.url === null)
           throw new Error("Transcode must return a session and URL.");

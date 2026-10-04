@@ -1,0 +1,11 @@
+{
+  "plugins": [
+    {
+      "name": "@pendia/plugin-webhooks",
+      "description": "Send server events to any HTTP endpoint.",
+      "versions": [
+        { "version": "1.0.0", "source": "@pendia/plugin-webhooks@1.0.0" }
+      ]
+    }
+  ]
+}

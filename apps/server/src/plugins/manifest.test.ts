@@ -45,6 +45,12 @@ describe("readPluginPackage", () => {
     expect(read.manifest.config).toBeNull();
   });
 
+  test("accepts * for any host", () => {
+    expect(
+      readPluginPackage(withPendia({ network: ["*"] })).manifest.network,
+    ).toEqual(["*"]);
+  });
+
   test.each([
     ["a non-object", "nope", "package.json must be an object"],
     ["an uppercase name", { ...valid, name: "Bad" }, "name"],
@@ -64,6 +70,11 @@ describe("readPluginPackage", () => {
     [
       "a URL in the network list",
       withPendia({ network: ["https://radarr.example"] }),
+      "pendia.network",
+    ],
+    [
+      "a partial wildcard in the network list",
+      withPendia({ network: ["*.example"] }),
       "pendia.network",
     ],
     [

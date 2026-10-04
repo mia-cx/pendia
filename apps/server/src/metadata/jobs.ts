@@ -10,6 +10,7 @@ import type { createJobRegistry } from "../jobs/registry.ts";
 import { emitPluginEvents } from "../plugins/events.ts";
 import type { PluginRuntime } from "../plugins/runtime.ts";
 import { readProviderKey } from "../providers/keys.ts";
+import { queueSubtitleFetch } from "../subtitles/jobs.ts";
 import {
   removeSelectedArtwork,
   storeArtworkOriginal,
@@ -180,6 +181,7 @@ export function registerMetadataJobs(
     await publish();
     if (application.state !== "matched") return false;
     await emitItemUpdated(db, item.id);
+    await queueSubtitleFetch(db, item);
     const type = item.kind === "episode" ? "thumb" : "poster";
     const primary = application.artwork.find(
       (candidate) => candidate.type === type,

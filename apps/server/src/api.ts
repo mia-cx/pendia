@@ -11,6 +11,7 @@ import {
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 import type { createArtworkHandler } from "./metadata/artwork-http.ts";
 import type { createPluginRouteHandler } from "./plugins/http.ts";
+import type { createSubtitleHandler } from "./subtitles/http.ts";
 import type { createWatcherHandler } from "./watcher/http.ts";
 
 const defaultWebRoot = fileURLToPath(
@@ -73,6 +74,7 @@ export function startApiServer(
     api?: ReturnType<typeof createApiHandler>;
     webhooks?: ReturnType<typeof createServarrWebhookHandler>;
     artwork?: ReturnType<typeof createArtworkHandler>;
+    subtitles?: ReturnType<typeof createSubtitleHandler>;
     plugins?: ReturnType<typeof createPluginRouteHandler>;
     watcher?: ReturnType<typeof createWatcherHandler>;
     jellyfin?: ReturnType<typeof createJellyfinHandler>;
@@ -120,6 +122,11 @@ export function startApiServer(
 
       if (handlers.artwork) {
         const response = await handlers.artwork(request);
+        if (response !== undefined) return response;
+      }
+
+      if (handlers.subtitles) {
+        const response = await handlers.subtitles(request);
         if (response !== undefined) return response;
       }
 

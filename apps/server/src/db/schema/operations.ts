@@ -69,7 +69,8 @@ export type JobPayload =
       runId?: string;
     }
   | { type: "probe"; fileId: string }
-  | { type: "provider-fetch"; itemId: string }
+  // `weekly` marks the one refresh a continuing Show keeps queued a week ahead.
+  | { type: "provider-fetch"; itemId: string; weekly?: true }
   | { type: "store"; sourceFileId: string; rung: string }
   | { type: "plugin"; pluginName: string; jobId: string; data: JsonObject };
 

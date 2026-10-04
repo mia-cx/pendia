@@ -1,6 +1,7 @@
 import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
 import { isBuiltInAdmin } from "../auth/permissions.ts";
+import { refreshItem as queueItemRefresh } from "../metadata/jobs.ts";
 import { RungName } from "../stored/policy.ts";
 import { requestStoredVersion } from "../stored/service.ts";
 import {
@@ -83,6 +84,18 @@ const storedVersionRequest = authenticatedMutation
     ),
   );
 
+const refreshItem = authenticatedMutation
+  .route({ method: "POST", path: "/items/{id}/refresh" })
+  .input(Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID })))
+  .output(Schema.standardSchemaV1(Schema.Struct({ jobId: Schema.UUID })))
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        queueItemRefresh(context.db, context.caller.user.id, input.id),
+      ),
+    ),
+  );
+
 const SearchQuery = Schema.Trim.pipe(
   Schema.minLength(1),
   Schema.maxLength(200),
@@ -119,6 +132,7 @@ export const pendiaRouter = {
     list: listItems,
     get: getItem,
     search,
+    refresh: refreshItem,
     requestStoredVersion: storedVersionRequest,
   },
   libraries: libraryProcedures,

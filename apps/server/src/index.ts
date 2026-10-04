@@ -4,6 +4,8 @@ import { startApiServer } from "./api.ts";
 import { createAuthHandler } from "./auth/http.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
+import { createJellyfinHandler } from "./jellyfin/http.ts";
+import { jellyfinRoutes } from "./jellyfin/routes.ts";
 import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
 import { registerLibraryJobs } from "./libraries/jobs.ts";
@@ -13,6 +15,7 @@ import {
   createChangeDebouncer,
   createServarrWebhookHandler,
 } from "./libraries/webhooks.ts";
+import { artworkStoreConfig } from "./metadata/artwork-backends.ts";
 import { createArtworkHandler } from "./metadata/artwork-http.ts";
 import { registerMetadataJobs } from "./metadata/jobs.ts";
 import { registerStoreJobs } from "./stored/jobs.ts";
@@ -165,6 +168,8 @@ export async function startPendia(
   const servesApi = role === "api" || role === "all";
   const runsJobs = role === "worker" || role === "all";
   const runsTranscoder = role === "transcoder" || role === "all";
+  // A bad artwork store setting fails startup, not the first poster.
+  if (servesApi || runsJobs) artworkStoreConfig();
   const database =
     servesApi || runsJobs || runsTranscoder
       ? createDatabase(databaseUrl)
@@ -263,11 +268,14 @@ export async function startPendia(
     ) {
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
+      // Jellyfin images share the artwork handler, so they share its resize cache.
+      const artwork = createArtworkHandler(database.db);
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
         api: createApiHandler(database.db, eventBroker, transcoder),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
-        artwork: createArtworkHandler(database.db),
+        artwork,
+        jellyfin: createJellyfinHandler(database.db, jellyfinRoutes(artwork)),
       });
     }
     if (runsJobs && database) {

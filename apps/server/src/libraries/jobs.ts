@@ -2,11 +2,12 @@ import { and, eq } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { items, jobs, libraries } from "../db/schema/index.ts";
+import { itemAncestors, items, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
+import { queueProviderFetch } from "../metadata/jobs.ts";
 import {
   reconcileStoredVersions,
   removeOrphanedStoreFolders,
@@ -49,33 +50,31 @@ export function registerLibraryJobs(
             .from(items)
             .where(eq(items.id, result.itemId));
           if (!item) throw new AuthError("NOT_FOUND");
-          if (item.metadataState === "pending") {
-            const concurrencyKey = `provider:${result.itemId}`;
-            // A running fetch never blocks: a pending Item after a provider
-            // change earns one queued successor that replays the fetch.
-            const [existing] = await db
-              .select({ id: jobs.id })
-              .from(jobs)
-              .where(
-                and(
-                  eq(jobs.type, "provider-fetch"),
-                  eq(jobs.concurrencyKey, concurrencyKey),
-                  eq(jobs.state, "queued"),
-                ),
-              )
-              .limit(1);
-            if (existing === undefined)
-              await createJobQueue(db).enqueue(
-                { type: "provider-fetch", itemId: result.itemId },
-                { concurrencyKey },
-              );
-          }
+          if (item.metadataState === "pending")
+            await queueProviderFetch(db, result.itemId);
         }
       } else {
-        await scanShowDirectory(db, library.id, payload.path, {
+        const result = await scanShowDirectory(db, library.id, payload.path, {
           changes: payload.changes,
           reconcileMissing: payload.reconcileMissing,
         });
+        // One fetch covers the whole Show, so a new pending Episode under a
+        // matched Show queues it too.
+        if (result.itemId !== null) {
+          const [pending] = await db
+            .select({ id: items.id })
+            .from(items)
+            .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
+            .where(
+              and(
+                eq(itemAncestors.ancestorId, result.itemId),
+                eq(items.metadataState, "pending"),
+              ),
+            )
+            .limit(1);
+          if (pending !== undefined)
+            await queueProviderFetch(db, result.itemId);
+        }
       }
       await reconcileStoredVersions(db, library, payload.path);
       await removeOrphanedStoreFolders(db, library, payload.path);

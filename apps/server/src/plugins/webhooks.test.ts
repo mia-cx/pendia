@@ -7,15 +7,17 @@ import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { fetchPlugin, installPlugin } from "./install.ts";
+import { readRegistry } from "./registries.ts";
 import { createPluginRuntime, type PluginRuntime } from "./runtime.ts";
 import { updatePluginState } from "./settings.ts";
 import { withFolder } from "./testing.ts";
 
-const webhooksRoot = join(import.meta.dir, "../../../../plugins/webhooks");
+const repoRoot = join(import.meta.dir, "../../../..");
+const webhooksRoot = join(repoRoot, "plugins/webhooks");
 const webhooksName = "@pendia/plugin-webhooks";
 
 /** Bundles the in-repo webhooks plugin into `folder` as its published package: package.json and dist. */
-export async function packWebhooks(folder: string): Promise<string> {
+async function packWebhooks(folder: string): Promise<string> {
   const build = await Bun.build({
     entrypoints: [join(webhooksRoot, "src/index.ts")],
     target: "bun",
@@ -100,6 +102,67 @@ describe.skipIf(!databaseUrl)("webhooks plugin", () => {
             kind: "movie",
           });
         }
+        expect(await runtime.load(webhooksName)).toBe(true);
+        await runtime.stop();
+      }),
+    ));
+
+  test("the official registry lists the webhooks plugin, which installs through the host", () =>
+    withFolder((folder) =>
+      withDatabase(async (db) => {
+        const entries = readRegistry(
+          await Bun.file(join(repoRoot, "pendia-registry.json")).json(),
+        );
+        const entry = entries.find((plugin) => plugin.name === webhooksName);
+        const { version } = await Bun.file(
+          join(webhooksRoot, "package.json"),
+        ).json();
+        expect(entry?.versions[0]).toEqual({
+          version,
+          source: `${webhooksName}@${version}`,
+        });
+
+        // A local npm stand-in serves the bundle as the published tarball.
+        const packed = await packWebhooks(join(folder, "source"));
+        const tarball = await new Bun.Archive(
+          {
+            "package/package.json": await Bun.file(
+              join(packed, "package.json"),
+            ).text(),
+            "package/dist/index.js": await Bun.file(
+              join(packed, "dist/index.js"),
+            ).text(),
+          },
+          { compress: "gzip" },
+        ).bytes();
+        using npm = Bun.serve({
+          port: 0,
+          fetch(request) {
+            const { origin, pathname } = new URL(request.url);
+            const path = decodeURIComponent(pathname);
+            if (path === "/webhooks.tgz") return new Response(tarball);
+            if (path !== `/${webhooksName}`)
+              return new Response(null, { status: 404 });
+            return Response.json({
+              "dist-tags": { latest: version },
+              versions: {
+                [version]: { dist: { tarball: `${origin}/webhooks.tgz` } },
+              },
+            });
+          },
+        });
+        await migrateDatabase(db);
+        const runtime = createPluginRuntime(db, {
+          directory: join(folder, "installed"),
+          sourceOptions: { npmRegistry: npm.url.href },
+        });
+        const source = entry?.versions[0]?.source ?? "";
+        const preview = await runtime.preview(source);
+        expect(preview.package.manifest).toMatchObject({
+          capabilities: ["events", "items:read", "network"],
+          network: ["*"],
+        });
+        await runtime.install(source, preview.integrity);
         expect(await runtime.load(webhooksName)).toBe(true);
         await runtime.stop();
       }),

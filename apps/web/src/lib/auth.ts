@@ -1,3 +1,4 @@
+import { reachServer } from "./api.ts";
 import { AuthRouteError } from "./errors.ts";
 
 /** The extra arguments every auth wrapper accepts for tests. */
@@ -57,12 +58,15 @@ async function postJson<T>(
   body: Record<string, unknown> | undefined,
   options: AuthOptions,
 ): Promise<T> {
-  const call = options.fetch ?? fetch;
-  const response = await call(`${options.origin ?? ""}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+  const response = await reachServer(
+    `${options.origin ?? ""}${path}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    },
+    options.fetch,
+  );
   if (!response.ok) await raiseAuthError(response);
   return (await response.json()) as T;
 }

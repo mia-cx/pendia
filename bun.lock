@@ -34,6 +34,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@orpc/client": "1.15.0",
+        "hls.js": "1.7.3",
       },
       "devDependencies": {
         "@orpc/server": "1.15.0",

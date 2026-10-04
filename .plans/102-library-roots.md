@@ -6,13 +6,13 @@ A Library gets one or more roots in a new `library_roots` table, and `libraries.
 
 ## Acceptance criteria
 
-- [ ] Migrating a database with single-root Libraries keeps every Library, Item, File and progress row. Each File points at its Library's one new root.
-- [ ] A Library with roots `A` and `B` holding `Blade Runner (1982)` in both scans to one movie Item with two Versions. Playback of each Version reads from the right root.
-- [ ] Removing root `B` leaves the Item with only `A`'s Version. Removing a root that holds an Item's only Files deletes that Item.
-- [ ] Repointing a root to a new path where the same files exist keeps Item ids and watch progress after the rescan.
-- [ ] An overlapping root, in the same or another Library, is rejected. So is removing the last root.
-- [ ] A webhook path under root `B` queues the right folder scan. A move from `A` to `B` ends with the File under `B`.
-- [ ] The admin UI can create a two-root Library, then add, repoint and remove roots, with confirmation on removal.
+- [x] Migrating a database with single-root Libraries keeps every Library, Item, File and progress row. Each File points at its Library's one new root.
+- [x] A Library with roots `A` and `B` holding `Blade Runner (1982)` in both scans to one movie Item with two Versions. Playback of each Version reads from the right root.
+- [x] Removing root `B` leaves the Item with only `A`'s Version. Removing a root that holds an Item's only Files deletes that Item.
+- [x] Repointing a root to a new path where the same files exist keeps Item ids and watch progress after the rescan.
+- [x] An overlapping root, in the same or another Library, is rejected. So is removing the last root.
+- [x] A webhook path under root `B` queues the right folder scan. A move from `A` to `B` ends with the File under `B`.
+- [x] The admin UI can create a two-root Library, then add, repoint and remove roots, with confirmation on removal.
 
 ## TODOs
 
@@ -80,3 +80,4 @@ Every non-test use of `libraries.rootPath`, of `files.path` joined to a root, an
   - `bun run build`: pass.
   - `bun test` with `DATABASE_URL`: 1369 pass, 3 skip, 0 fail.
   - `bun test` without `DATABASE_URL`: 796 pass, 594 skip, 0 fail.
+- Browser journey (headless Chromium, this branch): created a two-folder Library through the create form, then on its page added a folder, repointed one (its ID stayed), and removed one through the confirmation. Each save showed the expected status, and `library_roots` matched the page after a reload.

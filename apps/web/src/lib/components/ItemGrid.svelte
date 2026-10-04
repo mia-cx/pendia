@@ -1,22 +1,41 @@
 <script lang="ts">
+import ArrowDownUpIcon from "@lucide/svelte/icons/arrow-down-up";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
 import type { ItemCard } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
 import PosterCard from "$lib/components/PosterCard.svelte";
+import PosterGrid from "$lib/components/PosterGrid.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import * as Select from "$lib/components/ui/select/index.ts";
+import { Skeleton } from "$lib/components/ui/skeleton/index.ts";
 import { readFailure } from "$lib/errors.ts";
+
+import type { ShellLibrary } from "$lib/shell.ts";
 
 const {
   kind,
   heading,
   emptyText,
-}: { kind: "movie" | "show"; heading: string; emptyText: string } = $props();
+  libraries,
+}: {
+  kind: "movie" | "show";
+  heading: string;
+  emptyText: string;
+  libraries: readonly ShellLibrary[];
+} = $props();
 
 type Sort = "added" | "title";
 
 const sort = $derived<Sort>(
   page.url.searchParams.get("sort") === "title" ? "title" : "added",
+);
+const libraryId = $derived(page.url.searchParams.get("library"));
+const title = $derived(
+  libraryId === null
+    ? heading
+    : (libraries.find((l) => l.id === libraryId)?.name ?? heading),
 );
 
 let cards = $state<ItemCard[]>([]);
@@ -25,9 +44,9 @@ let loaded = $state(false);
 let loading = $state(false);
 let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
 let generation = 0;
-let more = $state<HTMLButtonElement | undefined>(undefined);
+let more = $state<HTMLElement | undefined>(undefined);
 
-async function load(order: Sort, after: string | null) {
+async function load(order: Sort, library: string | null, after: string | null) {
   const ticket = ++generation;
   loading = true;
   failure = undefined;
@@ -35,6 +54,7 @@ async function load(order: Sort, after: string | null) {
     const result = await client.items.list({
       kind,
       sort: order,
+      ...(library === null ? {} : { libraryId: library }),
       ...(after === null ? {} : { cursor: after }),
     });
     if (ticket !== generation) return;
@@ -61,11 +81,11 @@ $effect(() => {
   loaded = false;
   cards = [];
   cursor = null;
-  void load(sort, null);
+  void load(sort, libraryId, null);
 });
 
 function showMore() {
-  if (!loading && cursor !== null) void load(sort, cursor);
+  if (!loading && cursor !== null) void load(sort, libraryId, cursor);
 }
 
 // The Show more button loads the next page as it scrolls into view.
@@ -81,79 +101,66 @@ $effect(() => {
   return () => observer.disconnect();
 });
 
-function setSort(event: Event & { currentTarget: HTMLSelectElement }) {
+function setSort(value: string) {
   const url = new URL(page.url);
-  if (event.currentTarget.value === "title")
-    url.searchParams.set("sort", "title");
+  if (value === "title") url.searchParams.set("sort", "title");
   else url.searchParams.delete("sort");
   void goto(url, { replaceState: true, keepFocus: true, noScroll: true });
 }
 </script>
 
-<div class="legacy">
-<div class="bar">
-  <h1>{heading}</h1>
-  <label>
-    Sort by
-    <select value={sort} onchange={setSort}>
-      <option value="added">Recently added</option>
-      <option value="title">Title</option>
-    </select>
-  </label>
+<div class="mb-5 flex flex-wrap items-baseline justify-between gap-3 pt-4 lg:pt-8">
+  <h1 class="w-full pr-14 text-large-title lg:w-auto lg:pr-0">{title}</h1>
+  <Select.Root
+    type="single"
+    value={sort}
+    onValueChange={setSort}
+  >
+    <Select.Trigger aria-label="Sort by" class="ml-auto">
+      <ArrowDownUpIcon class="size-4 text-label-secondary" />
+      <Select.Value>{sort === "title" ? "Title" : "Recently added"}</Select.Value>
+    </Select.Trigger>
+    <Select.Content>
+      <Select.Item value="added">Recently added</Select.Item>
+      <Select.Item value="title">Title</Select.Item>
+    </Select.Content>
+  </Select.Root>
 </div>
 
 {#if loaded && cards.length === 0 && !failure}
-  <p class="muted">{emptyText}</p>
+  <p class="text-subheadline text-label-secondary">{emptyText}</p>
 {/if}
 
-<ul class="poster-grid">
+{#if !loaded && !failure}
+  <PosterGrid aria-hidden="true">
+    {#each { length: 18 } as _}
+      <li>
+        <Skeleton class="block aspect-[2/3] rounded-poster" />
+        <Skeleton class="mt-2 h-5 w-3/4" />
+        <Skeleton class="mt-1 h-[1.125rem] w-1/2" />
+      </li>
+    {/each}
+  </PosterGrid>
+{/if}
+
+<PosterGrid>
   {#each cards as card (card.id)}
     <li><PosterCard {card} /></li>
   {/each}
-</ul>
+</PosterGrid>
 
 {#if failure}
   <Failure {failure} />
 {/if}
 
 {#if cursor !== null}
-  <div class="more">
-    <button
-      type="button"
-      bind:this={more}
+  <div class="mt-8 flex justify-center">
+    <Button
+      variant="secondary"
+      bind:ref={more}
       onclick={showMore}
       disabled={loading}
-      aria-busy={loading}>Show more</button
+      aria-busy={loading}>Show more</Button
     >
   </div>
 {/if}
-</div>
-
-<style>
-  .bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px 24px;
-    margin-bottom: 20px;
-  }
-
-  h1 {
-    margin: 0;
-  }
-
-  label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--muted);
-    font-weight: 400;
-  }
-
-  .more {
-    display: flex;
-    justify-content: center;
-    margin-top: 32px;
-  }
-</style>

@@ -16,9 +16,104 @@ export interface VideoFixtureOptions {
   hdr?: "hdr10" | "hlg";
   audioCodec?: "aac" | "ac3" | "flac";
   audioChannels?: 2 | 6;
+  /** Subtitle Streams in order, each showing "Fixture" from 0 to 0.8 s; default one SRT. */
+  subtitles?: readonly ("srt" | "ass" | "pgs")[];
 }
 
-/** Generate a short real MKV with video, silent audio and SRT subtitles; h264 and stereo AAC by default. */
+/** Where the PGS fixture draws its white box, in video pixels. */
+export function pgsFixtureBox(width: number, height: number) {
+  const boxWidth = Math.floor(width / 2);
+  const boxHeight = Math.floor(height / 6);
+  return {
+    x: Math.floor((width - boxWidth) / 2),
+    y: height - 2 * boxHeight,
+    width: boxWidth,
+    height: boxHeight,
+  };
+}
+
+const u16 = (value: number) => [value >> 8, value & 255];
+
+// One PGS segment: magic, pts at 90 kHz, dts, type and length, then the body.
+const pgsSegment = (seconds: number, type: number, body: number[]) => {
+  const ticks = Math.round(seconds * 90_000);
+  return [
+    0x50,
+    0x47,
+    (ticks >>> 24) & 255,
+    (ticks >>> 16) & 255,
+    (ticks >>> 8) & 255,
+    ticks & 255,
+    0,
+    0,
+    0,
+    0,
+    type,
+    ...u16(body.length),
+    ...body,
+  ];
+};
+
+/** Builds a `.sup` that shows a white box from 0 to 0.8 s; ffmpeg has no PGS encoder. */
+function pgsFixture(width: number, height: number) {
+  const box = pgsFixtureBox(width, height);
+  const video = [...u16(width), ...u16(height), 0x10];
+  const window = [0, ...u16(box.x), ...u16(box.y), ...u16(box.width)];
+  window.push(...u16(box.height));
+  // Each line is one run of palette entry 1, then the end-of-line marker.
+  const line = [0, 0xc0 | (box.width >> 8), box.width & 255, 1, 0, 0];
+  const rle = Array.from({ length: box.height }, () => line).flat();
+  const objectLength = rle.length + 4;
+  return new Uint8Array([
+    // Epoch start: composition, window, palette, object, end.
+    ...pgsSegment(0, 0x16, [
+      ...video,
+      ...u16(0),
+      0x80,
+      0,
+      0,
+      1,
+      ...u16(0),
+      0,
+      0,
+      ...u16(box.x),
+      ...u16(box.y),
+    ]),
+    ...pgsSegment(0, 0x17, [1, ...window]),
+    ...pgsSegment(0, 0x14, [0, 0, 1, 235, 128, 128, 255]),
+    ...pgsSegment(0, 0x15, [
+      ...u16(0),
+      0,
+      0xc0,
+      (objectLength >> 16) & 255,
+      ...u16(objectLength & 0xffff),
+      ...u16(box.width),
+      ...u16(box.height),
+      ...rle,
+    ]),
+    ...pgsSegment(0, 0x80, []),
+    // An empty composition clears the screen.
+    ...pgsSegment(0.8, 0x16, [...video, ...u16(1), 0, 0, 0, 0]),
+    ...pgsSegment(0.8, 0x17, [1, ...window]),
+    ...pgsSegment(0.8, 0x80, []),
+  ]);
+}
+
+const assFixture = [
+  "[Script Info]",
+  "ScriptType: v4.00+",
+  "",
+  "[V4+ Styles]",
+  "Format: Name, Fontname, Fontsize, PrimaryColour, Bold, Italic, Alignment, MarginL, MarginR, MarginV",
+  "Style: Default,Sans,20,&H00FFFFFF,0,0,2,10,10,10",
+  "",
+  "[Events]",
+  "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  "Dialogue: 0,0:00:00.00,0:00:00.80,Default,,0,0,0,,{\\i1}Fixture{\\i0}",
+  "",
+].join("\n");
+
+/** Generate a short real MKV with video, silent audio and subtitles; h264, stereo AAC and one SRT by default. */
 export async function createVideoFixture(
   path: string,
   options: VideoFixtureOptions = {},
@@ -35,6 +130,7 @@ export async function createVideoFixture(
     hdr,
     audioCodec = "aac",
     audioChannels = 2,
+    subtitles = ["srt"],
   } = options;
   if (hdr !== undefined && videoCodec !== "hevc") {
     throw new Error("An HDR fixture needs HEVC video.");
@@ -91,9 +187,21 @@ export async function createVideoFixture(
     "-tag:v",
     "hvc1",
   ];
-  const subtitlesPath = `${path}.srt`;
+  const subtitleFiles = subtitles.map((format, index) => ({
+    format,
+    path: `${path}.${index}.${format === "pgs" ? "sup" : format}`,
+  }));
   const metadataPath = `${path}.ffmetadata`;
-  await writeFile(subtitlesPath, "1\n00:00:00,000 --> 00:00:00,800\nFixture\n");
+  for (const { format, path: subtitlePath } of subtitleFiles) {
+    await writeFile(
+      subtitlePath,
+      format === "pgs"
+        ? pgsFixture(width, height)
+        : format === "ass"
+          ? assFixture
+          : "1\n00:00:00,000 --> 00:00:00,800\nFixture\n",
+    );
+  }
   await writeFile(
     metadataPath,
     chapters
@@ -115,10 +223,12 @@ export async function createVideoFixture(
         "lavfi",
         "-i",
         `anullsrc=r=48000:cl=${audioChannels === 6 ? "5.1" : "stereo"}`,
-        "-f",
-        "srt",
-        "-i",
-        subtitlesPath,
+        ...subtitleFiles.flatMap(({ format, path: subtitlePath }) => [
+          "-f",
+          format === "pgs" ? "sup" : format,
+          "-i",
+          subtitlePath,
+        ]),
         "-f",
         "ffmetadata",
         "-i",
@@ -127,27 +237,27 @@ export async function createVideoFixture(
         "0:v:0",
         "-map",
         "1:a:0",
-        "-map",
-        "2:s:0",
+        ...subtitleFiles.flatMap((_, index) => ["-map", `${index + 2}:s:0`]),
         "-map_metadata",
-        "3",
+        String(subtitleFiles.length + 2),
         "-map_chapters",
-        "3",
+        String(subtitleFiles.length + 2),
         "-t",
         String(durationSeconds),
         ...(videoCodec === "hevc" ? hevc : h264),
         "-c:a",
         audioCodec,
-        "-c:s",
-        "srt",
+        ...subtitleFiles.flatMap(({ format }, index) => [
+          `-c:s:${index}`,
+          format === "pgs" ? "copy" : format,
+          `-metadata:s:s:${index}`,
+          `language=${index === 0 ? "nld" : "eng"}`,
+        ]),
         "-metadata:s:a:0",
         "language=eng",
-        "-metadata:s:s:0",
-        "language=nld",
         "-disposition:a:0",
         "default",
-        "-disposition:s:0",
-        "forced",
+        ...(subtitleFiles.length > 0 ? ["-disposition:s:0", "forced"] : []),
         path,
       ],
       { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
@@ -161,7 +271,9 @@ export async function createVideoFixture(
       throw new Error(`ffmpeg failed (${exitCode}): ${stderr.trim()}`);
     }
   } finally {
-    await rm(subtitlesPath, { force: true });
+    for (const { path: subtitlePath } of subtitleFiles) {
+      await rm(subtitlePath, { force: true });
+    }
     await rm(metadataPath, { force: true });
   }
 }

@@ -188,10 +188,12 @@ describe.skipIf(!databaseUrl)("store job", () => {
             value: { idleWindow: { start: "01:00", end: "12:00" } },
           });
           await run;
+          // Bounded by this run's own wall-clock span, so the old window's
+          // next 01:00 fails here whatever today's date is.
           const [continuation] = await queuedStores(db);
-          expect(continuation?.runAfter.getTime()).toBeLessThanOrEqual(
-            Date.now(),
-          );
+          const runAfter = continuation?.runAfter.getTime() ?? 0;
+          expect(runAfter).toBeGreaterThanOrEqual(started - 1_000);
+          expect(runAfter).toBeLessThanOrEqual(Date.now());
         });
       }),
     120_000,

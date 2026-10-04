@@ -16,17 +16,13 @@ A Library gets one or more roots in a new `library_roots` table, and `libraries.
 
 ## TODOs
 
-- [ ] Roots in the schema, with every call site on one resolver. `library_roots`, `files.root_id`, `probe_cache.root_id` and the `0015` migration with a backfill of roots, Files, probe cache rows and queued scan changes. `libraries/roots.ts` resolves a File's absolute path, a root's path and an Item's home root. Each call site in the inventory below moves onto it. Test fixtures create Libraries through one helper.
-  - Validation: a migration test seeds the `0014` schema with two single-root Libraries, a movie and a show with Files, progress, artwork and a stored Version, migrates, and asserts every row survives and each File points at its Library's root. `bun test src/libraries src/stored src/playback src/subtitles src/plugins src/metadata` with `DATABASE_URL`.
-- [ ] Multi-root scans. A folder scan walks the folder in every root and a full scan walks every root. Grouping runs on root-relative paths; each root's files become their own Versions of one Item. Reconciliation is per root. Scan changes carry their root.
-  - Validation: scan tests for one movie in two roots (one Item, two Versions, each Version's File in its own root), a Show in two roots, and per-root reconciliation.
-- [ ] Change detection by root. Webhooks locate a path by the longest root across Libraries; a move between two roots of one Library becomes a delete at the source and an add at the destination. The watcher reads `PENDIA_WATCH=<root-id>=<path>`; events, claims, heartbeats and reports carry roots.
-  - Validation: webhook tests for a path under root `B` and a move from `A` to `B`; watcher tests on the new protocol.
-- [ ] Roots in the libraries API. `create` takes `roots`, `get` and `list` return `roots`, and `update` adds, repoints and removes roots in one transaction under the Library's row lock. Overlapping and relative roots fail with the index of the root at fault; removing the last root fails.
-  - Validation: service and router tests for each criterion: overlap in the same and another Library, last-root removal, removal deleting emptied Items, repoint keeping Item ids and progress after the rescan.
-- [ ] Admin UI. The create form takes root rows you can add and remove. The Library page gains an edit form with the name, editable root rows with remove buttons, an add-root row, and each root's id with a copy button. Saving with a root removed asks first. Errors show next to their field. The setup wizard sends its one root as `roots`.
-  - Validation: `bun run check` for the web app; screenshots of the create form with two roots, the edit form, the removal prompt and an overlap error.
-- [ ] Docs: `CONTEXT.md` (Library, Root, home root), server README API and watcher sections, `docs/operations.md` watcher form, the plugin API files comment.
+- [x] Migration on top of `main`. `main` gained `0015_session_decision_selection`, so the roots migration is `0016_library_roots`, regenerated with `db:generate` and carrying the hand-written backfill.
+  - Validation: `db:generate` reports no schema changes; `bun test src/db` with `DATABASE_URL`: 16 pass.
+- [ ] Server: roots in the schema, scans, change detection and the libraries API. The WIP checkpoint `aa09cf1` holds this work for the first four TODOs of the original plan: `library_roots`, `files.root_id`, `probe_cache.root_id`, the resolver in `libraries/roots.ts` with every call site in the inventory on it, multi-root scans with per-root reconciliation, webhooks and the watcher by root, and `create`/`get`/`list`/`update` with roots. What is left is the stale `scan.test.ts` type and the wizard test that still reads `rootPath`.
+  - Validation: `bun run --cwd apps/server check`; `bun test src/libraries src/watcher src/api src/db` with `DATABASE_URL`. The acceptance tests already exist: the migration test, one movie and one Show in two roots, per-root reconciliation, root removal, repoint keeping Items and progress, overlap in the same and another Library, last-root removal, a webhook under root `B` and a move from `A` to `B`, and the watcher on `PENDIA_WATCH=<root-id>=<path>`.
+- [ ] Admin UI. The create form takes folder rows you can add and remove. The Library page gains an edit form with the name, editable folder rows with remove buttons, an add-folder button, and each saved folder's id with a copy button. Saving with a folder removed asks first. A refused folder shows its error under its row. A pure `lib/roots.ts` holds the draft logic.
+  - Validation: `bun test apps/web/src/lib/roots.test.ts`; `bun run --cwd apps/web check`.
+- [ ] Docs: `CONTEXT.md` (Library, Root, home root), server README API and watcher sections, `docs/operations.md` and `compose.watcher.yaml` for the new `PENDIA_WATCH` form, the plugin API files comment.
 - [ ] Full gate and screenshots per the brief.
 
 ## Call-site inventory
@@ -68,3 +64,8 @@ Every non-test use of `libraries.rootPath`, of `files.path` joined to a root, an
   - The Jellyfin layer reports no Library folders today (`VirtualFolders` is unimplemented), so nothing there lists roots.
   - Plugin file access keeps `(libraryId, path)`. A path resolves in the first root by position that holds it, or its folder, and otherwise in the first root.
   - A watcher claims the scans of a Library only when it watches every root of it, because a scan walks every root. Its events still count for any root it watches.
+  - The WIP checkpoint `aa09cf1` stays in history as one commit. It covers the first four TODOs of the original plan, so they collapse into one server TODO whose remaining fixes land as their own commit. Every later TODO gets its own commit.
+  - The UI says "folder" where the API says "root", matching the server's error messages ("This folder overlaps another folder of this library.").
+  - The Library page's heading and the library read move into a new `LibraryEditor.svelte`, so a rename shows in the heading at once. `PolicyEditor.svelte` keeps only the Stored Versions form.
+  - A scan that walked a root which an update removes before the scan writes fails on the `files_root_library_fk` foreign key, and the job retries against the new roots. A repoint during a scan is reconciled by the full scan the update queues.
+  - Colocated artwork stays in the Item's home root on disk. Removing that root leaves the artwork rows of Items another root still holds pointing at the old folder, until artwork is fetched again. The issue does not ask to move artwork, so this PR does not.

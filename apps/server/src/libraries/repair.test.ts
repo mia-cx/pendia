@@ -493,7 +493,8 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         );
         expect(await repair.run()).toBe(1);
         const queue = createJobQueue(db);
-        const claimed = await queue.claim();
+        // Show scans also queue a provider-fetch for the pending Show.
+        const claimed = await queue.claim(["scan"]);
         if (!claimed) throw new Error("Repair scan was not claimed.");
         await db
           .update(jobs)

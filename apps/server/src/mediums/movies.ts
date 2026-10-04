@@ -2,6 +2,10 @@ import { posix } from "node:path";
 import { movies as movieTable } from "../db/schema/movies.ts";
 import type { Medium } from "./medium.ts";
 import { isVideoExtra, isVideoPath } from "./video-common/paths.ts";
+import {
+  folderProviderIds,
+  stripProviderTags,
+} from "./video-common/provider-ids.ts";
 
 /** The movies medium: a leaf Item per canonical folder with one Version per file. */
 export const moviesMedium = {
@@ -68,37 +72,11 @@ function identify(
   return { kind: "movie", canonicalFolder };
 }
 
-// Radarr writes {tmdb-348}; Jellyfin writes [tmdbid-348] and Emby [tmdb-348].
-const providerSuffixSource =
-  "\\{(tmdb|imdb|tvdb)[-=]([^}]*)\\}|\\[(tmdb|imdb|tvdb)(?:id)?-([^\\]]*)\\]";
-
-const providerValuePatterns: Record<string, RegExp> = {
-  imdb: /^tt0*[1-9][0-9]*$/i,
-  tmdb: /^[1-9][0-9]*$/,
-  tvdb: /^[1-9][0-9]*$/,
-};
-
-function folderProviderIds(canonicalFolder: string): Record<string, string> {
-  const ids: Record<string, string> = {};
-  const pattern = new RegExp(providerSuffixSource, "gi");
-  for (const match of posix.basename(canonicalFolder).matchAll(pattern)) {
-    const provider = (match[1] ?? match[3] ?? "").toLowerCase();
-    const value = (match[2] ?? match[4] ?? "").trim();
-    if (provider in ids || !providerValuePatterns[provider]?.test(value))
-      continue;
-    ids[provider] = provider === "imdb" ? value.toLowerCase() : value;
-  }
-  return ids;
-}
-
 function parse(canonicalFolder: string): {
   title: string;
   year: number | null;
 } {
-  const folder = posix
-    .basename(canonicalFolder)
-    .replace(new RegExp(`\\s*(?:${providerSuffixSource})`, "gi"), "")
-    .trim();
+  const folder = stripProviderTags(posix.basename(canonicalFolder));
   const match = /^(.*?)\s*\((\d{4})\)(?:\s.*)?$/.exec(folder);
   const rawTitle = (match?.[1] ?? folder).trim();
   const title = rawTitle.includes(" ")

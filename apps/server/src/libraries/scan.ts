@@ -22,7 +22,7 @@ import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
-import { removeColocatedArtworkFiles } from "../metadata/artwork-store.ts";
+import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import {
   applyScanChanges,
   findItemByProviderIds,
@@ -32,17 +32,44 @@ import {
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import { persistScanTimelines } from "./timelines.ts";
 import {
+  type LibraryFile,
   MissingLibraryPathError,
   readLibraryFile,
   walkLibrary,
 } from "./walker.ts";
 
+/** Where a scan reads its files: the local disk, or a watcher's report. */
+export type ScanSource = {
+  /** Lists accepted media files under a library-relative scope; a missing scope lists none. */
+  walk(path: string, recursive: boolean): Promise<LibraryFile[]>;
+  /** Returns one walked file with its probe result. */
+  probe(path: string): Promise<ProbedLibraryFile>;
+  /** Fails when a probed file changed before the write. Runs under the write lock. */
+  verify(file: ProbedLibraryFile): Promise<void>;
+  /** Fails when an empty scope gained files before the write. Runs under the write lock. */
+  confirmEmpty(path: string, recursive: boolean): Promise<void>;
+  /** Whether a stored File's path outside the scope still holds a file. */
+  exists(path: string): Promise<boolean>;
+};
+
 /** Optional collaborators and queued changes for one directory scan. */
 export type ScanDirectoryOptions = {
   probe?: typeof probeVideo;
+  source?: ScanSource;
   changes?: readonly ScanChange[];
   reconcileMissing?: boolean;
 };
+
+/** The scan rules and walk depth for one library-relative scope of a medium. */
+export function scanScope(
+  medium: (typeof libraries.$inferSelect)["medium"],
+  path: string,
+) {
+  return {
+    rules: medium === "movies" ? moviesMedium.scan : showsScan,
+    recursive: path === "." || medium === "shows",
+  };
+}
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -123,6 +150,93 @@ async function confirmScopeEmpty(
   }
 }
 
+/** Reads a Library's own disk through the walker and the persistent probe cache. */
+export function localScanSource(
+  db: Database,
+  library: Pick<typeof libraries.$inferSelect, "id" | "rootPath" | "medium">,
+  probe: typeof probeVideo = probeVideo,
+): ScanSource {
+  const { rules } = scanScope(library.medium, ".");
+  return {
+    async walk(path, recursive) {
+      const walked: LibraryFile[] = [];
+      try {
+        for await (const file of walkLibrary(library.rootPath, rules, {
+          path,
+          recursive,
+        }))
+          walked.push(file);
+      } catch (error) {
+        if (
+          !(error instanceof MissingLibraryPathError) ||
+          error.scope !== "requested"
+        )
+          throw error;
+      }
+      return walked;
+    },
+    probe: (path) => probeLibraryFile(db, library, path, probe),
+    async verify(file) {
+      const current = await readLibraryFile(library.rootPath, file.path);
+      if (
+        current.bytes !== file.bytes ||
+        current.modifiedNs !== file.modifiedNs
+      )
+        throw new Error("File changed before scan write.");
+    },
+    confirmEmpty: (path, recursive) =>
+      confirmScopeEmpty(library.rootPath, rules, path, recursive),
+    async exists(path) {
+      try {
+        await readLibraryFile(library.rootPath, path);
+        return true;
+      } catch (error) {
+        if (error instanceof MissingLibraryPathError) return false;
+        throw error;
+      }
+    },
+  };
+}
+
+/**
+ * Finds the Show whose live Files all sit at these paths: a queued folder
+ * move re-paths Files before the scan finds their Show. A Show with a
+ * File still on disk elsewhere only lost some of them, so it stays put.
+ * Rows of Files already gone from disk do not count.
+ */
+async function findShowOwningFiles(
+  tx: Transaction,
+  libraryId: string,
+  paths: readonly string[],
+  source: ScanSource,
+) {
+  if (paths.length === 0) return undefined;
+  const [owner] = await tx
+    .select({ item: items })
+    .from(files)
+    .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
+    .innerJoin(
+      items,
+      and(eq(items.id, itemAncestors.ancestorId), eq(items.kind, "show")),
+    )
+    .where(and(eq(files.libraryId, libraryId), inArray(files.path, [...paths])))
+    .limit(1);
+  if (owner === undefined) return undefined;
+  const elsewhere = await tx
+    .select({ path: files.path })
+    .from(files)
+    .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
+    .where(
+      and(
+        eq(itemAncestors.ancestorId, owner.item.id),
+        notInArray(files.path, [...paths]),
+      ),
+    );
+  for (const file of elsewhere)
+    if (await source.exists(file.path)) return undefined;
+  return owner.item;
+}
+
 /** Deletes leaf Items still holding no Versions after queued file deletes. */
 async function deleteEmptiedItems(
   tx: Transaction,
@@ -149,7 +263,6 @@ export async function scanDirectory(
   path: string,
   options: ScanDirectoryOptions = {},
 ): Promise<{ itemId: string | null; versionIds: string[]; probed: number }> {
-  const probe = options.probe ?? probeVideo;
   const changes = options.changes ?? [];
   const [library] = await db
     .select()
@@ -157,30 +270,16 @@ export async function scanDirectory(
     .where(eq(libraries.id, libraryId));
   if (!library) throw new AuthError("NOT_FOUND");
   if (library.medium !== "movies") throw new AuthError("INVALID_INPUT");
+  const source = options.source ?? localScanSource(db, library, options.probe);
 
-  const walked: string[] = [];
-  try {
-    for await (const file of walkLibrary(library.rootPath, moviesMedium.scan, {
-      path,
-      recursive: false,
-    })) {
-      walked.push(file.path);
-    }
-  } catch (error) {
-    if (
-      !(error instanceof MissingLibraryPathError) ||
-      error.scope !== "requested"
-    ) {
-      throw error;
-    }
-  }
+  const walked = (await source.walk(path, false)).map((file) => file.path);
   const [group] = groupMoviePaths(walked);
 
   const members: ProbedLibraryFile[] = [];
   let probed = 0;
   if (group) {
     for (const memberPath of group.paths) {
-      const member = await probeLibraryFile(db, library, memberPath, probe);
+      const member = await source.probe(memberPath);
       if (
         !member.probe.streams.some(
           (stream) =>
@@ -201,7 +300,7 @@ export async function scanDirectory(
     Object.assign(changeProviderIds, change.providerIds);
   }
 
-  // Colocated artwork of deleted Items is removed only after the delete commits.
+  // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -218,25 +317,12 @@ export async function scanDirectory(
       deletedArtwork,
     );
 
-    for (const member of members) {
-      const current = await readLibraryFile(library.rootPath, member.path);
-      if (
-        current.bytes !== member.bytes ||
-        current.modifiedNs !== member.modifiedNs
-      ) {
-        throw new Error("File changed before scan write.");
-      }
-    }
+    for (const member of members) await source.verify(member);
 
     if (!group) {
       await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
       if (options.reconcileMissing === true) {
-        await confirmScopeEmpty(
-          library.rootPath,
-          moviesMedium.scan,
-          path,
-          false,
-        );
+        await source.confirmEmpty(path, false);
         const [item] = await tx
           .select()
           .from(items)
@@ -403,7 +489,7 @@ export async function scanDirectory(
     await persistScanTimelines(tx, itemId);
     return { itemId, versionIds };
   });
-  await removeColocatedArtworkFiles(deletedArtwork);
+  await removeArtworkFiles(deletedArtwork);
   return { ...written, probed };
 }
 
@@ -414,7 +500,6 @@ export async function scanShowDirectory(
   path: string,
   options: ScanDirectoryOptions = {},
 ): Promise<{ itemId: string | null; versionIds: string[]; probed: number }> {
-  const probe = options.probe ?? probeVideo;
   const changes = options.changes ?? [];
   const [library] = await db
     .select()
@@ -422,21 +507,9 @@ export async function scanShowDirectory(
     .where(eq(libraries.id, libraryId));
   if (!library) throw new AuthError("NOT_FOUND");
   if (library.medium !== "shows") throw new AuthError("INVALID_INPUT");
+  const source = options.source ?? localScanSource(db, library, options.probe);
 
-  const walked: string[] = [];
-  try {
-    for await (const file of walkLibrary(library.rootPath, showsScan, {
-      path,
-    })) {
-      walked.push(file.path);
-    }
-  } catch (error) {
-    if (
-      !(error instanceof MissingLibraryPathError) ||
-      error.scope !== "requested"
-    )
-      throw error;
-  }
+  const walked = (await source.walk(path, true)).map((file) => file.path);
   const group = groupShowPaths(walked).find(
     (candidate) => candidate.canonicalFolder === path,
   );
@@ -448,7 +521,7 @@ export async function scanShowDirectory(
       for (const version of episode.versions) {
         for (const memberPath of version.paths) {
           if (memberByPath.has(memberPath)) continue;
-          const member = await probeLibraryFile(db, library, memberPath, probe);
+          const member = await source.probe(memberPath);
           if (
             !member.probe.streams.some(
               (stream) =>
@@ -471,7 +544,7 @@ export async function scanShowDirectory(
     Object.assign(mergedProviderIds, change.providerIds);
   }
 
-  // Colocated artwork of deleted Items is removed only after the delete commits.
+  // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -488,20 +561,12 @@ export async function scanShowDirectory(
       deletedArtwork,
     );
 
-    for (const member of memberByPath.values()) {
-      const current = await readLibraryFile(library.rootPath, member.path);
-      if (
-        current.bytes !== member.bytes ||
-        current.modifiedNs !== member.modifiedNs
-      ) {
-        throw new Error("File changed before scan write.");
-      }
-    }
+    for (const member of memberByPath.values()) await source.verify(member);
 
     if (!group) {
       await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
       if (options.reconcileMissing === true) {
-        await confirmScopeEmpty(library.rootPath, showsScan, path, true);
+        await source.confirmEmpty(path, true);
         const [show] = await tx
           .select()
           .from(items)
@@ -526,7 +591,16 @@ export async function scanShowDirectory(
           eq(items.canonicalFolder, group.canonicalFolder),
         ),
       );
-    const found = await findItemByProviderIds(tx, libraryId, mergedProviderIds);
+    const found =
+      (await findItemByProviderIds(tx, libraryId, mergedProviderIds)) ??
+      (existingShow
+        ? undefined
+        : await findShowOwningFiles(
+            tx,
+            libraryId,
+            [...memberByPath.keys()],
+            source,
+          ));
     if (existingShow && found && existingShow.id !== found.id)
       throw new AuthError("CONFLICT");
     let showId: string;
@@ -926,7 +1000,19 @@ export async function scanShowDirectory(
     }
 
     // A changed provider id invalidates the match, so metadata re-fetches.
-    if (await setItemProviderIds(tx, showId, mergedProviderIds)) {
+    // Webhook ids assert; folder tags only fill ids nothing asserted yet.
+    const assertedChanged = await setItemProviderIds(
+      tx,
+      showId,
+      mergedProviderIds,
+    );
+    const filledChanged = await setItemProviderIds(
+      tx,
+      showId,
+      group.providerIds,
+      { fillOnly: true },
+    );
+    if (assertedChanged || filledChanged) {
       await tx
         .update(items)
         .set({ metadataState: "pending", updatedAt: new Date() })
@@ -934,6 +1020,6 @@ export async function scanShowDirectory(
     }
     return { itemId: showId, versionIds };
   });
-  await removeColocatedArtworkFiles(deletedArtwork);
+  await removeArtworkFiles(deletedArtwork);
   return { ...written, probed };
 }

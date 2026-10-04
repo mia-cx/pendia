@@ -132,6 +132,12 @@ const prunesDirectory = (rules: ScanRules, relative: string): boolean =>
   (rules.isExtra(`${relative}/placeholder.mkv`) &&
     !rules.identify(`${relative}/${posix.basename(relative)}.mkv`));
 
+/** Whether a walk of the whole library would yield this library-relative file. */
+export const acceptsLibraryFile = (rules: ScanRules, path: string): boolean =>
+  rules.identify(path) !== null &&
+  !rules.isExtra(path) &&
+  !prunesDirectory(rules, posix.dirname(path));
+
 /** Walk a library subtree, yielding the files the medium's scan rules accept. */
 export async function* walkLibrary(
   rootPath: string,

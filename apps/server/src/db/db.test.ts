@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { startApiServer } from "../api.ts";
-import { removeColocatedArtworkFiles } from "../metadata/artwork-store.ts";
+import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import { type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import {
@@ -172,7 +172,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const before = await migrationState(db);
-      expect(before.journal).toHaveLength(9);
+      expect(before.journal).toHaveLength(10);
       expect(before.tables).toHaveLength(35);
       expect(before.extensions).toEqual([
         { extname: "btree_gist" },
@@ -221,7 +221,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
             { code: 0, stderr: "" },
           ]);
           const state = await migrationState(db);
-          expect(state.journal).toHaveLength(9);
+          expect(state.journal).toHaveLength(10);
           expect(state.tables).toHaveLength(35);
           expect(state.groups).toHaveLength(2);
         } finally {
@@ -337,8 +337,10 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         const deletedArtwork: DeletedArtworkFile[] = [];
         await deleteItemSubtree(db, item.id, deletedArtwork);
         expect(await db.select().from(artwork)).toEqual([]);
-        expect(deletedArtwork).toEqual([{ rootPath: root, storageKey }]);
-        await removeColocatedArtworkFiles(deletedArtwork);
+        expect(deletedArtwork).toEqual([
+          { backend: "colocated", rootPath: root, storageKey },
+        ]);
+        await removeArtworkFiles(deletedArtwork);
         await expect(access(target)).rejects.toThrow();
       } finally {
         await rm(root, { recursive: true, force: true });

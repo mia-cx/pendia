@@ -47,7 +47,7 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
       expect(await readProviderKeyNames(db)).toEqual(["opensubtitles"]);
     }));
 
-  test("storing a tmdb key marks only unmatched movies pending", () =>
+  test("storing a tmdb or tvdb key marks only that provider's unmatched kinds pending", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const { admin } = await seed(db);
@@ -97,6 +97,19 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
         "pending",
       );
       expect(rows.find((row) => row.id === show.id)?.metadataState).toBe(
+        "unmatched",
+      );
+
+      await db
+        .update(items)
+        .set({ metadataState: "unmatched" })
+        .where(eq(items.id, movie.id));
+      await setProviderKey(db, admin.id, "tvdb", "api-key");
+      const afterTvdb = await db.select().from(items);
+      expect(afterTvdb.find((row) => row.id === show.id)?.metadataState).toBe(
+        "pending",
+      );
+      expect(afterTvdb.find((row) => row.id === movie.id)?.metadataState).toBe(
         "unmatched",
       );
     }));

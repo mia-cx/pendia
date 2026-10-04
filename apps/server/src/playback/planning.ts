@@ -21,6 +21,8 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { selectStoredVariants } from "../stored/playback.ts";
+import { subtitleUrl } from "../subtitles/http.ts";
+import { listSubtitles } from "../subtitles/store.ts";
 import {
   type AudioStream,
   decidePlayback,
@@ -383,6 +385,11 @@ export async function planPlayback(
   )
     throw new AuthError("CONFLICT");
   const client = await callerClient(db, caller);
+  // Tracks a subtitle provider stored next to the Item, served on the side.
+  const subtitles = (await listSubtitles(db, item.id)).map((track) => ({
+    ...track,
+    url: subtitleUrl(item.id, track),
+  }));
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -421,6 +428,7 @@ export async function planPlayback(
         item.id,
         issued,
       ),
+      subtitles,
     };
   });
 }

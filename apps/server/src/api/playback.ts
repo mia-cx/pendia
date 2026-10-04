@@ -42,13 +42,24 @@ const PlanInput = Schema.Struct({
   bitrateCapBps: Schema.optional(positiveInt),
 });
 
-const PlanOutput = Schema.Struct({
+const RefreshOutput = Schema.Struct({
   method: Schema.Literal("direct-play", "remux", "transcode"),
   itemId: Schema.UUID,
   versionId: Schema.UUID,
   sessionId: Schema.NullOr(Schema.UUID),
   url: Schema.NullOr(Schema.String),
   expiresAt: Schema.NullOr(Schema.String),
+});
+
+const PlanOutput = Schema.Struct({
+  ...RefreshOutput.fields,
+  subtitles: Schema.Array(
+    Schema.Struct({
+      language: Schema.String,
+      format: Schema.Literal("srt", "ass", "vtt"),
+      url: Schema.String,
+    }),
+  ),
 });
 
 const plan = authenticatedMutation
@@ -73,7 +84,7 @@ const refresh = authenticatedMutation
       Schema.Struct({ sessionId: Schema.UUID, itemId: Schema.UUID }),
     ),
   )
-  .output(Schema.standardSchemaV1(PlanOutput))
+  .output(Schema.standardSchemaV1(RefreshOutput))
   .handler(async ({ context, input }) =>
     runApi(
       fromHost(() =>

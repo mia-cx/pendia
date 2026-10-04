@@ -74,6 +74,50 @@ describe("host gating", () => {
   });
 });
 
+describe("host fetch", () => {
+  function fetcher(network: string[]) {
+    const reached: string[] = [];
+    const host = createHost({
+      db: {} as never,
+      name: "fetcher",
+      capabilities: new Set(["network"]),
+      network,
+      registrations: createRegistrations(),
+      config: async () => ({}),
+      filesAllowed: async () => true,
+      schedule: () => ({ cancel() {} }),
+      fetch: (async (url: URL) => {
+        reached.push(String(url));
+        return new Response(null, { status: 204 });
+      }) as typeof fetch,
+    });
+    if (host.fetch === undefined) throw new Error("fetch missing");
+    return { fetch: host.fetch, reached };
+  }
+
+  test("reaches only listed hosts, or any host with *", async () => {
+    const listed = fetcher(["radarr.example"]);
+    await listed.fetch("https://radarr.example/api");
+    await expect(listed.fetch("https://other.example/")).rejects.toThrow(
+      "may not reach other.example",
+    );
+    const any = fetcher(["*"]);
+    await any.fetch("http://hooks.example:8080/in");
+    expect([...listed.reached, ...any.reached]).toEqual([
+      "https://radarr.example/api",
+      "http://hooks.example:8080/in",
+    ]);
+  });
+
+  test("refuses schemes other than http and https", async () => {
+    const any = fetcher(["*"]);
+    await expect(any.fetch("file:///etc/passwd")).rejects.toThrow(
+      "only fetch http and https",
+    );
+    expect(any.reached).toEqual([]);
+  });
+});
+
 describe.skipIf(!databaseUrl)("plugin runtime", () => {
   test("files is absent without the capability, present with it, and gone at the global switch", () =>
     withFolder((folder) =>

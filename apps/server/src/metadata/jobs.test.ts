@@ -291,7 +291,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         if (!library) throw new Error("Fixture library missing.");
         await db.insert(settings).values({
           key: "metadata",
-          value: { providerOrder: ["tmdb"], confidenceThreshold: 0.9 },
+          value: {
+            providerOrder: ["tmdb"],
+            confidenceThreshold: 0.9,
+            subtitleLanguages: ["en"],
+          },
         });
         const admin = await setupAdmin(db, {
           username: "admin",
@@ -328,6 +332,13 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
           title: "Fight Club",
           metadataState: "matched",
         });
+        // With subtitle languages set, a match queues the subtitle fetch.
+        expect(
+          await db
+            .select({ payload: jobs.payload })
+            .from(jobs)
+            .where(eq(jobs.type, "subtitle-fetch")),
+        ).toEqual([{ payload: { type: "subtitle-fetch", itemId: item.id } }]);
       });
     }));
 

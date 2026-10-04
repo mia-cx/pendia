@@ -1,6 +1,6 @@
 {
-  "id": "765d4297-63cc-4572-850e-2f7fe3accff9",
-  "prevId": "ec872ab5-9156-4977-be2d-e9e07cf9fcca",
+  "id": "a66eedd0-f8d7-482a-904c-d9dc8636062c",
+  "prevId": "765d4297-63cc-4572-850e-2f7fe3accff9",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3317,6 +3317,18 @@
         "decision": {
           "name": "decision",
           "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "client_name": {
+          "name": "client_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "device_name": {
+          "name": "device_name",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

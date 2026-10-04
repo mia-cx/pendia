@@ -71,6 +71,8 @@ export type JobPayload =
   | { type: "probe"; fileId: string }
   // `weekly` marks the one refresh a continuing Show keeps queued a week ahead.
   | { type: "provider-fetch"; itemId: string; weekly?: true }
+  // Fetches the configured subtitle languages an Item has no track for yet.
+  | { type: "subtitle-fetch"; itemId: string }
   // A store job encodes one rung, or sweeps a library folder's stored output.
   | { type: "store"; sourceFileId: string; rung: string }
   | { type: "store"; libraryId: string; folder: string }
@@ -87,6 +89,7 @@ export const jobType = pgEnum("job_type", [
   "provider-fetch",
   "store",
   "plugin",
+  "subtitle-fetch",
 ]);
 export const jobState = pgEnum("job_state", [
   "queued",

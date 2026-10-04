@@ -24,14 +24,20 @@ const capabilityLabels: Record<Capability, string> = {
   files: "Read, change and delete files in your libraries",
 };
 
+function describeNetwork(network: readonly string[]): string {
+  if (network.includes("*")) return "Reach any host";
+  if (network.length > 0) return `Reach ${network.join(", ")}`;
+  return capabilityLabels.network;
+}
+
 /** Describes what each capability lets a plugin do, naming the hosts network may reach. */
 export function describeCapabilities(
   capabilities: readonly Capability[],
   network: readonly string[],
 ): string[] {
   return capabilities.map((capability) =>
-    capability === "network" && network.length > 0
-      ? `Reach ${network.join(", ")}`
+    capability === "network"
+      ? describeNetwork(network)
       : capabilityLabels[capability],
   );
 }

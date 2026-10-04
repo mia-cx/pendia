@@ -25,6 +25,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { assertPlainData } from "./boundary.ts";
+import { anyHost } from "./manifest.ts";
 
 /** A shelf a plugin registered. */
 export type PluginShelf = Parameters<
@@ -475,7 +476,12 @@ export function createHost(context: HostContext): PluginHost {
     ...(has("network") && {
       async fetch(url: string, init?: RequestInit) {
         const target = new URL(requireString(url, "url"));
-        if (!context.network.includes(target.hostname))
+        if (target.protocol !== "http:" && target.protocol !== "https:")
+          throw new Error(`${name} may only fetch http and https URLs.`);
+        if (
+          !context.network.includes(anyHost) &&
+          !context.network.includes(target.hostname)
+        )
           throw new Error(
             `${name} may not reach ${target.hostname}; its manifest lists ${context.network.join(", ") || "no hosts"}.`,
           );

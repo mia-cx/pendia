@@ -142,11 +142,22 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
             body: typeof init?.body === "string" ? init.body : "",
           });
           const { pathname } = new URL(href);
-          if (pathname === "/api/v1/subtitles")
+          const language = new URL(href).searchParams.get("languages");
+          if (pathname === "/api/v1/subtitles" && language === "nl")
             return Response.json({
               data: [
+                // A split release holds half the dialogue per file.
+                result("nl", 15, {
+                  moviehash_match: true,
+                  files: [{ file_id: 15 }, { file_id: 16 }],
+                }),
                 result("nl", 11, { moviehash_match: true, download_count: 5 }),
                 result("nl", 12, { download_count: 90_000 }),
+              ],
+            });
+          if (pathname === "/api/v1/subtitles" && language === "en")
+            return Response.json({
+              data: [
                 result("en", 13, { machine_translated: true }),
                 result("en", 14, { foreign_parts_only: true }),
               ],
@@ -168,7 +179,10 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
         if (job === undefined) throw new Error("No subtitle-fetch job queued.");
         await registry.run(job);
 
-        const [search, download, file] = calls;
+        const [search, english, download, file] = calls;
+        expect(new URL(english?.url ?? "").searchParams.get("languages")).toBe(
+          "en",
+        );
         const query = new URL(search?.url ?? "").searchParams;
         expect([...query.keys()]).toEqual([
           "imdb_id",
@@ -180,7 +194,7 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
         ]);
         expect(Object.fromEntries(query)).toMatchObject({
           imdb_id: "78748",
-          languages: "nl,en",
+          languages: "nl",
           moviehash: expect.stringMatching(/^[0-9a-f]{16}$/),
           query: "movie",
           type: "movie",
@@ -190,7 +204,7 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
         expect(search?.headers.get("user-agent")).toStartWith("Pendia");
         expect(JSON.parse(download?.body ?? "")).toEqual({ file_id: 11 });
         expect(file?.url).toBe("https://dl.example/abc/movie.nl.srt");
-        expect(calls).toHaveLength(3);
+        expect(calls).toHaveLength(4);
         expect(await listSubtitles(db, itemId)).toEqual([
           { language: "nl", format: "srt" },
         ]);

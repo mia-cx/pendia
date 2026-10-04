@@ -47,7 +47,8 @@ export default definePlugin((host) => {
         signal: AbortSignal.timeout(requestTimeoutMs),
       });
       await response.body?.cancel();
-      if (response.status < 400) return true;
+      if (response.status < 300) return true;
+      // host.fetch hands redirects back unfollowed, so a 3xx never arrived.
       log.warn("webhook.rejected", { endpoint, status: response.status });
       return response.status < 500;
     } catch (error) {

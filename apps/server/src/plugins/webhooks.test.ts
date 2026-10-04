@@ -43,67 +43,79 @@ async function runPluginJobs(db: Database, runtime: PluginRuntime) {
   }
 }
 
+type Received = { method: string; headers: Headers; body: string };
+
+/**
+ * Installs the bundled plugin, adds an Item and delivers its item.added event
+ * to a local receiver that answers each request with `status(n)`. Resolves
+ * what the receiver got and what the plugin logged.
+ */
+async function deliverAddedItem(
+  db: Database,
+  folder: string,
+  status: (request: number) => number,
+) {
+  const received: Received[] = [];
+  using receiver = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      received.push({
+        method: request.method,
+        headers: request.headers,
+        body: await request.text(),
+      });
+      return new Response(null, { status: status(received.length) });
+    },
+  });
+  await migrateDatabase(db);
+  const source = await packWebhooks(join(folder, "source"));
+  const { integrity } = await fetchPlugin(source);
+  const directory = join(folder, "installed");
+  await installPlugin(db, directory, source, integrity);
+  await updatePluginState(db, webhooksName, (state) => ({
+    ...state,
+    config: {
+      url: `${receiver.url}hooks/secret-token`,
+      headers: ["X-Token: s3cret"],
+      body: '{"text":"Added {{item.title}} ({{item.year}})","kind":"{{data.kind}}"}',
+    },
+  }));
+  const [library] = await db
+    .insert(libraries)
+    .values({ name: "Movies", medium: "movies", rootPath: folder })
+    .returning();
+  if (!library) throw new Error("Library missing.");
+  await insertItem(db, {
+    libraryId: library.id,
+    kind: "movie",
+    title: 'The "Thing"',
+    year: 1982,
+    canonicalFolder: "The Thing (1982)",
+    extension: {},
+  });
+
+  const runtime = createPluginRuntime(db, { directory });
+  const logged = spyOn(console, "log");
+  try {
+    await runPluginJobs(db, runtime);
+    const lines = logged.mock.calls.map(([line]) => String(line));
+    const loaded = await runtime.load(webhooksName);
+    return { received, lines, loaded };
+  } finally {
+    logged.mockRestore();
+    await runtime.stop();
+  }
+}
+
 describe.skipIf(!databaseUrl)("webhooks plugin", () => {
   test("an added Item posts the rendered body, retrying a 5xx answer", () =>
     withFolder((folder) =>
       withDatabase(async (db) => {
-        const received: { method: string; headers: Headers; body: string }[] =
-          [];
-        using receiver = Bun.serve({
-          port: 0,
-          async fetch(request) {
-            received.push({
-              method: request.method,
-              headers: request.headers,
-              body: await request.text(),
-            });
-            return new Response(null, {
-              status: received.length === 1 ? 503 : 204,
-            });
-          },
-        });
-        await migrateDatabase(db);
-        const source = await packWebhooks(join(folder, "source"));
-        const { integrity } = await fetchPlugin(source);
-        const directory = join(folder, "installed");
-        await installPlugin(db, directory, source, integrity);
-        await updatePluginState(db, webhooksName, (state) => ({
-          ...state,
-          config: {
-            url: `${receiver.url}hooks/secret-token`,
-            headers: ["X-Token: s3cret"],
-            body: '{"text":"Added {{item.title}} ({{item.year}})","kind":"{{data.kind}}"}',
-          },
-        }));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: folder })
-          .returning();
-        if (!library) throw new Error("Library missing.");
-        await insertItem(db, {
-          libraryId: library.id,
-          kind: "movie",
-          title: 'The "Thing"',
-          year: 1982,
-          canonicalFolder: "The Thing (1982)",
-          extension: {},
-        });
-
-        const runtime = createPluginRuntime(db, { directory });
-        const logged = spyOn(console, "log");
-        let lines: string[];
-        try {
-          await runPluginJobs(db, runtime);
-          lines = logged.mock.calls.map(([line]) => String(line));
-        } finally {
-          logged.mockRestore();
-        }
-        // The 503 is logged by origin; the path's token stays out of the log.
-        expect(lines.some((line) => line.includes("webhook.rejected"))).toBe(
-          true,
+        const { received, lines, loaded } = await deliverAddedItem(
+          db,
+          folder,
+          (request) => (request === 1 ? 503 : 204),
         );
-        expect(lines.some((line) => line.includes("secret-token"))).toBe(false);
-
         expect(received).toHaveLength(2);
         for (const request of received) {
           expect(request.method).toBe("POST");
@@ -114,8 +126,31 @@ describe.skipIf(!databaseUrl)("webhooks plugin", () => {
             kind: "movie",
           });
         }
-        expect(await runtime.load(webhooksName)).toBe(true);
-        await runtime.stop();
+        // The 503 is logged by origin; the path's token stays out of the log.
+        expect(lines.some((line) => line.includes("webhook.rejected"))).toBe(
+          true,
+        );
+        expect(lines.some((line) => line.includes("secret-token"))).toBe(false);
+        expect(loaded).toBe(true);
+      }),
+    ));
+
+  test("a redirect is logged as not delivered and not retried", () =>
+    withFolder((folder) =>
+      withDatabase(async (db) => {
+        const { received, lines } = await deliverAddedItem(
+          db,
+          folder,
+          () => 307,
+        );
+        expect(received).toHaveLength(1);
+        expect(
+          lines.filter(
+            (line) =>
+              line.includes("webhook.rejected") &&
+              line.includes('"status":307'),
+          ),
+        ).toHaveLength(1);
       }),
     ));
 

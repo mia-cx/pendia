@@ -138,9 +138,11 @@ function readMatch(
   const language = readLanguage(requiredString(attributes.language));
   if (language === null || !languages.has(language)) return null;
   if (!Array.isArray(attributes.files)) return invalid();
-  const [first] = attributes.files;
-  if (first === undefined) return null;
-  const fileId = asObject(first).file_id;
+  // A split release (CD1, CD2) holds part of the dialogue per file, so only
+  // a single-file result is a whole track.
+  const [only, ...rest] = attributes.files;
+  if (only === undefined || rest.length > 0) return null;
+  const fileId = asObject(only).file_id;
   if (typeof fileId !== "number" || !Number.isSafeInteger(fileId))
     return invalid();
   const downloads =
@@ -177,23 +179,30 @@ export function createOpenSubtitlesProvider(
       );
       if (wanted.size === 0) return [];
       const params = await searchParameters(db, itemId);
-      const query = new URLSearchParams({ languages: [...wanted].join(",") });
-      for (const [key, value] of Object.entries(params))
-        if (value !== undefined) query.set(key, value.toLowerCase());
-      // Sorted, lowercase parameters avoid a redirect to the canonical URL.
-      query.sort();
-      const body = asObject(
-        await requestJson(
-          request,
-          new URL(`${baseUrl}/subtitles?${query}`),
-          limits,
-          { init: { headers } },
-        ),
-      );
-      if (!Array.isArray(body.data)) return invalid();
-      return body.data
-        .map((entry) => readMatch(entry, wanted))
-        .filter((match) => match !== null);
+      const matches: SubtitleMatch[] = [];
+      // One search per language: results come in pages, and a popular
+      // language would otherwise push the others off the first one.
+      for (const language of wanted) {
+        const query = new URLSearchParams({ languages: language });
+        for (const [key, value] of Object.entries(params))
+          if (value !== undefined) query.set(key, value.toLowerCase());
+        // Sorted, lowercase parameters avoid a redirect to the canonical URL.
+        query.sort();
+        const body = asObject(
+          await requestJson(
+            request,
+            new URL(`${baseUrl}/subtitles?${query}`),
+            limits,
+            { init: { headers } },
+          ),
+        );
+        if (!Array.isArray(body.data)) return invalid();
+        for (const entry of body.data) {
+          const match = readMatch(entry, wanted);
+          if (match !== null) matches.push(match);
+        }
+      }
+      return matches;
     },
     async download({ providerId }) {
       const fileId = Number(providerId);

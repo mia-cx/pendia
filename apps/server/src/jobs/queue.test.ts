@@ -467,6 +467,28 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
       });
     }));
 
+  test("an expired lease cannot be renewed back into a taken key", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const queue = createJobQueue(db);
+      const late = await queue.enqueue(probePayload(), {
+        concurrencyKey: "library",
+      });
+      const holder = await queue.claim();
+      if (!holder) throw new Error("Claim missing.");
+      await expireLease(db, late.id);
+      const next = await queue.enqueue(probePayload(), {
+        priority: 1,
+        concurrencyKey: "library",
+      });
+      expect((await queue.claim())?.id).toBe(next.id);
+      expect(await queue.renew(holder)).toBe(false);
+      const live = await db.$client<{ count: number }[]>`
+        select count(*)::integer as count from jobs
+        where state = 'running' and lease_expires_at >= now()`;
+      expect(live[0]?.count).toBe(1);
+    }));
+
   test("a job that keeps losing its lease ends failed with the lease error", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

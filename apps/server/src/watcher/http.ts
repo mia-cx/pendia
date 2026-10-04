@@ -317,31 +317,31 @@ async function finishJob(db: Database, request: Request, jobId: string) {
   const body: unknown = await request.json().catch(() => undefined);
   // Only the claim that holds the job may settle it, even with a malformed report.
   if (!Schema.is(HeldClaim)(body)) throw new AuthError("INVALID_INPUT");
-  if (body.claimToken !== job.claimToken) throw new AuthError("CONFLICT");
   const queue = createJobQueue(db);
+  // Another claim may have taken the job while the body arrived. A renewal
+  // proves this claim still holds it, and holding keeps it while the report is written.
+  const held = { ...job, claimToken: body.claimToken };
+  if (!(await queue.renew(held))) throw new AuthError("CONFLICT");
   let report: typeof ScanReport.Type;
   try {
     report = Schema.decodeUnknownSync(ScanReport)(body);
   } catch {
-    await queue.fail(job, new Error("Invalid watcher report."));
+    await queue.fail(held, new Error("Invalid watcher report."));
     throw new AuthError("INVALID_INPUT");
   }
   if ("error" in report) {
-    const failed = await queue.fail(job, new Error(report.error));
+    const failed = await queue.fail(held, new Error(report.error));
     return { state: failed?.state };
   }
+  const { payload } = job;
+  const source = reportedScanSource(db, payload.libraryId, report);
   try {
-    await runScanJob(
-      db,
-      job.payload,
-      job,
-      reportedScanSource(db, job.payload.libraryId, report),
-    );
+    await queue.hold(held, () => runScanJob(db, payload, job, source));
   } catch (error) {
-    const failed = await queue.fail(job, error);
+    const failed = await queue.fail(held, error);
     return { state: failed?.state };
   }
-  const completed = await queue.complete(job);
+  const completed = await queue.complete(held);
   return { state: completed?.state };
 }
 

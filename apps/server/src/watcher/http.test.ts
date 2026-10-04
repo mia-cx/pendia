@@ -9,6 +9,7 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   files,
   items,
+  jobs,
   libraries,
   probeCache,
   progress,
@@ -462,6 +463,74 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         ]);
       }),
     ));
+
+  test("a report whose claim was taken while it uploaded writes nothing", () =>
+    withDatabase(async (db) => {
+      const { token, library } = await setup(db);
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      const queue = createJobQueue(db);
+      const job = await queue.enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: ".",
+      });
+      const claimed: WatcherClaim = await (
+        await handler(post("claim", { libraryIds: [library.id] }, token))
+      )?.json();
+      if (claimed.job === null) throw new Error("No scan was claimed.");
+      // The body arrives only once the test sends it, after the api looked the job up.
+      let reading = () => {};
+      const read = new Promise<void>((resolve) => {
+        reading = resolve;
+      });
+      let send = (_body: unknown) => {};
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull: (controller) =>
+            new Promise<void>((resolve) => {
+              send = (value) => {
+                controller.enqueue(
+                  new TextEncoder().encode(JSON.stringify(value)),
+                );
+                controller.close();
+                resolve();
+              };
+              reading();
+            }),
+        },
+        { highWaterMark: 0 },
+      );
+      const response = handler(
+        new Request(`http://pendia.test/api/watcher/jobs/${job.id}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body,
+        }),
+      );
+      await read;
+      await db
+        .update(jobs)
+        .set({
+          leaseExpiresAt: sql`statement_timestamp() - interval '1 second'`,
+        })
+        .where(eq(jobs.id, job.id));
+      const reclaimed = await queue.claim(["scan"], {
+        libraryIds: [library.id],
+      });
+      expect(reclaimed?.attempts).toBe(2);
+      send({
+        claimToken: claimed.job.claimToken,
+        files: [{ path: "Heat (1995)/Heat.mkv", bytes: "1", modifiedNs: "1" }],
+        probes: [],
+      });
+      expect((await response)?.status).toBe(409);
+      expect(await listJobs(db)).toMatchObject([
+        { id: job.id, state: "running", claimToken: reclaimed?.claimToken },
+      ]);
+    }));
 
   test("heartbeats renew the claim's lease, and a stale claim settles nothing", () =>
     withDatabase(async (db) => {

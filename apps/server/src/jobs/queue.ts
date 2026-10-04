@@ -81,20 +81,28 @@ export function createJobQueue(
     lt(jobs.leaseExpiresAt, sql`statement_timestamp()`),
   );
 
-  /** Extends the lease; false means another claim took the job or it settled. */
+  /**
+   * Extends a live lease; false means it expired, another claim took the job
+   * or it settled. Renewing under the claim lock keeps a lease that a claim
+   * already counted as expired from coming back into its concurrency key.
+   */
   async function renew(job: Claim) {
-    const renewed = await db
-      .update(jobs)
-      .set({ leaseExpiresAt: leaseEnd })
-      .where(
-        and(
-          eq(jobs.id, job.id),
-          eq(jobs.claimToken, job.claimToken),
-          eq(jobs.state, "running"),
-        ),
-      )
-      .returning({ id: jobs.id });
-    return renewed.length > 0;
+    return db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${claimLockKey})`);
+      const renewed = await tx
+        .update(jobs)
+        .set({ leaseExpiresAt: leaseEnd })
+        .where(
+          and(
+            eq(jobs.id, job.id),
+            eq(jobs.claimToken, job.claimToken),
+            eq(jobs.state, "running"),
+            gte(jobs.leaseExpiresAt, sql`statement_timestamp()`),
+          ),
+        )
+        .returning({ id: jobs.id });
+      return renewed.length > 0;
+    });
   }
 
   return {

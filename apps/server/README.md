@@ -275,14 +275,15 @@ VALUES (
   )
 )
 ON CONFLICT (key) DO UPDATE
-SET value = settings.value || jsonb_build_object(
+SET value = (settings.value #>> '{}')::jsonb || jsonb_build_object(
       'oidc',
-      coalesce(nullif(settings.value -> 'oidc', 'null'), '{}') || (EXCLUDED.value -> 'oidc')
+      coalesce(nullif((settings.value #>> '{}')::jsonb -> 'oidc', 'null'), '{}')
+        || (EXCLUDED.value -> 'oidc')
     ),
     updated_at = clock_timestamp();
 ```
 
-This keeps the other auth keys and a client secret that is already stored. Replace the placeholder before execution. Then paste the Client Secret into OIDC on the admin settings screen.
+This keeps the other auth keys and a client secret that is already stored. `#>> '{}'` unwraps a row the API wrote, which the Bun SQL driver stores as a JSON string. Replace the placeholder before execution. Then paste the Client Secret into OIDC on the admin settings screen.
 
 Live validation after merge: sign out, choose "Sign in with Authentik" on the login page, authenticate, and confirm the browser lands on the home screen signed in. For a first OIDC account, open the invite link and choose the same button there.
 

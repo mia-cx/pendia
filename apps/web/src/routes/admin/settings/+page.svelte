@@ -22,6 +22,10 @@ let keyValue = $state("");
 let keyBusy = $state(false);
 let keyFailure = $state<FailureShape | undefined>(undefined);
 
+let secretValue = $state("");
+let secretBusy = $state(false);
+let secretFailure = $state<FailureShape | undefined>(undefined);
+
 let removeBusy = $state<Record<string, boolean>>({});
 let removeFailures = $state<Record<string, FailureShape>>({});
 
@@ -170,6 +174,23 @@ async function addKey(event: SubmitEvent) {
   }
 }
 
+async function saveSecret(event: SubmitEvent) {
+  event.preventDefault();
+  secretBusy = true;
+  secretFailure = undefined;
+  const oidcClientSecret = secretValue;
+  try {
+    settings.set(
+      await serial(() => client.settings.update({ oidcClientSecret })),
+    );
+    if (secretValue === oidcClientSecret) secretValue = "";
+  } catch (error) {
+    secretFailure = readFailure(error);
+  } finally {
+    secretBusy = false;
+  }
+}
+
 async function removeKey(name: string) {
   removeBusy[name] = true;
   delete removeFailures[name];
@@ -202,6 +223,7 @@ async function removeKey(name: string) {
   <p class="muted">Loading.</p>
 {:else}
   {@const store = settings.data.artworkStore}
+  {@const secretSet = settings.data.oidcClientSecretSet}
   <section>
     <h3>Trusted proxies</h3>
     <p class="muted">
@@ -382,11 +404,35 @@ async function removeKey(name: string) {
 
   <section>
     <h3>OIDC</h3>
-    <p>{settings.data.oidcConfigured ? "Configured" : "Not configured"}</p>
+    <dl class="store">
+      <dt>Status</dt>
+      <dd>{settings.data.oidcConfigured ? "Configured" : "Not configured"}</dd>
+      <dt>Client secret</dt>
+      <dd>{secretSet ? "Set" : "Not set"}</dd>
+    </dl>
     <p class="muted">
-      OIDC is configured in the database in this slice; see
+      The issuer and client ID are set in the database; see
       apps/server/README.md.
     </p>
+    <form onsubmit={saveSecret} class="stack">
+      {#if secretFailure}
+        <Failure failure={secretFailure} />
+      {/if}
+      <label for="oidcSecret"
+        >{secretSet ? "New client secret" : "Client secret"}</label
+      >
+      <input
+        id="oidcSecret"
+        name="clientSecret"
+        type="password"
+        autocomplete="off"
+        required
+        bind:value={secretValue}
+      />
+      <button type="submit" disabled={secretBusy}
+        >{secretSet ? "Replace secret" : "Set secret"}</button
+      >
+    </form>
   </section>
 {/if}
 

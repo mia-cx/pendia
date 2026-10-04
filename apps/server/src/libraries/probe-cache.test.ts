@@ -88,7 +88,7 @@ describe.skipIf(!databaseUrl)("probeLibraryFile", () => {
           await db
             .update(probeCache)
             .set({
-              result: sql`to_jsonb(((${probeCache.result} #>> '{}')::jsonb - 'keyframesSeconds')::text)`,
+              result: sql`${probeCache.result} - 'keyframesSeconds'`,
             })
             .where(
               and(

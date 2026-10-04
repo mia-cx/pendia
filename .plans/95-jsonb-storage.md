@@ -17,7 +17,7 @@
 
 - [x] Shared `jsonb` column type in `db/schema/common.ts`, used by every `jsonb` column including `jobs.payload`. Validation: `db/jsonb.test.ts` writes every `jsonb` column through insert, update and upsert and checks `jsonb_typeof`; `drizzle-kit generate` reports no schema change; server `check`.
 - [x] Migration `0013` unwraps double-encoded strings in each affected column. Validation: `db/jsonb.test.ts` seeds every column through drizzle's own `jsonb` (the old path), plus plain-string settings written by raw SQL, runs the migration, and checks the result.
-- [ ] Remove the string workarounds in the server README and `probe-cache.test.ts`. Validation: `probe-cache.test.ts` on Postgres; the README upsert run by hand against an API-written `auth` row.
+- [x] Remove the string workarounds in the server README and `probe-cache.test.ts`. Validation: `probe-cache.test.ts` on Postgres; the README upsert run by hand against an API-written `auth` row.
 - [ ] Order the `session.state` reads in `api/transcode.test.ts` and `transcoder/sessions.test.ts` by `events.id`. Validation: both files on Postgres.
 - [ ] Full gate. Validation: the commands in the brief, results below.
 
@@ -59,6 +59,11 @@ Real Postgres 18, Bun 1.4.2, drizzle-orm 0.45.2. Each row written through drizzl
 - So the migration unwraps a `jsonb` string when its trimmed text starts with `{`, `[` or `"` and `IS JSON` accepts it (Postgres 16 and later; compose and CI run 18). A plain string written by raw SQL, such as a provider key `abc` or `{not json`, does not match and stays as it is. No writer stores a top-level number or boolean through drizzle, so number-like strings are left alone.
 - `0013_jsonb_values.sql` is a custom drizzle-kit migration with one `UPDATE` per column, `jobs.payload` excluded. Its snapshot matches `0012` apart from key order. Rename it if `main` gains a `0013` first.
 - The migration test seeds every column except `jobs.payload` and the number setting through drizzle's own `jsonb`, checks they are strings, adds settings `tmdb-key`, `{not json` and `"unterminated` with `to_jsonb(text)`, runs the migration file, and checks types and drizzle reads. Validation: `jsonb.test.ts` 3 pass, 56 expects. With `"` dropped from the settings rule, it fails on the `plain` setting, which reads back as `"plain"` with quotes.
+
+### Workarounds
+
+- The README OIDC upsert and `probe-cache.test.ts` use plain `jsonb` operators again. No other code or doc copes with string storage; the remaining `JSON.parse` calls read files and HTTP bodies. The migration unwraps every legacy row, so nothing keeps a fallback.
+- Validation: a scratch test wrote the `auth` row through `writeAuthSettings` with a client secret, ran the README block with a client ID, and read back an object with the new OIDC fields and the secret kept. `probe-cache.test.ts` 9 pass.
 
 ### #99
 

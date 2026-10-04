@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateDatabase } from "./db/migrate.ts";
+import { migrateDatabase, migrationLockKey } from "./db/migrate.ts";
 import {
+  groups,
   type JobPayload,
   type TranscoderBackend,
   transcoderCapabilities,
@@ -94,6 +95,71 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
       }),
     30_000,
   );
+
+  test("the api answers readiness only after migrations and the startup trial", () =>
+    withDatabase(async (db, url) => {
+      // Holding the migration lock parks startup before the schema exists.
+      const lock = await db.$client.reserve();
+      await lock`select pg_advisory_lock(${migrationLockKey})`;
+      let locked = true;
+      const unlock = async () => {
+        if (!locked) return;
+        locked = false;
+        await lock`select pg_advisory_unlock(${migrationLockKey})`;
+        lock.release();
+      };
+      // The port must be known while startPendia is still starting.
+      const probe = Bun.serve({ port: 0, fetch: () => new Response() });
+      const port = probe.port;
+      await probe.stop();
+      const readiness = () =>
+        fetch(`http://127.0.0.1:${port}/readyz`).then(
+          (response) => response.status,
+          () => "no answer",
+        );
+      const table: TranscoderBackend[] = [
+        { name: "cpu", codecs: ["h264"], toneMapping: ["hdr10"] },
+      ];
+      let trialCalled = false;
+      let startTrial: () => void = () => {};
+      const trialStarted = new Promise<void>((resolve) => {
+        startTrial = resolve;
+      });
+      let finishTrial: (backends: TranscoderBackend[]) => void = () => {};
+      const starting = startPendia("all", {
+        databaseUrl: url,
+        port,
+        transcoderOptions: {
+          port: 0,
+          trial: () => {
+            trialCalled = true;
+            startTrial();
+            return new Promise((resolve) => {
+              finishTrial = resolve;
+            });
+          },
+        },
+      });
+      try {
+        await Bun.sleep(200);
+        expect(trialCalled).toBe(false);
+        expect(await readiness()).toBe("no answer");
+
+        await unlock();
+        await trialStarted;
+        // Migrations finished: they seed the built-in groups.
+        expect(await db.select().from(groups)).toHaveLength(2);
+        expect(await readiness()).toBe("no answer");
+
+        finishTrial(table);
+        await starting;
+        expect(await readiness()).toBe(200);
+      } finally {
+        await unlock();
+        finishTrial(table);
+        await (await starting.catch(() => null))?.stop();
+      }
+    }));
 
   test(
     "transcoder role registers its node, answers the internal route and unregisters on stop",

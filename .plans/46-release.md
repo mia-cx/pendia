@@ -12,8 +12,8 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
 
 ## TODOs
 
-- [ ] Prove that the api answers `/readyz` only after migrations and the startup trial: a `startPendia("all")` test holds the migration lock, then blocks the trial, and sees no ready answer until both finish.
-  - Validation: `DATABASE_URL=... bun test src/roles.test.ts` in `apps/server`.
+- [x] Prove that the api answers `/readyz` only after migrations and the startup trial: a `startPendia("all")` test holds the migration lock, then blocks the trial, and sees no ready answer until both finish.
+  - Validation: `DATABASE_URL=... bun test src/roles.test.ts` in `apps/server`. Done: 12 pass.
 - [ ] Name the image `ghcr.io/mia-cx/pendia` in `compose.yaml` and `compose.watcher.yaml`, pinned by `PENDIA_VERSION`, with the build kept as the fallback, and give the healthcheck a start period for the trial.
   - Validation: `docker compose config` and `docker compose -f compose.watcher.yaml config` resolve.
 - [ ] CI: the `image` job records the image size and the ffmpeg version in the run summary; a `publish` job pushes the image to GHCR on `v*` tags after `checks` and `image` pass.

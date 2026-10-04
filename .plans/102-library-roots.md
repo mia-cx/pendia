@@ -74,10 +74,13 @@ Every non-test use of `libraries.rootPath`, of `files.path` joined to a root, an
   - `libraries.rootsRevision` increments when roots are added, repointed or removed, and scan sources carry it so a scan that read roots before an edit fails and retries instead of reconciling a stale snapshot.
   - A watcher report naming a removed root builds its scan source inside the error handler, so the job fails and retries instead of renewing its lease and throwing a 500 forever.
   - An Item's existing colocated artwork and subtitles are found in every root, home root first, and removed from every root, while new writes still go to the home root.
-- Gate (5fa322b):
+  - Looking across roots treats a root that throws as "not here": the first hit wins, the union is returned for listings, and the first error is rethrown only when every root failed.
+- Gate (6b57a75):
   - `bun run --cwd apps/server check`: pass.
   - `bun run --cwd apps/web check`: pass.
   - `bun run lint`: pass.
   - `DATABASE_URL bun test` on the touched areas: 462 pass, 3 skip, 0 fail.
   - `DATABASE_URL bun test` from the repo root: 1375 pass, 3 skip, 0 fail.
+  - `DATABASE_URL bun test src/subtitles src/metadata src/playback`: 491 pass, 3 skip, 0 fail.
+  - `DATABASE_URL bun test src` in apps/server: 1341 pass, 3 skip, 0 fail.
 - Browser journey (headless Chromium, this branch): created a two-folder Library through the create form, then on its page added a folder, repointed one (its ID stayed), and removed one through the confirmation. Each save showed the expected status, and `library_roots` matched the page after a reload.

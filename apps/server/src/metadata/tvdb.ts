@@ -55,11 +55,13 @@ function stringYear(value: unknown): number | null {
   return year !== null && /^\d{4}$/.test(year) ? Number(year) : null;
 }
 
-/** TVDB answers full artwork URLs, and older records a path on its artwork host. */
+/** TVDB answers full artwork URLs, and older records a path on its artwork host; any other host is dropped. */
 function artworkUrl(value: unknown): string | null {
   const image = optionalString(value)?.trim();
   if (!image) return null;
-  return image.startsWith("/") ? `${artworkBaseUrl}${image}` : image;
+  // The server downloads these URLs, so a response may not point it anywhere else.
+  const url = URL.parse(image, artworkBaseUrl);
+  return url?.origin === artworkBaseUrl ? url.href : null;
 }
 
 function readData(body: unknown): Record<string, unknown> {

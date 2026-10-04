@@ -343,6 +343,24 @@ describe("TVDB metadata provider", () => {
     ).rejects.toThrow("TVDB only supports shows, seasons and episodes.");
   });
 
+  test("drops artwork URLs outside TVDB's HTTPS artwork host", async () => {
+    const { request } = mockRequest(
+      withSeries({
+        image: "http://127.0.0.1/poster.jpg",
+        artworks: [
+          { type: 3, image: "//169.254.169.254/latest/meta-data" },
+          { type: 23, image: "http://artworks.thetvdb.com/logo.png" },
+          { type: 2, image: "https://artworks.thetvdb.com/banners/p.jpg" },
+        ],
+      }),
+    );
+    const provider = createTvdbMetadataProvider("key", undefined, request);
+    const show = await provider.fetch({ providerId: "81189", kind: "show" });
+    expect(show?.artwork).toEqual([
+      { type: "poster", url: "https://artworks.thetvdb.com/banners/p.jpg" },
+    ]);
+  });
+
   test("an endless episode listing is rejected instead of followed forever", async () => {
     const { request } = mockRequest((url, init) =>
       url.pathname === "/v4/series/81189/episodes/official"

@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
@@ -8,6 +8,12 @@ import { items, settings, settingsLockClass } from "../db/schema/index.ts";
 const providersKey = "providers";
 const namePattern = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const maxValueLength = 4096;
+
+/** The Item kinds whose unmatched Items each built-in provider key requeues. */
+const requeuedKinds = new Map<string, (typeof items.$inferSelect.kind)[]>([
+  ["tmdb", ["movie"]],
+  ["tvdb", ["show", "season", "episode"]],
+]);
 
 function storedKeys(value: unknown): Record<string, string> {
   const stored: Record<string, string> = Object.create(null);
@@ -105,26 +111,27 @@ export async function setProviderKey(
     value.includes("\0")
   )
     throw new AuthError("INVALID_INPUT");
+  const kinds = requeuedKinds.get(key);
   return writeKeys(
     db,
     (keys) => {
       keys[key] = value;
     },
-    key === "tmdb"
-      ? async (tx) => {
-          // A fresh TMDB credential gives previously unmatched movies a
+    kinds === undefined
+      ? undefined
+      : async (tx) => {
+          // A fresh credential gives the provider's unmatched Items a
           // chance: the next scan finds them pending and enqueues a fetch.
           await tx
             .update(items)
             .set({ metadataState: "pending", updatedAt: new Date() })
             .where(
               and(
-                eq(items.kind, "movie"),
+                inArray(items.kind, kinds),
                 eq(items.metadataState, "unmatched"),
               ),
             );
-        }
-      : undefined,
+        },
   );
 }
 

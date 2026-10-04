@@ -364,6 +364,26 @@ export async function removeSelectedArtwork(
   return true;
 }
 
+/** Finds the id of an Item's selected artwork of a type, if it has one. */
+export async function selectedArtworkId(
+  db: Database,
+  itemId: string,
+  type: string,
+): Promise<string | undefined> {
+  const [selected] = await db
+    .select({ id: artwork.id })
+    .from(artwork)
+    .where(
+      and(
+        eq(artwork.itemId, itemId),
+        eq(artwork.type, type),
+        eq(artwork.selected, true),
+      ),
+    )
+    .limit(1);
+  return selected?.id;
+}
+
 /** A stored artwork original: exact bytes plus its artwork row. */
 export interface ArtworkOriginal {
   bytes: Uint8Array;

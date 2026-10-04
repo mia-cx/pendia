@@ -44,6 +44,7 @@ describe("openapi document", () => {
         "/items/{id}",
         "/items/{id}/refresh",
         "/playback/plan",
+        "/playback/sessions",
         "/playback/{sessionId}/{itemId}/refresh",
         "/playback/{sessionId}/{itemId}/start",
         "/playback/{sessionId}/{itemId}/progress",

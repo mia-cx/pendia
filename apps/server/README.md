@@ -131,6 +131,14 @@ A `store` job writes `<source file>.pendia/<rung>/`: `rung.json` with the rung d
 
 When a plan is not direct play, the complete stored rungs that pass the client become the variants of one master playlist. A remux plan takes them only when they include the source rung. The api serves `hls/<versionId>/media.m3u8`, `init.mp4` and `N.m4s` from the library share, so every api needs read access to the libraries. The live session answers only when no stored rung passes.
 
+## Activity
+
+| Procedure | REST route | Input | Output |
+| --- | --- | --- | --- |
+| `playback.sessions` | GET `/api/playback/sessions` | None | `PlaybackSession[]`, newest first |
+
+`playback.sessions` needs `manage-server`. It lists sessions that are not stopped and reported in the last five minutes: state, play method, user, client and device, the Item as a browse card, rungs and the transcoder node name. Rungs are the stored rung names for a stored session, the output height for a live transcode such as `720p`, and `source` otherwise. A plan records the client and device of the caller's login, or an API key's name as the client, and publishes `session.state` `starting`, so a dashboard on `events.stream` sees a session arrive and leave.
+
 ## Auth
 
 The api and all roles serve these JSON routes. Setup creates the admin account only. It does not log in.

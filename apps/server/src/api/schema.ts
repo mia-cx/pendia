@@ -201,6 +201,22 @@ export const ServerSettings = Schema.Struct({
   providerKeys: Schema.Array(Schema.String),
 });
 
+/** A live or queued playback session as the sessions dashboard lists it. */
+export const PlaybackSession = Schema.Struct({
+  id: Schema.UUID,
+  state: Schema.Literal("queued", "starting", "playing", "stopped"),
+  playMethod: Schema.Literal("direct-play", "remux", "transcode"),
+  user: Schema.Struct({ id: Schema.UUID, displayName: Schema.String }),
+  clientName: Schema.NullOr(Schema.String),
+  deviceName: Schema.NullOr(Schema.String),
+  item: BrowseCard,
+  // Stored rung names, the live transcode height such as "720p", or "source".
+  rungs: Schema.Array(Schema.String),
+  transcoder: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  lastSeenAt: Schema.String,
+});
+
 /** The newest scan run's job counts and newest job for one library. */
 export const ScanStatus = Schema.Struct({
   libraryId: Schema.UUID,

@@ -25,7 +25,13 @@ export type ArtworkStoreConfig =
   // path is the fallback for a read-only media share.
   | { backend: "colocated"; path?: string }
   | { backend: "configured-path"; path: string }
-  | { backend: "s3"; client: Bun.S3Client };
+  // bucket and endpoint are for display; the client carries them itself.
+  | {
+      backend: "s3";
+      client: Bun.S3Client;
+      bucket: string;
+      endpoint: string | null;
+    };
 
 /** The backend an artwork row records. */
 export type ArtworkBackendName = (typeof artwork.$inferSelect)["backend"];
@@ -60,20 +66,40 @@ export function readArtworkStoreConfig(
       throw new Error(
         "PENDIA_ARTWORK_STORE=s3 needs S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).",
       );
+    const endpoint = s3("ENDPOINT");
     return {
       backend: "s3",
       client: new Bun.S3Client({
         bucket,
-        endpoint: s3("ENDPOINT"),
+        endpoint,
         region: s3("REGION"),
         accessKeyId,
         secretAccessKey,
       }),
+      bucket,
+      endpoint: endpoint ?? null,
     };
   }
   throw new Error(
     `PENDIA_ARTWORK_STORE must be colocated, path or s3. Found "${store}".`,
   );
+}
+
+/** Describes an artwork store for display: its backend and where, never credentials. */
+export function describeArtworkStore(store: ArtworkStoreConfig) {
+  return store.backend === "s3"
+    ? {
+        backend: store.backend,
+        path: null,
+        bucket: store.bucket,
+        endpoint: store.endpoint,
+      }
+    : {
+        backend: store.backend,
+        path: store.path ?? null,
+        bucket: null,
+        endpoint: null,
+      };
 }
 
 let fromEnvironment: ArtworkStoreConfig | undefined;

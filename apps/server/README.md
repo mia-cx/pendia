@@ -222,7 +222,7 @@ To enable OIDC, set `oidc` to an object:
 The issuer, clientId and clientSecret fields are required. `openid` must be included, and scopes use OAuth scope-token characters. HTTPS is required except loopback HTTP for tests. Keep client secrets out of source control and logs.
 
 Numbers must be positive safe integers. The two seconds settings allow at most 315360000; sessionMaxAgeSeconds also accepts null.
-`artworkRequiresAuth` is a boolean defaulting to false. `settings.update` writes `trustedProxyAddresses` and `artworkRequiresAuth` only.
+`artworkRequiresAuth` is a boolean defaulting to false. Of the auth settings, `settings.update` writes `trustedProxyAddresses` and `artworkRequiresAuth` only.
 Settings apply on the next request. Invalid stored settings fail closed.
 `artworkRequiresAuth` false keeps artwork anonymous for clients such as Findroid. True requires the existing bearer token or session cookie.
 A session maximum age also limits existing sessions by creation time. Clearing it does not clear a session's stored expiry.
@@ -310,7 +310,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `groups.create` | POST `/api/groups` | `name`, `permissions` | `Group` |
 | `groups.setPermissions` | PUT `/api/groups/{id}/permissions` | `id`, `permissions` | `Group` |
 | `settings.get` | GET `/api/settings` | None | `ServerSettings` |
-| `settings.update` | PATCH `/api/settings` | optional `trustedProxyAddresses`, optional `artworkRequiresAuth` | `ServerSettings` |
+| `settings.update` | PATCH `/api/settings` | optional `trustedProxyAddresses`, `artworkRequiresAuth`, nullable `bitrateCapBps`, `idleWindow` | `ServerSettings` |
 | `settings.setProviderKey` | PUT `/api/settings/providers/{name}` | `name`, `value` | `ServerSettings` |
 | `settings.deleteProviderKey` | DELETE `/api/settings/providers/{name}` | `name` | `ServerSettings` |
 
@@ -327,8 +327,10 @@ Session and user instants cross as ISO-8601 at millisecond precision, because th
 
 Group permission edits apply to custom groups only. The built-in `admins` and `users` groups reject writes: admins bypass every check, and `users` is the documented default group.
 
-`settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured and the provider key names. No read returns a provider key value or the OIDC client secret; provider keys are write-only over the API.
-Only `trustedProxyAddresses` and `artworkRequiresAuth` are writable through `settings.update`. OIDC stays read-only in this slice.
+`settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured, the provider key names, the global bitrate cap, the store idle window and the artwork store. No read returns a provider key value, the OIDC client secret or S3 credentials; provider keys are write-only over the API.
+`settings.update` writes `trustedProxyAddresses`, `artworkRequiresAuth`, `bitrateCapBps` and `idleWindow`. OIDC stays read-only in this slice.
+`bitrateCapBps` is the global default cap in bits per second, null for none; the next `playback.plan` reads it. `idleWindow` is `{ start, end }` as `HH:MM` server local time. A new window moves queued store jobs booked for a later start to the new window's start, or to now when the window is open.
+`artworkStore` is `{ backend, path, bucket, endpoint }`: the environment's choice (`PENDIA_ARTWORK_STORE`), read-only, because moving artwork between backends is unsupported.
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}?width=<pixels>`; `width` is required and accepts an integer from 1 through 4096.
 Browse cards add `parentId`, `seasonNumber`, `episodeNumber`, `episodeEndNumber` and `show`, which is `{ id, title, posterArtworkId }` for a Season or Episode and null otherwise. An Episode's `seasonNumber` is its Season's. Together they give every route a card needs.

@@ -199,6 +199,14 @@ export const ServerSettings = Schema.Struct({
   artworkRequiresAuth: Schema.Boolean,
   oidcConfigured: Schema.Boolean,
   providerKeys: Schema.Array(Schema.String),
+  bitrateCapBps: Schema.NullOr(Schema.Int),
+  idleWindow: Schema.Struct({ start: Schema.String, end: Schema.String }),
+  artworkStore: Schema.Struct({
+    backend: Schema.Literal("colocated", "configured-path", "s3"),
+    path: Schema.NullOr(Schema.String),
+    bucket: Schema.NullOr(Schema.String),
+    endpoint: Schema.NullOr(Schema.String),
+  }),
 });
 
 /** A live or queued playback session as the sessions dashboard lists it. */

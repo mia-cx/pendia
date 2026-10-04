@@ -19,10 +19,20 @@ import { listSessions, revokeSession } from "../auth/sessions.ts";
 import { readAuthSettings, writeAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import {
+  artworkStoreConfig,
+  describeArtworkStore,
+} from "../metadata/artwork-backends.ts";
+import {
+  readGlobalBitrateCap,
+  writeGlobalBitrateCap,
+} from "../playback/settings.ts";
+import {
   readProviderKeyNames,
   removeProviderKey,
   setProviderKey,
 } from "../providers/keys.ts";
+import { IdleWindow, readStoreSettings } from "../stored/policy.ts";
+import { setIdleWindow } from "../stored/service.ts";
 import { authenticated, authenticatedMutation, base } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
 import {
@@ -80,6 +90,9 @@ async function readServerSettings(db: Database) {
     artworkRequiresAuth: config.artworkRequiresAuth,
     oidcConfigured: config.oidc !== null,
     providerKeys,
+    bitrateCapBps: await readGlobalBitrateCap(db),
+    idleWindow: (await readStoreSettings(db)).idleWindow,
+    artworkStore: describeArtworkStore(artworkStoreConfig()),
   };
 }
 
@@ -358,6 +371,13 @@ export const settingsProcedures = {
         Schema.Struct({
           trustedProxyAddresses: Schema.optional(Schema.Array(Schema.String)),
           artworkRequiresAuth: Schema.optional(Schema.Boolean),
+          // Null clears the global cap.
+          bitrateCapBps: Schema.optional(
+            Schema.NullOr(
+              Schema.Int.pipe(Schema.between(1, Number.MAX_SAFE_INTEGER)),
+            ),
+          ),
+          idleWindow: Schema.optional(IdleWindow),
         }),
       ),
     )
@@ -365,8 +385,15 @@ export const settingsProcedures = {
     .handler(async ({ context, input }) =>
       runApi(
         fromHost(async () => {
-          await writeAuthSettings(context.db, context.caller.user.id, input);
-          return readServerSettings(context.db);
+          const { db } = context;
+          const actorId = context.caller.user.id;
+          const { bitrateCapBps, idleWindow, ...auth } = input;
+          await writeAuthSettings(db, actorId, auth);
+          if (bitrateCapBps !== undefined)
+            await writeGlobalBitrateCap(db, actorId, bitrateCapBps);
+          if (idleWindow !== undefined)
+            await setIdleWindow(db, actorId, idleWindow);
+          return readServerSettings(db);
         }),
       ),
     ),

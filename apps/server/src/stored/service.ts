@@ -1,10 +1,12 @@
-import { eq } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { files, items, libraries } from "../db/schema/index.ts";
+import { files, items, jobs, libraries, settings } from "../db/schema/index.ts";
 import {
+  type IdleWindow,
+  idleWindowAt,
   readStoredVersionPolicy,
   rungFits,
   type StoredVersionPolicy,
@@ -66,6 +68,39 @@ export async function setStoredVersionPolicy(
   });
   await reconcileStoredVersions(db, library);
   return { policy: readStoredVersionPolicy(library.configuration) };
+}
+
+/** Sets the server-wide idle window for a caller holding manage-server, and books waiting store jobs into the new window. */
+export async function setIdleWindow(
+  db: Database,
+  actorId: string,
+  idleWindow: IdleWindow,
+  now = new Date(),
+) {
+  await requirePermission(db, actorId, "manage-server");
+  const place = idleWindowAt(idleWindow, now);
+  const runAfter = place.inside ? now : place.startsAt;
+  const value = { idleWindow };
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(settings)
+      .values({ key: "store", value })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value, updatedAt: sql`clock_timestamp()` },
+      });
+    // A job booked for the old window's start would otherwise wait for it.
+    await tx
+      .update(jobs)
+      .set({ runAfter })
+      .where(
+        and(
+          eq(jobs.type, "store"),
+          eq(jobs.state, "queued"),
+          gt(jobs.runAfter, now),
+        ),
+      );
+  });
 }
 
 /** Queues one policy rung for an Item whatever the policy condition says; false when it is complete or already queued. */

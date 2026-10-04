@@ -14,7 +14,6 @@ import {
   items,
   sessionRegistry,
   sessions,
-  settings,
   streams,
   userSettings,
   versions,
@@ -28,6 +27,7 @@ import {
   type SubtitleStream,
 } from "./decisions.ts";
 import type { ClientProfile, Hdr, PlaybackCaps } from "./policy.ts";
+import { readGlobalBitrateCap } from "./settings.ts";
 
 /** The decoded input every playback planning call receives. */
 export type PlanInput = {
@@ -177,23 +177,6 @@ export async function loadPlaybackSource(
   return { item, version, file, source };
 }
 
-async function globalBitrateCap(db: Database): Promise<number | null> {
-  const [row] = await db
-    .select({ value: settings.value })
-    .from(settings)
-    .where(eq(settings.key, "playback"))
-    .limit(1);
-  if (row === undefined) return null;
-  const raw: unknown = row.value;
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
-    throw new Error("Invalid playback settings.");
-  const cap = (raw as Record<string, unknown>).bitrateCapBps;
-  if (cap === null || cap === undefined) return null;
-  if (typeof cap !== "number" || !Number.isSafeInteger(cap) || cap <= 0)
-    throw new Error("Invalid playback settings.");
-  return cap;
-}
-
 async function userBitrateCap(
   db: Database,
   userId: string,
@@ -295,7 +278,7 @@ export async function planPlayback(
     config.trustedProxyAddresses,
   );
   const caps: PlaybackCaps = {
-    globalDefault: await globalBitrateCap(db),
+    globalDefault: await readGlobalBitrateCap(db),
     userOverride: await userBitrateCap(db, caller.user.id),
     sessionRequest: input.bitrateCapBps ?? null,
     isLan: isLanAddress(identity.address),

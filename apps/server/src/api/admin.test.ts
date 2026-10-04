@@ -11,15 +11,28 @@ import {
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { groups, libraries, settings } from "../db/schema/index.ts";
+import { groups, jobs, libraries, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import {
+  artworkStoreConfig,
+  describeArtworkStore,
+} from "../metadata/artwork-backends.ts";
 import { setProviderKey } from "../providers/keys.ts";
+import { enqueueStore } from "../stored/jobs.ts";
+import { defaultIdleWindow } from "../stored/policy.ts";
 
 const device = {
   clientName: "Test Client",
   deviceId: "device-1",
   deviceName: "Living Room",
+};
+
+// What settings.get answers before anyone sets a cap or an idle window.
+const serverDefaults = {
+  bitrateCapBps: null,
+  idleWindow: defaultIdleWindow,
+  artworkStore: describeArtworkStore(artworkStoreConfig()),
 };
 
 async function seed(db: Database) {
@@ -469,6 +482,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           artworkRequiresAuth: false,
           oidcConfigured: true,
           providerKeys: ["tmdb"],
+          ...serverDefaults,
         });
         const client = createPendiaClient({ origin: base, headers });
         expect((await client.settings.get()).oidcConfigured).toBe(true);
@@ -498,6 +512,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           artworkRequiresAuth: true,
           oidcConfigured: false,
           providerKeys: [],
+          ...serverDefaults,
         });
         const bad = await fetch(`${base}/api/settings`, {
           method: "PATCH",
@@ -518,6 +533,75 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           client.settings.deleteProviderKey({ name: "tmdb" }),
         );
         expect(missing.code).toBe("NOT_FOUND");
+      } finally {
+        await server.stop();
+      }
+    }));
+
+  test("settings set the global cap and the idle window, which rebooks waiting store jobs", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { admin, token } = await seed(db);
+      const viewer = await createLocalUser(db, admin.id, {
+        username: "viewer",
+        password: "viewer-pass",
+      });
+      const { token: viewerToken } = await createApiKey(db, viewer.id, "v");
+      const tomorrow = new Date(Date.now() + 86_400_000);
+      const waiting = await enqueueStore(
+        db,
+        { sourceFileId: Bun.randomUUIDv7(), rung: "source" },
+        tomorrow,
+      );
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const client = createPendiaClient({
+          origin: base,
+          headers: { authorization: `Bearer ${token}` },
+        });
+        const capped = await client.settings.update({
+          bitrateCapBps: 4_000_000,
+          // Equal ends mean all day, so the waiting job may run at once.
+          idleWindow: { start: "03:00", end: "03:00" },
+        });
+        expect(capped).toMatchObject({
+          bitrateCapBps: 4_000_000,
+          idleWindow: { start: "03:00", end: "03:00" },
+          trustedProxyAddresses: [],
+        });
+        const [job] = await db
+          .select({ runAfter: jobs.runAfter })
+          .from(jobs)
+          .where(eq(jobs.id, waiting.id));
+        expect(job?.runAfter.getTime()).toBeLessThanOrEqual(Date.now());
+        expect((await client.settings.get()).bitrateCapBps).toBe(4_000_000);
+        expect(
+          (await client.settings.update({ bitrateCapBps: null })).bitrateCapBps,
+        ).toBeNull();
+
+        for (const body of [
+          { bitrateCapBps: 0 },
+          { idleWindow: { start: "25:00", end: "07:00" } },
+        ]) {
+          const bad = await fetch(`${base}/api/settings`, {
+            method: "PATCH",
+            headers: {
+              authorization: `Bearer ${token}`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(body),
+          });
+          expect(bad.status).toBe(400);
+        }
+        const denied = await capture(
+          createPendiaClient({
+            origin: base,
+            headers: { authorization: `Bearer ${viewerToken}` },
+          }).settings.update({ bitrateCapBps: 1_000_000 }),
+        );
+        expect(denied.code).toBe("FORBIDDEN");
+        expect((await client.settings.get()).bitrateCapBps).toBeNull();
       } finally {
         await server.stop();
       }

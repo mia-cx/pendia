@@ -1,10 +1,21 @@
 import { isAbsolute, resolve } from "node:path";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
-import { jobs, libraries } from "../db/schema/index.ts";
+import {
+  artwork,
+  items,
+  jobs,
+  libraries,
+  versions,
+} from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
+import {
+  type ArtworkStoreConfig,
+  artworkStoreConfig,
+} from "../metadata/artwork-backends.ts";
+import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 
 const maxNameLength = 128;
@@ -98,14 +109,38 @@ export async function updateLibrary(
   return library;
 }
 
-/** Deletes a library row without touching the filesystem. */
-export async function deleteLibrary(db: Database, actorId: string, id: string) {
+/** Deletes a library row and its stored artwork, leaving the media folder untouched. */
+export async function deleteLibrary(
+  db: Database,
+  actorId: string,
+  id: string,
+  store: ArtworkStoreConfig = artworkStoreConfig(),
+) {
   await requirePermission(db, actorId, "manage-libraries");
-  const [deleted] = await db
-    .delete(libraries)
-    .where(eq(libraries.id, id))
-    .returning({ id: libraries.id });
-  if (!deleted) throw new AuthError("NOT_FOUND");
+  const orphaned = await db.transaction(async (tx) => {
+    // The row lock serializes this snapshot against concurrent artwork stores.
+    const [library] = await tx
+      .select({ rootPath: libraries.rootPath })
+      .from(libraries)
+      .where(eq(libraries.id, id))
+      .for("update");
+    if (!library) throw new AuthError("NOT_FOUND");
+    // Colocated artwork sits in the media folder, so only other backends lose it.
+    const stored = await tx
+      .select({ backend: artwork.backend, storageKey: artwork.storageKey })
+      .from(artwork)
+      .leftJoin(items, eq(artwork.itemId, items.id))
+      .leftJoin(versions, eq(artwork.versionId, versions.id))
+      .where(
+        and(
+          ne(artwork.backend, "colocated"),
+          or(eq(items.libraryId, id), eq(versions.libraryId, id)),
+        ),
+      );
+    await tx.delete(libraries).where(eq(libraries.id, id));
+    return stored.map((row) => ({ ...row, rootPath: library.rootPath }));
+  });
+  await removeArtworkFiles(orphaned, store);
   return { ok: true };
 }
 

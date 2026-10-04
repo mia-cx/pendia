@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   access,
+  chmod,
   mkdir,
   mkdtemp,
   open,
@@ -13,17 +14,26 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq, sql } from "drizzle-orm";
+import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { artwork, libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { insertItem } from "../db/tree.ts";
 import {
-  type ArtworkOpen,
+  type DeletedArtworkFile,
+  deleteItemSubtree,
+  insertItem,
+} from "../db/tree.ts";
+import { deleteLibrary } from "../libraries/service.ts";
+import type { ArtworkOpen, ArtworkStoreConfig } from "./artwork-backends.ts";
+import {
   readArtworkOriginal,
+  removeArtworkFiles,
+  removeSelectedArtwork,
   storeArtworkOriginal,
 } from "./artwork-store.ts";
+import { s3Url, testS3Store } from "./testing.ts";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
@@ -106,6 +116,49 @@ function mockRequest(responder: (url: string) => Response) {
     return responder(url);
   }) as typeof fetch;
   return { calls, request };
+}
+
+/** Proves a removed selection, a deleted Item and a deleted Library each take their original along. */
+async function expectRemovals(
+  db: Database,
+  root: string,
+  store: ArtworkStoreConfig,
+  exists: (storageKey: string) => Promise<boolean>,
+) {
+  const { library, item } = await fixture(db, root);
+  const { request } = mockRequest(() => new Response(png));
+  const selected = await storeArtworkOriginal(db, item.id, poster, request, {
+    store,
+  });
+  expect(await removeSelectedArtwork(db, item.id, "poster", store)).toBe(true);
+  expect(await exists(selected.storageKey)).toBe(false);
+
+  const owned = await storeArtworkOriginal(db, item.id, poster, request, {
+    store,
+  });
+  const deletedArtwork: DeletedArtworkFile[] = [];
+  await deleteItemSubtree(db, item.id, deletedArtwork);
+  await removeArtworkFiles(deletedArtwork, store);
+  expect(await exists(owned.storageKey)).toBe(false);
+
+  const sibling = await insertItem(db, {
+    libraryId: library.id,
+    kind: "movie",
+    title: "Aliens",
+    year: 1986,
+    canonicalFolder: "Aliens (1986)",
+    extension: {},
+  });
+  const kept = await storeArtworkOriginal(db, sibling.id, poster, request, {
+    store,
+  });
+  expect(await exists(kept.storageKey)).toBe(true);
+  const admin = await setupAdmin(db, {
+    username: "admin",
+    password: "admin-pass",
+  });
+  await deleteLibrary(db, admin.id, library.id, store);
+  expect(await exists(kept.storageKey)).toBe(false);
 }
 
 describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
@@ -372,14 +425,9 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
             }),
         );
         await expect(
-          storeArtworkOriginal(
-            db,
-            item.id,
-            poster,
-            request,
-            30_000,
-            png.length,
-          ),
+          storeArtworkOriginal(db, item.id, poster, request, {
+            maxDownloadBytes: png.length,
+          }),
         ).rejects.toThrow("Artwork response too large.");
         expect(cancelled).toBe(true);
         expect(calls).toHaveLength(1);
@@ -407,7 +455,9 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         });
         const { request } = mockRequest(() => new Response(stream));
         await expect(
-          storeArtworkOriginal(db, item.id, poster, request, 30_000, 4),
+          storeArtworkOriginal(db, item.id, poster, request, {
+            maxDownloadBytes: 4,
+          }),
         ).rejects.toThrow("Artwork response too large.");
         expect(cancelled).toBe(true);
         expect(await db.select().from(artwork)).toHaveLength(0);
@@ -425,14 +475,9 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const { calls, request } = mockRequest(() => new Response(png));
         for (const maxDownloadBytes of [0, -1, 1.5, Number.NaN]) {
           await expect(
-            storeArtworkOriginal(
-              db,
-              item.id,
-              poster,
-              request,
-              30_000,
+            storeArtworkOriginal(db, item.id, poster, request, {
               maxDownloadBytes,
-            ),
+            }),
           ).rejects.toThrow("Invalid artwork download limit.");
         }
         expect(calls).toHaveLength(0);
@@ -481,33 +526,112 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       });
     }));
 
-  test("a non-colocated selected row yields a fresh id and is unselected", () =>
+  test("round-trips a poster through the configured path", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
-        const { item } = await fixture(db, root);
-        const [old] = await db
-          .insert(artwork)
-          .values({
-            itemId: item.id,
-            versionId: null,
-            type: "poster",
-            sourceUrl: "https://image.example/old.jpg",
-            backend: "configured-path",
-            storageKey: "elsewhere/old.jpg",
-            selected: true,
-          })
-          .returning();
-        if (!old) throw new Error("Fixture artwork missing.");
-        const { request } = mockRequest(() => new Response(png));
-        const row = await storeArtworkOriginal(db, item.id, poster, request);
-        expect(row.id).not.toBe(old.id);
-        expect(row.backend).toBe("colocated");
-        const rows = await db.select().from(artwork).orderBy(artwork.id);
-        expect(rows).toHaveLength(2);
-        expect(rows[0]).toMatchObject({ id: old.id, selected: false });
-        expect(rows[1]).toMatchObject({ id: row.id, selected: true });
-        expect(await readFile(join(root, row.storageKey))).toEqual(png);
+        await withTempRoot(async (parent) => {
+          const path = join(parent, "new", "artwork");
+          const store = { backend: "configured-path", path } as const;
+          const { item } = await fixture(db, root);
+          const { request } = mockRequest(() => new Response(png));
+          const row = await storeArtworkOriginal(db, item.id, poster, request, {
+            store,
+          });
+          expect(row.backend).toBe("configured-path");
+          expect(row.storageKey).toMatch(
+            new RegExp(`^${row.id}\\.[0-9a-f-]{36}$`),
+          );
+          expect(await readFile(join(path, row.storageKey))).toEqual(png);
+          await expect(
+            access(join(root, "Alien (1979)", ".pendia")),
+          ).rejects.toThrow();
+          const original = await readArtworkOriginal(db, row.id, store);
+          expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+          expect(await readArtworkOriginal(db, row.id)).toBeNull();
+        });
+      });
+    }));
+
+  test("removes configured-path originals with their selection, Item and Library", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await withTempRoot(async (path) => {
+          await expectRemovals(
+            db,
+            root,
+            { backend: "configured-path", path },
+            (storageKey) =>
+              access(join(path, storageKey)).then(
+                () => true,
+                () => false,
+              ),
+          );
+        });
+      });
+    }));
+
+  // Root ignores directory permissions, so it cannot fake a read-only share.
+  test.skipIf(process.getuid?.() === 0)(
+    "a read-only Item folder falls back to the configured path",
+    () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withTempRoot(async (root) => {
+          await withTempRoot(async (parent) => {
+            const path = join(parent, "new", "fallback");
+            const { item } = await fixture(db, root);
+            const folder = join(root, item.canonicalFolder);
+            const { request } = mockRequest(() => new Response(png));
+            await chmod(folder, 0o555);
+            try {
+              await expect(
+                storeArtworkOriginal(db, item.id, poster, request, {
+                  store: { backend: "colocated" },
+                }),
+              ).rejects.toMatchObject({ code: "EACCES" });
+              const store = { backend: "colocated", path } as const;
+              const row = await storeArtworkOriginal(
+                db,
+                item.id,
+                poster,
+                request,
+                { store },
+              );
+              expect(row.backend).toBe("configured-path");
+              expect(await readFile(join(path, row.storageKey))).toEqual(png);
+              const original = await readArtworkOriginal(db, row.id, store);
+              expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+            } finally {
+              await chmod(folder, 0o755);
+            }
+          });
+        });
+      }),
+  );
+
+  test("a replacement keeps the row id and removes the old original from its backend", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await withTempRoot(async (path) => {
+          const { item } = await fixture(db, root);
+          const { request } = mockRequest(() => new Response(png));
+          const old = await storeArtworkOriginal(db, item.id, poster, request);
+          const row = await storeArtworkOriginal(
+            db,
+            item.id,
+            { type: "poster", url: "https://image.example/new.png" },
+            request,
+            { store: { backend: "configured-path", path } },
+          );
+          expect(row.id).toBe(old.id);
+          expect(row.backend).toBe("configured-path");
+          await expect(access(join(root, old.storageKey))).rejects.toThrow();
+          expect(await readFile(join(path, row.storageKey))).toEqual(png);
+          expect(await db.select().from(artwork)).toHaveLength(1);
+        });
       });
     }));
 
@@ -613,7 +737,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
             );
           })) as typeof fetch;
         await expect(
-          storeArtworkOriginal(db, item.id, poster, request, 1),
+          storeArtworkOriginal(db, item.id, poster, request, { timeoutMs: 1 }),
         ).rejects.toThrow("timed out");
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(
@@ -630,7 +754,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const { calls, request } = mockRequest(() => new Response(png));
         for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.MAX_VALUE]) {
           await expect(
-            storeArtworkOriginal(db, item.id, poster, request, timeoutMs),
+            storeArtworkOriginal(db, item.id, poster, request, { timeoutMs }),
           ).rejects.toThrow("Invalid artwork request timeout.");
         }
         expect(calls).toHaveLength(0);
@@ -727,7 +851,12 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
             );
           return open(path, flags);
         };
-        const original = await readArtworkOriginal(db, first.id, openFile);
+        const original = await readArtworkOriginal(
+          db,
+          first.id,
+          { backend: "colocated" },
+          openFile,
+        );
         expect(paths).toHaveLength(3);
         expect(paths[0]).not.toBe(paths[1]);
         expect(paths[1]).not.toBe(paths[2]);
@@ -758,7 +887,7 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
       });
     }));
 
-  test("returns null for a non-colocated artwork row", () =>
+  test("returns null for a row whose backend this process lacks", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
@@ -812,6 +941,22 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
       );
     }));
 
+  test("rejects a FIFO at the original instead of waiting for a writer", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        const target = join(root, row.storageKey);
+        await rm(target);
+        expect(Bun.spawnSync(["mkfifo", target]).exitCode).toBe(0);
+        await expect(readArtworkOriginal(db, row.id)).rejects.toThrow(
+          "Invalid artwork storage path.",
+        );
+      });
+    }));
+
   test("rejects a .pendia symlink in read mode", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -837,5 +982,50 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
           );
         }),
       );
+    }));
+});
+
+describe.skipIf(!databaseUrl || !s3Url)("S3 artwork store", () => {
+  test("round-trips a poster and removes the replaced object", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const store = testS3Store();
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request, {
+          store,
+        });
+        expect(row.backend).toBe("s3");
+        expect(row.storageKey).toMatch(
+          new RegExp(`^${row.id}\\.[0-9a-f-]{36}$`),
+        );
+        const original = await readArtworkOriginal(db, row.id, store);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+
+        const replaced = await storeArtworkOriginal(
+          db,
+          item.id,
+          { type: "poster", url: "https://image.example/new.png" },
+          request,
+          { store },
+        );
+        expect(replaced.id).toBe(row.id);
+        expect(await store.client.exists(row.storageKey)).toBe(false);
+        expect(await store.client.exists(replaced.storageKey)).toBe(true);
+        await store.client.delete(replaced.storageKey);
+        expect(await readArtworkOriginal(db, row.id, store)).toBeNull();
+      });
+    }));
+
+  test("removes objects with their selection, Item and Library", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const store = testS3Store();
+        await expectRemovals(db, root, store, (storageKey) =>
+          store.client.exists(storageKey),
+        );
+      });
     }));
 });

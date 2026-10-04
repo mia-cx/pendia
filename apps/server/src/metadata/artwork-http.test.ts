@@ -16,8 +16,10 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import type { ArtworkStoreConfig } from "./artwork-backends.ts";
 import { type ArtworkResize, createArtworkHandler } from "./artwork-http.ts";
 import { storeArtworkOriginal } from "./artwork-store.ts";
+import { s3Url, testS3Store } from "./testing.ts";
 
 const alwaysReady = async () => true;
 
@@ -45,7 +47,12 @@ function respondWith(bytes: Uint8Array): typeof fetch {
     new Response(Buffer.from(bytes))) as typeof fetch;
 }
 
-async function seed(db: Database, root: string, bytes: Uint8Array) {
+async function seed(
+  db: Database,
+  root: string,
+  bytes: Uint8Array,
+  store: ArtworkStoreConfig = { backend: "colocated" },
+) {
   const [library] = await db
     .insert(libraries)
     .values({ name: "Movies", medium: "movies", rootPath: root })
@@ -65,19 +72,14 @@ async function seed(db: Database, root: string, bytes: Uint8Array) {
     item.id,
     poster,
     respondWith(bytes),
+    { store },
   );
   return { item, row };
 }
 
 async function withServer<T>(
   db: Database,
-  options: {
-    resize?: ArtworkResize;
-    maxCacheEntries?: number;
-    maxCacheBytes?: number;
-    maxConcurrentResizes?: number;
-    maxQueuedResizes?: number;
-  },
+  options: Parameters<typeof createArtworkHandler>[1],
   run: (base: string) => Promise<T>,
 ): Promise<T> {
   const server = startApiServer(alwaysReady, 0, {
@@ -91,6 +93,36 @@ async function withServer<T>(
 }
 
 describe.skipIf(!databaseUrl)("artwork http", () => {
+  for (const backend of ["colocated", "configured-path", "s3"] as const)
+    test.skipIf(backend === "s3" && !s3Url)(
+      `a fresh install serves artwork from the ${backend} store`,
+      () =>
+        withDatabase(async (db) => {
+          await migrateDatabase(db);
+          await withTempRoot(async (root) => {
+            await withTempRoot(async (path) => {
+              const store: ArtworkStoreConfig =
+                backend === "colocated"
+                  ? { backend }
+                  : backend === "configured-path"
+                    ? { backend, path }
+                    : testS3Store();
+              const { row } = await seed(db, root, png, store);
+              expect(row.backend).toBe(backend);
+              await withServer(db, { store }, async (base) => {
+                const response = await fetch(
+                  `${base}/api/artwork/${row.id}?width=4`,
+                );
+                expect(response.status).toBe(200);
+                expect(response.headers.get("content-type")).toBe("image/png");
+                const bytes = new Uint8Array(await response.arrayBuffer());
+                expect((await new Bun.Image(bytes).metadata()).width).toBe(4);
+              });
+            });
+          });
+        }),
+    );
+
   test("labels a re-encoded GIF with the output type", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

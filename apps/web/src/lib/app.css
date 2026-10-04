@@ -9,6 +9,10 @@
   --muted: oklch(48% 0.025 250deg);
   --signal: oklch(57% 0.17 255deg);
   --danger: oklch(52% 0.16 25deg);
+  --surface: oklch(91% 0.014 250deg);
+  --line: color-mix(in oklch, var(--ink) 16%, transparent);
+  --radius-poster: 8px;
+  --gutter: clamp(16px, 4vw, 40px);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -18,6 +22,7 @@
     --muted: oklch(70% 0.025 250deg);
     --signal: oklch(66% 0.17 255deg);
     --danger: oklch(70% 0.16 25deg);
+    --surface: oklch(24% 0.022 250deg);
   }
 }
 
@@ -141,6 +146,15 @@ fieldset {
 .failure p {
   margin: 0;
   color: var(--muted);
+}
+
+.poster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(140px, 25vw), 1fr));
+  gap: 24px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .muted {

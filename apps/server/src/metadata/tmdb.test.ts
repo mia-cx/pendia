@@ -5,11 +5,11 @@ const apiKey = "test-key";
 
 type Call = { input: RequestInfo | URL; init: RequestInit | undefined };
 
-function mockRequest(handler: () => Response) {
+function mockRequest(handler: (url: URL) => Response) {
   const calls: Call[] = [];
   const request = (async (input: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ input, init });
-    return handler();
+    return handler(new URL(String(input)));
   }) as typeof fetch;
   return { calls, request };
 }
@@ -165,6 +165,138 @@ describe("TMDB metadata provider", () => {
         kind: "movie",
       });
       expect(match?.confidence).toBe(1);
+    }
+  });
+
+  test("search matches a folder named with a translated title", async () => {
+    const translations: Record<string, unknown> = {
+      "/3/movie/278/translations": {
+        translations: [
+          { iso_639_1: "fr", data: { title: "Les Évadés" } },
+          { iso_639_1: "it", data: { title: "" } },
+          { iso_639_1: "ja", data: null },
+          { iso_639_1: "de", data: { title: "Die Verurteilten" } },
+        ],
+      },
+      "/3/movie/999/translations": {
+        translations: [{ iso_639_1: "de", data: { title: "Verurteilt" } }],
+      },
+    };
+    const { calls, request } = mockRequest((url) =>
+      url.pathname === "/3/search/movie"
+        ? Response.json({
+            results: [
+              {
+                id: 278,
+                title: "The Shawshank Redemption",
+                original_title: "The Shawshank Redemption",
+                release_date: "1994-09-23",
+              },
+              { id: 999, title: "Condemned", release_date: "1994-01-01" },
+            ],
+          })
+        : Response.json(translations[url.pathname]),
+    );
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    expect(
+      await provider.search({
+        title: "Die Verurteilten",
+        year: 1994,
+        kind: "movie",
+      }),
+    ).toEqual([
+      {
+        providerId: "278",
+        title: "The Shawshank Redemption",
+        year: 1994,
+        confidence: 1,
+      },
+      { providerId: "999", title: "Condemned", year: 1994, confidence: 0.7 },
+    ]);
+    expect(calls.map((call) => calledUrl(call).pathname).sort()).toEqual([
+      "/3/movie/278/translations",
+      "/3/movie/999/translations",
+      "/3/search/movie",
+    ]);
+    expect(calledUrl(calls[1]).searchParams.get("api_key")).toBe(apiKey);
+  });
+
+  test("search reads no translations when a plain title matches", async () => {
+    const { calls, request } = jsonRequest({
+      results: [
+        { id: 1, title: "Alien", release_date: "1979-05-25" },
+        { id: 2, title: "Aliens", release_date: "1986-07-18" },
+      ],
+    });
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    await provider.search({ title: "Alien", kind: "movie" });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a translated title shared by two candidates stays tied", async () => {
+    const { request } = mockRequest((url) => {
+      if (url.pathname === "/3/search/movie")
+        return Response.json({
+          results: [1, 2, 3].map((id) => ({
+            id,
+            title: `Movie ${id}`,
+            release_date: "2001-01-01",
+          })),
+        });
+      const title = url.pathname === "/3/movie/3/translations" ? "Anders" : "X";
+      return Response.json({ translations: [{ data: { title } }] });
+    });
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    const matches = await provider.search({
+      title: "x",
+      year: 2001,
+      kind: "movie",
+    });
+    expect(matches.map((match) => match.confidence)).toEqual([1, 1, 0.7]);
+  });
+
+  test("translation lookups cover the first five candidates and skip a missing movie", async () => {
+    const { calls, request } = mockRequest((url) => {
+      if (url.pathname === "/3/search/movie")
+        return Response.json({
+          results: [1, 2, 3, 4, 5, 6].map((id) => ({
+            id,
+            title: `Movie ${id}`,
+          })),
+        });
+      if (url.pathname === "/3/movie/1/translations")
+        return Response.json({ status_code: 34 }, { status: 404 });
+      return Response.json({ translations: [{ data: { title: "Gesucht" } }] });
+    });
+    const provider = createTmdbMetadataProvider(apiKey, request);
+    const matches = await provider.search({ title: "Gesucht", kind: "movie" });
+    expect(matches.map((match) => match.confidence)).toEqual([
+      0.6, 0.9, 0.9, 0.9, 0.9, 0.6,
+    ]);
+    expect(calls).toHaveLength(6);
+  });
+
+  test("rejects malformed translation bodies", async () => {
+    const malformed = [
+      "oops",
+      {},
+      { translations: "x" },
+      { translations: [null] },
+      { translations: [{ data: "x" }] },
+      { translations: [{ data: { title: 5 } }] },
+    ];
+    for (const body of malformed) {
+      const { request } = mockRequest((url) =>
+        Response.json(
+          url.pathname === "/3/search/movie"
+            ? { results: [{ id: 1, title: "Other" }] }
+            : body,
+        ),
+      );
+      const provider = createTmdbMetadataProvider(apiKey, request);
+      await expect(
+        provider.search({ title: "x", kind: "movie" }),
+      ).rejects.toThrow("Invalid TMDB response.");
     }
   });
 

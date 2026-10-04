@@ -119,7 +119,14 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
         await Bun.write(outsideFile, "keep");
         await symlink(join(folder, "outside"), join(root, "linked"));
         await symlink(outsideFile, join(root, "keep.txt"));
-        for (const path of ["linked/keep.txt", "keep.txt", "linked/new.txt"]) {
+        const outsideNew = join(folder, "outside", "new.txt");
+        await symlink(outsideNew, join(root, "dangling.txt"));
+        for (const path of [
+          "linked/keep.txt",
+          "keep.txt",
+          "linked/new.txt",
+          "dangling.txt",
+        ]) {
           await expect(files.read(library.id, path)).rejects.toThrow(
             "outside the library",
           );
@@ -131,6 +138,7 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
           );
         }
         expect(await Bun.file(outsideFile).text()).toBe("keep");
+        expect(await Bun.file(outsideNew).exists()).toBe(false);
         await files.write(library.id, "Extras/new.txt", new Uint8Array([1]));
         expect(await Bun.file(join(root, "Extras/new.txt")).bytes()).toEqual(
           new Uint8Array([1]),

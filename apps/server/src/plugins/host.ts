@@ -1,4 +1,4 @@
-import { realpath, rm, stat } from "node:fs/promises";
+import { lstat, realpath, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type {
   ArtworkProvider,
@@ -237,6 +237,13 @@ async function libraryPath(
       return real;
     } catch (error) {
       if (!isMissing(error)) throw error;
+      // realpath also says ENOENT for a dangling link, which still points
+      // somewhere; only a part that truly does not exist may be created.
+      const dangling = await lstat(existing).then(
+        () => true,
+        () => false,
+      );
+      if (dangling) throw outside();
       missing.unshift(basename(existing));
     }
   }

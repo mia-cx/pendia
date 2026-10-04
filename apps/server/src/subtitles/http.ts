@@ -3,7 +3,11 @@ import { readSessionToken } from "../auth/http.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { readTrackName, type StoredSubtitle, subtitleFolders } from "./store.ts";
+import {
+  readTrackName,
+  type StoredSubtitle,
+  subtitleFolders,
+} from "./store.ts";
 
 const routePattern =
   /^\/api\/subtitles\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([^/]+)$/i;
@@ -40,8 +44,7 @@ export function createSubtitleHandler(db: Database) {
       // A track may sit in any asset root; the home root holds the newest.
       const folders = await subtitleFolders(db, itemId);
       const [first] = folders;
-      if (first === undefined)
-        return failure(404, "No such subtitle track.");
+      if (first === undefined) return failure(404, "No such subtitle track.");
       await requirePermission(db, caller.user.id, "view", first.libraryId);
       for (const folder of folders) {
         const file = Bun.file(folder.file(track));

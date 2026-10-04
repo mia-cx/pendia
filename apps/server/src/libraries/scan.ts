@@ -37,11 +37,7 @@ import {
   updateItemCanonicalFolder,
 } from "./changes.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
-import {
-  type LibraryRoot,
-  type RootedPath,
-  rootedKey,
-} from "./roots.ts";
+import { type LibraryRoot, type RootedPath, rootedKey } from "./roots.ts";
 import { persistScanTimelines } from "./timelines.ts";
 import {
   type LibraryFile,

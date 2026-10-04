@@ -45,7 +45,10 @@ export function trackName(track: StoredSubtitle): string {
  */
 export async function subtitleFolders(db: Database, itemId: string) {
   const [row] = await db
-    .select({ libraryId: items.libraryId, canonicalFolder: items.canonicalFolder })
+    .select({
+      libraryId: items.libraryId,
+      canonicalFolder: items.canonicalFolder,
+    })
     .from(items)
     .where(eq(items.id, itemId));
   if (row === undefined) throw new AuthError("NOT_FOUND");

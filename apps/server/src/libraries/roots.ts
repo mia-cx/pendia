@@ -123,3 +123,26 @@ export async function assetRoots(
   const roots = await rootsOf(db, item.libraryId);
   return [home, ...roots.filter((root) => root.id !== home.id)];
 }
+
+/**
+ * The first non-null answer across candidates, treating a throw as "not
+ * here". If every candidate threw, the first error is rethrown.
+ */
+export async function firstInRoots<Candidate, Found>(
+  candidates: readonly Candidate[],
+  attempt: (candidate: Candidate) => Promise<Found | null>,
+): Promise<Found | null> {
+  let firstError: unknown;
+  let answered = false;
+  for (const candidate of candidates) {
+    try {
+      const found = await attempt(candidate);
+      answered = true;
+      if (found !== null) return found;
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (!answered && firstError !== undefined) throw firstError;
+  return null;
+}

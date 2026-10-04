@@ -3,6 +3,7 @@ import { readSessionToken } from "../auth/http.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
+import { firstInRoots } from "../libraries/roots.ts";
 import {
   readTrackName,
   type StoredSubtitle,
@@ -46,18 +47,18 @@ export function createSubtitleHandler(db: Database) {
       const [first] = folders;
       if (first === undefined) return failure(404, "No such subtitle track.");
       await requirePermission(db, caller.user.id, "view", first.libraryId);
-      for (const folder of folders) {
+      const found = await firstInRoots(folders, async (folder) => {
         const file = Bun.file(folder.file(track));
-        if (await file.exists())
-          return new Response(file, {
-            headers: {
-              "content-type": contentTypes[track.format],
-              "cache-control": "private, no-cache",
-              "x-content-type-options": "nosniff",
-            },
-          });
-      }
-      return failure(404, "No such subtitle track.");
+        return (await file.exists()) ? file : null;
+      });
+      if (found === null) return failure(404, "No such subtitle track.");
+      return new Response(found, {
+        headers: {
+          "content-type": contentTypes[track.format],
+          "cache-control": "private, no-cache",
+          "x-content-type-options": "nosniff",
+        },
+      });
     } catch (error) {
       if (error instanceof AuthError)
         return failure(error.status, error.message);

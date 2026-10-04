@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createORPCClient } from "@orpc/client";
@@ -10,13 +10,14 @@ import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { providerIds, settings } from "../db/schema/index.ts";
+import { items, providerIds, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
+import { addRoot } from "../libraries/testing.ts";
 import {
   createVideoFixture,
   withVideoFixture,
@@ -327,4 +328,34 @@ describe.skipIf(!databaseUrl)("stored subtitle tracks", () => {
         }
       }),
     ));
+
+  test.skipIf(process.getuid?.() === 0)(
+    "an unsearchable root does not hide tracks in the readable one",
+    () =>
+      withDatabase((db) =>
+        withScannedMovie(db, async ({ itemId }) => {
+          const [item] = await db
+            .select({ libraryId: items.libraryId })
+            .from(items);
+          if (!item) throw new Error("Item missing.");
+          const extra = await mkdtemp(join(tmpdir(), "pendia-sub-extra-"));
+          await addRoot(db, item.libraryId, extra);
+          await writeSubtitle(
+            db,
+            itemId,
+            { language: "en", format: "srt" },
+            cue,
+          );
+          try {
+            await chmod(extra, 0o000);
+            expect(await listSubtitles(db, itemId)).toEqual([
+              { language: "en", format: "srt" },
+            ]);
+          } finally {
+            await chmod(extra, 0o755);
+            await rm(extra, { recursive: true, force: true });
+          }
+        }),
+      ),
+  );
 });

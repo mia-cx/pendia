@@ -1116,6 +1116,82 @@ describe.skipIf(!databaseUrl)("artwork and subtitles across roots", () => {
       });
     }));
 
+  test("a missing root directory does not hide an original in another root", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const admin = await setupAdmin(db, {
+        username: "admin",
+        password: "admin-pass",
+      });
+      await withTempRoot(async (dir) => {
+        const rootA = join(dir, "a");
+        const rootB = join(dir, "b");
+        const folder = "Alien (1979)";
+        await mkdir(join(rootA, folder), { recursive: true });
+        await mkdir(join(rootB, folder), { recursive: true });
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: rootA,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const rootBId = await addRoot(db, library.id, rootB);
+        const item = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Alien",
+          year: 1979,
+          canonicalFolder: folder,
+          extension: {},
+        });
+        const [version] = await db
+          .insert(versions)
+          .values({
+            itemId: item.id,
+            itemKind: "movie",
+            libraryId: library.id,
+            label: "Alien",
+            format: "video",
+            bytes: 1n,
+          })
+          .returning();
+        if (!version) throw new Error("Version missing.");
+        for (const [order, rootId] of [library.rootId, rootBId].entries())
+          await db.insert(files).values({
+            versionId: version.id,
+            itemId: item.id,
+            libraryId: library.id,
+            rootId,
+            path: `${folder}/Alien.mkv`,
+            order,
+            bytes: 1n,
+            modifiedAt: new Date(0),
+          });
+
+        // Root B first makes B the home root, so the original lands there.
+        await updateLibrary(db, admin.id, library.id, {
+          roots: [
+            { id: rootBId, path: rootB },
+            { id: library.rootId, path: rootA },
+          ],
+        });
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        await access(join(rootB, row.storageKey));
+        await updateLibrary(db, admin.id, library.id, {
+          roots: [
+            { id: library.rootId, path: rootA },
+            { id: rootBId, path: rootB },
+          ],
+        });
+
+        // Root A gone from disk: its backend throws, root B still answers.
+        await rm(rootA, { recursive: true });
+        const original = await readArtworkOriginal(db, row.id);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+      });
+    }));
+
   test("removing the root an Item lived in removes its artwork there", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

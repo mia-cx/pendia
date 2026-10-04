@@ -5,9 +5,13 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { artwork, items, libraries } from "../db/schema/index.ts";
 import type { DeletedArtworkFile } from "../db/tree.ts";
-import { assetRoots, homeRoot, rootsOf } from "../libraries/roots.ts";
 import {
-  type ArtworkBackend,
+  assetRoots,
+  firstInRoots,
+  homeRoot,
+  rootsOf,
+} from "../libraries/roots.ts";
+import {
   type ArtworkBackendName,
   type ArtworkOpen,
   type ArtworkStoreConfig,
@@ -49,15 +53,18 @@ async function originalExists(
   backendName: ArtworkBackendName,
   storageKey: string,
 ): Promise<boolean> {
-  const backends: (ArtworkBackend | null)[] =
-    backendName === "colocated"
-      ? (await assetRoots(db, itemId)).map((root) =>
-          artworkBackend(store, backendName, root.path),
-        )
-      : [artworkBackend(store, backendName, "")];
-  for (const backend of backends)
-    if (backend !== null && (await backend.exists(storageKey))) return true;
-  return false;
+  if (backendName === "colocated")
+    return (
+      (await firstInRoots(await assetRoots(db, itemId), async (root) =>
+        (await artworkBackend(store, backendName, root.path)?.exists(
+          storageKey,
+        )) === true
+          ? true
+          : null,
+      )) ?? false
+    );
+  const backend = artworkBackend(store, backendName, "");
+  return backend !== null && (await backend.exists(storageKey));
 }
 
 /** Stores one selected artwork original in the process artwork store. */
@@ -355,7 +362,6 @@ export async function readArtworkOriginal(
       .from(artwork)
       .where(eq(artwork.id, artworkId));
     if (!row || row.itemId === null || !row.selected) return null;
-    let backends: (ArtworkBackend | null)[];
     if (row.backend === "colocated") {
       const roots = await assetRoots(db, row.itemId).catch((error: unknown) => {
         if (error instanceof AuthError) return null;
@@ -363,14 +369,21 @@ export async function readArtworkOriginal(
       });
       if (roots === null) return null;
       // The home root moved since the write: try each root the file may be in.
-      backends = roots.map((root) =>
-        artworkBackend(store, row.backend, root.path, openFile),
+      const bytes = await firstInRoots(
+        roots,
+        async (root) =>
+          (await artworkBackend(store, "colocated", root.path, openFile)?.read(
+            row.storageKey,
+          )) ?? null,
       );
+      if (bytes !== null) return { bytes, artwork: row };
     } else {
-      backends = [artworkBackend(store, row.backend, "", openFile)];
-    }
-    for (const backend of backends) {
-      const bytes = await backend?.read(row.storageKey);
+      const bytes = await artworkBackend(
+        store,
+        row.backend,
+        "",
+        openFile,
+      )?.read(row.storageKey);
       if (bytes != null) return { bytes, artwork: row };
     }
     // A concurrent replacement may have removed this generation; follow it.

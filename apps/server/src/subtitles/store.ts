@@ -78,13 +78,20 @@ export async function listSubtitles(
 ): Promise<StoredSubtitle[]> {
   const tracks = new Map<string, StoredSubtitle>();
   const prefix = `${itemId}.`;
+  let firstError: unknown;
+  let answered = false;
   for (const folder of await subtitleFolders(db, itemId)) {
     let names: string[];
     try {
       names = await readdir(folder.path);
+      answered = true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        answered = true;
+        continue;
+      }
+      firstError ??= error;
+      continue;
     }
     for (const name of names) {
       if (!name.startsWith(prefix)) continue;
@@ -92,6 +99,8 @@ export async function listSubtitles(
       if (track !== null) tracks.set(trackName(track), track);
     }
   }
+  // A folder that cannot be read counts as none; only if none could is it an error.
+  if (!answered && firstError !== undefined) throw firstError;
   return [...tracks.values()].sort((a, b) =>
     a.language.localeCompare(b.language),
   );

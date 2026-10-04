@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { initials, isCurrent, navigation } from "./shell.ts";
+import { initials, isCurrent, isCurrentSection, navigation } from "./shell.ts";
 
 const libraries = [
   { id: "fam", name: "Family", medium: "movies" as const },
@@ -44,16 +44,29 @@ describe("shell navigation", () => {
     expect(isCurrent(new URL("http://x/?q=a"), "/")).toBe(true);
   });
 
-  test("a section is current on its path and sub-paths, a library child wins over it", () => {
+  test("a section is current on its path and sub-paths, filtered or not", () => {
     const section = "/movies";
     const child = "/movies?library=fam";
     expect(isCurrent(new URL("http://x/movies"), section)).toBe(true);
     expect(isCurrent(new URL("http://x/movies/abc"), section)).toBe(true);
     const filtered = new URL("http://x/movies?library=fam");
     expect(isCurrent(filtered, child)).toBe(true);
-    expect(isCurrent(filtered, section)).toBe(false);
+    expect(isCurrent(filtered, section)).toBe(true);
     expect(isCurrent(new URL("http://x/movies?library=other"), child)).toBe(
       false,
+    );
+  });
+
+  test("a visible library child takes the highlight; hidden children leave it on the section", () => {
+    const movies = navigation(true, libraries).find(
+      (e) => e.label === "Movies",
+    );
+    if (!movies) throw new Error("Movies entry missing");
+    const filtered = new URL("http://x/movies?library=fam");
+    expect(isCurrentSection(filtered, movies, true)).toBe(false);
+    expect(isCurrentSection(filtered, movies, false)).toBe(true);
+    expect(isCurrentSection(new URL("http://x/movies"), movies, true)).toBe(
+      true,
     );
   });
 

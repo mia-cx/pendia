@@ -71,7 +71,15 @@ export function isCurrent(url: URL, href: string): boolean {
     return url.pathname === path && url.searchParams.get("library") === wanted;
   if (url.pathname !== path && !url.pathname.startsWith(`${path}/`))
     return false;
-  // A section href loses to a library child whenever the URL is filtered.
-  if (url.searchParams.get("library") !== null) return false;
   return true;
+}
+
+/** Whether a nav entry is current; a visible library child that matches takes the highlight instead. */
+export function isCurrentSection(
+  url: URL,
+  entry: NavEntry,
+  childrenShown: boolean,
+): boolean {
+  if (!isCurrent(url, entry.href)) return false;
+  return !(childrenShown && entry.children.some((c) => isCurrent(url, c.href)));
 }

@@ -11,7 +11,12 @@ import { page } from "$app/state";
 import AccountMenu from "$lib/components/AccountMenu.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
-import { isCurrent, type NavEntry, navigation } from "$lib/shell.ts";
+import {
+  isCurrent,
+  isCurrentSection,
+  type NavEntry,
+  navigation,
+} from "$lib/shell.ts";
 import type { LayoutProps } from "./$types";
 
 const { data, children }: LayoutProps = $props();
@@ -73,7 +78,7 @@ onNavigate((nav) => {
 
 {#snippet navRow(entry: NavEntry, children: boolean)}
   {@const Icon = icons[entry.icon]}
-  {@const current = isCurrent(page.url, entry.href)}
+  {@const current = isCurrentSection(page.url, entry, children && !collapsed)}
   <Tooltip.Root disabled={!collapsed}>
     <Tooltip.Trigger>
       {#snippet child({ props })}
@@ -239,7 +244,7 @@ onNavigate((nav) => {
   >
     {#each tabs as tab (tab.href)}
       {@const Icon = icons[tab.icon]}
-      {@const current = isCurrent(page.url, tab.href)}
+      {@const current = isCurrentSection(page.url, tab, false)}
       <a
         href={tab.href}
         aria-current={current ? "page" : undefined}

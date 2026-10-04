@@ -6,8 +6,8 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
 
 ## Acceptance criteria
 
-- [ ] On a clean machine, `docker compose up` from the README reaches the admin wizard.
-- [ ] Readiness is false until migrations and the trial complete.
+- [x] On a clean machine, `docker compose up` from the README reaches the admin wizard.
+- [x] Readiness is false until migrations and the trial complete.
 - [ ] CI publishes the image on a tag and the image size is recorded here. (Mia pushes the first tag; the publish job is ready.)
 
 ## TODOs
@@ -22,8 +22,11 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
   - Validation: a test or a manual run with a bad `DATABASE_URL` prints one JSON line. Done: `DATABASE_URL=not-a-url bun src/index.ts --role api` and `--role nope` each print one `server.failed` line and exit 1.
 - [x] Write `docs/operations.md`: roles, environment reference, health, log format and releases. Give the README a quick start and link the document; move the artwork store table there.
   - Validation: every variable the server reads appears once; links resolve. Done: the 15 variables `rg` finds outside tests are all in the table, and the README, server README, compose and anchor links resolve.
-- [ ] Follow the README quick start in an empty directory and reach the admin wizard; screenshot it. Run the full gate and record the results here.
+- [x] Follow the README quick start in an empty directory and reach the admin wizard; screenshot it. Run the full gate and record the results here.
   - Validation: wizard screenshot; `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `bun test` with and without `DATABASE_URL`.
+  - Quick start: in an empty folder, `git clone --branch feat/46-release` (the branch, since `main` lacks the change), then `PENDIA_HOST_PORT=3846 docker compose -p pendia-46 up -d`. The GHCR pull answered `denied`, compose built the image from the clone, and `/readyz` answered ready. `/` opened the setup wizard: https://i.mia.cx/file/2026/10/pendia-46-wizard-compose.png. Inside the container `/media` was read-only to `pendia` and `/var/lib/pendia` was writable, which confirms the artwork fallback is needed. Torn down with `down -v`; the image and the 19 build cache entries the build made were removed by id.
+  - Local image: 888 MB on disk, 243 MB compressed.
+  - Gate at 1972ce0: install no changes; lint clean (376 files); check 6 of 6; build 4 of 4. With DATABASE_URL: 1316 pass, 3 skip, 0 fail. Without: 774 pass, 563 skip, 0 fail.
 
 ## Notes
 

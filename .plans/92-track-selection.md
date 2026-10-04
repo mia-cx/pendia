@@ -25,9 +25,22 @@ Decisions from the lead:
 - [x] Planning and API: `PlanInput` takes both indexes and checks them against the File's Streams. Stored rungs, which carry the first audio Stream, are refused for any other audio choice. The plan answers with the chosen indexes and the File's audio and subtitle Streams. Validation: `api/transcode.test.ts` on Postgres with the issue's two fixtures, plus a 400 for a bad index in `api/playback.test.ts`.
 - [x] Jellyfin: PlaybackInfo reads `AudioStreamIndex` and `SubtitleStreamIndex` from the body or query, passes them to the plan, keeps them on the `TranscodingUrl`, and answers `DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` from the selection. Validation: `jellyfin/streaming.test.ts` on Postgres.
 - [x] Web player: an Audio menu and a Subtitles menu beside the Version menu. A change re-plans at the current position and keeps the choice across retries. Validation: web `check`, a unit test for the track names, and screenshots at 1440x900 and 390x844 in light and dark with the menus open.
-- [ ] Docs and full gate: `docs/spec/playback.md` and `docs/spec/jellyfin-layer.md` name the selection. Validation: the commands in the brief, results below.
+- [x] Docs and full gate: `docs/spec/playback.md` and `docs/spec/jellyfin-layer.md` name the selection. Validation: the commands in the brief, results below.
 
 ## Notes
 
 - `remuxArguments` has no production caller today (live sessions run `liveRunArguments` for remux too), but it maps `0:a:0` the same way, so it takes the selection as well.
 - Stored rungs encode `0:a:0`. A selection resolved to any other audio Stream, including a default-flagged second Stream with no explicit choice, plays live.
+- The decision now holds one audio decision (null without audio) and one subtitle decision per selected Stream, each with its `stream` position, plus `selection`. Unselected Streams no longer change the method: a File with AAC first and TrueHD second remuxes instead of transcoding.
+- The plan answers `audioStreamIndex`, `subtitleStreamIndex` (the subtitle the session shows: the choice, else a burned one, else the default WebVTT rendition) and the Version's `audioStreams` and `subtitleStreams`, which the web menus read.
+- Jellyfin: a negative `AudioStreamIndex` asks for the default. Subtitle `DeliveryMethod` keeps describing how each Stream would arrive if chosen, as Jellyfin's own server does.
+- Checked in headless Chromium 154 against a two-audio, SRT + PGS fixture: with no choice the PGS burns in (transcode); Japanese audio keeps the burn-in; Off remuxes with no text tracks; the Dutch SRT remuxes and shows as the one text track.
+
+### Gate (2026-10-04, at the docs commit, `origin/main` unchanged)
+
+- `bun install --frozen-lockfile`: ok
+- `bun run lint`: ok
+- `bun run check`: ok
+- `bun run build`: ok
+- `DATABASE_URL=… bun test`: 1349 pass, 3 skip (S3 tests without `TEST_S3_URL`), 0 fail
+- `bun test` without `DATABASE_URL`: 789 pass, 581 skip, 0 fail

@@ -1,9 +1,9 @@
 import type { MetadataProvider } from "@pendia/plugin-api";
-import { and, eq } from "drizzle-orm";
+import { and, eq, lte, sql } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { episodes, items, jobs, seasons } from "../db/schema/index.ts";
+import { episodes, items, jobs, seasons, shows } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { readProviderKey } from "../providers/keys.ts";
@@ -16,12 +16,13 @@ import { readMetadataSettings } from "./settings.ts";
 import { createTmdbMetadataProvider } from "./tmdb.ts";
 import { createTvdbMetadataProvider } from "./tvdb.ts";
 
-/** Queues one Item's provider-fetch, or returns the one already queued. */
+/** Queues one Item's provider-fetch, or returns the due one already queued. */
 export async function queueProviderFetch(db: Database, itemId: string) {
   const concurrencyKey = `provider:${itemId}`;
   // A running fetch never blocks: a pending Item after a provider change
-  // earns one queued successor that replays the fetch.
-  const [queued] = await db
+  // earns one queued successor that replays the fetch. A weekly refresh
+  // queued for later is not due yet, so it never absorbs a fetch.
+  const [due] = await db
     .select()
     .from(jobs)
     .where(
@@ -29,16 +30,47 @@ export async function queueProviderFetch(db: Database, itemId: string) {
         eq(jobs.type, "provider-fetch"),
         eq(jobs.concurrencyKey, concurrencyKey),
         eq(jobs.state, "queued"),
+        lte(jobs.runAfter, sql`statement_timestamp()`),
       ),
     )
     .limit(1);
   return (
-    queued ??
+    due ??
     createJobQueue(db).enqueue(
       { type: "provider-fetch", itemId },
       { concurrencyKey },
     )
   );
+}
+
+const weekMs = 7 * 24 * 60 * 60 * 1000;
+
+/** Keeps exactly one weekly refresh queued for a continuing Show and none for any other. */
+export async function scheduleWeeklyRefresh(db: Database, showId: string) {
+  const concurrencyKey = `provider:${showId}`;
+  await db.transaction(async (tx) => {
+    // The Show row lock serializes two fetches of one Show finishing at once.
+    const [show] = await tx
+      .select({ status: shows.status })
+      .from(shows)
+      .where(eq(shows.itemId, showId))
+      .for("update");
+    await tx
+      .delete(jobs)
+      .where(
+        and(
+          eq(jobs.type, "provider-fetch"),
+          eq(jobs.concurrencyKey, concurrencyKey),
+          eq(jobs.state, "queued"),
+          sql`${jobs.payload}->>'weekly' = 'true'`,
+        ),
+      );
+    if (show?.status !== "continuing") return;
+    await createJobQueue(tx).enqueue(
+      { type: "provider-fetch", itemId: showId, weekly: true },
+      { concurrencyKey, runAfter: new Date(Date.now() + weekMs) },
+    );
+  });
 }
 
 async function metadataProviders(
@@ -129,23 +161,30 @@ export function registerMetadataJobs(
       .select()
       .from(items)
       .where(eq(items.id, payload.itemId));
+    // A deleted Show's weekly refresh has nothing left to do.
+    if (!item && payload.weekly) return;
     if (!item) throw new AuthError("NOT_FOUND");
     const publish = () =>
       publishEvent(db, { kind: "library.changed", libraryId: item.libraryId });
-    const providers = await metadataProviders(db, request);
-    const matched = await fetchItem(item, providers, publish);
-    if (!matched || item.kind !== "show") return;
-    // One job covers the whole Show, so its Seasons and Episodes publish
-    // one event at the end instead of one each.
     try {
-      for (const child of await showChildren(db, item.id))
-        await fetchItem(child, providers, async () => {});
-    } catch (error) {
-      // Pending lets the next scan retry the tree after this job gives up.
-      await markPending(item.id);
-      throw error;
+      const providers = await metadataProviders(db, request);
+      const matched = await fetchItem(item, providers, publish);
+      if (!matched || item.kind !== "show") return;
+      // One job covers the whole Show, so its Seasons and Episodes publish
+      // one event at the end instead of one each.
+      try {
+        for (const child of await showChildren(db, item.id))
+          await fetchItem(child, providers, async () => {});
+      } catch (error) {
+        // Pending lets the next scan retry the tree after this job gives up.
+        await markPending(item.id);
+        throw error;
+      } finally {
+        await publish();
+      }
     } finally {
-      await publish();
+      // A failed fetch still keeps a continuing Show's weekly chain alive.
+      if (item.kind === "show") await scheduleWeeklyRefresh(db, item.id);
     }
   });
 }

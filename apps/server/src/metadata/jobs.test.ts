@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -15,6 +15,7 @@ import {
   libraries,
   providerIds,
   settings,
+  shows,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
@@ -23,8 +24,8 @@ import { createJobRegistry } from "../jobs/registry.ts";
 import { registerLibraryJobs } from "../libraries/jobs.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { setProviderKey } from "../providers/keys.ts";
-import { registerMetadataJobs } from "./jobs.ts";
-import { tvdbResponse } from "./tvdb-fixtures.ts";
+import { queueProviderFetch, registerMetadataJobs } from "./jobs.ts";
+import { tvdbResponse, tvdbSeries } from "./tvdb-fixtures.ts";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
@@ -908,6 +909,115 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         });
         // The Show's own event, then one for the whole tree.
         expect(await db.select().from(events)).toHaveLength(3);
+      });
+    }));
+
+  test("a continuing Show keeps exactly one fetch queued a week ahead", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { show } = await showFixture(db, root);
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, tvdbRequest());
+        const queuedFetches = () =>
+          db
+            .select()
+            .from(jobs)
+            .where(
+              and(eq(jobs.type, "provider-fetch"), eq(jobs.state, "queued")),
+            );
+        for (let run = 0; run < 2; run += 1) {
+          const before = Date.now();
+          const job = await createJobQueue(db).enqueue({
+            type: "provider-fetch",
+            itemId: show.id,
+          });
+          await registry.run(job);
+          await db.delete(jobs).where(eq(jobs.id, job.id));
+          const [weekly, ...rest] = await queuedFetches();
+          expect(rest).toHaveLength(0);
+          expect(weekly?.payload).toEqual({
+            type: "provider-fetch",
+            itemId: show.id,
+            weekly: true,
+          });
+          const delay = (weekly?.runAfter.getTime() ?? 0) - before;
+          expect(delay).toBeGreaterThanOrEqual(7 * 24 * 60 * 60 * 1000);
+          expect(delay).toBeLessThan(7 * 24 * 60 * 60 * 1000 + 60_000);
+        }
+        // A scan never coalesces onto a refresh that is not due yet.
+        const fresh = await queueProviderFetch(db, show.id);
+        expect(fresh.payload).toEqual({
+          type: "provider-fetch",
+          itemId: show.id,
+        });
+        expect(await queuedFetches()).toHaveLength(2);
+        expect((await queueProviderFetch(db, show.id)).id).toBe(fresh.id);
+      });
+    }));
+
+  test("an ended Show drops its weekly refresh, and a failed fetch keeps a continuing one", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { show } = await showFixture(db, root);
+        let status = "Continuing";
+        let fail = false;
+        const base = tvdbRequest();
+        const request = (async (
+          input: RequestInfo | URL,
+          init?: RequestInit,
+        ) => {
+          const url = new URL(String(input));
+          if (fail && url.pathname.endsWith("/extended"))
+            return new Response("down", { status: 503 });
+          if (url.pathname.endsWith("/extended"))
+            return Response.json({
+              data: { ...tvdbSeries, status: { name: status } },
+            });
+          return base(input, init);
+        }) as typeof fetch;
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request);
+        const runFetch = async () => {
+          const job = await createJobQueue(db).enqueue({
+            type: "provider-fetch",
+            itemId: show.id,
+          });
+          try {
+            await registry.run(job);
+          } finally {
+            await db.delete(jobs).where(eq(jobs.id, job.id));
+          }
+        };
+        const weeklyCount = async () =>
+          (await db.select().from(jobs)).filter(
+            (job) =>
+              job.payload.type === "provider-fetch" && job.payload.weekly,
+          ).length;
+
+        await runFetch();
+        expect(await weeklyCount()).toBe(1);
+        fail = true;
+        await expect(runFetch()).rejects.toThrow(
+          "TVDB request failed with status 503.",
+        );
+        expect(await weeklyCount()).toBe(1);
+        fail = false;
+        status = "Ended";
+        await runFetch();
+        expect(await weeklyCount()).toBe(0);
+        expect(
+          await db.select().from(shows).where(eq(shows.itemId, show.id)),
+        ).toMatchObject([{ status: "ended" }]);
+
+        await db.delete(items).where(eq(items.id, show.id));
+        const orphan = await createJobQueue(db).enqueue({
+          type: "provider-fetch",
+          itemId: show.id,
+          weekly: true,
+        });
+        await registry.run(orphan);
       });
     }));
 

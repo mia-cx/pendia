@@ -187,6 +187,26 @@ export function localScanSource(
   };
 }
 
+/** Finds the Show that owns any of these Files: a queued move re-paths Files before the scan finds their Show. */
+async function findShowOwningFiles(
+  tx: Transaction,
+  libraryId: string,
+  paths: readonly string[],
+) {
+  if (paths.length === 0) return undefined;
+  const [owner] = await tx
+    .select({ item: items })
+    .from(files)
+    .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
+    .innerJoin(
+      items,
+      and(eq(items.id, itemAncestors.ancestorId), eq(items.kind, "show")),
+    )
+    .where(and(eq(files.libraryId, libraryId), inArray(files.path, [...paths])))
+    .limit(1);
+  return owner?.item;
+}
+
 /** Deletes leaf Items still holding no Versions after queued file deletes. */
 async function deleteEmptiedItems(
   tx: Transaction,
@@ -541,7 +561,11 @@ export async function scanShowDirectory(
           eq(items.canonicalFolder, group.canonicalFolder),
         ),
       );
-    const found = await findItemByProviderIds(tx, libraryId, mergedProviderIds);
+    const found =
+      (await findItemByProviderIds(tx, libraryId, mergedProviderIds)) ??
+      (existingShow
+        ? undefined
+        : await findShowOwningFiles(tx, libraryId, [...memberByPath.keys()]));
     if (existingShow && found && existingShow.id !== found.id)
       throw new AuthError("CONFLICT");
     let showId: string;

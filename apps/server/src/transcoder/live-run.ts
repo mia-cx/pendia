@@ -212,12 +212,16 @@ export function liveRunArguments(run: LiveRun) {
     "-individual_header_trailer",
     "1",
   );
-  const interior = run.boundariesSeconds.slice(1, -1);
-  if (interior.length > 0) {
+  // The segment muxer measures cut times from the run's first frame and takes
+  // the list from its first entry; -segment_start_number only names files. So
+  // a run lists the boundaries after its start, relative to that start.
+  const start = run.boundariesSeconds[run.startIndex] ?? 0;
+  const cuts = run.boundariesSeconds.slice(run.startIndex + 1, -1);
+  if (cuts.length > 0) {
     // Cut times are floored so a keyframe at the boundary falls inside its segment.
     args.push(
       "-segment_times",
-      interior.map((time) => `${Math.floor(time * 1e6)}us`).join(","),
+      cuts.map((time) => `${Math.floor((time - start) * 1e6)}us`).join(","),
     );
   }
   args.push(

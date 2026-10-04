@@ -190,17 +190,23 @@ describe("liveRunArguments", () => {
       expect(args.at(-1)).toBe("/run/%d.m4s");
     });
 
-    test("a restart seeks before the input and keeps every cut time", () => {
-      const args = liveRunArguments(base({ startIndex: 2 }));
+    test("a restart seeks before the input and cuts relative to its start", () => {
+      const args = liveRunArguments(
+        base({ startIndex: 1, boundariesSeconds: [0, 5, 8, 12, 16] }),
+      );
       const seek = args.indexOf("-ss");
       expect(args[seek - 2]).toBe("-seek_timestamp");
       expect(args[seek - 1]).toBe("1");
-      expect(args[seek + 1]).toBe("6000000us");
+      expect(args[seek + 1]).toBe("5000000us");
       expect(seek).toBeLessThan(args.indexOf("-i"));
-      expect(after(args, "-segment_times")).toBe(
-        "3000000us,6000000us,9000000us",
+      expect(after(args, "-segment_times")).toBe("3000000us,7000000us");
+      expect(after(args, "-segment_start_number")).toBe("1");
+    });
+
+    test("a restart in the last segment lists no cut times", () => {
+      expect(liveRunArguments(base({ startIndex: 3 }))).not.toContain(
+        "-segment_times",
       );
-      expect(after(args, "-segment_start_number")).toBe("2");
     });
 
     test("a throttled run passes the read rate before the input", () => {
@@ -618,6 +624,52 @@ describe("live runs", () => {
     expect((await probeFormat(joined)).startTime).toBeCloseTo(6, 1);
     expect((await ffprobeKeyframeTimes(joined))[0]).toBeCloseTo(6, 3);
   }, 30_000);
+
+  test("a restart on an uneven timeline cuts every later segment at its boundary", async () => {
+    // Keyframes at 0, 5, 8 and 12 s: equal segments would hide a misplaced cut.
+    const uneven = join(dir, "uneven.mkv");
+    await runProcess([
+      "ffmpeg",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=320x180:r=25:d=16",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-force_key_frames",
+      "0,5,8,12",
+      "-g",
+      "1000",
+      "-sc_threshold",
+      "0",
+      uneven,
+    ]);
+    const timeline = [0, 5, 8, 12, 16];
+    for (const [name, video] of [
+      ["uneven-copy", copy()],
+      [
+        "uneven-encode",
+        transcode({ width: 320, height: 180, level: null, maxFrameRate: null }),
+      ],
+    ] as const) {
+      const restart = await runToEnd(name, {
+        inputPath: uneven,
+        boundariesSeconds: timeline,
+        startIndex: 1,
+        video,
+      });
+      expect(restart.segments).toEqual([1, 2, 3]);
+      for (const index of restart.segments) {
+        const { pts } = await firstVideoPts(await restart.served(index));
+        expect(pts).toBeCloseTo(timeline[index] ?? -1, 3);
+      }
+    }
+  }, 60_000);
 
   test.skipIf(!hasLibx265)(
     "an HEVC source transcodes to H.264 cut exactly on the timeline",

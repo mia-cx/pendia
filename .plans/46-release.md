@@ -18,8 +18,8 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
   - Validation: `docker compose config` and `docker compose -f compose.watcher.yaml config` resolve. Done: both resolve, and so does the test override.
 - [x] CI: the `image` job records the image size and the ffmpeg version in the run summary; a `publish` job pushes the image to GHCR on `v*` tags after `checks` and `image` pass.
   - Validation: the PR's `image` job shows the size; the `publish` job is skipped on the PR.
-- [ ] Log a failed startup as a JSON line like every other line.
-  - Validation: a test or a manual run with a bad `DATABASE_URL` prints one JSON line.
+- [x] Log a failed startup as a JSON line like every other line.
+  - Validation: a test or a manual run with a bad `DATABASE_URL` prints one JSON line. Done: `DATABASE_URL=not-a-url bun src/index.ts --role api` and `--role nope` each print one `server.failed` line and exit 1.
 - [ ] Write `docs/operations.md`: roles, environment reference, health, log format and releases. Give the README a quick start and link the document; move the artwork store table there.
   - Validation: every variable the server reads appears once; links resolve.
 - [ ] Follow the README quick start in an empty directory and reach the admin wizard; screenshot it. Run the full gate and record the results here.

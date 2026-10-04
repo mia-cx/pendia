@@ -180,6 +180,9 @@ export const sessionRegistry = pgTable(
     state: playbackState("state").notNull(),
     transcoderNodeId: uuid("transcoder_node_id"),
     decision: jsonb("decision").$type<SessionDecision>(),
+    // The app and device that planned the session; an API key has no device.
+    clientName: text("client_name"),
+    deviceName: text("device_name"),
     createdAt: instant("created_at").notNull().defaultNow(),
     lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
   },

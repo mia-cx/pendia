@@ -1,5 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { Schema } from "effect";
+import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { issuePlaybackToken } from "../auth/playback-tokens.ts";
@@ -8,9 +9,11 @@ import { readAuthSettings } from "../auth/settings.ts";
 import { requestIdentity } from "../auth/transport.ts";
 import type { Database } from "../db/client.ts";
 import {
+  apiKeys,
   files,
   items,
   sessionRegistry,
+  sessions,
   settings,
   streams,
   userSettings,
@@ -207,6 +210,27 @@ async function userBitrateCap(
   return cap;
 }
 
+/** Names the app and device behind a caller's credential; an API key names the client only. */
+async function callerClient(db: Database, caller: Caller) {
+  if (caller.credential.kind === "api-key") {
+    const [key] = await db
+      .select({ name: apiKeys.name })
+      .from(apiKeys)
+      .where(eq(apiKeys.id, caller.credential.id))
+      .limit(1);
+    return { clientName: key?.name ?? null, deviceName: null };
+  }
+  const [session] = await db
+    .select({
+      clientName: sessions.clientName,
+      deviceName: sessions.deviceName,
+    })
+    .from(sessions)
+    .where(eq(sessions.id, caller.credential.id))
+    .limit(1);
+  return session ?? { clientName: null, deviceName: null };
+}
+
 function isLanAddress(address: string): boolean {
   const v4 = address.match(/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/);
   if (v4) {
@@ -317,6 +341,7 @@ export async function planPlayback(
   )
     throw new AuthError("CONFLICT");
   const method = base.method;
+  const client = await callerClient(db, caller);
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -329,9 +354,15 @@ export async function planPlayback(
         decision: stored
           ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
           : decision,
+        ...client,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");
+    await publishEvent(tx, {
+      kind: "session.state",
+      sessionId: session.id,
+      state: "starting",
+    });
     const issued = await issuePlaybackToken(tx, caller, {
       sessionId: session.id,
       itemId: item.id,

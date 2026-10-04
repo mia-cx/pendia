@@ -13,6 +13,7 @@ import { authenticate, createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
+  events,
   files,
   items,
   libraries,
@@ -987,5 +988,51 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       );
       expect(planned.method).toBe("direct-play");
       expect(planned.sessionId).not.toBeNull();
+    }));
+
+  test("a planned session records its client and announces itself", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db);
+      const input = { itemId: fx.item.id, versionId: fx.version.id, profile };
+      const transport = { request: planRequest(), peerAddress: "127.0.0.1" };
+      const bySession = await planPlayback(db, fx.caller, input, transport);
+      const byKey = await planPlayback(db, fx.keyCaller, input, transport);
+      const clientOf = async (sessionId: string | null) => {
+        if (sessionId === null) throw new Error("Expected a session.");
+        const [row] = await db
+          .select({
+            clientName: sessionRegistry.clientName,
+            deviceName: sessionRegistry.deviceName,
+          })
+          .from(sessionRegistry)
+          .where(eq(sessionRegistry.id, sessionId));
+        return row;
+      };
+      expect(await clientOf(bySession.sessionId)).toEqual({
+        clientName: "Test Client",
+        deviceName: "Living Room",
+      });
+      expect(await clientOf(byKey.sessionId)).toEqual({
+        clientName: "player",
+        deviceName: null,
+      });
+      const announced = await db
+        .select({ payload: events.payload })
+        .from(events)
+        .where(eq(events.kind, "session.state"))
+        .orderBy(events.id);
+      expect(announced.map((row) => row.payload)).toEqual([
+        {
+          kind: "session.state",
+          sessionId: bySession.sessionId,
+          state: "starting",
+        },
+        {
+          kind: "session.state",
+          sessionId: byKey.sessionId,
+          state: "starting",
+        },
+      ]);
     }));
 });

@@ -52,19 +52,58 @@ export function after(key: PageKey) {
   return sql`(${items.addedAt}, ${items.id}) < (${key.addedAt}::timestamptz, ${key.id}::uuid)`;
 }
 
+/** The sort position a title cursor points at, in A to Z order. */
+export type TitleKey = { title: string; id: string };
+
+const titleCursorPrefix = "t1.";
+
+/** Encodes a title-order key as an opaque cursor, prefixed so no other order accepts it. */
+export function encodeTitleCursor(key: TitleKey): string {
+  return `${titleCursorPrefix}${Buffer.from(JSON.stringify([key.title, key.id])).toString("base64url")}`;
+}
+
+/** Decodes a title-order cursor, returning undefined for anything that is not one. */
+export function decodeTitleCursor(cursor: string): TitleKey | undefined {
+  if (!cursor.startsWith(titleCursorPrefix)) return undefined;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(
+      Buffer.from(cursor.slice(titleCursorPrefix.length), "base64url").toString(
+        "utf8",
+      ),
+    );
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(decoded) || decoded.length !== 2) return undefined;
+  const [title, id] = decoded;
+  if (typeof title !== "string" || title.includes("\0")) return undefined;
+  if (typeof id !== "string" || !uuidPattern.test(id)) return undefined;
+  return { title, id };
+}
+
+/** The keyset predicate selecting rows past the cursor in title order. */
+export function afterTitle(key: TitleKey) {
+  return sql`(${items.title}, ${items.id}) > (${key.title}, ${key.id}::uuid)`;
+}
+
+/** Assembles a page from a limit+1 fetch, encoding the last kept row as the cursor. */
+export function toPageBy<T>(
+  rows: readonly T[],
+  limit: number,
+  cursorOf: (row: T) => string,
+): Page<T> {
+  if (rows.length <= limit) return { items: rows, cursor: null };
+  const kept = rows.slice(0, limit);
+  const last = kept.at(-1);
+  return { items: kept, cursor: last === undefined ? null : cursorOf(last) };
+}
+
 /** Assembles a page from a limit+1 fetch, emitting a cursor only when more rows remain. */
 export function toPage<T>(
   rows: readonly T[],
   limit: number,
   key: (row: T) => PageKey,
 ): Page<T> {
-  if (rows.length > limit) {
-    const kept = rows.slice(0, limit);
-    const last = kept.at(-1);
-    return {
-      items: kept,
-      cursor: last === undefined ? null : encodeCursor(key(last)),
-    };
-  }
-  return { items: rows, cursor: null };
+  return toPageBy(rows, limit, (row) => encodeCursor(key(row)));
 }

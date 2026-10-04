@@ -10,7 +10,6 @@ import {
   startScan,
   type WizardSession,
 } from "$lib/wizard.ts";
-import "$lib/admin.css";
 
 const stepTitles = ["Create the admin", "Add the first library", "Scan"];
 

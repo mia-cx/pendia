@@ -346,6 +346,30 @@ A rename updates the stored File and Item paths before the scan writes, so Item,
 
 The `api` and `all` roles run a directory-mtime repair pass after startup and every 24 hours. It walks movie and show Library directories without statting files, compares each directory mtime with a snapshot kept in process memory, and queues a directory scan for every changed canonical folder and every Item folder missing on disk. Repair and manual fan-out scans carry the reconcileMissing flag, so a scan removes imported Versions whose files disappeared and the emptied movie Items, show Episodes and Seasons they leave behind. An unavailable root is skipped without deleting rows. A restart rebuilds the snapshot, so every reachable directory is checked once after boot. `POST /api/libraries/{id}/scan` remains the manual full scan.
 
+### Watcher
+
+Media on NFS gives the api no inotify events, so `--role watcher` runs on the storage host instead. It needs no database. Configure it with three variables:
+
+- `PENDIA_API_URL`: the api origin, such as `http://pendia.lan:3000`.
+- `PENDIA_WATCHER_TOKEN`: an API key owned by a caller with `manage-libraries`.
+- `PENDIA_WATCH`: `<library-id>=<local root>` pairs separated by commas. Use Library ids, because names are not unique. A local root is the Library's root as the storage host sees it, so mount points may differ from the api's.
+
+The watcher watches each root recursively. After a file stays quiet for 200 ms, it posts the add, move or delete to `POST /api/watcher/events` with a library-relative path. A path that appears with the inode of a vanished path is a move, so renames keep Item and Progress identity. The api keeps changes to the medium's own files and debounces them like webhook changes. A failed post is logged and dropped; the repair pass heals what it missed.
+
+The watcher also runs its Libraries' scans on local disk. It claims scan jobs through `POST /api/watcher/claim`, walks and probes, and posts the files and raw ffprobe output to `POST /api/watcher/jobs/<id>`. The api writes them like a local scan and fills the probe cache, which the next claim shares so unchanged files skip ffprobe. Each claim, and a heartbeat every 5 s during a scan, marks the watcher's Libraries as watched for 30 s. Workers leave scans of a watched Library queued. When the watcher stops, workers scan the Library again after 30 s. A watcher killed during a scan leaves that job running, like a worker killed during a job.
+
+All watcher routes take the API key as `Authorization: Bearer <key>`. Missing, wrong and session tokens answer 401.
+
+On the storage host, run [compose.watcher.yaml](../../compose.watcher.yaml). It mounts `PENDIA_MEDIA` (default `/srv/media`) read-only at `/media`:
+
+```sh
+PENDIA_API_URL=http://pendia.lan:3000 \
+PENDIA_WATCHER_TOKEN=<api key> \
+PENDIA_MEDIA=/srv/media \
+PENDIA_WATCH=<movies-library-id>=/media/movies,<shows-library-id>=/media/shows \
+docker compose -f compose.watcher.yaml up -d
+```
+
 ### Metadata and artwork settings
 
 The `settings` row with key `metadata` holds one JSON object. Missing fields use these defaults:

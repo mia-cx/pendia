@@ -30,6 +30,9 @@ export type WatcherOptions = {
 
 type Job = NonNullable<WatcherClaim["job"]>;
 
+/** Report answers after which the api has failed or finished the job itself. */
+const settledStatuses = [400, 404, 409];
+
 /** Reads PENDIA_API_URL, PENDIA_WATCHER_TOKEN and PENDIA_WATCH (`<library-id>=<path>,...`). */
 export function readWatcherConfig(
   env: Record<string, string | undefined>,
@@ -174,16 +177,17 @@ export async function startWatcher(
     });
 
   /**
-   * Posts a scan report until the api answers below 500. The claimed job
+   * Posts a scan report until the api settles the job. The claimed job
    * holds its Library's concurrency key, so a lost report would block
-   * every later scan. A 4xx means the job is settled, possibly by an
-   * earlier copy of this report whose answer never arrived.
+   * every later scan. A 400, 404 or 409 means the api settled the job,
+   * possibly from an earlier copy of this report whose answer never
+   * arrived. Anything else, a 401 or 403 included, is retried.
    */
   async function deliver(jobId: string, report: WatcherReport) {
     for (;;) {
       try {
         const response = await request(`jobs/${jobId}`, report);
-        if (response.status < 500) {
+        if (response.ok || settledStatuses.includes(response.status)) {
           if (!response.ok)
             onError(
               new Error(

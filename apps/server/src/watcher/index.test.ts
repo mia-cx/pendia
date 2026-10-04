@@ -129,7 +129,7 @@ test("pushes adds, moves and deletes within 1 s with library-relative paths", as
   }
 });
 
-test("retries a scan report the api failed to take", async () => {
+test("retries a scan report the api refused with 403", async () => {
   const root = await mkdtemp(join(tmpdir(), "pendia-watch-"));
   const jobId = "0199a000-0000-7000-8000-000000000002";
   let claims = 0;
@@ -155,8 +155,9 @@ test("retries a scan report the api failed to take", async () => {
       if (pathname !== `/api/watcher/jobs/${jobId}`)
         return new Response(null, { status: 404 });
       reports.push(await request.json());
+      // A Permission removed for a moment, then restored.
       return reports.length === 1
-        ? new Response("unavailable", { status: 503 })
+        ? new Response("forbidden", { status: 403 })
         : Response.json({ state: "completed" });
     },
   });

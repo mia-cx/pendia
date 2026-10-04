@@ -49,23 +49,24 @@ export async function probeLibraryFile(
     ) {
       throw new Error("File changed during probe.");
     }
-    await tx
-      .insert(probeCache)
-      .values({
-        libraryId: library.id,
-        path: normalizedPath,
-        bytes: after.bytes,
-        modifiedNs: after.modifiedNs,
-        result,
-      })
-      .onConflictDoUpdate({
-        target: [probeCache.libraryId, probeCache.path],
-        set: {
-          bytes: after.bytes,
-          modifiedNs: after.modifiedNs,
-          result,
-        },
-      });
+    await cacheProbe(tx, library.id, after, result);
     return { ...after, probe: result, cached: false };
   });
+}
+
+/** Stores a probe result for one file, replacing an older entry at its path. */
+export async function cacheProbe(
+  db: Pick<Database, "insert">,
+  libraryId: string,
+  file: Pick<LibraryFile, "path" | "bytes" | "modifiedNs">,
+  result: ProbeResult,
+) {
+  const { bytes, modifiedNs } = file;
+  await db
+    .insert(probeCache)
+    .values({ libraryId, path: file.path, bytes, modifiedNs, result })
+    .onConflictDoUpdate({
+      target: [probeCache.libraryId, probeCache.path],
+      set: { bytes, modifiedNs, result },
+    });
 }

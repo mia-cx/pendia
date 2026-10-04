@@ -1,13 +1,38 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { eq, sql } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries } from "../db/schema/index.ts";
+import {
+  files,
+  items,
+  libraries,
+  probeCache,
+  streams,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { listJobs } from "../jobs/queue.ts";
+import { createJobQueue, listJobs, watcherHeartbeatMs } from "../jobs/queue.ts";
+import { readLibraryFile } from "../libraries/walker.ts";
 import { createChangeDebouncer } from "../libraries/webhooks.ts";
-import { createWatcherHandler } from "./http.ts";
+import {
+  createVideoFixture,
+  withVideoFixture,
+} from "../mediums/video-common/fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
+import { readFfprobe } from "../mediums/video-common/probe.ts";
+import {
+  createWatcherHandler,
+  type WatcherClaim,
+  type WatcherReport,
+} from "./http.ts";
+
+const unusedDebouncer = {
+  submitWatched: () => Promise.reject(new Error("No events expected.")),
+};
 
 async function setup(db: Database) {
   await migrateDatabase(db);
@@ -18,6 +43,7 @@ async function setup(db: Database) {
   const { token } = await createApiKey(db, admin.id, "Watcher");
   const [library] = await db
     .insert(libraries)
+    // The api never reads this root: a watched Library's disk is the watcher's.
     .values({ name: "Movies", medium: "movies", rootPath: "/media/movies" })
     .returning();
   if (!library) throw new Error("Library insert returned no row.");
@@ -123,8 +149,8 @@ describe.skipIf(!databaseUrl)("watcher events", () => {
       } finally {
         await debouncer.close();
       }
-      const jobs = await listJobs(db, { type: "scan" });
-      expect(jobs.map((job) => job.payload)).toEqual([
+      const queued = await listJobs(db, { type: "scan" });
+      expect(queued.map((job) => job.payload)).toEqual([
         {
           type: "scan",
           libraryId: library.id,
@@ -146,5 +172,130 @@ describe.skipIf(!databaseUrl)("watcher events", () => {
           ],
         },
       ]);
+    }));
+});
+
+describe.skipIf(!databaseUrl)("watcher scans", () => {
+  test("a worker leaves a watched Library's scans to the watcher", () =>
+    withDatabase(async (db) => {
+      const { token, library } = await setup(db);
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      const queue = createJobQueue(db);
+      const first = await queue.enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: "Alien (1979)",
+      });
+      const second = await queue.enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: "Heat (1995)",
+      });
+      const response = await handler(
+        post("claim", { libraryIds: [library.id] }, token),
+      );
+      const claimed: WatcherClaim = await response?.json();
+      expect(claimed.job).toEqual({
+        id: first.id,
+        attempts: 1,
+        libraryId: library.id,
+        path: "Alien (1979)",
+        medium: "movies",
+        cached: [],
+      });
+      expect(await queue.claim()).toBeUndefined();
+      await db
+        .update(libraries)
+        .set({
+          watcherSeenAt: sql`statement_timestamp() - ${watcherHeartbeatMs + 1_000} * interval '1 millisecond'`,
+        })
+        .where(eq(libraries.id, library.id));
+      expect((await queue.claim())?.id).toBe(second.id);
+    }));
+
+  test("a claimed scan with a reported probe writes the movie and the probe cache", () =>
+    withVideoFixture((dir) =>
+      withDatabase(async (db) => {
+        const { token, library } = await setup(db);
+        const handler = createWatcherHandler(db, unusedDebouncer);
+        const path = "Alien (1979)/Alien (1979).mkv";
+        await mkdir(join(dir, "Alien (1979)"));
+        await createVideoFixture(join(dir, path));
+        await createJobQueue(db).enqueue({
+          type: "scan",
+          libraryId: library.id,
+          path: "Alien (1979)",
+        });
+        const claimed: WatcherClaim = await (
+          await handler(post("claim", { libraryIds: [library.id] }, token))
+        )?.json();
+        if (claimed.job === null) throw new Error("No scan was claimed.");
+        const file = await readLibraryFile(dir, path);
+        const report = {
+          attempts: claimed.job.attempts,
+          files: [
+            {
+              path,
+              bytes: String(file.bytes),
+              modifiedNs: String(file.modifiedNs),
+            },
+          ],
+          probes: [
+            {
+              path,
+              ffprobe: await readFfprobe(join(dir, path)),
+              keyframesSeconds: (await readKeyframeIndex(join(dir, path)))
+                .keyframesSeconds,
+            },
+          ],
+        } satisfies WatcherReport;
+        const response = await handler(
+          post(`jobs/${claimed.job.id}`, report, token),
+        );
+        expect(await response?.json()).toEqual({ state: "completed" });
+
+        const [item] = await db.select().from(items);
+        expect(item).toMatchObject({
+          kind: "movie",
+          canonicalFolder: "Alien (1979)",
+        });
+        const [stored] = await db.select().from(files);
+        expect(stored).toMatchObject({ path, bytes: file.bytes });
+        expect(await db.select().from(versions)).toHaveLength(1);
+        const kinds = (await db.select().from(streams)).map(
+          (stream) => stream.kind,
+        );
+        expect(kinds).toContain("video");
+        const [cached] = await db.select().from(probeCache);
+        expect(cached).toMatchObject({
+          path,
+          bytes: file.bytes,
+          modifiedNs: file.modifiedNs,
+        });
+        expect(cached?.result.streams.length).toBe(kinds.length);
+      }),
+    ));
+
+  test("a report from a stale attempt is refused", () =>
+    withDatabase(async (db) => {
+      const { token, library } = await setup(db);
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      await createJobQueue(db).enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: "Alien (1979)",
+      });
+      const claimed: WatcherClaim = await (
+        await handler(post("claim", { libraryIds: [library.id] }, token))
+      )?.json();
+      if (claimed.job === null) throw new Error("No scan was claimed.");
+      const response = await handler(
+        post(
+          `jobs/${claimed.job.id}`,
+          { attempts: claimed.job.attempts + 1, error: "late" },
+          token,
+        ),
+      );
+      expect(response?.status).toBe(409);
     }));
 });

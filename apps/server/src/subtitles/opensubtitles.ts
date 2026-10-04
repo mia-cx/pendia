@@ -25,6 +25,8 @@ const limits = {
 };
 const maxSubtitleBytes = 8 * 1024 * 1024;
 const hashChunkBytes = 64 * 1024;
+// Pages read per language when earlier pages hold no full track.
+const maxPages = 5;
 
 const { asObject, invalid, requiredString } = jsonDecoders("OpenSubtitles");
 
@@ -183,23 +185,37 @@ export function createOpenSubtitlesProvider(
       // One search per language: results come in pages, and a popular
       // language would otherwise push the others off the first one.
       for (const language of wanted) {
-        const query = new URLSearchParams({ languages: language });
-        for (const [key, value] of Object.entries(params))
-          if (value !== undefined) query.set(key, value.toLowerCase());
-        // Sorted, lowercase parameters avoid a redirect to the canonical URL.
-        query.sort();
-        const body = asObject(
-          await requestJson(
-            request,
-            new URL(`${baseUrl}/subtitles?${query}`),
-            limits,
-            { init: { headers } },
-          ),
-        );
-        if (!Array.isArray(body.data)) return invalid();
-        for (const entry of body.data) {
-          const match = readMatch(entry, wanted);
-          if (match !== null) matches.push(match);
+        // A page can hold only split, translated or forced results, so later
+        // pages are read until the language has a full track to offer.
+        for (
+          let page = 1, pages = 1;
+          page <= Math.min(pages, maxPages);
+          page++
+        ) {
+          const query = new URLSearchParams({ languages: language });
+          for (const [key, value] of Object.entries(params))
+            if (value !== undefined) query.set(key, value.toLowerCase());
+          if (page > 1) query.set("page", String(page));
+          // Sorted, lowercase parameters avoid a redirect to the canonical URL.
+          query.sort();
+          const body = asObject(
+            await requestJson(
+              request,
+              new URL(`${baseUrl}/subtitles?${query}`),
+              limits,
+              { init: { headers } },
+            ),
+          );
+          if (!Array.isArray(body.data)) return invalid();
+          let full = false;
+          for (const entry of body.data) {
+            const match = readMatch(entry, wanted);
+            if (match === null) continue;
+            matches.push(match);
+            full ||= !match.forced;
+          }
+          if (full) break;
+          if (typeof body.total_pages === "number") pages = body.total_pages;
         }
       }
       return matches;

@@ -141,8 +141,9 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
             headers: new Headers(init?.headers),
             body: typeof init?.body === "string" ? init.body : "",
           });
-          const { pathname } = new URL(href);
-          const language = new URL(href).searchParams.get("languages");
+          const { pathname, searchParams } = new URL(href);
+          const language = searchParams.get("languages");
+          const page = searchParams.get("page") ?? "1";
           if (pathname === "/api/v1/subtitles" && language === "nl")
             return Response.json({
               data: [
@@ -155,19 +156,26 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
                 result("nl", 12, { download_count: 90_000 }),
               ],
             });
+          // English page one holds nothing usable; page two has a full track.
           if (pathname === "/api/v1/subtitles" && language === "en")
             return Response.json({
-              data: [
-                result("en", 13, { machine_translated: true }),
-                result("en", 14, { foreign_parts_only: true }),
-              ],
+              total_pages: 2,
+              data:
+                page === "1"
+                  ? [
+                      result("en", 13, { machine_translated: true }),
+                      result("en", 14, { foreign_parts_only: true }),
+                    ]
+                  : [result("en", 17, {})],
             });
-          if (pathname === "/api/v1/download")
+          if (pathname === "/api/v1/download") {
+            const { file_id } = JSON.parse(String(init?.body));
             return Response.json({
-              link: "https://dl.example/abc/movie.nl.srt",
-              file_name: "movie.nl.srt",
+              link: `https://dl.example/abc/${file_id}.srt`,
+              file_name: `${file_id}.srt`,
             });
-          if (href === "https://dl.example/abc/movie.nl.srt")
+          }
+          if (href.startsWith("https://dl.example/abc/"))
             return new Response(cue);
           return new Response(null, { status: 404 });
         }) as typeof fetch;
@@ -179,10 +187,24 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
         if (job === undefined) throw new Error("No subtitle-fetch job queued.");
         await registry.run(job);
 
-        const [search, english, download, file] = calls;
-        expect(new URL(english?.url ?? "").searchParams.get("languages")).toBe(
-          "en",
-        );
+        const [search, ...rest] = calls;
+        expect(
+          rest.map(({ url, body }) => {
+            const { pathname, searchParams } = new URL(url);
+            return pathname === "/api/v1/subtitles"
+              ? `search ${searchParams.get("languages")} ${searchParams.get("page") ?? 1}`
+              : pathname === "/api/v1/download"
+                ? `download ${JSON.parse(body).file_id}`
+                : url;
+          }),
+        ).toEqual([
+          "search en 1",
+          "search en 2",
+          "download 11",
+          "https://dl.example/abc/11.srt",
+          "download 17",
+          "https://dl.example/abc/17.srt",
+        ]);
         const query = new URL(search?.url ?? "").searchParams;
         expect([...query.keys()]).toEqual([
           "imdb_id",
@@ -202,10 +224,8 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
         });
         expect(search?.headers.get("api-key")).toBe("os-key");
         expect(search?.headers.get("user-agent")).toStartWith("Pendia");
-        expect(JSON.parse(download?.body ?? "")).toEqual({ file_id: 11 });
-        expect(file?.url).toBe("https://dl.example/abc/movie.nl.srt");
-        expect(calls).toHaveLength(4);
         expect(await listSubtitles(db, itemId)).toEqual([
+          { language: "en", format: "srt" },
           { language: "nl", format: "srt" },
         ]);
 
@@ -223,6 +243,11 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
             profile,
           });
           expect(planned.subtitles).toEqual([
+            {
+              language: "en",
+              format: "srt",
+              url: `/api/subtitles/${itemId}/en.srt`,
+            },
             {
               language: "nl",
               format: "srt",

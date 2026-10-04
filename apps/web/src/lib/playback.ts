@@ -89,6 +89,70 @@ export function withToken(url: string, token: string, page: string): string {
   return next.href;
 }
 
+type Plan = Awaited<ReturnType<PendiaClient["playback"]["plan"]>>;
+
+/** One audio Stream of the planned Version. */
+export type AudioStream = Plan["audioStreams"][number];
+
+/** One subtitle Stream of the planned Version. */
+export type SubtitleStream = Plan["subtitleStreams"][number];
+
+const languages = new Intl.DisplayNames(["en"], { type: "language" });
+
+// "und" is the probe's tag for an unknown language.
+function languageName(code: string | null) {
+  if (code === null || code === "und") return null;
+  try {
+    return languages.of(code) ?? null;
+  } catch {
+    return code;
+  }
+}
+
+const layouts: Record<number, string> = {
+  1: "Mono",
+  2: "Stereo",
+  6: "5.1",
+  8: "7.1",
+};
+
+// Names that repeat take their place in the list, so every option differs.
+function unique(names: string[]) {
+  return names.map((name, position) =>
+    names.indexOf(name) === names.lastIndexOf(name)
+      ? name
+      : `${name} (${position + 1})`,
+  );
+}
+
+/** Menu names for audio Streams, such as `Japanese · 5.1`. */
+export function audioNames(streams: readonly AudioStream[]): string[] {
+  return unique(
+    streams.map((stream, position) => {
+      const name =
+        stream.title ??
+        languageName(stream.language) ??
+        `Audio ${position + 1}`;
+      const layout =
+        stream.channels === null ? undefined : layouts[stream.channels];
+      return layout === undefined ? name : `${name} · ${layout}`;
+    }),
+  );
+}
+
+/** Menu names for subtitle Streams, such as `English · Forced`. */
+export function subtitleNames(streams: readonly SubtitleStream[]): string[] {
+  return unique(
+    streams.map((stream, position) => {
+      const name =
+        stream.title ??
+        languageName(stream.language) ??
+        `Subtitles ${position + 1}`;
+      return stream.forced ? `${name} · Forced` : name;
+    }),
+  );
+}
+
 /** A playback position as `12:34` or `1:02:03`. */
 export function formatPosition(seconds: number): string {
   const total = Math.floor(seconds);

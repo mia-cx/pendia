@@ -91,7 +91,7 @@ A library's policy names the rungs Pendia stores next to each source and an opti
 
 All three need `manage-transcoding`. A manual request names a rung the policy defines and skips only its condition. An unknown rung answers 400, a rung the source cannot make answers 409.
 
-Every folder scan queues the wanted rungs of each Item's best aligned source, deletes rungs the policy no longer names, and removes `<file>.pendia` folders whose source left the disk. Replacing a policy reconciles the whole library at once.
+Every folder scan queues the wanted rungs of each Item's best aligned source and deletes the rows of rungs the policy no longer names. A low-priority `store` sweep job on a worker then removes their folders and any `<file>.pendia` folder whose source left the disk, because the api, which runs a watcher's scans, may only read the share. Replacing a policy reconciles the whole library at once.
 
 A `store` job writes `<source file>.pendia/<rung>/`: `rung.json` with the rung definition, `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Editing a rung's height or bitrate under the same name stores it again. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
 

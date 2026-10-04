@@ -1,5 +1,3 @@
-import { lstat, readdir, rm, rmdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
@@ -9,19 +7,11 @@ import {
   streams,
   versions,
 } from "../db/schema/index.ts";
-import { enqueueStore, storedFolderOf } from "./jobs.ts";
+import { enqueueStore, enqueueStoreSweep, storedFolderOf } from "./jobs.ts";
 import { policyMatches, readStoredVersionPolicy, rungFits } from "./policy.ts";
+import { inFolder } from "./sweep.ts";
 
 type Library = typeof libraries.$inferSelect;
-
-const storeSuffix = ".pendia";
-
-/** Matches library-relative paths inside a folder; "." is the whole library. */
-function inFolder(path: typeof files.path, folder: string) {
-  return folder === "."
-    ? undefined
-    : sql`starts_with(${path}, ${`${folder}/`})`;
-}
 
 /** The aligned single-file source of each Item that stored rungs derive from: the tallest, then the highest bitrate. */
 export async function bestSources(db: Database, where: SQL | undefined) {
@@ -113,7 +103,7 @@ export async function requestStore(
   return true;
 }
 
-/** Brings the stored rungs of a library folder in line with its policy: drops rungs it no longer names, whose definition changed or whose source moved, and enqueues missing wanted ones. */
+/** Brings the stored rungs of a library folder in line with its policy: drops the rows of rungs it no longer names, whose definition changed or whose source moved, queues a sweep for their folders, and enqueues missing wanted rungs. */
 export async function reconcileStoredVersions(
   db: Database,
   library: Library,
@@ -142,6 +132,7 @@ export async function reconcileStoredVersions(
         inFolder(files.path, folder),
       ),
     );
+  let dropped = false;
   for (const row of stored) {
     if (row.rung === null || row.storedFolder === null) continue;
     const rung = policy?.rungs.find((candidate) => candidate.name === row.rung);
@@ -159,11 +150,13 @@ export async function reconcileStoredVersions(
     )
       continue;
     await db.delete(versions).where(eq(versions.id, row.id));
-    const absolute = resolve(library.rootPath, row.storedFolder);
-    await rm(absolute, { recursive: true, force: true });
-    // The `.pendia` folder goes once its last rung does.
-    await rmdir(dirname(absolute)).catch(() => {});
+    dropped = true;
   }
+  // Folders go on a worker: whoever runs this may only read the share, as
+  // the api does for a watcher's scan report. Without a policy there is no
+  // stored output left to sweep once its rows are gone.
+  if (policy !== null || dropped)
+    await enqueueStoreSweep(db, library.id, folder);
   if (policy === null) return;
   const sources = await bestSources(
     db,
@@ -176,62 +169,4 @@ export async function reconcileStoredVersions(
         await requestStore(db, source.fileId, rung.name);
     }
   }
-}
-
-const exists = (path: string) =>
-  lstat(path).then(
-    () => true,
-    (error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-      throw error;
-    },
-  );
-
-/** Deletes every `<file>.pendia` folder under a library folder whose source is gone from disk and has no File row. */
-export async function removeOrphanedStoreFolders(
-  db: Database,
-  library: Library,
-  folder = ".",
-) {
-  // A source whose File row remains keeps its rungs, so a Version still
-  // marked complete never loses its folder before the scan drops the File.
-  const known = new Set(
-    (
-      await db
-        .select({ path: files.path })
-        .from(files)
-        .where(
-          and(eq(files.libraryId, library.id), inFolder(files.path, folder)),
-        )
-    ).map((row) => row.path),
-  );
-  const visit = async (relative: string): Promise<void> => {
-    const absolute = resolve(library.rootPath, relative);
-    const entries = await readdir(absolute, { withFileTypes: true }).catch(
-      (error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw error;
-      },
-    );
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const child = relative === "." ? entry.name : `${relative}/${entry.name}`;
-      if (!entry.name.endsWith(storeSuffix)) {
-        await visit(child);
-        continue;
-      }
-      // A bare `.pendia` folder holds Item artwork, not a stored source.
-      if (entry.name === storeSuffix) continue;
-      const source = child.slice(0, -storeSuffix.length);
-      if (
-        !known.has(source) &&
-        !(await exists(resolve(library.rootPath, source)))
-      )
-        await rm(resolve(library.rootPath, child), {
-          recursive: true,
-          force: true,
-        });
-    }
-  };
-  await visit(folder);
 }

@@ -1,12 +1,13 @@
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   files,
   items,
   type JobPayload,
+  jobs,
   libraries,
   segmentTimelines,
   streams,
@@ -31,8 +32,12 @@ import {
   readStoreSettings,
   rungFits,
 } from "./policy.ts";
+import { sweepStoredFolders } from "./sweep.ts";
 
-type StorePayload = Extract<JobPayload, { type: "store" }>;
+type StorePayload = Extract<
+  JobPayload,
+  { type: "store"; sourceFileId: string }
+>;
 
 /** The concurrency key that runs one store job at a time across the cluster. */
 export const storeConcurrencyKey = "store";
@@ -58,6 +63,32 @@ export async function enqueueStore(
       concurrencyKey: storeConcurrencyKey,
       ...(runAfter === undefined ? {} : { runAfter }),
     },
+  );
+}
+
+/** Queues a sweep of a library folder's stored output on a worker, unless one is already queued. */
+export async function enqueueStoreSweep(
+  db: Database,
+  libraryId: string,
+  folder: string,
+) {
+  const [queued] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.type, "store"),
+        eq(jobs.state, "queued"),
+        sql`${jobs.payload}->>'libraryId' = ${libraryId}`,
+        sql`${jobs.payload}->>'folder' = ${folder}`,
+      ),
+    )
+    .limit(1);
+  if (queued !== undefined) return;
+  // No concurrency key: a sweep never waits behind a night-long encode.
+  await createJobQueue(db).enqueue(
+    { type: "store", libraryId, folder },
+    { priority: storePriority },
   );
 }
 
@@ -266,6 +297,16 @@ export function registerStoreJobs(
   { signal, now = () => new Date(), readRate }: StoreJobOptions = {},
 ) {
   registry.register("store", async (payload) => {
+    if ("folder" in payload) {
+      const [library] = await db
+        .select()
+        .from(libraries)
+        .where(eq(libraries.id, payload.libraryId))
+        .limit(1);
+      if (library !== undefined)
+        await sweepStoredFolders(db, library, payload.folder);
+      return;
+    }
     const target = await loadStoreTarget(db, payload);
     if (target === null) return;
     const { idleWindow } = await readStoreSettings(db);

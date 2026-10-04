@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
@@ -16,9 +16,11 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { runScanJob } from "../libraries/jobs.ts";
+import { localScanSource } from "../libraries/scan.ts";
 import { readStoreManifest } from "./encode.ts";
-import { removeOrphanedStoreFolders } from "./reconcile.ts";
 import { requestStoredVersion, setStoredVersionPolicy } from "./service.ts";
+import { sweepStoredFolders } from "./sweep.ts";
 import {
   drain,
   fixtureFolder,
@@ -35,13 +37,77 @@ const stored = (db: Database) =>
     .where(eq(versions.origin, "stored"))
     .orderBy(versions.rung);
 
+// Encode jobs only; folder sweeps share the `store` type.
 const queuedStores = (db: Database) =>
   db
     .select({ payload: jobs.payload })
     .from(jobs)
-    .where(and(eq(jobs.type, "store"), eq(jobs.state, "queued")));
+    .where(
+      and(
+        eq(jobs.type, "store"),
+        eq(jobs.state, "queued"),
+        sql`${jobs.payload}->>'rung' is not null`,
+      ),
+    );
 
 describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
+  test(
+    "a watcher's scan report leaves folder cleanup to a worker that can write",
+    () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        // A condition the fixture misses: the scan queues a sweep, no encode.
+        const policy: JsonObject = {
+          rungs: [{ name: "source" }],
+          when: { minHeight: 2160 },
+        };
+        await withStoredLibrary(db, policy, async ({ root, library }) => {
+          const orphan = join(root, fixtureFolder, "Gone.mkv.pendia");
+          await mkdir(join(orphan, "source"), { recursive: true });
+          await Bun.write(join(orphan, "source", "init.mp4"), "stale");
+          // The api reads the share but may not write it.
+          await chmod(join(root, fixtureFolder), 0o555);
+          try {
+            await runScanJob(
+              db,
+              {
+                type: "scan",
+                libraryId: library.id,
+                path: fixtureFolder,
+                reconcileMissing: true,
+              },
+              { id: Bun.randomUUIDv7() },
+              localScanSource(db, library),
+            );
+            expect(await readdir(orphan)).toEqual(["source"]);
+          } finally {
+            await chmod(join(root, fixtureFolder), 0o755);
+          }
+          const sweeps = await db
+            .select({ payload: jobs.payload })
+            .from(jobs)
+            .where(and(eq(jobs.type, "store"), eq(jobs.state, "queued")));
+          expect(sweeps).toEqual([
+            {
+              payload: {
+                type: "store",
+                libraryId: library.id,
+                folder: fixtureFolder,
+              },
+            },
+          ]);
+          await drain(db);
+          expect(
+            await Bun.file(join(orphan, "source", "init.mp4")).exists(),
+          ).toBe(false);
+          expect((await readdir(join(root, fixtureFolder))).sort()).toEqual([
+            "Movie (2020).mkv",
+          ]);
+        });
+      }),
+    60_000,
+  );
+
   test(
     "a policy stores complete rungs, a dropped rung and a deleted source take their folders",
     () =>
@@ -110,11 +176,14 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
             expect((await stored(db)).map((row) => row.rung)).toEqual([
               "source",
             ]);
+            // The folder goes in a sweep on a worker, not in the api call.
+            expect((await readdir(pendia)).sort()).toEqual(["360p", "source"]);
+            await drain(db);
             expect(await readdir(pendia)).toEqual(["source"]);
 
             await rm(join(root, fixturePath));
             // While its File row stands, the rungs of a complete Version stay.
-            await removeOrphanedStoreFolders(db, library, fixtureFolder);
+            await sweepStoredFolders(db, library, fixtureFolder);
             expect(await readdir(pendia)).toEqual(["source"]);
             await scanFolder(db, library.id);
             await drain(db);

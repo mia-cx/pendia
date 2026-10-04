@@ -18,7 +18,7 @@
 - [x] Shared `jsonb` column type in `db/schema/common.ts`, used by every `jsonb` column including `jobs.payload`. Validation: `db/jsonb.test.ts` writes every `jsonb` column through insert, update and upsert and checks `jsonb_typeof`; `drizzle-kit generate` reports no schema change; server `check`.
 - [x] Migration `0013` unwraps double-encoded strings in each affected column. Validation: `db/jsonb.test.ts` seeds every column through drizzle's own `jsonb` (the old path), plus plain-string settings written by raw SQL, runs the migration, and checks the result.
 - [x] Remove the string workarounds in the server README and `probe-cache.test.ts`. Validation: `probe-cache.test.ts` on Postgres; the README upsert run by hand against an API-written `auth` row.
-- [ ] Order the `session.state` reads in `api/transcode.test.ts` and `transcoder/sessions.test.ts` by `events.id`. Validation: both files on Postgres.
+- [x] Order the `session.state` reads in `api/transcode.test.ts` and `transcoder/sessions.test.ts` by `events.id`. Validation: both files on Postgres.
 - [ ] Full gate. Validation: the commands in the brief, results below.
 
 ## Notes
@@ -69,3 +69,4 @@ Real Postgres 18, Bun 1.4.2, drizzle-orm 0.45.2. Each row written through drizzl
 
 - Order-dependent reads of `events` without `ORDER BY`: `api/transcode.test.ts` (the issue) and `stateEvents` in `transcoder/sessions.test.ts`.
 - Left as they are: `transcoder/sessions.test.ts` `segment.ready` uses `toContain`; `libraries/jobs.test.ts` and `metadata/jobs.test.ts` assert lists of identical `library.changed` rows, which match in any order; `transcoder/index.ts` reads one row by id; `api/events.ts` already orders.
+- Validation: `api/transcode.test.ts` and `transcoder/sessions.test.ts` 24 pass on Postgres.

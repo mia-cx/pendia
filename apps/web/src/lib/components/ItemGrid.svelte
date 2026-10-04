@@ -90,6 +90,7 @@ function setSort(event: Event & { currentTarget: HTMLSelectElement }) {
 }
 </script>
 
+<div class="legacy">
 <div class="bar">
   <h1>{heading}</h1>
   <label>
@@ -126,6 +127,7 @@ function setSort(event: Event & { currentTarget: HTMLSelectElement }) {
     >
   </div>
 {/if}
+</div>
 
 <style>
   .bar {

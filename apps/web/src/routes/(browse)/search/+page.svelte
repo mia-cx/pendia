@@ -39,6 +39,7 @@ $effect(() => {
   <title>{query === "" ? "Search" : `${query} · Search`} · Pendia</title>
 </svelte:head>
 
+<div class="legacy">
 <h1>{query === "" ? "Search" : `Results for "${query}"`}</h1>
 
 {#if failure}
@@ -52,6 +53,7 @@ $effect(() => {
     {/each}
   </ul>
 {/if}
+</div>
 
 <style>
   h1 {

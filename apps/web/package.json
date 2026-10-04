@@ -9,8 +9,15 @@
     "dev": "vite dev"
   },
   "dependencies": {
+    "@internationalized/date": "3.12.4",
+    "@lucide/svelte": "1.48.0",
     "@orpc/client": "1.15.0",
-    "hls.js": "1.7.3"
+    "bits-ui": "2.19.3",
+    "clsx": "2.1.1",
+    "hls.js": "1.7.3",
+    "svelte-sonner": "1.2.1",
+    "tailwind-merge": "3.7.0",
+    "tailwind-variants": "3.3.1"
   },
   "devDependencies": {
     "@orpc/server": "1.15.0",

@@ -1,0 +1,354 @@
+<script lang="ts">
+import BookmarkIcon from "@lucide/svelte/icons/bookmark";
+import CheckIcon from "@lucide/svelte/icons/check";
+import InfoIcon from "@lucide/svelte/icons/info";
+import PlayIcon from "@lucide/svelte/icons/play";
+import PlusIcon from "@lucide/svelte/icons/plus";
+import SearchIcon from "@lucide/svelte/icons/search";
+import SettingsIcon from "@lucide/svelte/icons/settings";
+import Trash2Icon from "@lucide/svelte/icons/trash-2";
+import { toast } from "svelte-sonner";
+import * as AlertDialog from "$lib/components/ui/alert-dialog/index.js";
+import { Badge } from "$lib/components/ui/badge/index.js";
+import { Button } from "$lib/components/ui/button/index.js";
+import * as Dialog from "$lib/components/ui/dialog/index.js";
+import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
+import { Input } from "$lib/components/ui/input/index.js";
+import * as Popover from "$lib/components/ui/popover/index.js";
+import * as ScrollArea from "$lib/components/ui/scroll-area/index.js";
+import * as Select from "$lib/components/ui/select/index.js";
+import { Separator } from "$lib/components/ui/separator/index.js";
+import * as Sheet from "$lib/components/ui/sheet/index.js";
+import { Skeleton } from "$lib/components/ui/skeleton/index.js";
+import * as Slider from "$lib/components/ui/slider/index.js";
+import * as Switch from "$lib/components/ui/switch/index.js";
+import * as Table from "$lib/components/ui/table/index.js";
+import * as Tabs from "$lib/components/ui/tabs/index.js";
+import * as Tooltip from "$lib/components/ui/tooltip/index.js";
+
+let quality = $state("");
+let watched = $state(true);
+let volume = $state(65);
+let tab = $state("details");
+
+const versions = [
+  { resolution: "2160p", codec: "HEVC", size: "18.4 GB", bitrate: "42.1" },
+  { resolution: "1080p", codec: "H.264", size: "7.9 GB", bitrate: "19.8" },
+  { resolution: "720p", codec: "H.264", size: "3.1 GB", bitrate: "8.4" },
+];
+
+const rows = Array.from(
+  { length: 30 },
+  (_, i) => `Dune: Part Two · extras ${i + 1}`,
+);
+</script>
+
+<svelte:head>
+	<title>Design system · Pendia</title>
+</svelte:head>
+
+<div class="gallery">
+	<h1 class="text-title-1">Design system</h1>
+
+	<section>
+		<h2 class="text-title-2">Buttons</h2>
+		<div class="row">
+			<Button>Play</Button>
+			<Button variant="secondary">Mark watched</Button>
+			<Button variant="outline">Edit</Button>
+			<Button variant="ghost">Skip</Button>
+			<Button variant="tinted">Resume</Button>
+			<Button variant="destructive">Delete</Button>
+			<Button variant="link">Learn more</Button>
+		</div>
+		<div class="row">
+			<Button size="sm">Small</Button>
+			<Button size="lg">Large</Button>
+			<Button size="icon" aria-label="Add to list"><PlusIcon /></Button>
+			<Button size="icon-lg" variant="secondary" aria-label="Settings"><SettingsIcon /></Button>
+			<Button disabled>Loading…</Button>
+		</div>
+		<div class="hero">
+			<Button variant="glass"><PlayIcon /> Continue watching</Button>
+			<Button variant="glass" size="icon" aria-label="Bookmark"><BookmarkIcon /></Button>
+		</div>
+	</section>
+
+	<section>
+		<h2 class="text-title-2">Fields</h2>
+		<div class="stack">
+			<Input placeholder="Search titles" aria-label="Search" class="w-72" />
+			<Input value="Dune: Part Two" aria-label="Title" class="w-72" />
+			<Input value="not-an-email" aria-invalid="true" aria-label="Invalid field" class="w-72" />
+			<Input disabled value="Server offline" aria-label="Disabled field" class="w-72" />
+			<Select.Root type="single" bind:value={quality}>
+				<Select.Trigger class="w-72"><Select.Value placeholder="Preferred quality" /></Select.Trigger>
+				<Select.Content>
+					<Select.Item value="original">Original</Select.Item>
+					<Select.Item value="high">High · 12 Mbps</Select.Item>
+					<Select.Item value="medium">Medium · 4 Mbps</Select.Item>
+					<Select.Item value="low">Low · 1 Mbps</Select.Item>
+				</Select.Content>
+			</Select.Root>
+		</div>
+	</section>
+
+	<section>
+		<h2 class="text-title-2">Toggles</h2>
+		<div class="row">
+			<Switch.Root bind:checked={watched} aria-label="Watched" />
+			<Switch.Root checked={false} aria-label="Auto-play next episode" />
+			<Switch.Root checked={true} disabled aria-label="Disabled toggle" />
+		</div>
+		<Slider.Root type="single" bind:value={volume} min={0} max={100} step={1} class="w-64" aria-label="Volume" />
+		<Tabs.Root bind:value={tab} class="w-full max-w-md">
+			<Tabs.List>
+				<Tabs.Trigger value="details">Details</Tabs.Trigger>
+				<Tabs.Trigger value="versions">Versions</Tabs.Trigger>
+				<Tabs.Trigger value="extras">Extras</Tabs.Trigger>
+			</Tabs.List>
+			<Tabs.Content value="details" class="text-label-secondary">Directed by Denis Villeneuve.</Tabs.Content>
+			<Tabs.Content value="versions" class="text-label-secondary">Three versions on disk.</Tabs.Content>
+			<Tabs.Content value="extras" class="text-label-secondary">Behind-the-scenes features.</Tabs.Content>
+		</Tabs.Root>
+	</section>
+
+	<section>
+		<h2 class="text-title-2">Badges</h2>
+		<div class="row">
+			<Badge>New</Badge>
+			<Badge variant="tint">4K</Badge>
+			<Badge variant="outline">Unmatched</Badge>
+			<Badge variant="destructive">Failed</Badge>
+		</div>
+	</section>
+
+	<section>
+		<h2 class="text-title-2">Menus and overlays</h2>
+		<div class="row">
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="secondary"><SearchIcon /> Actions</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content>
+					<DropdownMenu.Label>Films · Dune</DropdownMenu.Label>
+					<DropdownMenu.Item><PlayIcon /> Play</DropdownMenu.Item>
+					<DropdownMenu.Item><BookmarkIcon /> Save for later</DropdownMenu.Item>
+					<DropdownMenu.Item><CheckIcon /> Mark watched</DropdownMenu.Item>
+					<DropdownMenu.Separator />
+					<DropdownMenu.Item class="text-destructive"><Trash2Icon class="text-destructive" /> Remove from library</DropdownMenu.Item>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
+
+			<Popover.Root>
+				<Popover.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="secondary">Filter</Button>
+					{/snippet}
+				</Popover.Trigger>
+				<Popover.Content class="w-64">
+					<p class="text-subheadline text-label">Refine results</p>
+					<p class="text-footnote text-label-secondary">Narrow by year, genre or quality.</p>
+				</Popover.Content>
+			</Popover.Root>
+
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="ghost" size="icon" aria-label="Info"><InfoIcon /></Button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content>Scanned 2 hours ago</Tooltip.Content>
+			</Tooltip.Root>
+
+			<Dialog.Root>
+				<Dialog.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="outline">Open dialog</Button>
+					{/snippet}
+				</Dialog.Trigger>
+				<Dialog.Content>
+					<Dialog.Header>
+						<Dialog.Title>Edit title</Dialog.Title>
+						<Dialog.Description>Change how Pendia lists this title.</Dialog.Description>
+					</Dialog.Header>
+					<Input value="Dune: Part Two" aria-label="Title" />
+					<Dialog.Footer>
+						<Dialog.Close>
+							{#snippet child({ props })}
+								<Button {...props} variant="ghost">Cancel</Button>
+							{/snippet}
+						</Dialog.Close>
+						<Button>Save</Button>
+					</Dialog.Footer>
+				</Dialog.Content>
+			</Dialog.Root>
+
+			<AlertDialog.Root>
+				<AlertDialog.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="destructive">Delete library</Button>
+					{/snippet}
+				</AlertDialog.Trigger>
+				<AlertDialog.Content>
+					<AlertDialog.Header>
+						<AlertDialog.Title>Delete library?</AlertDialog.Title>
+						<AlertDialog.Description>
+							Deleting Films removes its titles from Pendia. The files stay on disk.
+						</AlertDialog.Description>
+					</AlertDialog.Header>
+					<AlertDialog.Footer>
+						<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+						<AlertDialog.Action>Delete library</AlertDialog.Action>
+					</AlertDialog.Footer>
+				</AlertDialog.Content>
+			</AlertDialog.Root>
+
+			<Sheet.Root>
+				<Sheet.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="secondary">Right sheet</Button>
+					{/snippet}
+				</Sheet.Trigger>
+				<Sheet.Content side="right">
+					<Sheet.Header>
+						<Sheet.Title>Filters</Sheet.Title>
+						<Sheet.Description>Narrow the library view.</Sheet.Description>
+					</Sheet.Header>
+					<div class="sheet-body">
+						<Switch.Root checked={true} aria-label="Watched only" />
+						<p class="text-subheadline text-label-secondary">Show watched titles only.</p>
+					</div>
+					<Sheet.Footer>
+						<Sheet.Close>
+							{#snippet child({ props })}
+								<Button {...props} variant="ghost">Cancel</Button>
+							{/snippet}
+						</Sheet.Close>
+						<Button>Apply</Button>
+					</Sheet.Footer>
+				</Sheet.Content>
+			</Sheet.Root>
+
+			<Sheet.Root>
+				<Sheet.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="secondary">Bottom sheet</Button>
+					{/snippet}
+				</Sheet.Trigger>
+				<Sheet.Content side="bottom">
+					<Sheet.Header>
+						<Sheet.Title>Add to list</Sheet.Title>
+						<Sheet.Description>Pick a list for this title.</Sheet.Description>
+					</Sheet.Header>
+					<div class="sheet-body">
+						<p class="text-subheadline text-label-secondary">No lists yet.</p>
+					</div>
+				</Sheet.Content>
+			</Sheet.Root>
+
+			<Button variant="secondary" onclick={() => toast.success("Saved")}>Success toast</Button>
+			<Button variant="secondary" onclick={() => toast.error("Couldn't save")}>Error toast</Button>
+		</div>
+	</section>
+
+	<section>
+		<h2 class="text-title-2">Table</h2>
+		<Table.Root>
+			<Table.Header>
+				<Table.Row>
+					<Table.Head>Resolution</Table.Head>
+					<Table.Head>Codec</Table.Head>
+					<Table.Head class="text-right">Size</Table.Head>
+					<Table.Head class="text-right">Bitrate (Mbps)</Table.Head>
+				</Table.Row>
+			</Table.Header>
+			<Table.Body>
+				{#each versions as v (v.resolution)}
+					<Table.Row>
+						<Table.Cell>{v.resolution}</Table.Cell>
+						<Table.Cell>{v.codec}</Table.Cell>
+						<Table.Cell class="text-right tabular-nums">{v.size}</Table.Cell>
+						<Table.Cell class="text-right tabular-nums">{v.bitrate}</Table.Cell>
+					</Table.Row>
+				{/each}
+			</Table.Body>
+		</Table.Root>
+	</section>
+
+	<section>
+		<h2 class="text-title-2">Skeleton</h2>
+		<div class="row items-start">
+			<Skeleton class="w-32 rounded-poster aspect-[2/3]" />
+			<div class="stack grow max-w-sm">
+				<Skeleton class="h-4 w-3/4" />
+				<Skeleton class="h-4 w-1/2" />
+				<Skeleton class="h-4 w-5/6" />
+			</div>
+		</div>
+	</section>
+
+	<section>
+		<h2 class="text-title-2">Scroll area</h2>
+		<ScrollArea.Root class="h-48 w-72 rounded-md border border-separator">
+			<div class="p-3">
+				{#each rows as row (row)}
+					<p class="text-subheadline py-1">{row}</p>
+				{/each}
+			</div>
+			<ScrollArea.Scrollbar orientation="vertical" />
+		</ScrollArea.Root>
+	</section>
+	<Separator class="my-8" />
+</div>
+
+<style>
+	.gallery {
+		max-width: 720px;
+		margin: 0 auto;
+		padding: var(--spacing-page) var(--gutter);
+		display: flex;
+		flex-direction: column;
+		gap: calc(var(--spacing-section) * 1.5);
+	}
+	h1 {
+		margin: 0;
+	}
+	h2 {
+		margin: 0 0 var(--spacing-section);
+	}
+	.row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--spacing-inline);
+		align-items: center;
+	}
+	.stack {
+		display: flex;
+		flex-direction: column;
+		gap: var(--spacing-stack);
+	}
+	section {
+		display: flex;
+		flex-direction: column;
+		gap: var(--spacing-stack);
+	}
+	.hero {
+		display: flex;
+		gap: var(--spacing-inline);
+		align-items: center;
+		padding: var(--spacing-page);
+		border-radius: var(--radius-card);
+		background:
+			linear-gradient(135deg, oklch(62% 0.19 275) 0%, oklch(55% 0.2 330) 55%, oklch(50% 0.16 20) 100%);
+		min-height: 140px;
+	}
+	.sheet-body {
+		padding: var(--spacing-section) 0;
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-inline);
+	}
+</style>

@@ -3,6 +3,7 @@ import { onDestroy } from "svelte";
 import { afterNavigate, beforeNavigate, goto } from "$app/navigation";
 import { page } from "$app/state";
 import SignOut from "$lib/components/SignOut.svelte";
+import * as Tooltip from "$lib/components/ui/tooltip/index.js";
 import type { LayoutProps } from "./$types";
 
 const { data, children }: LayoutProps = $props();
@@ -62,8 +63,7 @@ function submit(event: SubmitEvent) {
 }
 </script>
 
-<div class="legacy">
-<header>
+<header class="legacy">
   <a class="brand" href="/">Pendia</a>
   <nav aria-label="Library">
     {#each sections as section (section.href)}
@@ -93,10 +93,11 @@ function submit(event: SubmitEvent) {
   </div>
 </header>
 
+<Tooltip.Provider>
 <main>
   {@render children()}
 </main>
-</div>
+</Tooltip.Provider>
 
 <style>
   header {

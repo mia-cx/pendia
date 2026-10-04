@@ -12,6 +12,7 @@ const home = resource(() => client.shelves.home());
   <title>Pendia</title>
 </svelte:head>
 
+<div class="legacy">
 <h1 class="sr-only">Home</h1>
 
 {#if home.failure}
@@ -37,6 +38,7 @@ const home = resource(() => client.shelves.home());
     </section>
   {/each}
 {/if}
+</div>
 
 <style>
   section + section {

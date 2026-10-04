@@ -24,6 +24,7 @@ import {
   decidePlayback,
   type PlaybackDecision,
   type PlaybackSource,
+  requiresBurnIn,
   type SubtitleStream,
 } from "./decisions.ts";
 import {
@@ -344,10 +345,9 @@ export async function planPlayback(
     decision = null;
   }
   // Stored rungs that pass replace the live session; the api serves them from
-  // disk. They carry no subtitle pixels, so a required burn-in stays live.
-  const burns =
-    decision?.video.action === "transcode" && decision.video.burnSubtitles;
-  const storedVariantIds = burns
+  // disk. They carry no subtitle pixels, so a required burn-in stays live, or
+  // fails the plan when no live path exists.
+  const storedVariantIds = requiresBurnIn(source, input.profile)
     ? []
     : await selectStoredVariants(
         db,

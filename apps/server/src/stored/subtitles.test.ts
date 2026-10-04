@@ -37,14 +37,16 @@ const browser = {
 };
 
 describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
-  /** Stores both rungs of the fixture, starts an all-role server and plans the source for a browser. */
+  /** Stores both rungs of the fixture, starts an all-role server and hands over a planner for the source. */
   const planStored = (
     subtitles: VideoFixtureOptions["subtitles"],
     run: (context: {
       db: Database;
       base: string;
       server: Awaited<ReturnType<typeof startPendia>>;
-      planned: Awaited<ReturnType<Client["playback"]["plan"]>>;
+      plan: (
+        profile: Parameters<Client["playback"]["plan"]>[0]["profile"],
+      ) => ReturnType<Client["playback"]["plan"]>;
     }) => Promise<void>,
   ) =>
     withDatabase(async (db, url) => {
@@ -83,12 +85,17 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
                 headers: { authorization: `Bearer ${token}` },
               }),
             );
-            const planned = await client.playback.plan({
-              itemId,
-              versionId: version.id,
-              profile: browser,
+            await run({
+              db,
+              base,
+              server,
+              plan: (profile) =>
+                client.playback.plan({
+                  itemId,
+                  versionId: version.id,
+                  profile,
+                }),
             });
-            await run({ db, base, server, planned });
           } finally {
             await server.stop();
             await rm(scratchDir, { recursive: true, force: true });
@@ -109,7 +116,8 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
   test(
     "stored rungs keep the source's SRT as a WebVTT track",
     () =>
-      planStored(["srt"], async ({ db, base, server, planned }) => {
+      planStored(["srt"], async ({ db, base, server, plan }) => {
+        const planned = await plan(browser);
         expect(planned.method).toBe("remux");
         expect(
           (await decisionOf(db, planned.sessionId))?.storedVariantIds,
@@ -151,13 +159,19 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
   test(
     "a PGS track the client cannot draw keeps the live burn-in over stored rungs",
     () =>
-      planStored(["pgs"], async ({ db, planned }) => {
+      planStored(["pgs"], async ({ db, plan }) => {
+        const planned = await plan(browser);
         expect(planned.method).toBe("transcode");
         const decision = await decisionOf(db, planned.sessionId);
         expect(decision?.storedVariantIds).toBeUndefined();
         expect(decision).toMatchObject({
           video: { action: "transcode", burnSubtitles: true },
         });
+        // Under every live rung but over the stored 360p one: no path can
+        // burn the track in, so the plan fails rather than drop it.
+        await expect(
+          plan({ ...browser, maxBitrate: 1_200_000 }),
+        ).rejects.toMatchObject({ status: 400 });
       }),
     120_000,
   );

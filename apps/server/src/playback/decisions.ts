@@ -257,6 +257,13 @@ function decideSubtitle(
   return { action: "burn" as const, format: subtitle.format };
 }
 
+/** Reports whether the client needs a subtitle burned into the video: a bitmap Stream it cannot draw. Holds whatever the video and audio decide. */
+export function requiresBurnIn(source: PlaybackSource, client: ClientProfile) {
+  return source.subtitles.some(
+    (subtitle) => decideSubtitle(subtitle, client, false).action === "burn",
+  );
+}
+
 /** Returns the play method and per-Stream decisions for a source on one client. */
 export function decidePlayback(
   source: PlaybackSource,
@@ -268,9 +275,7 @@ export function decidePlayback(
   const subtitles = source.subtitles.map((subtitle) =>
     decideSubtitle(subtitle, client, false),
   );
-  const burnSubtitles = subtitles.some(
-    (subtitle) => subtitle.action === "burn",
-  );
+  const burnSubtitles = requiresBurnIn(source, client);
   const video = decideVideo(
     source.video,
     client,

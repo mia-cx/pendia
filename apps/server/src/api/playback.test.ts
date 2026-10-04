@@ -417,6 +417,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           sessionId: null,
           url: null,
           expiresAt: null,
+          subtitles: [],
         });
         const rows = await db
           .select({ id: sessionRegistry.id })

@@ -17,6 +17,8 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { selectStoredVariants } from "../stored/playback.ts";
+import { subtitleUrl } from "../subtitles/http.ts";
+import { listSubtitles } from "../subtitles/store.ts";
 import {
   type AudioStream,
   decidePlayback,
@@ -307,6 +309,11 @@ export async function planPlayback(
     sessionId: null as string | null,
     url: null as string | null,
     expiresAt: null as string | null,
+    // Tracks a subtitle provider stored next to the Item, served on the side.
+    subtitles: (await listSubtitles(db, item.id)).map((track) => ({
+      ...track,
+      url: subtitleUrl(item.id, track),
+    })),
   };
   if (base.method === "transcode") return base;
   // A Version without an aligned timeline cannot be segmented for remux.

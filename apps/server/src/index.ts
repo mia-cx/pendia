@@ -25,6 +25,7 @@ import {
   type PluginRuntimeOptions,
 } from "./plugins/runtime.ts";
 import { registerStoreJobs } from "./stored/jobs.ts";
+import { createSubtitleHandler } from "./subtitles/http.ts";
 import {
   startTranscoder,
   type Transcoder,
@@ -313,6 +314,7 @@ export async function startPendia(
         api: createApiHandler(database.db, eventBroker, transcoder, plugins),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
         artwork,
+        subtitles: createSubtitleHandler(database.db),
         plugins: createPluginRouteHandler(database.db, plugins),
         jellyfin: createJellyfinHandler(database.db, jellyfinRoutes(artwork)),
         watcher: createWatcherHandler(database.db, changeDebouncer),

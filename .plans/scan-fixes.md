@@ -17,13 +17,13 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
 - [ ] A new `S01E01-E03` next to a retained `S01E02` succeeds without an exclusion constraint error.
 - [ ] The show reconciler deletes File rows only for imported Versions, like the movie reconciler.
 - [ ] A file recreated between the walk and the write lock keeps its row and its watch progress, for movies and shows.
-- [ ] `waitForBlockedScan` counts only lock waits in the test's own database, from other backends.
+- [x] `waitForBlockedScan` counts only lock waits in the test's own database, from other backends.
 - [ ] Lint, check, build, and `bun test` with and without `DATABASE_URL` pass.
 
 ## TODOs
 
-- [ ] #73: filter `waitForBlockedScan` to `datname = current_database()` and `pid <> pg_backend_pid()`.
-  - Validation: the existing lock tests in `scan.test.ts` pass.
+- [x] #73: filter `waitForBlockedScan` to `datname = current_database()` and `pid <> pg_backend_pid()`.
+  - Validation: the existing lock tests in `scan.test.ts` pass. `bun test src/libraries/scan.test.ts -t revalidates`: 2 pass.
 - [ ] #67: store `keyframesSeconds` and `lazyIndexPending` on show Versions, as the movie path does.
   - Validation: the show tree test asserts single-file episode Versions are indexed.
 - [ ] #68: merge overlapping discovered episode ranges per Season before writing, and drop the widening checks the merge makes dead.

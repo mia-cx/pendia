@@ -111,7 +111,9 @@ async function waitForBlockedScan(db: Database) {
   for (;;) {
     const rows = await db.$client<{ count: number }[]>`
       select count(*)::integer as count from pg_stat_activity
-      where wait_event_type = 'Lock'`;
+      where wait_event_type = 'Lock'
+        and datname = current_database()
+        and pid <> pg_backend_pid()`;
     if ((rows[0]?.count ?? 0) > 0) return;
     if (Date.now() >= deadline) {
       throw new Error("A blocked scan update was not observed.");

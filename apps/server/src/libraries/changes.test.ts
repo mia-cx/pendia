@@ -5,6 +5,7 @@ import {
   readFile,
   rename,
   rm,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -924,6 +925,39 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         const replacement = await itemAt(db, showBEpisodes[0]);
         expect(replacement).not.toBe(replaced);
         expect(await showOf(db, replacement)).toBe(await showAt(db, "Show B"));
+      });
+    }));
+
+  test("a move onto a one-Episode Show keeps that Show", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const source = "Show A/Season 01/Show A S01E01.mkv";
+        const target = "Show B/Season 01/Show B S01E01.mkv";
+        for (const path of [source, target]) {
+          await mkdir(join(root, dirname(path)), { recursive: true });
+          await createVideoFixture(join(root, path));
+        }
+        // Fixtures share a size, so the mtime tells the two files apart.
+        await utimes(join(root, target), new Date(0), new Date(0));
+        const library = await insertLibrary(db, root, "shows");
+        await scanShowDirectory(db, library.id, "Show A");
+        await scanShowDirectory(db, library.id, "Show B");
+        const showB = await showAt(db, "Show B");
+
+        await rename(join(root, source), join(root, target));
+        await scanShowDirectory(db, library.id, "Show B", {
+          changes: [
+            {
+              kind: "move",
+              path: target,
+              previousPath: source,
+              providerIds: {},
+            },
+          ],
+        });
+
+        expect(await showOf(db, await itemAt(db, target))).toBe(showB);
       });
     }));
 

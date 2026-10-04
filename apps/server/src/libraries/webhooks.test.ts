@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { asc, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
@@ -22,6 +22,7 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
+import { scanShowDirectory } from "./scan.ts";
 import type { ChangeEvent } from "./servarr.ts";
 import {
   createChangeDebouncer,
@@ -636,46 +637,65 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       }
     }));
 
-  test("a move between two Show folders queues both folders", () =>
+  test("only a move into another Show queues its source folder", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      const library = await insertLibrary(db, "Shows", "/media/shows", "shows");
-      const debouncer = createChangeDebouncer(db, { delayMs: 10 });
-      const move = {
-        kind: "move",
-        path: "Show B/Season 01/Show B S01E03.mkv",
-        previousPath: "Show A/Season 01/Show A S01E01.mkv",
-      } as const;
-      try {
-        await debouncer.submit("sonarr", [
-          {
-            ...move,
-            path: `/media/shows/${move.path}`,
-            previousPath: `/media/shows/${move.previousPath}`,
-            providerIds: { tvdb: "2" },
-          },
-        ]);
-        const jobs = await waitForScanJobs(db, 2);
-        expect(jobs).toHaveLength(2);
-        expect(jobs.map((job) => job.payload)).toEqual(
-          expect.arrayContaining([
-            {
-              type: "scan",
-              libraryId: library.id,
-              path: "Show A",
-              changes: [{ ...move, providerIds: {} }],
-            },
-            {
-              type: "scan",
-              libraryId: library.id,
-              path: "Show B",
-              changes: [{ ...move, providerIds: { tvdb: "2" } }],
-            },
-          ]),
-        );
-      } finally {
-        await debouncer.close();
-      }
+      await withVideoFixture(async (root) => {
+        const episodes = [
+          "Show A/Season 01/Show A S01E01.mkv",
+          "Show A/Season 01/Show A S01E02.mkv",
+          "Show B/Season 01/Show B S01E01.mkv",
+        ];
+        for (const path of episodes) {
+          await mkdir(join(root, dirname(path)), { recursive: true });
+          await createVideoFixture(join(root, path));
+        }
+        const library = await insertLibrary(db, "Shows", root, "shows");
+        await scanShowDirectory(db, library.id, "Show A");
+        await scanShowDirectory(db, library.id, "Show B");
+        const intoShow = {
+          kind: "move",
+          path: "Show B/Season 01/Show B S01E03.mkv",
+          previousPath: "Show A/Season 01/Show A S01E01.mkv",
+        } as const;
+        const intoFolder = {
+          kind: "move",
+          path: "Show C/Season 01/Show A S01E02.mkv",
+          previousPath: "Show A/Season 01/Show A S01E02.mkv",
+        } as const;
+        const providerIds = { tvdb: "2" };
+        const debouncer = createChangeDebouncer(db, { delayMs: 10 });
+        try {
+          await debouncer.submit(
+            "sonarr",
+            [intoShow, intoFolder].map((move) => ({
+              ...move,
+              path: join(root, move.path),
+              previousPath: join(root, move.previousPath),
+              providerIds,
+            })),
+          );
+          await debouncer.close();
+          const jobs = await listJobs(db, { type: "scan" });
+          expect(jobs.map((job) => job.payload)).toHaveLength(3);
+          expect(jobs.map((job) => job.payload)).toEqual(
+            expect.arrayContaining(
+              [
+                ["Show A", { ...intoShow, providerIds: {} }],
+                ["Show B", { ...intoShow, providerIds }],
+                ["Show C", { ...intoFolder, providerIds }],
+              ].map(([path, change]) => ({
+                type: "scan",
+                libraryId: library.id,
+                path,
+                changes: [change],
+              })),
+            ),
+          );
+        } finally {
+          await debouncer.close();
+        }
+      });
     }));
 
   test("the api role accepts api-key webhooks and rejects other callers", () =>

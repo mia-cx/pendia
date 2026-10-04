@@ -1,11 +1,12 @@
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { libraries, type ScanChange } from "../db/schema/index.ts";
+import { files, libraries, type ScanChange } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
+import { leavesRoot } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { scanScope } from "./scan.ts";
 import { type ChangeEvent, radarrChanges, sonarrChanges } from "./servarr.ts";
@@ -261,14 +262,32 @@ export function createChangeDebouncer(
           "Webhook path must name a folder inside the library root.",
         );
       resolved.push({ libraryId: found.libraryId, path: directory, scan });
-      // A move between folders scans its source too. Servarr's provider ids
-      // name the destination, so the source scan goes without them.
-      if (previousDirectory !== undefined && previousDirectory !== directory)
-        resolved.push({
-          libraryId: found.libraryId,
-          path: previousDirectory,
-          scan: { ...scan, providerIds: {} },
-        });
+      // A move into another Show or Movie scans its source too. Servarr's
+      // provider ids name the destination, so the source scan goes without them.
+      if (
+        scan.kind === "move" &&
+        previousDirectory !== undefined &&
+        previousDirectory !== directory
+      ) {
+        const [file] = await db
+          .select({ itemId: files.itemId })
+          .from(files)
+          .where(
+            and(
+              eq(files.libraryId, found.libraryId),
+              eq(files.path, scan.previousPath),
+            ),
+          );
+        if (
+          file !== undefined &&
+          (await leavesRoot(db, found.libraryId, file.itemId, scan.path))
+        )
+          resolved.push({
+            libraryId: found.libraryId,
+            path: previousDirectory,
+            scan: { ...scan, providerIds: {} },
+          });
+      }
     }
     queueChanges(resolved);
   };

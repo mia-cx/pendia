@@ -1,16 +1,6 @@
 import { lstat } from "node:fs/promises";
 import { join, posix } from "node:path";
-import {
-  and,
-  desc,
-  eq,
-  inArray,
-  isNull,
-  ne,
-  notInArray,
-  or,
-  sql,
-} from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -38,12 +28,13 @@ const rootItemId = async (db: Connection, itemId: string): Promise<string> => {
   return root?.id ?? itemId;
 };
 
-/** Finds the Show or Movie whose folder holds a library-relative path. */
-const rootItemAt = async (
+/** Reports whether a library-relative path lies in another Show or Movie than the given Item. */
+export async function leavesRoot(
   db: Connection,
   libraryId: string,
+  itemId: string,
   path: string,
-): Promise<string | undefined> => {
+): Promise<boolean> {
   const folders: string[] = [];
   for (
     let folder = posix.dirname(path);
@@ -51,7 +42,7 @@ const rootItemAt = async (
     folder = posix.dirname(folder)
   )
     folders.push(folder);
-  if (folders.length === 0) return undefined;
+  if (folders.length === 0) return false;
   const [root] = await db
     .select({ id: items.id })
     .from(items)
@@ -64,7 +55,17 @@ const rootItemAt = async (
     )
     .orderBy(desc(sql`length(${items.canonicalFolder})`))
     .limit(1);
-  return root?.id;
+  return root !== undefined && root.id !== (await rootItemId(db, itemId));
+}
+
+/** Lists a size and mtime key for every File under one root Item. */
+const rootFileStamps = async (db: Connection, rootId: string) => {
+  const rows = await db
+    .select({ bytes: files.bytes, modifiedAt: files.modifiedAt })
+    .from(files)
+    .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
+    .where(eq(itemAncestors.ancestorId, rootId));
+  return rows.map((row) => `${row.bytes}:${row.modifiedAt.getTime()}`);
 };
 
 /** Removes one File, or its Version when no other File remains, and returns the Item that may now be empty. */
@@ -244,9 +245,6 @@ export async function applyScanChanges(
         ? requireRelativePath(change.previousPath, false)
         : undefined,
   }));
-  const movedPaths = normalized
-    .filter(({ change }) => change.kind === "move")
-    .map(({ path }) => path);
   const emptiedItemIds: string[] = [];
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
@@ -265,8 +263,8 @@ export async function applyScanChanges(
       if (file && destination) {
         if (file.id === destination.id) continue;
         // A collision replaces only the colliding Item. The exception is a
-        // duplicate root an early scan made of a moved folder: it holds only
-        // Files this batch moves in, and it goes whole.
+        // duplicate root an early scan made of a moved folder. A rename keeps
+        // size and mtime, so each of its Files matches one of the source's.
         if (destination.itemId === file.itemId) {
           await db
             .delete(versions)
@@ -274,24 +272,15 @@ export async function applyScanChanges(
         } else {
           const sourceRootId = await rootItemId(db, file.itemId);
           const destinationRootId = await rootItemId(db, destination.itemId);
-          const duplicate =
-            sourceRootId !== destinationRootId &&
-            (
-              await db
-                .select({ id: files.id })
-                .from(files)
-                .innerJoin(
-                  itemAncestors,
-                  eq(itemAncestors.descendantId, files.itemId),
-                )
-                .where(
-                  and(
-                    eq(itemAncestors.ancestorId, destinationRootId),
-                    notInArray(files.path, movedPaths),
-                  ),
-                )
-                .limit(1)
-            ).length === 0;
+          let duplicate = false;
+          if (sourceRootId !== destinationRootId) {
+            const sourceStamps = new Set(
+              await rootFileStamps(db, sourceRootId),
+            );
+            duplicate = (await rootFileStamps(db, destinationRootId)).every(
+              (stamp) => sourceStamps.has(stamp),
+            );
+          }
           await deleteItemSubtree(
             db,
             duplicate ? destinationRootId : destination.itemId,
@@ -302,11 +291,7 @@ export async function applyScanChanges(
       if (file) {
         // A move into another Show or Movie leaves its source, and the
         // destination folder's scan adds it there. Progress stays behind.
-        const destinationRootId = await rootItemAt(db, libraryId, path);
-        if (
-          destinationRootId !== undefined &&
-          destinationRootId !== (await rootItemId(db, file.itemId))
-        ) {
+        if (await leavesRoot(db, libraryId, file.itemId, path)) {
           const emptied = await removeFile(db, file);
           if (emptied !== undefined) emptiedItemIds.push(emptied);
           continue;

@@ -393,7 +393,8 @@ export function createSessionManager(
   };
 
   // Moves the registry state the client sees, only from the expected state,
-  // so a stop or a start the client made in between wins.
+  // so a stop or a start the client made in between wins. The row and its
+  // event commit together, so nobody reads the state without its event.
   const recordState = (
     session: LiveSession,
     from: "starting" | "queued",
@@ -401,25 +402,27 @@ export function createSessionManager(
   ) => {
     const { sessionId } = session.scope;
     session.registryWrites = session.registryWrites
-      .then(async () => {
-        const moved = await db
-          .update(sessionRegistry)
-          .set({ state: to })
-          .where(
-            and(
-              eq(sessionRegistry.id, sessionId),
-              eq(sessionRegistry.state, from),
-            ),
-          )
-          .returning({ id: sessionRegistry.id });
-        if (moved.length > 0) {
-          await publishEvent(db, {
-            kind: "session.state",
-            sessionId,
-            state: to,
-          });
-        }
-      })
+      .then(() =>
+        db.transaction(async (tx) => {
+          const moved = await tx
+            .update(sessionRegistry)
+            .set({ state: to })
+            .where(
+              and(
+                eq(sessionRegistry.id, sessionId),
+                eq(sessionRegistry.state, from),
+              ),
+            )
+            .returning({ id: sessionRegistry.id });
+          if (moved.length > 0) {
+            await publishEvent(tx, {
+              kind: "session.state",
+              sessionId,
+              state: to,
+            });
+          }
+        }),
+      )
       .catch((error: unknown) =>
         log("error", "session.state_failed", {
           sessionId,

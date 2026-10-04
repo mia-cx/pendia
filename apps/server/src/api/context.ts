@@ -5,6 +5,7 @@ import { authenticate } from "../auth/sessions.ts";
 import { readAuthSettings } from "../auth/settings.ts";
 import { requestIdentity } from "../auth/transport.ts";
 import type { Database } from "../db/client.ts";
+import type { PluginRuntime } from "../plugins/runtime.ts";
 import { fromHost, runApi } from "./errors.ts";
 import type { EventBroker } from "./events.ts";
 
@@ -14,6 +15,7 @@ export type ApiContext = {
   request: Request;
   peerAddress: string;
   events: EventBroker;
+  plugins: PluginRuntime;
 };
 
 /** The error map every procedure shares so oRPC documents and types it. */

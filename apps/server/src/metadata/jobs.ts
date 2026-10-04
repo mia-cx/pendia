@@ -5,6 +5,8 @@ import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { items } from "../db/schema/index.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
+import { emitPluginEvents } from "../plugins/events.ts";
+import type { PluginRuntime } from "../plugins/runtime.ts";
 import { readProviderKey } from "../providers/keys.ts";
 import {
   removeSelectedArtwork,
@@ -23,11 +25,25 @@ async function publishLibraryChanged(db: Database, itemId: string) {
   });
 }
 
-/** Registers the built-in provider-fetch job handler. */
+async function emitItemUpdated(db: Database, itemId: string) {
+  await db.transaction(async (tx) => {
+    const [item] = await tx
+      .select({ kind: items.kind })
+      .from(items)
+      .where(eq(items.id, itemId));
+    if (item)
+      await emitPluginEvents(tx, [
+        { event: "item.updated", payload: { itemId, kind: item.kind } },
+      ]);
+  });
+}
+
+/** Registers the provider-fetch job handler; plugin metadata providers join TMDB when a runtime is given. */
 export function registerMetadataJobs(
   db: Database,
   registry: ReturnType<typeof createJobRegistry>,
   request: typeof fetch = fetch,
+  plugins?: PluginRuntime,
 ): void {
   registry.register("provider-fetch", async (payload) => {
     const config = await readMetadataSettings(db);
@@ -36,9 +52,12 @@ export function registerMetadataJobs(
     const tmdbKey = storedTmdbKey || config.tmdb?.apiKey;
     if (tmdbKey !== undefined)
       providers.push(createTmdbMetadataProvider(tmdbKey, request));
+    if (plugins !== undefined)
+      providers.push(...(await plugins.metadataProviders()));
     const application = await applyMetadata(db, payload.itemId, providers);
     await publishLibraryChanged(db, payload.itemId);
     if (application.state !== "matched") return;
+    await emitItemUpdated(db, payload.itemId);
     const poster = application.artwork.find(
       (candidate) => candidate.type === "poster",
     );

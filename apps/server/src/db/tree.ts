@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import { emitPluginEvents } from "../plugins/events.ts";
 import type { Database } from "./client.ts";
 import {
   artwork,
@@ -127,6 +128,9 @@ export async function insertItem(db: Connection, input: NewItem) {
         depth: ancestor.depth + 1,
       })),
     ]);
+    await emitPluginEvents(tx, [
+      { event: "item.added", payload: { itemId: item.id, kind: item.kind } },
+    ]);
     return item;
   });
 }
@@ -216,8 +220,8 @@ export async function deleteItemSubtree(
     const item = await getItem(tx, itemId);
     await lockLibrary(tx, item.libraryId);
     // Serialize the artwork snapshot against concurrent stores on descendants.
-    await tx
-      .select({ id: items.id })
+    const removed = await tx
+      .select({ itemId: items.id, kind: items.kind })
       .from(items)
       .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
       .where(eq(itemAncestors.ancestorId, itemId))
@@ -268,5 +272,9 @@ export async function deleteItemSubtree(
       deletedArtwork.push(row);
     }
     await tx.delete(items).where(eq(items.id, itemId));
+    await emitPluginEvents(
+      tx,
+      removed.map((payload) => ({ event: "item.removed", payload })),
+    );
   });
 }

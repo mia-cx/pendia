@@ -114,9 +114,14 @@ function isResponse(value: unknown): value is PluginResponse {
   );
 }
 
-/** Enqueues one plugin job per schedule tick, once across every worker. */
-async function enqueueTick(db: Database, pluginName: string, id: string) {
-  const minute = new Date();
+/** Enqueues one plugin job per schedule tick, once across every worker that fires it in the same minute. */
+export async function enqueueTick(
+  db: Database,
+  pluginName: string,
+  id: string,
+  at = new Date(),
+) {
+  const minute = new Date(at);
   minute.setUTCSeconds(0, 0);
   const jobId = Bun.randomUUIDv5(
     `${pluginName}\0${id}\0${minute.toISOString()}`,

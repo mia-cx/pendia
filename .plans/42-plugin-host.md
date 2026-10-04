@@ -29,7 +29,7 @@ Build the plugin host from `docs/spec/plugins.md`, `docs/spec/plugin-api.d.ts` a
   - `plugins/host.ts` builds the host per plugin from approved capabilities minus switched-off files, so an absent capability is an absent member. items, progress, files (path containment, per-call switch check), network-restricted fetch, config and log.
   - `plugins/runtime.ts` imports a plugin on first use, calls setup, holds its registrations and wraps every plugin callback: a throw or boundary violation marks it failed with the error logged and unloads it.
   - Validation: Postgres tests with fixture plugins for gating, the boundary check, the files switches and a throwing setup.
-- [ ] 4. Bridges: providers, events, jobs, routes, shelves.
+- [x] 4. Bridges: providers, events, jobs, routes, shelves.
   - Plugin metadata providers join the provider-fetch job's provider list; subtitle and artwork providers are held for their consumers.
   - Events: publishing an event enqueues one `plugin` job per enabled plugin with the events capability, so delivery is once across workers and NOTIFY wakes them. Emit item, progress and playback events at their write sites.
   - Jobs: `schedule` runs `Bun.cron` in worker processes, each tick enqueues a deduplicated `plugin` job, and the worker runs the handler.

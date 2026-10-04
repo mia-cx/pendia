@@ -139,7 +139,7 @@ async function retryScan() {
   <title>Set up Pendia</title>
 </svelte:head>
 
-<main>
+<main class="legacy">
   <h1>Set up Pendia</h1>
 
   <ol class="steps">

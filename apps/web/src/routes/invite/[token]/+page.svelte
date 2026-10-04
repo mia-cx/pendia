@@ -67,7 +67,7 @@ async function submit(event: SubmitEvent) {
   <title>Join Pendia</title>
 </svelte:head>
 
-<main>
+<main class="legacy">
   {#if status === "live"}
     <h1>Create your account</h1>
     {#if failure}

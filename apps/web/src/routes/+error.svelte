@@ -8,7 +8,7 @@ const unreachable = $derived(page.error?.code === "UNREACHABLE");
   <title>Pendia</title>
 </svelte:head>
 
-<main>
+<main class="legacy">
   <div class="failure" role="alert">
     {#if unreachable}
       <h2>Server unreachable</h2>

@@ -141,7 +141,7 @@ function show(event: PageTransitionEvent) {
 
 <svelte:window onpagehide={hide} onpageshow={show} />
 
-<div class="player">
+<div class="player legacy">
   <div class="bar">
     <a class="back" href={back} onclick={leave}
       ><span aria-hidden="true">‹</span> Back</a

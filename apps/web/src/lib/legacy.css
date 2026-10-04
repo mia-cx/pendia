@@ -1,0 +1,195 @@
+/*
+  Temporary home for the old element styles, keeping screens that are not yet
+  redesigned readable. Each redesign slice removes its screen's `legacy` class;
+  the last one deletes this file.
+*/
+
+/* Old token names now alias the role tokens, so scoped styles keep resolving. */
+:root {
+  --canvas: var(--background);
+  --ink: var(--label);
+  --muted: var(--label-secondary);
+  --signal: var(--tint);
+  --danger: var(--destructive);
+  --surface: var(--background-elevated);
+  --line: var(--separator);
+  /* @theme only emits --radius-poster when a utility uses it; old scoped styles still need it. */
+  --radius-poster: 0.625rem;
+}
+
+@layer base {
+  .legacy {
+    font-size: 1rem;
+    line-height: 1.5;
+    letter-spacing: normal;
+  }
+
+  /* Undo the parts of preflight the old markup leaned on. */
+  .legacy
+  :where(
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6,
+    p,
+    ul,
+    ol,
+    dl,
+    dd,
+    figure,
+    blockquote,
+    pre,
+    hr,
+    menu
+  ) {
+    margin: revert;
+  }
+
+  .legacy :where(ul, ol, menu) {
+    padding: revert;
+    list-style: revert;
+  }
+
+  .legacy :where(h1, h2, h3) {
+    font-weight: revert;
+  }
+
+  .legacy :where(h4, h5, h6) {
+    font-size: revert;
+    font-weight: revert;
+  }
+
+  .legacy :where(a) {
+    color: revert;
+    text-decoration: revert;
+  }
+
+  .legacy :where(b, strong) {
+    font-weight: bolder;
+  }
+
+  .legacy :where(fieldset) {
+    margin: revert;
+    padding: revert;
+    border: revert;
+  }
+
+  .legacy :where(img, svg, video, canvas) {
+    display: revert;
+    vertical-align: revert;
+  }
+
+  .legacy :where(button, input, select, textarea) {
+    background-color: revert;
+    padding: revert;
+    border: revert;
+    border-radius: revert;
+    color: revert;
+    font: revert;
+  }
+
+  .legacy h1,
+  .legacy h2,
+  .legacy h3 {
+    line-height: 1.2;
+    text-wrap: balance;
+  }
+
+  .legacy h1 {
+    font-size: 28px;
+  }
+
+  .legacy h2 {
+    font-size: 20px;
+  }
+
+  .legacy h3 {
+    font-size: 16px;
+  }
+
+  .legacy table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .legacy th,
+  .legacy td {
+    padding: 8px 12px;
+    border-bottom: 1px solid color-mix(in oklch, var(--ink) 16%, transparent);
+    text-align: left;
+  }
+
+  .legacy th {
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .legacy label {
+    display: block;
+    font-weight: 600;
+  }
+
+  .legacy input,
+  .legacy select {
+    min-height: 32px;
+    padding: 4px 8px;
+    border: 1px solid color-mix(in oklch, var(--ink) 32%, transparent);
+    border-radius: 6px;
+    background: var(--canvas);
+    color: var(--ink);
+    font: inherit;
+  }
+
+  .legacy button {
+    min-height: 32px;
+    padding: 4px 14px;
+    border: 1px solid color-mix(in oklch, var(--ink) 32%, transparent);
+    border-radius: 6px;
+    background: var(--canvas);
+    color: var(--ink);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .legacy button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .legacy fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .legacy .failure {
+    padding: 12px 16px;
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+  }
+
+  .legacy .failure h2 {
+    margin: 0 0 4px;
+    font-size: 16px;
+  }
+
+  .legacy .failure p {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .legacy .poster-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(140px, 25vw), 1fr));
+    gap: 24px 16px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .legacy .muted {
+    color: var(--muted);
+  }
+}

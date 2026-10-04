@@ -1,13 +1,16 @@
 import { sveltekit } from "@sveltejs/kit/vite";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
+const api = process.env.PENDIA_DEV_API ?? "http://127.0.0.1:3000";
+
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [tailwindcss(), sveltekit()],
   server: {
     proxy: {
-      "/rpc": "http://127.0.0.1:3000",
-      "/api": "http://127.0.0.1:3000",
-      "/healthz": "http://127.0.0.1:3000",
+      "/rpc": api,
+      "/api": api,
+      "/healthz": api,
     },
   },
 });

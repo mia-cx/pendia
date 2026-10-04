@@ -62,6 +62,7 @@ const titleCase = (role: string) =>
   <title>{item.data ? `${item.data.title} · Pendia` : "Pendia"}</title>
 </svelte:head>
 
+<div class="legacy">
 {#if item.failure}
   <Failure failure={item.failure} />
 {:else if item.data}
@@ -211,6 +212,7 @@ const titleCase = (role: string) =>
     {/if}
   </article>
 {/if}
+</div>
 
 <style>
   .backdrop {

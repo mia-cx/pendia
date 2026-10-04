@@ -19,6 +19,7 @@ const sections = [
   <title>Pendia admin</title>
 </svelte:head>
 
+<div class="legacy">
 <header>
   <a class="brand" href="/">Pendia</a>
   <nav aria-label="Admin sections">
@@ -41,6 +42,7 @@ const sections = [
 <main>
   {@render children()}
 </main>
+</div>
 
 <style>
   header {

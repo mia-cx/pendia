@@ -53,7 +53,7 @@ async function submit(event: SubmitEvent) {
   <title>Sign in · Pendia</title>
 </svelte:head>
 
-<main>
+<main class="legacy">
   <h1>Sign in</h1>
   {#if shown}
     <Failure failure={shown} />

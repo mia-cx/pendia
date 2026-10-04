@@ -62,6 +62,7 @@ function submit(event: SubmitEvent) {
 }
 </script>
 
+<div class="legacy">
 <header>
   <a class="brand" href="/">Pendia</a>
   <nav aria-label="Library">
@@ -95,6 +96,7 @@ function submit(event: SubmitEvent) {
 <main>
   {@render children()}
 </main>
+</div>
 
 <style>
   header {

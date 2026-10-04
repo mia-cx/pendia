@@ -1,14 +1,19 @@
 import { eventIterator } from "@orpc/server";
 import { Schema } from "effect";
 import { isBuiltInAdmin } from "../auth/permissions.ts";
+import { refreshItem as queueItemRefresh } from "../metadata/jobs.ts";
 import {
   groupProcedures,
   settingsProcedures,
   setupProcedures,
   userProcedures,
 } from "./admin.ts";
-import { authenticated, authenticateRequest } from "./context.ts";
-import { runApi } from "./errors.ts";
+import {
+  authenticated,
+  authenticatedMutation,
+  authenticateRequest,
+} from "./context.ts";
+import { fromHost, runApi } from "./errors.ts";
 import { getItemDetail, listItemCards, searchItems } from "./items.ts";
 import { libraryProcedures } from "./libraries.ts";
 import { markProcedures, shelfProcedures } from "./marks.ts";
@@ -59,6 +64,18 @@ const getItem = authenticated
     runApi(getItemDetail(context.db, context.caller, input.id)),
   );
 
+const refreshItem = authenticatedMutation
+  .route({ method: "POST", path: "/items/{id}/refresh" })
+  .input(Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID })))
+  .output(Schema.standardSchemaV1(Schema.Struct({ jobId: Schema.UUID })))
+  .handler(async ({ context, input }) =>
+    runApi(
+      fromHost(() =>
+        queueItemRefresh(context.db, context.caller.user.id, input.id),
+      ),
+    ),
+  );
+
 const SearchQuery = Schema.Trim.pipe(
   Schema.minLength(1),
   Schema.maxLength(200),
@@ -91,7 +108,7 @@ const streamEvents = authenticated
 /** The API router: procedures defined once, served over both RPC and REST. */
 export const pendiaRouter = {
   me,
-  items: { list: listItems, get: getItem, search },
+  items: { list: listItems, get: getItem, search, refresh: refreshItem },
   libraries: libraryProcedures,
   playback: playbackProcedures,
   marks: markProcedures,

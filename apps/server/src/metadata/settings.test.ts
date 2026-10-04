@@ -15,7 +15,7 @@ describe.skipIf(!databaseUrl)("metadata settings", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       expect(await readMetadataSettings(db)).toEqual({
-        providerOrder: ["tmdb"],
+        providerOrder: ["tmdb", "tvdb"],
         confidenceThreshold: 0.9,
         libraries: {},
         tmdb: null,
@@ -88,7 +88,7 @@ describe.skipIf(!databaseUrl)("metadata settings", () => {
         .where(eq(settings.key, "metadata"));
       const lowest = await readMetadataSettings(db);
       expect(lowest.confidenceThreshold).toBe(0);
-      expect(providersForLibrary(lowest, "movies")).toEqual(["tmdb"]);
+      expect(providersForLibrary(lowest, "movies")).toEqual(["tmdb", "tvdb"]);
     }));
 
   test("providersForLibrary returns fresh arrays callers cannot mutate", () => {

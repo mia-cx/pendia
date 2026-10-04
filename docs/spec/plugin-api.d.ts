@@ -175,12 +175,16 @@ export interface PluginResponse {
 export interface MetadataProvider {
   id: string;
   kinds: ItemKind[];
-  /** `providerIds` carries ids other providers already assert, such as an IMDb id from the folder name. */
+  /**
+   * `providerIds` carries ids other providers already assert, such as an IMDb id from the folder name.
+   * `show` is present for seasons and episodes: the parent Show's provider ids and the Item's numbers.
+   */
   search(query: {
     title: string;
     year?: number;
     kind: ItemKind;
     providerIds?: Record<string, string>;
+    show?: { providerIds: Record<string, string>; seasonNumber: number; episodeNumber?: number };
   }): Promise<MetadataMatch[]>;
   /** Resolves null when the provider has no record for `providerId`, so the host can mark the Item unmatched. */
   fetch(match: { providerId: string; kind: ItemKind }): Promise<MetadataResult | null>;
@@ -202,6 +206,12 @@ export interface MetadataResult {
   credits: { name: string; role: string; character?: string; order: number }[];
   artwork: { type: "poster" | "backdrop" | "logo" | "thumb"; url: string }[];
   providerIds: Record<string, string>;
+  /** The first release or air date as `YYYY-MM-DD`. */
+  releaseDate?: string | null;
+  /** Shows only: the last air date as `YYYY-MM-DD`. */
+  lastAirDate?: string | null;
+  /** Shows only: the lowercase airing status, such as "continuing", "ended" or "upcoming". */
+  status?: string | null;
 }
 
 export interface SubtitleProvider {

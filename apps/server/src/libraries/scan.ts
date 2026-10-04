@@ -22,7 +22,7 @@ import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
-import { removeColocatedArtworkFiles } from "../metadata/artwork-store.ts";
+import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import {
   applyScanChanges,
   findItemByProviderIds,
@@ -201,7 +201,7 @@ export async function scanDirectory(
     Object.assign(changeProviderIds, change.providerIds);
   }
 
-  // Colocated artwork of deleted Items is removed only after the delete commits.
+  // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -403,7 +403,7 @@ export async function scanDirectory(
     await persistScanTimelines(tx, itemId);
     return { itemId, versionIds };
   });
-  await removeColocatedArtworkFiles(deletedArtwork);
+  await removeArtworkFiles(deletedArtwork);
   return { ...written, probed };
 }
 
@@ -471,7 +471,7 @@ export async function scanShowDirectory(
     Object.assign(mergedProviderIds, change.providerIds);
   }
 
-  // Colocated artwork of deleted Items is removed only after the delete commits.
+  // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
   const written = await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -926,7 +926,19 @@ export async function scanShowDirectory(
     }
 
     // A changed provider id invalidates the match, so metadata re-fetches.
-    if (await setItemProviderIds(tx, showId, mergedProviderIds)) {
+    // Webhook ids assert; folder tags only fill ids nothing asserted yet.
+    const assertedChanged = await setItemProviderIds(
+      tx,
+      showId,
+      mergedProviderIds,
+    );
+    const filledChanged = await setItemProviderIds(
+      tx,
+      showId,
+      group.providerIds,
+      { fillOnly: true },
+    );
+    if (assertedChanged || filledChanged) {
       await tx
         .update(items)
         .set({ metadataState: "pending", updatedAt: new Date() })
@@ -934,6 +946,6 @@ export async function scanShowDirectory(
     }
     return { itemId: showId, versionIds };
   });
-  await removeColocatedArtworkFiles(deletedArtwork);
+  await removeArtworkFiles(deletedArtwork);
   return { ...written, probed };
 }

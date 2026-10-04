@@ -28,6 +28,15 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - name: Start S3-compatible server
+        # versitygw serves each directory under /data as a bucket.
+        run: |
+          mkdir -p "$RUNNER_TEMP/s3/pendia"
+          docker run --detach --rm --publish 127.0.0.1:7070:7070 \
+            --volume "$RUNNER_TEMP/s3:/data" \
+            --env ROOT_ACCESS_KEY=pendia --env ROOT_SECRET_KEY=pendia-secret \
+            --env VGW_BACKEND=posix --env VGW_BACKEND_ARG=/data \
+            versity/versitygw:v1.8.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
@@ -43,6 +52,7 @@ jobs:
       - run: bun test
         env:
           DATABASE_URL: postgresql://pendia:pendia@127.0.0.1:5432/pendia
+          TEST_S3_URL: http://pendia:pendia-secret@127.0.0.1:7070/pendia
 
   image:
     runs-on: ubuntu-latest

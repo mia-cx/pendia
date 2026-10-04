@@ -16,7 +16,7 @@ One binary, `--role api|worker|transcoder|watcher|all`. `all` is one process run
 ## Storage
 
 - Media: the library shares, read by every role. Stored Versions live next to their source in `.pendia` folders, see [transcoding.md](./transcoding.md).
-- Artwork store: originals fetched from providers live in one of three configurable backends: colocated in the Item's `.pendia` folder, which is the default; a configured path; or S3-compatible object storage. Resized copies are a local per-process cache and are recomputable.
+- Artwork store: originals fetched from providers live in one of three configurable backends: colocated in the Item's `.pendia` folder, which is the default; a configured path; or S3-compatible object storage. The backend is chosen at setup, and moving existing artwork between backends is unsupported in the MVP. A colocated store on a read-only media share falls back to the configured path. Resized copies are a local per-process cache and are recomputable.
 - Postgres: everything else, including settings, the plugin lockfile, the session registry and the job queue.
 
 ## Jobs
@@ -25,7 +25,7 @@ One jobs table on Postgres, claimed with `SELECT ... FOR UPDATE SKIP LOCKED`. Co
 
 ## Config
 
-Environment variables bootstrap a process: the database URL, the role, the port, the scratch directory, and for a watcher the api URL and its token. Everything else lives in Postgres and is edited in the admin UI, applied without a restart wherever the setting allows.
+Environment variables bootstrap a process: the database URL, the role, the port, the scratch directory, the artwork store, and for a watcher the api URL and its token. Everything else lives in Postgres and is edited in the admin UI, applied without a restart wherever the setting allows.
 
 ## Plugins across processes
 

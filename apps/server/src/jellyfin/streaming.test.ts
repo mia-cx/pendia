@@ -2,12 +2,15 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import * as HLS from "hls-parser";
+import { sessionRegistry } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
+import { continueWatching } from "../playback/marks.ts";
 import { deviceProfiles } from "./profile-fixtures.ts";
-import { toGuid } from "./request.ts";
+import { parseGuid, toGuid } from "./request.ts";
 import { jellyfinLogin, seedMovies } from "./testing.ts";
 
 HLS.setOptions({ strictMode: true });
@@ -49,7 +52,7 @@ describe.skipIf(!databaseUrl)("jellyfin streaming", () => {
     "Infuse direct-plays the file and Swiftfin plays the transcode URL",
     () =>
       withDatabase(async (db, url) => {
-        const { movies } = await seedMovies(db, root, ["Atmos"]);
+        const { movies, viewer } = await seedMovies(db, root, ["Atmos"]);
         const movie = movies.get("Atmos");
         if (movie === undefined) throw new Error("Expected the movie.");
         const scratch = await mkdtemp(join(tmpdir(), "pendia-jellyfin-hls-"));
@@ -160,6 +163,45 @@ describe.skipIf(!databaseUrl)("jellyfin streaming", () => {
           const bare = new URL(subtitle?.DeliveryUrl ?? "", base);
           bare.search = "";
           expect((await fetch(bare)).status).toBe(401);
+
+          // Swiftfin reports against the session PlaybackInfo opened.
+          const report = (path: string, seconds: number) =>
+            fetch(`${base}${path}`, {
+              method: "POST",
+              headers: {
+                authorization: `${swiftfin}, Token="${swiftfinToken}"`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                ItemId: itemGuid,
+                MediaSourceId: toGuid(movie.versionId),
+                PlaySessionId: hls.PlaySessionId,
+                SessionId: hls.PlaySessionId,
+                PositionTicks: seconds * 10_000_000,
+                IsPaused: false,
+              }),
+            });
+          expect((await report("/Sessions/Playing", 0)).status).toBe(204);
+          expect((await report("/Sessions/Playing/Progress", 1)).status).toBe(
+            204,
+          );
+          expect((await report("/Sessions/Playing/Stopped", 2)).status).toBe(
+            204,
+          );
+          const [session] = await db
+            .select()
+            .from(sessionRegistry)
+            .where(eq(sessionRegistry.id, parseGuid(hls.PlaySessionId) ?? ""));
+          expect(session).toMatchObject({
+            playMethod: "transcode",
+            state: "stopped",
+          });
+          const shelf = await continueWatching(db, viewer.id, {});
+          expect(shelf.items[0]?.progress).toMatchObject({
+            itemId: movie.itemId,
+            positionSeconds: 2,
+            completed: false,
+          });
         } finally {
           await pendia.stop();
           await rm(scratch, { recursive: true, force: true });

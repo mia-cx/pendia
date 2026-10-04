@@ -4,6 +4,7 @@ import type { Route } from "./http.ts";
 import { imageRoutes } from "./images.ts";
 import { browseRoutes } from "./items.ts";
 import { playbackRoutes } from "./playback.ts";
+import { progressRoutes } from "./progress.ts";
 import { quickConnectRoutes } from "./quick-connect.ts";
 import { systemRoutes } from "./system.ts";
 import { userRoutes } from "./users.ts";
@@ -20,5 +21,6 @@ export function jellyfinRoutes(
     ...browseRoutes,
     ...imageRoutes(artwork),
     ...playbackRoutes(hls),
+    ...progressRoutes,
   ];
 }

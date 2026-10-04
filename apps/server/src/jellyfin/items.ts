@@ -54,7 +54,8 @@ const date = (day: string | null) =>
 const capitalised = (name: string) =>
   `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
 
-function userData(view: ItemView) {
+/** Builds a Jellyfin UserItemDataDto from the caller's marks on an Item view. */
+export function userData(view: ItemView) {
   const { marks, durationSeconds } = view;
   return {
     Rating: marks.rating ?? undefined,

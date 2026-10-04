@@ -21,6 +21,7 @@ import type { Database } from "../db/client.ts";
 import {
   artwork,
   favourites,
+  itemAncestors,
   items,
   progress,
   ratings,
@@ -84,6 +85,63 @@ export async function setFavourite(
       .where(and(eq(favourites.userId, userId), eq(favourites.itemId, itemId)));
   }
   return getItemMarks(db, userId, itemId);
+}
+
+/**
+ * Marks an Item and everything under it played or unplayed for the caller,
+ * as marking a Show watched marks its Episodes. Played finishes each Item
+ * that has a Version and counts a play; unplayed clears the progress of all.
+ */
+export async function setPlayed(
+  db: Database,
+  userId: string,
+  itemId: string,
+  played: boolean,
+) {
+  await viewableItem(db, userId, itemId);
+  const tree = db
+    .select({ id: itemAncestors.descendantId })
+    .from(itemAncestors)
+    .where(eq(itemAncestors.ancestorId, itemId));
+  if (!played) {
+    await db
+      .delete(progress)
+      .where(and(eq(progress.userId, userId), inArray(progress.itemId, tree)));
+    return;
+  }
+  // Each Item's progress takes the format of its first Version.
+  const targets = await db
+    .selectDistinctOn([versions.itemId], {
+      itemId: versions.itemId,
+      format: versions.format,
+    })
+    .from(versions)
+    .where(and(inArray(versions.itemId, tree), eq(versions.origin, "imported")))
+    .orderBy(versions.itemId, versions.label, versions.id);
+  if (targets.length === 0) return;
+  await db
+    .insert(progress)
+    .values(
+      targets.map((target) => ({
+        userId,
+        ...target,
+        completed: true,
+        positionSeconds: 0,
+        playCount: 1,
+        playedAt: sql`clock_timestamp()`,
+        updatedAt: sql`clock_timestamp()`,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [progress.userId, progress.itemId],
+      set: {
+        completed: true,
+        positionSeconds: 0,
+        playCount: sql`${progress.playCount} + 1`,
+        playedAt: sql`clock_timestamp()`,
+        updatedAt: sql`clock_timestamp()`,
+      },
+    });
 }
 
 /** Sets or clears the caller's zero-to-ten, single-decimal rating on an Item. */

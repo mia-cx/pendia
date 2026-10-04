@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import { Schema } from "effect";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
@@ -231,6 +231,69 @@ async function touchSession(tx: LifecycleDb, sessionId: string) {
     .where(eq(sessionRegistry.id, sessionId));
 }
 
+/**
+ * Finds the play session a client reports against, for clients that play
+ * without asking Pendia to plan: the named session when it is the caller's,
+ * live and on this Item; else the caller's newest live session on the Item,
+ * since a client may name a session Pendia never issued; else a new
+ * direct-play session on the named Version, or the Item's first.
+ */
+export async function resolvePlaySession(
+  db: Database,
+  userId: string,
+  report: { itemId: string; sessionId?: string; versionId?: string },
+) {
+  const { itemId, sessionId } = report;
+  await requireViewableItem(db, userId, itemId);
+  await requirePermission(db, userId, "play");
+  const live = and(
+    eq(sessionRegistry.userId, userId),
+    eq(sessionRegistry.itemId, itemId),
+    ne(sessionRegistry.state, "stopped"),
+  );
+  const [found] = await db
+    .select({ id: sessionRegistry.id, versionId: sessionRegistry.versionId })
+    .from(sessionRegistry)
+    .where(live)
+    .orderBy(
+      sql`${sessionRegistry.id} = ${sessionId ?? null} desc nulls last`,
+      desc(sessionRegistry.createdAt),
+      desc(sessionRegistry.id),
+    )
+    .limit(1);
+  const [version] = await db
+    .select({ id: versions.id, durationSeconds: versions.durationSeconds })
+    .from(versions)
+    .where(
+      and(
+        eq(versions.itemId, itemId),
+        eq(versions.origin, "imported"),
+        found !== undefined
+          ? eq(versions.id, found.versionId)
+          : report.versionId === undefined
+            ? undefined
+            : eq(versions.id, report.versionId),
+      ),
+    )
+    .orderBy(asc(versions.label), asc(versions.id))
+    .limit(1);
+  if (version === undefined) throw new AuthError("NOT_FOUND");
+  if (found !== undefined)
+    return { sessionId: found.id, durationSeconds: version.durationSeconds };
+  const [opened] = await db
+    .insert(sessionRegistry)
+    .values({
+      userId,
+      itemId,
+      versionId: version.id,
+      playMethod: "direct-play",
+      state: "starting",
+    })
+    .returning({ id: sessionRegistry.id });
+  if (opened === undefined) throw new Error("Session insert returned no row.");
+  return { sessionId: opened.id, durationSeconds: version.durationSeconds };
+}
+
 /** Marks a planned session playing and records its first position. */
 export async function startPlayback(
   db: Database,
@@ -311,12 +374,12 @@ export async function updatePlayback(
   });
 }
 
-/** Stops a session, persisting the final position when it was playing; a queued or starting session stops without one. */
+/** Stops a session, persisting the final position when it was playing and one is given; a queued or starting session stops without one. */
 export async function stopPlayback(
   db: Database,
   userId: string,
   scope: Scope,
-  input: { positionSeconds: number; completed?: boolean },
+  input: { positionSeconds?: number; completed?: boolean },
 ) {
   checkScope(scope);
   return db.transaction(async (tx) => {
@@ -326,7 +389,7 @@ export async function stopPlayback(
         state: "stopped" as const,
         progress: await readProgress(tx, userId, scope.itemId),
       };
-    if (session.state === "playing") {
+    if (session.state === "playing" && input.positionSeconds !== undefined) {
       checkPosition(input.positionSeconds, version.durationSeconds);
       await upsertProgress(
         tx,

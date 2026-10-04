@@ -48,6 +48,10 @@ export type ItemViewQuery = {
   readonly kinds?: readonly ItemKind[];
   readonly ids?: readonly string[];
   readonly search?: string;
+  /** Titles starting with this text, ignoring case. */
+  readonly nameStartsWith?: string;
+  /** Titles that sort before this text, ignoring case. */
+  readonly nameLessThan?: string;
   readonly favourite?: boolean;
   readonly played?: boolean;
   readonly resumable?: boolean;
@@ -180,6 +184,13 @@ function filtersOf(viewable: string[], query: ItemViewQuery) {
     search === undefined
       ? undefined
       : sql`(${items.title} % ${search} or ${search} <% ${items.title})`,
+    query.nameStartsWith === undefined
+      ? undefined
+      : sql`starts_with(lower(${items.title}), lower(${query.nameStartsWith}))`,
+    // Byte order, so "#" in a letter picker means digits and symbols before "a".
+    query.nameLessThan === undefined
+      ? undefined
+      : sql`lower(${items.title}) collate "C" < lower(${query.nameLessThan}) collate "C"`,
     query.favourite === undefined
       ? undefined
       : sql`(${favourites.id} is not null) = ${query.favourite}`,

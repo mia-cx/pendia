@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { seedBrowse } from "../api/view-fixtures.ts";
+import type { Database } from "../db/client.ts";
+import { progress } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { createJellyfinHandler } from "./http.ts";
@@ -27,42 +29,50 @@ function conforms(result: QueryResult) {
   return result.Items.map((item) => item.Name);
 }
 
+// A Findroid client against the Jellyfin handler, signed in by name.
+async function signIn(db: Database, username: string, password: string) {
+  const handle = createJellyfinHandler(
+    db,
+    jellyfinRoutes(createArtworkHandler(db)),
+  );
+  const send = async (path: string, header: string, body?: object) => {
+    const response = await handle(
+      new Request(`http://pendia.test${path}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: { Authorization: header, "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+      "127.0.0.1",
+    );
+    if (response === undefined) throw new Error(`${path} unrouted`);
+    return response;
+  };
+  const login = (await (
+    await send("/Users/AuthenticateByName", findroid, {
+      Username: username,
+      Pw: password,
+    })
+  ).json()) as { AccessToken: string; User: { Id: string } };
+  const signedIn = `${findroid}, Token="${login.AccessToken}"`;
+  const get = async <T = QueryResult>(path: string) => {
+    const response = await send(path, signedIn);
+    expect(response.status).toBe(200);
+    return (await response.json()) as T;
+  };
+  return { send, get, signedIn, userId: login.User.Id };
+}
+
+const guid = toGuid;
+
 describe.skipIf(!databaseUrl)("jellyfin browse", () => {
   test("browses movies and shows as Swiftfin and Findroid do", () =>
     withDatabase(async (db) => {
       const s = await seedBrowse(db);
-      const handle = createJellyfinHandler(
+      const { send, get, signedIn, userId } = await signIn(
         db,
-        jellyfinRoutes(createArtworkHandler(db)),
+        "viewer",
+        "viewer-pass",
       );
-      const send = async (path: string, header: string) => {
-        const response = await handle(
-          new Request(`http://pendia.test${path}`, {
-            method: path.startsWith("/Users/Authenticate") ? "POST" : "GET",
-            headers: {
-              Authorization: header,
-              "content-type": "application/json",
-            },
-            body: path.startsWith("/Users/Authenticate")
-              ? JSON.stringify({ Username: "viewer", Pw: "viewer-pass" })
-              : undefined,
-          }),
-          "127.0.0.1",
-        );
-        if (response === undefined) throw new Error(`${path} unrouted`);
-        return response;
-      };
-      const login = (await (
-        await send("/Users/AuthenticateByName", findroid)
-      ).json()) as { AccessToken: string; User: { Id: string } };
-      const signedIn = `${findroid}, Token="${login.AccessToken}"`;
-      const get = async <T = QueryResult>(path: string) => {
-        const response = await send(path, signedIn);
-        expect(response.status).toBe(200);
-        return (await response.json()) as T;
-      };
-      const userId = login.User.Id;
-      const guid = toGuid;
 
       const views = await get(`/UserViews?userId=${userId}`);
       expect(conforms(views)).toEqual(["Movies", "Shows"]);
@@ -153,5 +163,54 @@ describe.skipIf(!databaseUrl)("jellyfin browse", () => {
       );
       expect(hidden.TotalRecordCount).toBe(0);
       expect((await send("/Items", findroid)).status).toBe(401);
+    }));
+
+  test("answers the library list, letter picker and home rows clients ask for", () =>
+    withDatabase(async (db) => {
+      const s = await seedBrowse(db);
+      const { get, userId } = await signIn(db, "viewer", "viewer-pass");
+
+      // Findroid lists libraries with a flat, parentless /Items.
+      const roots = await get(`/Items?userId=${userId}`);
+      expect(conforms(roots)).toEqual(["Movies", "Shows"]);
+      expect(roots.Items.map((item) => item.CollectionType)).toEqual([
+        "movies",
+        "tvshows",
+      ]);
+
+      const grid = `/Items?parentId=${guid(s.films.id)}&recursive=true&includeItemTypes=Movie`;
+      expect(conforms(await get(`${grid}&nameStartsWith=h`))).toEqual(["Heat"]);
+      expect(conforms(await get(`${grid}&NameLessThan=B`))).toEqual([
+        "Arrival",
+      ]);
+
+      // Android TV's Continue Listening row asks for audio, which Pendia has none of.
+      expect(conforms(await get("/UserItems/Resume?mediaTypes=Audio"))).toEqual(
+        [],
+      );
+      expect(conforms(await get("/UserItems/Resume?mediaTypes=Video"))).toEqual(
+        ["The Matrix"],
+      );
+
+      // A started next episode stays in Resume when the client asks it to.
+      await db.insert(progress).values({
+        userId: s.viewer.id,
+        itemId: s.episodeTwo.id,
+        format: "video",
+        positionSeconds: 30,
+        playedAt: new Date(),
+      });
+      const nextUp = `/Shows/NextUp?seriesId=${guid(s.show.id)}`;
+      expect(conforms(await get(nextUp))).toEqual(["Half Loop"]);
+      expect(conforms(await get(`${nextUp}&enableResumable=false`))).toEqual(
+        [],
+      );
+
+      // Before any episode is finished, a named Show offers its first one.
+      const admin = await signIn(db, "admin", "admin-pass");
+      expect(conforms(await admin.get(nextUp))).toEqual([
+        "Good News About Hell",
+      ]);
+      expect(conforms(await admin.get("/Shows/NextUp"))).toEqual([]);
     }));
 });

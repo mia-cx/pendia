@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertItem } from "../db/tree.ts";
 import { seedBrowse } from "./view-fixtures.ts";
 import {
   type ItemViewQuery,
@@ -60,6 +61,26 @@ describe.skipIf(!databaseUrl)("item views", () => {
         (await titles({ kinds: ["movie", "show"], sort: [{ by: "premiere" }] }))
           .titles[0],
       ).toBe("Severance");
+
+      await insertItem(db, {
+        libraryId: s.films.id,
+        kind: "movie",
+        title: "2001: A Space Odyssey",
+        canonicalFolder: "2001",
+        extension: {},
+      });
+      const movies = { kinds: ["movie" as const] };
+      expect(await titles({ ...movies, nameStartsWith: "H" })).toEqual({
+        titles: ["Heat"],
+        total: 1,
+      });
+      expect((await titles({ ...movies, nameLessThan: "A" })).titles).toEqual([
+        "2001: A Space Odyssey",
+      ]);
+      expect((await titles({ ...movies, nameLessThan: "b" })).titles).toEqual([
+        "2001: A Space Odyssey",
+        "Arrival",
+      ]);
     }));
 
   test("carries medium fields, artwork, provider ids and the caller's marks", () =>

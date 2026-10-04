@@ -7,6 +7,7 @@ import {
   viewableLibraries,
 } from "../api/views.ts";
 import { AuthError } from "../auth/errors.ts";
+import type { Database } from "../db/client.ts";
 import { nextUp } from "../mediums/shows.ts";
 import { continueWatching } from "../playback/marks.ts";
 import { readServerId } from "../server-id.ts";
@@ -25,12 +26,7 @@ const itemTypes = {
   episode: "Episode",
 } as const satisfies Record<Kind, string>;
 
-const kindsByType = new Map<string, Kind>(
-  Object.entries(itemTypes).map(([kind, type]) => [
-    type.toLowerCase(),
-    kind as Kind,
-  ]),
-);
+const playableKinds = new Set<Kind>(["movie", "episode"]);
 
 const collectionTypes = { movies: "movies", shows: "tvshows" } as const;
 
@@ -72,7 +68,7 @@ function userData(view: ItemView) {
 
 /** Builds a Jellyfin BaseItemDto from an Item view. */
 export function baseItemDto(view: ItemView, serverId: string) {
-  const playable = view.kind === "movie" || view.kind === "episode";
+  const playable = playableKinds.has(view.kind);
   const show = view.show;
   const showBackdrop = show?.artwork.backdrop ?? null;
   return {
@@ -161,27 +157,39 @@ function queryResult(items: unknown[], total: number, startIndex: number) {
   return { Items: items, TotalRecordCount: total, StartIndex: startIndex };
 }
 
+async function librariesResult(db: Database, libraries: Library[]) {
+  const serverId = await readServerId(db);
+  return json(
+    queryResult(
+      libraries.map((library) => libraryDto(library, serverId)),
+      libraries.length,
+      0,
+    ),
+  );
+}
+
 function guids(values: string[]) {
   return values.flatMap((value) => parseGuid(value) ?? []);
 }
 
-/** Reads IncludeItemTypes and ExcludeItemTypes. Undefined means every kind. */
+/** Reads IncludeItemTypes, ExcludeItemTypes and MediaTypes. Undefined means every kind. */
 function kindsOf(query: Query): Kind[] | undefined {
-  const include = query.list("includeItemTypes");
-  const exclude = new Set(
-    query.list("excludeItemTypes").map((type) => type.toLowerCase()),
+  const lowered = (name: string) =>
+    new Set(query.list(name).map((value) => value.toLowerCase()));
+  const include = lowered("includeItemTypes");
+  const exclude = lowered("excludeItemTypes");
+  const media = lowered("mediaTypes");
+  if (include.size === 0 && exclude.size === 0 && media.size === 0)
+    return undefined;
+  const kinds = Object.keys(itemTypes) as Kind[];
+  const typeOf = (kind: Kind) => itemTypes[kind].toLowerCase();
+  // Every playable Pendia kind is a Video; folders have no media type.
+  return kinds.filter(
+    (kind) =>
+      (include.size === 0 || include.has(typeOf(kind))) &&
+      !exclude.has(typeOf(kind)) &&
+      (media.size === 0 || (media.has("video") && playableKinds.has(kind))),
   );
-  if (include.length === 0 && exclude.size === 0) return undefined;
-  const named =
-    include.length === 0
-      ? Object.values(itemTypes)
-      : include.flatMap((type) => {
-          const kind = kindsByType.get(type.toLowerCase());
-          return kind === undefined ? [] : [itemTypes[kind]];
-        });
-  return named
-    .filter((type) => !exclude.has(type.toLowerCase()))
-    .flatMap((type) => kindsByType.get(type.toLowerCase()) ?? []);
 }
 
 function sortOf(query: Query): ItemViewQuery["sort"] {
@@ -232,11 +240,11 @@ async function viewsResult({ db, caller }: UserContext, query: ItemViewQuery) {
   );
 }
 
-// Shelves hand back ordered ids; the views keep that order and then page.
+// Shelves hand back ordered ids; the views keep that order, are narrowed, then paged.
 async function shelfResult(
   context: UserContext,
   ids: string[],
-  keep: (view: ItemView) => boolean = () => true,
+  select: (views: ItemView[]) => ItemView[] = (views) => views,
 ) {
   const { db, caller, query } = context;
   const kinds = kindsOf(query);
@@ -245,7 +253,7 @@ async function shelfResult(
     readServerId(db),
   ]);
   const byId = new Map(page.items.map((view) => [view.id, view]));
-  const views = ids.flatMap((id) => byId.get(id) ?? []).filter(keep);
+  const views = select(ids.flatMap((id) => byId.get(id) ?? []));
   const { offset, limit } = pageOf(query);
   const shown = views.slice(
     offset,
@@ -282,19 +290,8 @@ export const browseRoutes: Route[] = [
   {
     method: "GET",
     path: "/UserViews",
-    handle: async ({ db, caller }) => {
-      const [libraries, serverId] = await Promise.all([
-        viewableLibraries(db, caller.user.id),
-        readServerId(db),
-      ]);
-      return json(
-        queryResult(
-          libraries.map((library) => libraryDto(library, serverId)),
-          libraries.length,
-          0,
-        ),
-      );
-    },
+    handle: async ({ db, caller }) =>
+      librariesResult(db, await viewableLibraries(db, caller.user.id)),
   },
   {
     method: "GET",
@@ -308,6 +305,10 @@ export const browseRoutes: Route[] = [
       const library = libraries.find((candidate) => candidate.id === parentId);
       const ids = query.list("ids");
       const kinds = kindsOf(query);
+      // Without a parent, a flat listing is the user's root folder: the libraries.
+      // Findroid lists libraries this way. No Item kind is a library folder.
+      if (parentId === undefined && !recursive && ids.length === 0)
+        return librariesResult(db, kinds === undefined ? libraries : []);
       if (kinds?.length === 0)
         return json(queryResult([], 0, pageOf(query).offset));
       return viewsResult(context, {
@@ -319,6 +320,9 @@ export const browseRoutes: Route[] = [
         ids: ids.length === 0 ? undefined : guids(ids),
         kinds,
         search: query.get("searchTerm"),
+        // Swiftfin's letter picker: a letter, or `NameLessThan=A` for "#".
+        nameStartsWith: query.get("nameStartsWith"),
+        nameLessThan: query.get("nameLessThan"),
         ...marksOf(query),
         sort: sortOf(query),
         ...pageOf(query),
@@ -360,13 +364,34 @@ export const browseRoutes: Route[] = [
     method: "GET",
     path: "/Shows/NextUp",
     handle: async (context) => {
-      const series = context.query.get("seriesId");
+      const { db, caller, query } = context;
+      const series = query.get("seriesId");
       const showId = series === undefined ? undefined : requiredGuid(series);
-      return shelfResult(
-        context,
-        await nextUp(context.db, context.caller.user.id),
-        (view) => showId === undefined || view.show?.id === showId,
-      );
+      const resumable = query.flag("enableResumable") ?? true;
+      const ids = await nextUp(db, caller.user.id);
+      // A named Show offers its first unfinished episode, specials aside,
+      // before any episode is finished. The shelf's own pick comes first.
+      if (showId !== undefined) {
+        const unfinished = await listItemViews(db, caller.user.id, {
+          ancestorId: showId,
+          kinds: ["episode"],
+          played: false,
+          sort: [{ by: "number" }],
+        });
+        const first = unfinished.items.find((view) => view.seasonNumber !== 0);
+        if (first !== undefined) ids.push(first.id);
+      }
+      return shelfResult(context, ids, (views) => {
+        const seen = new Set<string>();
+        return views.filter((view) => {
+          const show = view.show?.id;
+          if (show === undefined || seen.has(show)) return false;
+          if (showId !== undefined && show !== showId) return false;
+          seen.add(show);
+          // Jellyfin leaves a started episode to Resume rather than skip past it.
+          return resumable || view.marks.positionSeconds === 0;
+        });
+      });
     },
   },
   {

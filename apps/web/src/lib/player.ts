@@ -93,14 +93,19 @@ export function play(options: PlaybackOptions) {
     if (at > 0) on("loadedmetadata", () => (video.currentTime = at), true);
   }
 
-  function begin() {
-    if (started !== undefined || scope === undefined) return;
+  function reportStart(current: { sessionId: string; itemId: string }) {
     started = client.playback
-      .start({ ...scope, positionSeconds: position() })
+      .start({ ...current, positionSeconds: position() })
       .then(
         () => true,
         () => false,
       );
+    return started;
+  }
+
+  function begin() {
+    if (started !== undefined || scope === undefined) return;
+    void reportStart(scope);
     heartbeat = setInterval(() => {
       if (!video.paused) report();
     }, heartbeatMs);
@@ -110,15 +115,17 @@ export function play(options: PlaybackOptions) {
   // the pause that preceded it.
   function report() {
     if (started === undefined || scope === undefined) return;
-    const begun = started;
+    const session = scope;
     const current = {
-      ...scope,
+      ...session,
       positionSeconds: position(),
       completed: video.ended,
     };
     reports = reports
       .then(async () => {
-        if (await begun) await client.playback.progress(current);
+        // A failed start is retried here, or the server drops every report.
+        if ((await started) || (await reportStart(session)))
+          await client.playback.progress(current);
       })
       .catch(() => {
         // A missed heartbeat is replaced by the next one.
@@ -252,9 +259,15 @@ export function play(options: PlaybackOptions) {
         video.load();
         await opened;
         if (scope === undefined) return;
-        // A hung report must not keep stop from going out.
+        const session = scope;
+        // Stop saves the position only for a started session. A hung report
+        // must not keep stop from going out.
+        const settled = reports.then(async () => {
+          if (started !== undefined && !(await started))
+            await reportStart(session);
+        });
         await Promise.race([
-          Promise.all([reports, started]),
+          settled,
           new Promise((resolve) => setTimeout(resolve, closeWaitMs)),
         ]);
         await lastWord.playback.stop({ ...scope, ...final }).catch(() => {

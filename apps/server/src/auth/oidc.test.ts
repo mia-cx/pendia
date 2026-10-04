@@ -282,6 +282,29 @@ function oidcCallback(flow: { callbackUrl?: string; flowCookie: string }) {
   });
 }
 
+/** Checks a successful callback sends the browser home, then reads its session through me. */
+async function signedIn(base: string, callback: Response) {
+  expect(callback.status).toBe(303);
+  expect(callback.headers.get("location")).toBe("/");
+  const session = callback.headers
+    .getSetCookie()
+    .find((cookie) => cookie.startsWith("pendia_session="));
+  expect(session).toContain("HttpOnly");
+  const me = await fetch(`${base}/api/auth/me`, {
+    headers: { cookie: session?.split(";")[0] ?? "" },
+  });
+  expect(me.status).toBe(200);
+  return (await me.json()) as {
+    user: { id: string; username: string; displayName: string };
+    credential: { id: string };
+  };
+}
+
+function expectLoginError(response: Response, code: string) {
+  expect(response.status).toBe(303);
+  expect(response.headers.get("location")).toBe(`/login?error=${code}`);
+}
+
 async function configureOidc(
   db: Database,
   issuer: string,
@@ -333,30 +356,19 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         const callback = await oidcCallback(flow);
         expect(flow.start.status).toBe(302);
         expect(flow.authorize?.status).toBe(302);
-        expect(callback.status).toBe(200);
-        const body = (await callback.json()) as {
-          token: string;
-          user: { id: string; username: string };
-          session: {
-            clientName: string;
-            deviceId: string;
-            deviceName: string;
-          };
-        };
-        expect(body.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        const body = await signedIn(base, callback);
         expect(body.user.id).toBe(local.id);
         expect(body.user.username).toBe("linked");
-        expect(body.session).toMatchObject({
+        const [session] = await db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, body.credential.id));
+        expect(session).toMatchObject({
           clientName: device.clientName,
           deviceName: device.deviceName,
+          deviceId: " spaced-device ",
         });
-        expect(body.session.deviceId).toBe(" spaced-device ");
         const cookies = callback.headers.getSetCookie();
-        expect(
-          cookies.some(
-            (c) => c.startsWith("pendia_session=") && c.includes("HttpOnly"),
-          ),
-        ).toBe(true);
         expect(
           cookies.some(
             (c) =>
@@ -386,11 +398,6 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         expect(seen.state).toMatch(/^[A-Za-z0-9_-]{43}$/);
         expect(seen.nonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
         expect(seen.redirect_uri).toBe(`${base}/api/auth/oidc/callback`);
-
-        const me = await fetch(`${base}/api/auth/me`, {
-          headers: { authorization: `Bearer ${body.token}` },
-        });
-        expect(me.status).toBe(200);
       } finally {
         await server.stop();
         await provider.stop();
@@ -426,8 +433,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .where(eq(users.id, local.id));
 
         const callback = await oidcCallback(await oidcLogin(base));
-        expect(callback.status).toBe(200);
-        const body = (await callback.json()) as { user: { id: string } };
+        const body = await signedIn(base, callback);
         expect(body.user.id).toBe(local.id);
         expect(provider.observed.userinfo).toBe(0);
         const [stored] = await db
@@ -467,14 +473,10 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .set({ email: "linked@example.com" })
           .where(eq(users.id, local.id));
 
-        const first = await oidcCallback(await oidcLogin(base));
-        expect(first.status).toBe(200);
+        await signedIn(base, await oidcCallback(await oidcLogin(base)));
         provider.setClaims({ sub: "subject-2", emailVerified: false });
         const second = await oidcCallback(await oidcLogin(base));
-        expect(second.status).toBe(200);
-        const body = (await second.json()) as {
-          user: { id: string };
-        };
+        const body = await signedIn(base, second);
         expect(body.user.id).toBe(local.id);
       } finally {
         await server.stop();
@@ -516,14 +518,8 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           oidcCallback(flowOne),
           oidcCallback(flowTwo),
         ]);
-        expect(callbackOne.status).toBe(200);
-        expect(callbackTwo.status).toBe(200);
-        const bodyOne = (await callbackOne.json()) as {
-          user: { id: string };
-        };
-        const bodyTwo = (await callbackTwo.json()) as {
-          user: { id: string };
-        };
+        const bodyOne = await signedIn(base, callbackOne);
+        const bodyTwo = await signedIn(base, callbackTwo);
         expect(bodyOne.user.id).toBe(local.id);
         expect(bodyTwo.user.id).toBe(local.id);
         const [stored] = await db
@@ -565,11 +561,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         const callback = await oidcCallback(
           await oidcLogin(base, { invite: inviteToken }),
         );
-        expect(callback.status).toBe(200);
-        const body = (await callback.json()) as {
-          token: string;
-          user: { id: string; username: string; displayName: string };
-        };
+        const body = await signedIn(base, callback);
         expect(body.user.username).toBe("invited-person");
         expect(body.user.displayName).toBe("Invited Person");
         const [created] = await db
@@ -591,10 +583,6 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .from(invites)
           .where(eq(invites.id, invite.id));
         expect(consumed?.acceptedAt).not.toBeNull();
-        const me = await fetch(`${base}/api/auth/me`, {
-          headers: { authorization: `Bearer ${body.token}` },
-        });
-        expect(me.status).toBe(200);
 
         const userCount = (await db.select().from(users)).length;
         provider.setClaims({
@@ -605,10 +593,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         const again = await oidcCallback(
           await oidcLogin(base, { invite: inviteToken }),
         );
-        expect(again.status).toBe(400);
-        expect(
-          ((await again.json()) as { error: { code: string } }).error.code,
-        ).toBe("INVALID_INVITE");
+        expectLoginError(again, "invalid_invite");
         expect(await db.select().from(users)).toHaveLength(userCount);
       } finally {
         await server.stop();
@@ -641,11 +626,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         const callback = await oidcCallback(
           await oidcLogin(base, { invite: inviteToken }),
         );
-        expect(callback.status).toBe(200);
-        const body = (await callback.json()) as {
-          token: string;
-          user: { id: string };
-        };
+        const body = await signedIn(base, callback);
         const [created] = await db
           .select()
           .from(users)
@@ -665,10 +646,6 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .from(invites)
           .where(eq(invites.id, invite.id));
         expect(consumed?.acceptedAt).not.toBeNull();
-        const me = await fetch(`${base}/api/auth/me`, {
-          headers: { authorization: `Bearer ${body.token}` },
-        });
-        expect(me.status).toBe(200);
       } finally {
         await server.stop();
         await provider.stop();
@@ -701,10 +678,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .where(eq(users.id, local.id));
 
         const callback = await oidcCallback(await oidcLogin(base));
-        expect(callback.status).toBe(401);
-        expect(
-          ((await callback.json()) as { error: { code: string } }).error.code,
-        ).toBe("OIDC_FAILED");
+        expectLoginError(callback, "oidc_failed");
         const [stored] = await db
           .select()
           .from(users)
@@ -735,10 +709,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         await setupAdmin(db, { username: "admin", password: "secret" });
 
         const callback = await oidcCallback(await oidcLogin(base));
-        expect(callback.status).toBe(401);
-        expect(
-          ((await callback.json()) as { error: { code: string } }).error.code,
-        ).toBe("OIDC_FAILED");
+        expectLoginError(callback, "oidc_failed");
         expect(await db.select().from(users)).toHaveLength(1);
         expect(await db.select().from(sessions)).toHaveLength(0);
         expect(await db.select().from(invites)).toHaveLength(0);
@@ -764,10 +735,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         await setupAdmin(db, { username: "admin", password: "secret" });
 
         const callback = await oidcCallback(await oidcLogin(base));
-        expect(callback.status).toBe(401);
-        expect(
-          ((await callback.json()) as { error: { code: string } }).error.code,
-        ).toBe("OIDC_FAILED");
+        expectLoginError(callback, "oidc_failed");
         expect(await db.select().from(users)).toHaveLength(1);
         expect(await db.select().from(sessions)).toHaveLength(0);
       } finally {
@@ -802,10 +770,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .where(eq(users.id, local.id));
 
         const expectFailure = async (response: Response) => {
-          expect(response.status).toBe(401);
-          expect(
-            ((await response.json()) as { error: { code: string } }).error.code,
-          ).toBe("OIDC_FAILED");
+          expectLoginError(response, "oidc_failed");
           expect(response.headers.get("set-cookie")).toContain(
             "pendia_oidc_flow=;",
           );
@@ -893,10 +858,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           .where(eq(users.id, other.id));
 
         const callback = await oidcCallback(await oidcLogin(base));
-        expect(callback.status).toBe(401);
-        expect(
-          ((await callback.json()) as { error: { code: string } }).error.code,
-        ).toBe("OIDC_FAILED");
+        expectLoginError(callback, "oidc_failed");
         const stored = await db.select().from(users);
         for (const row of stored) {
           expect(row.oidcIssuer).toBeNull();
@@ -906,6 +868,33 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
       } finally {
         await server.stop();
         await provider.stop();
+      }
+    }));
+
+  test("login and callback failures send the browser back to the login page", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const params = new URLSearchParams(device);
+        const start = (query = params) =>
+          fetch(`${base}/api/auth/oidc/login?${query}`, { redirect: "manual" });
+        expectLoginError(await start(), "not_found");
+        expectLoginError(
+          await fetch(`${base}/api/auth/oidc/callback`, { redirect: "manual" }),
+          "not_found",
+        );
+        const provider = await startProvider({ sub: "gone" });
+        await configureOidc(db, provider.issuer);
+        await provider.stop();
+        expectLoginError(await start(), "oidc_failed");
+        expectLoginError(
+          await start(new URLSearchParams({ clientName: "Web" })),
+          "invalid_input",
+        );
+      } finally {
+        await server.stop();
       }
     }));
 
@@ -984,14 +973,8 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           oidcCallback(flowOne),
           oidcCallback(flowTwo),
         ]);
-        expect(callbackOne.status).toBe(200);
-        expect(callbackTwo.status).toBe(200);
-        const bodyOne = (await callbackOne.json()) as {
-          user: { id: string; username: string };
-        };
-        const bodyTwo = (await callbackTwo.json()) as {
-          user: { id: string; username: string };
-        };
+        const bodyOne = await signedIn(base, callbackOne);
+        const bodyTwo = await signedIn(base, callbackTwo);
         const usernames = [bodyOne.user.username, bodyTwo.user.username];
         expect(new Set(usernames).size).toBe(2);
         expect(usernames).toContain("same-name");

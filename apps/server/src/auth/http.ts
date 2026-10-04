@@ -42,6 +42,25 @@ function respond(
   return Response.json(body, { status, headers: merged });
 }
 
+function redirect(location: string, headers = new Headers()): Response {
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Location", location);
+  return new Response(null, { status: 303, headers });
+}
+
+// The OIDC routes answer a browser, so a failure lands on the login page
+// with the lowercased error code for it to explain.
+function loginFailure(error: unknown, headers?: Headers): Response {
+  let code = "internal_error";
+  if (error instanceof AuthError) code = error.code.toLowerCase();
+  else
+    console.error(
+      JSON.stringify({ level: "error", message: "auth.request.failed" }),
+    );
+  return redirect(`/login?error=${code}`, headers);
+}
+
 function errorResponse(error: unknown): Response {
   if (error instanceof AuthError) {
     return respond(
@@ -327,31 +346,35 @@ export function createAuthHandler(db: Database) {
           });
         }
         case "/api/auth/oidc/login": {
-          if (!config.oidc) throw new AuthError("NOT_FOUND");
-          const url = effectiveUrl(request, identity.secure);
-          const result = await startOidcLogin(
-            config.oidc,
-            new URL(oidcFlowPath, url).href,
-            {
-              clientName: requiredQuery(url, "clientName"),
-              deviceId: requiredQuery(url, "deviceId"),
-              deviceName: requiredQuery(url, "deviceName"),
-              inviteToken: optionalQuery(url, "invite"),
-            },
-          );
-          return new Response(null, {
-            status: 302,
-            headers: {
-              "Cache-Control": "no-store",
-              "X-Content-Type-Options": "nosniff",
-              Location: result.authorizationUrl.href,
-              "Set-Cookie": oidcFlowCookie(result.flow, identity.secure),
-            },
-          });
+          try {
+            if (!config.oidc) throw new AuthError("NOT_FOUND");
+            const url = effectiveUrl(request, identity.secure);
+            const result = await startOidcLogin(
+              config.oidc,
+              new URL(oidcFlowPath, url).href,
+              {
+                clientName: requiredQuery(url, "clientName"),
+                deviceId: requiredQuery(url, "deviceId"),
+                deviceName: requiredQuery(url, "deviceName"),
+                inviteToken: optionalQuery(url, "invite"),
+              },
+            );
+            return new Response(null, {
+              status: 302,
+              headers: {
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                Location: result.authorizationUrl.href,
+                "Set-Cookie": oidcFlowCookie(result.flow, identity.secure),
+              },
+            });
+          } catch (error) {
+            return loginFailure(error);
+          }
         }
         case "/api/auth/oidc/callback": {
-          if (!config.oidc) throw new AuthError("NOT_FOUND");
           try {
+            if (!config.oidc) throw new AuthError("NOT_FOUND");
             const flow = readCookie(request, oidcFlowCookieName);
             if (flow === undefined) throw new AuthError("OIDC_FAILED");
             const result = await finishOidcLogin(
@@ -373,14 +396,14 @@ export function createAuthHandler(db: Database) {
               "Set-Cookie",
               clearedOidcFlowCookie(identity.secure),
             );
-            return respond(result, 200, headers);
+            return redirect("/", headers);
           } catch (error) {
-            const response = errorResponse(error);
-            response.headers.append(
-              "Set-Cookie",
-              clearedOidcFlowCookie(identity.secure),
+            return loginFailure(
+              error,
+              new Headers({
+                "Set-Cookie": clearedOidcFlowCookie(identity.secure),
+              }),
             );
-            return response;
           }
         }
         default:

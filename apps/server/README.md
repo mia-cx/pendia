@@ -160,12 +160,13 @@ Use a private bind address, firewall or restricted ingress during setup. Expose 
 | POST | `/api/auth/invites` | `email`, `expiresInSeconds` | 201 with one-time `token` and safe `invite` |
 | POST | `/api/auth/invites/accept` | `token`, `username`, `password`, optional `displayName`, `clientName`, `deviceId`, `deviceName` | 201 with `token`, `user`, `session` and session cookie |
 | GET | `/api/auth/oidc/login` | Query `clientName`, `deviceId`, `deviceName`, optional `invite` | 302 to the configured provider |
-| GET | `/api/auth/oidc/callback` | Provider callback | 200 with `token`, `user`, `session` and session cookie |
+| GET | `/api/auth/oidc/callback` | Provider callback | 303 to `/` with the session cookie |
 | GET | `/api/auth/me` | None | `user`, `credential` |
 | POST | `/api/auth/logout` | None | Revokes the current session or API key and returns `ok` |
 
 Invite creation requires `manage-users` and accepts bearer or session-cookie auth. Invite tokens are random, stored only as SHA-256 digests, expire, and work once.
 Invite acceptance and new OIDC accounts require a live invite. Existing OIDC subjects log in directly.
+The two OIDC routes answer a browser, so a failure is a 303 to `/login?error=<code>`, where the code is the lowercased error code such as `oidc_failed`, or `internal_error`.
 Only `email_verified: true` can link an existing account. An unverified email never links, but a matching live invite can create a separate account.
 OIDC uses discovery, authorization code, state, nonce, PKCE S256, signed ID-token validation, confidential Basic client authentication, and UserInfo subject validation when advertised.
 

@@ -102,12 +102,20 @@ async function unpack(bytes: Uint8Array): Promise<Map<string, Uint8Array>> {
     throw new PluginError("BAD_REQUEST", "The package is not a tarball.");
   }
   const files = new Map<string, Uint8Array>();
+  let top: string | undefined;
   for (const [path, file] of entries) {
     const normalized = posix.normalize(path);
     if (posix.isAbsolute(normalized) || normalized.split("/").includes(".."))
       throw new PluginError("BAD_REQUEST", `${path} escapes the package.`);
     // A package tarball holds one top folder, `package/` for npm.
-    const inner = normalized.split("/").slice(1).join("/");
+    const [folder = "", ...rest] = normalized.split("/");
+    top ??= folder;
+    if (folder !== top)
+      throw new PluginError(
+        "BAD_REQUEST",
+        "The package holds more than one top folder.",
+      );
+    const inner = rest.join("/");
     if (inner !== "") files.set(inner, await file.bytes());
   }
   return files;

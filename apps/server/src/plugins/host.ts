@@ -1,5 +1,5 @@
-import { rm, stat } from "node:fs/promises";
-import { isAbsolute, resolve, sep } from "node:path";
+import { realpath, rm, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type {
   ArtworkProvider,
   Capability,
@@ -222,11 +222,24 @@ async function libraryPath(
   if (library === undefined)
     throw new Error(`Library ${libraryId} does not exist.`);
   const relative = requireString(path, "path");
-  const root = resolve(library.rootPath);
+  const outside = () => new Error(`${relative} is outside the library.`);
+  const root = await realpath(library.rootPath);
   const target = resolve(root, relative);
   if (isAbsolute(relative) || !target.startsWith(`${root}${sep}`))
-    throw new Error(`${relative} is outside the library.`);
-  return target;
+    throw outside();
+  // Resolve links in the deepest part that exists, so a symlink inside the
+  // library cannot carry a read, write or delete outside it.
+  const missing: string[] = [];
+  for (let existing = target; ; existing = dirname(existing)) {
+    try {
+      const real = join(await realpath(existing), ...missing);
+      if (!real.startsWith(`${root}${sep}`)) throw outside();
+      return real;
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+      missing.unshift(basename(existing));
+    }
+  }
 }
 
 function isMissing(error: unknown): boolean {
@@ -421,12 +434,15 @@ export function createHost(context: HostContext): PluginHost {
           requireString(id, "id");
           requireFunction(handler, "handler");
           Bun.cron.parse(requireString(cron, "cron"));
-          registrations.schedules.set(id, { cron, handler });
+          const entry = { cron, handler };
+          registrations.schedules.set(id, entry);
           const started = context.schedule(id, cron);
           return {
             cancel() {
               started.cancel();
-              registrations.schedules.delete(id);
+              // A later schedule with the same id replaced this one; leave it.
+              if (registrations.schedules.get(id) === entry)
+                registrations.schedules.delete(id);
             },
           };
         },

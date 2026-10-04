@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Capability } from "@pendia/plugin-api";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -6,7 +7,11 @@ import { libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { createHost, createRegistrations } from "./host.ts";
-import { createPluginRuntime, PluginFailed } from "./runtime.ts";
+import {
+  createPluginRuntime,
+  PluginFailed,
+  PluginUnavailable,
+} from "./runtime.ts";
 import { readPluginSettings, updatePluginSettings } from "./settings.ts";
 import {
   installFixture,
@@ -109,6 +114,26 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
         });
         await expect(files.stat(library.id, "../escape")).rejects.toThrow(
           "outside the library",
+        );
+        const outsideFile = join(folder, "outside", "keep.txt");
+        await Bun.write(outsideFile, "keep");
+        await symlink(join(folder, "outside"), join(root, "linked"));
+        await symlink(outsideFile, join(root, "keep.txt"));
+        for (const path of ["linked/keep.txt", "keep.txt", "linked/new.txt"]) {
+          await expect(files.read(library.id, path)).rejects.toThrow(
+            "outside the library",
+          );
+          await expect(
+            files.write(library.id, path, new Uint8Array([1])),
+          ).rejects.toThrow("outside the library");
+          await expect(files.delete(library.id, path)).rejects.toThrow(
+            "outside the library",
+          );
+        }
+        expect(await Bun.file(outsideFile).text()).toBe("keep");
+        await files.write(library.id, "Extras/new.txt", new Uint8Array([1]));
+        expect(await Bun.file(join(root, "Extras/new.txt")).bytes()).toEqual(
+          new Uint8Array([1]),
         );
 
         await updatePluginSettings(db, (current) => ({
@@ -216,6 +241,84 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
         await expect(host?.items?.query({ limit: 0 })).rejects.toThrow(
           "query.limit",
         );
+      }),
+    ));
+
+  test("a failed setup stops its schedules, and an old cancel leaves its replacement", () =>
+    withFolder((folder) =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        const jobs: { stopped: boolean; stop(): void }[] = [];
+        const cron = () => {
+          const job = {
+            stopped: false,
+            stop() {
+              job.stopped = true;
+            },
+          };
+          jobs.push(job);
+          return job;
+        };
+        const thrower = `cron-thrower-${Bun.randomUUIDv7()}`;
+        const twice = `cron-twice-${Bun.randomUUIDv7()}`;
+        await installFixture(db, folder, {
+          name: thrower,
+          capabilities: ["jobs"],
+          source: `export default (host) => {
+  host.jobs.schedule("sweep", "* * * * *", async () => {});
+  throw new Error("setup broke");
+};`,
+        });
+        await installFixture(db, folder, {
+          name: twice,
+          capabilities: ["jobs"],
+          source: `export default (host) => {
+  const first = host.jobs.schedule("sweep", "* * * * *", async () => {});
+  host.jobs.schedule("sweep", "* * * * *", async () => {});
+  first.cancel();
+};`,
+        });
+        const runtime = createPluginRuntime(db, {
+          directory: join(folder, "installed"),
+          schedules: true,
+          cron,
+        });
+        expect(await runtime.load(thrower)).toBe(false);
+        expect(jobs.map((job) => job.stopped)).toEqual([true]);
+        expect(await runtime.load(twice)).toBe(true);
+        expect(jobs.map((job) => job.stopped)).toEqual([true, true, false]);
+        await runtime.stop();
+        await Bun.sleep(0);
+        expect(jobs.map((job) => job.stopped)).toEqual([true, true, true]);
+      }),
+    ));
+
+  test("an event for a plugin this process cannot install fails its job and leaves the plugin enabled", () =>
+    withFolder((folder) =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        const name = `unreachable-${Bun.randomUUIDv7()}`;
+        await installFixture(db, folder, {
+          name,
+          capabilities: ["events"],
+          source: "export default () => {};",
+        });
+        await rm(join(folder, "sources"), { recursive: true });
+        const runtime = createPluginRuntime(db, {
+          directory: join(folder, "fresh"),
+        });
+        await expect(
+          runtime.runJob({
+            type: "plugin",
+            pluginName: name,
+            jobId: "event:item.added",
+            data: { itemId: Bun.randomUUIDv7(), kind: "movie" },
+          }),
+        ).rejects.toBeInstanceOf(PluginUnavailable);
+        expect((await readPluginSettings(db)).plugins[name]).toMatchObject({
+          enabled: true,
+          failure: null,
+        });
       }),
     ));
 });

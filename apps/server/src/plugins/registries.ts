@@ -108,8 +108,13 @@ export async function addRegistry(db: Database, registry: string) {
 
 /** Removes a registry URL. */
 export async function removeRegistry(db: Database, registry: string) {
+  const trimmed = registry.trim();
+  // Match the stored form addRegistry writes, and the raw form older rows hold.
+  const stored = URL.canParse(trimmed) ? new URL(trimmed).href : trimmed;
   return updatePluginSettings(db, (current) => ({
     ...current,
-    registries: current.registries.filter((url) => url !== registry),
+    registries: current.registries.filter(
+      (url) => url !== trimmed && url !== stored,
+    ),
   }));
 }

@@ -149,6 +149,11 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
           );
           expect(await hello.json()).toEqual({ greeting: "hi", loud: false });
 
+          const empty = await capture(
+            admin.plugins.setFiles({ off: { until: "" } }),
+          );
+          expect(empty.code).toBe("BAD_REQUEST");
+          expect((await admin.plugins.list()).filesOff).toBeNull();
           const switched = await admin.plugins.setFiles({
             off: { until: null },
           });
@@ -261,7 +266,10 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
             expect(
               (await capture(admin.registries.add({ url: "ftp://nope" }))).code,
             ).toBe("BAD_REQUEST");
-            expect(await admin.registries.remove({ url: local })).toEqual([]);
+            // The stored URL gained a trailing slash; the bare form still removes it.
+            expect(
+              await admin.registries.remove({ url: local.slice(0, -1) }),
+            ).toEqual([]);
           }),
         );
       } finally {

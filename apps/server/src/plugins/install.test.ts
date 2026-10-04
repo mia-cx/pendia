@@ -43,12 +43,17 @@ async function withPackageServer(
     { "package/../../evil.js": "x" },
     { compress: "gzip" },
   ).bytes();
+  const twoTops = await new Bun.Archive(
+    { "package/index.js": "export default () => {};", "other/index.js": "x" },
+    { compress: "gzip" },
+  ).bytes();
   const server = Bun.serve({
     port: 0,
     fetch(request) {
       const { origin, pathname } = new URL(request.url);
       if (pathname === "/hello.tgz") return new Response(tarball);
       if (pathname === "/evil.tgz") return new Response(evil);
+      if (pathname === "/two.tgz") return new Response(twoTops);
       if (pathname === "/npm/pendia-plugin-hello")
         return Response.json({
           "dist-tags": { latest: "1.0.0" },
@@ -127,6 +132,9 @@ describe("plugin sources", () => {
     withPackageServer(async (origin) => {
       await expect(fetchPlugin(`${origin}/evil.tgz`)).rejects.toThrow(
         "escapes the package",
+      );
+      await expect(fetchPlugin(`${origin}/two.tgz`)).rejects.toThrow(
+        "more than one top folder",
       );
     }));
 

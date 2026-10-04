@@ -174,9 +174,11 @@ async function listPlugins(context: Context, settings?: PluginSettings) {
 }
 
 function readFilesOff(input: { until: string | null } | null) {
-  if (input?.until && Number.isNaN(Date.parse(input.until)))
+  if (input === null) return null;
+  // The empty string is a string too, and the settings reader rejects it.
+  if (input.until !== null && Number.isNaN(Date.parse(input.until)))
     throw new PluginError("BAD_REQUEST", "until must be an ISO date.");
-  return input === null ? null : { until: input.until };
+  return { until: input.until };
 }
 
 /** The plugin admin procedures mounted under `plugins`, all behind manage-server. */

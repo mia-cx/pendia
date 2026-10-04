@@ -51,6 +51,20 @@ export class PluginFailed extends Error {
   }
 }
 
+/** An enabled plugin this process could not install, such as when its source is unreachable. */
+export class PluginUnavailable extends Error {
+  constructor(
+    readonly plugin: string,
+    cause: unknown,
+  ) {
+    super(
+      `Plugin ${plugin} is unavailable here: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = "PluginUnavailable";
+  }
+}
+
 /** A plugin shelf resolved for one caller. */
 export type ResolvedShelf = {
   plugin: string;
@@ -67,9 +81,17 @@ type Loaded = {
   config: string;
   schema: ConfigSchema | null;
   registrations: Registrations;
-  crons: Map<string, Bun.CronJob>;
+  crons: Map<string, { stop(): void }>;
   timer?: ReturnType<typeof setTimeout>;
 };
+
+/** Starts one in-process cron schedule. */
+export type StartCron = (
+  schedule: string,
+  tick: () => void,
+) => { stop(): void };
+
+const bunCron: StartCron = (schedule, tick) => Bun.cron(schedule, tick).unref();
 
 /** Where a runtime installs plugins and fetches sources, and whether it runs schedules. */
 export type PluginRuntimeOptions = {
@@ -77,6 +99,8 @@ export type PluginRuntimeOptions = {
   sourceOptions?: SourceOptions;
   /** Starts cron schedules; true in processes that run jobs. */
   schedules?: boolean;
+  /** How a schedule starts; `Bun.cron` unless a test counts starts and stops. */
+  cron?: StartCron;
   fetch?: typeof fetch;
 };
 
@@ -167,6 +191,7 @@ export function createPluginRuntime(
     directory = pluginDirectory(),
     sourceOptions,
     schedules = false,
+    cron: startSchedule = bunCron,
     fetch: request = fetch,
   }: PluginRuntimeOptions = {},
 ) {
@@ -176,11 +201,12 @@ export function createPluginRuntime(
   function unload(name: string) {
     const pending = loaded.get(name);
     loaded.delete(name);
-    void pending?.then((plugin) => {
-      if (plugin === null) return;
-      for (const job of plugin.crons.values()) job.stop();
-      clearTimeout(plugin.timer);
-    });
+    void pending?.then(
+      (plugin) => {
+        if (plugin !== null) stopCrons(plugin);
+      },
+      () => {},
+    );
   }
 
   async function fail(name: string, error: unknown) {
@@ -216,7 +242,7 @@ export function createPluginRuntime(
   function startCron(plugin: Loaded, id: string, cron: string) {
     if (!schedules) return { cancel() {} };
     plugin.crons.get(id)?.stop();
-    const job = Bun.cron(cron, () =>
+    const job = startSchedule(cron, () =>
       enqueueTick(db, plugin.name, id).catch((error: unknown) =>
         logError("plugin.schedule.failed", {
           plugin: plugin.name,
@@ -224,14 +250,20 @@ export function createPluginRuntime(
           error: errorMessage(error),
         }),
       ),
-    ).unref();
+    );
     plugin.crons.set(id, job);
     return {
       cancel() {
         job.stop();
-        plugin.crons.delete(id);
+        if (plugin.crons.get(id) === job) plugin.crons.delete(id);
       },
     };
+  }
+
+  function stopCrons(plugin: Loaded) {
+    for (const job of plugin.crons.values()) job.stop();
+    plugin.crons.clear();
+    clearTimeout(plugin.timer);
   }
 
   async function open(name: string): Promise<Loaded | null> {
@@ -252,12 +284,13 @@ export function createPluginRuntime(
       ).manifest;
     } catch (error) {
       // An install that fails here is this process's problem, such as an
-      // unreachable source, not the plugin's: it stays enabled.
+      // unreachable source, not the plugin's: it stays enabled, and a job
+      // that needed it fails and retries instead of completing undelivered.
       logError("plugin.install.failed", {
         plugin: name,
         error: errorMessage(error),
       });
-      return null;
+      throw new PluginUnavailable(name, error);
     }
     const now = new Date();
     const filesOn =
@@ -310,6 +343,8 @@ export function createPluginRuntime(
         await module.default(host);
       });
     } catch {
+      // Schedules a failed setup started belong to nobody else; stop them.
+      stopCrons(plugin);
       return null;
     }
     // A files switch that is off for a while comes back on by rebuilding the host.
@@ -328,7 +363,7 @@ export function createPluginRuntime(
     return plugin;
   }
 
-  /** Imports a plugin on first use; resolves null when it is disabled, failed or unavailable here. */
+  /** Imports a plugin on first use; resolves null when it is disabled or failed, and rejects with PluginUnavailable when this process cannot install it. */
   function load(name: string): Promise<Loaded | null> {
     const existing = loaded.get(name);
     if (existing !== undefined) return existing;
@@ -354,7 +389,15 @@ export function createPluginRuntime(
         ([, state]) => state.enabled && state.capabilities.includes(capability),
       )
       .map(([name]) => name);
-    const plugins = await Promise.all(names.map(load));
+    // A plugin this process cannot install yet is left out, not fatal.
+    const plugins = await Promise.all(
+      names.map((name) =>
+        load(name).catch((error: unknown) => {
+          if (error instanceof PluginUnavailable) return null;
+          throw error;
+        }),
+      ),
+    );
     return plugins.filter((plugin) => plugin !== null);
   }
 
@@ -521,7 +564,12 @@ export function createPluginRuntime(
 
     /** Loads a plugin now and reports whether it is loaded. */
     async load(name: string) {
-      return (await load(name)) !== null;
+      try {
+        return (await load(name)) !== null;
+      } catch (error) {
+        if (error instanceof PluginUnavailable) return false;
+        throw error;
+      }
     },
   };
 }

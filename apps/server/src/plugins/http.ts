@@ -5,7 +5,11 @@ import { readAuthSettings } from "../auth/settings.ts";
 import { requestIdentity } from "../auth/transport.ts";
 import type { Database } from "../db/client.ts";
 import { readBoundedBytes } from "../metadata/bounded-body.ts";
-import { PluginFailed, type PluginRuntime } from "./runtime.ts";
+import {
+  PluginFailed,
+  type PluginRuntime,
+  PluginUnavailable,
+} from "./runtime.ts";
 
 /** The path prefix plugin routes are served under. */
 export const pluginRoutePrefix = "/plugins/";
@@ -95,6 +99,10 @@ export function createPluginRouteHandler(db: Database, plugins: PluginRuntime) {
         return json(error.status, { error: error.message });
       if (error instanceof PluginFailed)
         return json(500, { error: `The plugin ${name} failed.` });
+      if (error instanceof PluginUnavailable)
+        return json(503, {
+          error: `The plugin ${name} is not installed here yet.`,
+        });
       throw error;
     }
   };

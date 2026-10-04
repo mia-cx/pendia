@@ -2,11 +2,12 @@ import { lstat, readdir, rm, rmdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import { files, type libraries, versions } from "../db/schema/index.ts";
+import { files, versions } from "../db/schema/index.ts";
+import { type LibraryRoot, rootsOf } from "../libraries/roots.ts";
 
 const storeSuffix = ".pendia";
 
-/** Matches library-relative paths inside a folder; "." is the whole library. */
+/** Matches root-relative paths inside a folder; "." is the whole root. */
 export function inFolder(path: typeof files.path, folder: string) {
   return folder === "."
     ? undefined
@@ -32,12 +33,8 @@ const directories = async (path: string) =>
     })
   ).filter((entry) => entry.isDirectory());
 
-/** Deletes stored output under a library folder that nothing owns: `<file>.pendia` folders whose source is gone from disk and has no File row, and rung folders with no Stored Version. Runs on a worker, which writes to the share. */
-export async function sweepStoredFolders(
-  db: Database,
-  library: typeof libraries.$inferSelect,
-  folder = ".",
-) {
+/** Deletes stored output under a folder of one root that nothing owns. */
+async function sweepRoot(db: Database, root: LibraryRoot, folder: string) {
   // A source whose File row remains keeps its rungs, so a Version still
   // marked complete never loses its folder before the scan drops the File.
   const known = new Set(
@@ -45,30 +42,22 @@ export async function sweepStoredFolders(
       await db
         .select({ path: files.path })
         .from(files)
-        .where(
-          and(eq(files.libraryId, library.id), inFolder(files.path, folder)),
-        )
+        .where(and(eq(files.rootId, root.id), inFolder(files.path, folder)))
     ).map((row) => row.path),
   );
   // A store job creates its Version before its folder, so a rung folder
-  // without one was dropped by reconciliation.
+  // without one was dropped by reconciliation. Rungs sit beside their source.
   const owned = new Set(
     (
       await db
         .select({ storedFolder: versions.storedFolder })
         .from(versions)
-        .where(
-          and(
-            eq(versions.libraryId, library.id),
-            eq(versions.origin, "stored"),
-          ),
-        )
+        .innerJoin(files, eq(files.id, versions.sourceFileId))
+        .where(and(eq(files.rootId, root.id), eq(versions.origin, "stored")))
     ).map((row) => row.storedFolder),
   );
   const visit = async (relative: string): Promise<void> => {
-    for (const entry of await directories(
-      resolve(library.rootPath, relative),
-    )) {
+    for (const entry of await directories(resolve(root.path, relative))) {
       const child = relative === "." ? entry.name : `${relative}/${entry.name}`;
       if (!entry.name.endsWith(storeSuffix)) {
         await visit(child);
@@ -76,12 +65,9 @@ export async function sweepStoredFolders(
       }
       // A bare `.pendia` folder holds Item artwork, not a stored source.
       if (entry.name === storeSuffix) continue;
-      const absolute = resolve(library.rootPath, child);
+      const absolute = resolve(root.path, child);
       const source = child.slice(0, -storeSuffix.length);
-      if (
-        !known.has(source) &&
-        !(await exists(resolve(library.rootPath, source)))
-      ) {
+      if (!known.has(source) && !(await exists(resolve(root.path, source)))) {
         await rm(absolute, { recursive: true, force: true });
         continue;
       }
@@ -99,4 +85,14 @@ export async function sweepStoredFolders(
     }
   };
   await visit(folder);
+}
+
+/** Deletes stored output under a Library folder, in every root, that nothing owns: `<file>.pendia` folders whose source is gone from disk and has no File row, and rung folders with no Stored Version. Runs on a worker, which writes to the share. */
+export async function sweepStoredFolders(
+  db: Database,
+  libraryId: string,
+  folder = ".",
+) {
+  for (const root of await rootsOf(db, libraryId))
+    await sweepRoot(db, root, folder);
 }

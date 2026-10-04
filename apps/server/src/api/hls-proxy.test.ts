@@ -115,7 +115,7 @@ describe.skipIf(!databaseUrl)("hls proxy", () => {
         const library = await createLibrary(db, fx.admin.id, {
           name: "Movies",
           medium: "movies",
-          rootPath: libraryRoot,
+          roots: [libraryRoot],
         });
         const scanned = await scanDirectory(db, library.id, "Movie (2026)");
         const versionId = scanned.versionIds[0];

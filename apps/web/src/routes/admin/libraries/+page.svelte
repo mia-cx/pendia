@@ -2,8 +2,10 @@
 import { onDestroy, untrack } from "svelte";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
+import FolderFields from "$lib/components/FolderFields.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
+import { type RootDraft, refusedRoot } from "$lib/roots.ts";
 import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 
 const list = resource(() => client.libraries.list());
@@ -33,10 +35,13 @@ function holdsStatus(id: string, ticket: number): boolean {
 }
 
 let addName = $state("");
-let addRoot = $state("");
+let addRows = $state<RootDraft[]>([{ path: "" }]);
 let addMedium = $state<LibraryRow["medium"]>("movies");
 let addBusy = $state(false);
 let addFailure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
+let addRefusal = $state<{ index: number; message: string } | undefined>(
+  undefined,
+);
 let addNotice = $state("");
 
 let editingId = $state<string | null>(null);
@@ -89,22 +94,29 @@ async function addLibrary(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  addRefusal = undefined;
   addNotice = "";
   const name = addName;
   const medium = addMedium;
-  const root = addRoot;
+  const sent = $state.snapshot(addRows);
   try {
     const created = await client.libraries.create({
       name,
       medium,
-      rootPath: root,
+      roots: sent.map((row) => row.path),
     });
     if (addName === name) addName = "";
-    if (addRoot === root) addRoot = "";
+    const unchanged =
+      addRows.length === sent.length &&
+      addRows.every((row, index) => row.path === sent[index]?.path);
+    if (unchanged) addRows = [{ path: "" }];
     addNotice = `Added ${created.name}.`;
     await list.reload();
   } catch (error) {
-    addFailure = readFailure(error);
+    const refused = refusedRoot(error);
+    if (refused !== undefined && refused.index < sent.length)
+      addRefusal = refused;
+    else addFailure = readFailure(error);
   } finally {
     addBusy = false;
   }
@@ -215,7 +227,7 @@ function scanCell(row: LibraryRow): string {
       <tr>
         <th>Name</th>
         <th>Medium</th>
-        <th>Root path</th>
+        <th>Folders</th>
         <th>Scan</th>
         <th><span class="sr-only">Actions</span></th>
       </tr>
@@ -238,7 +250,9 @@ function scanCell(row: LibraryRow): string {
             {/if}
           </td>
           <td>{mediumNames[row.medium]}</td>
-          <td class="path">{row.rootPath}</td>
+          <td class="path">
+            {#each row.roots as root (root.id)}<span>{root.path}</span>{/each}
+          </td>
           <td class="scan">
             {#if scanFailures[row.id]}
               {scanFailures[row.id]}
@@ -311,9 +325,9 @@ function scanCell(row: LibraryRow): string {
   {/if}
   <label for="addName">Name</label>
   <input id="addName" name="name" required bind:value={addName} />
-  <label for="addRoot">Root path</label>
-  <input id="addRoot" name="rootPath" required bind:value={addRoot} />
-  <p class="muted">Enter an absolute path on the server, like /srv/movies.</p>
+  <FolderFields bind:rows={addRows} bind:refusal={addRefusal} idPrefix="add">
+    <p class="muted">Enter absolute paths on the server, like /srv/movies.</p>
+  </FolderFields>
   <label for="addMedium">Medium</label>
   <select id="addMedium" name="medium" bind:value={addMedium}>
     {#each Object.entries(mediumNames) as [value, label] (value)}
@@ -339,6 +353,12 @@ td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.path span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .name input {

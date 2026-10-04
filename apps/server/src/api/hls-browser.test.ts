@@ -205,7 +205,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
           const library = await createLibrary(db, fx.admin.id, {
             name: "Movies",
             medium: "movies",
-            rootPath: libraryRoot,
+            roots: [libraryRoot],
           });
           const scanned = await scanDirectory(
             db,

@@ -162,7 +162,7 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
       const library = await createLibrary(db, admin.id, {
         name: "Movies",
         medium: "movies",
-        rootPath: libraryRoot,
+        roots: [libraryRoot],
       });
       const dir = await mkdtemp(join(tmpdir(), "pendia-transcode-scratch-"));
       const server = await startPendia("all", {

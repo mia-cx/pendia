@@ -15,13 +15,13 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   events,
   items,
-  libraries,
   libraryAccess,
   sessionRegistry,
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import {
   type Event,
   memoizeAudience,
@@ -153,14 +153,11 @@ async function seed(db: Database) {
 }
 
 async function insertLibrary(db: Database, name: string) {
-  const [library] = await db
-    .insert(libraries)
-    .values({
-      name,
-      medium: "movies",
-      rootPath: `/srv/${name.toLowerCase()}`,
-    })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name,
+    medium: "movies",
+    rootPath: `/srv/${name.toLowerCase()}`,
+  });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
 }

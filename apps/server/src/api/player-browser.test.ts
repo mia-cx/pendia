@@ -134,7 +134,7 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
         const library = await createLibrary(db, admin.id, {
           name: "Movies",
           medium: "movies",
-          rootPath: libraryRoot,
+          roots: [libraryRoot],
         });
         const scratchDir = await mkdtemp(
           join(tmpdir(), "pendia-player-scratch-"),

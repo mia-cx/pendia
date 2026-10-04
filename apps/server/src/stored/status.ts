@@ -1,17 +1,10 @@
 import { readdir } from "node:fs/promises";
-import { resolve } from "node:path";
 import { and, asc, count, eq, sql } from "drizzle-orm";
 import { browseCardsById } from "../api/items.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
-import {
-  files,
-  items,
-  jobs,
-  libraries,
-  segmentTimelines,
-  versions,
-} from "../db/schema/index.ts";
+import { files, jobs, segmentTimelines, versions } from "../db/schema/index.ts";
+import { absolutePath } from "../libraries/roots.ts";
 import { segmentCount } from "../playback/playlists.ts";
 import { storedFolderOf } from "./jobs.ts";
 
@@ -34,7 +27,7 @@ async function storeJobs(db: Database, state: "queued" | "running") {
       runAfter: jobs.runAfter,
       itemId: files.itemId,
       path: files.path,
-      rootPath: libraries.rootPath,
+      rootId: files.rootId,
       boundariesSeconds: segmentTimelines.boundariesSeconds,
     })
     .from(jobs)
@@ -42,8 +35,6 @@ async function storeJobs(db: Database, state: "queued" | "running") {
       files,
       sql`${files.id} = (${jobs.payload}->>'sourceFileId')::uuid`,
     )
-    .innerJoin(items, eq(items.id, files.itemId))
-    .innerJoin(libraries, eq(libraries.id, items.libraryId))
     .innerJoin(versions, eq(versions.id, files.versionId))
     .leftJoin(
       segmentTimelines,
@@ -94,7 +85,10 @@ export async function readStoreStatus(db: Database, actorId: string) {
         item: job.item,
         rung: job.rung,
         segmentsDone: await segmentsDone(
-          resolve(job.rootPath, storedFolderOf(job.path, job.rung)),
+          await absolutePath(db, {
+            rootId: job.rootId,
+            path: storedFolderOf(job.path, job.rung),
+          }),
         ),
         segmentsTotal:
           job.boundariesSeconds === null

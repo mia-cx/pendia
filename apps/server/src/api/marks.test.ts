@@ -11,7 +11,6 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   items,
-  libraries,
   libraryAccess,
   progress,
   sessionRegistry,
@@ -20,6 +19,7 @@ import {
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { encodeCursor } from "./pagination.ts";
 import type { pendiaRouter } from "./router.ts";
 
@@ -71,10 +71,11 @@ async function seed(db: Database) {
 }
 
 async function addLibrary(db: Database, name: string) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name, medium: "movies", rootPath: `/srv/${name}` })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name,
+    medium: "movies",
+    rootPath: `/srv/${name}`,
+  });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
 }
@@ -652,10 +653,11 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seed(db);
-      const [library] = await db
-        .insert(libraries)
-        .values({ name: "Shows", medium: "shows", rootPath: "/srv/shows" })
-        .returning();
+      const [library] = await insertLibraries(db, {
+        name: "Shows",
+        medium: "shows",
+        rootPath: "/srv/shows",
+      });
       if (!library) throw new Error("Library insert returned no row.");
       const show = await insertItem(db, {
         libraryId: library.id,

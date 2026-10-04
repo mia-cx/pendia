@@ -12,9 +12,10 @@ import { createApiKey, login } from "../auth/sessions.ts";
 import { writeAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { groups, jobs, libraries, settings } from "../db/schema/index.ts";
+import { groups, jobs, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import {
   artworkStoreConfig,
   describeArtworkStore,
@@ -423,10 +424,11 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         username: "viewer",
         password: "viewer-pass",
       });
-      const [library] = await db
-        .insert(libraries)
-        .values({ name: "Movies", medium: "movies", rootPath: "/srv/movies" })
-        .returning();
+      const [library] = await insertLibraries(db, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/srv/movies",
+      });
       if (!library) throw new Error("Library insert returned no row.");
       const server = await startPendia("api", { databaseUrl: url, port: 0 });
       try {
@@ -683,7 +685,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         const library = await client.libraries.create({
           name: "Movies",
           medium: "movies",
-          rootPath: "/srv/movies",
+          roots: ["/srv/movies"],
         });
         expect(await client.libraries.scanStatus({ id: library.id })).toEqual({
           libraryId: library.id,

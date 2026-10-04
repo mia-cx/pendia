@@ -23,6 +23,7 @@ import {
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { setItemProviderIds } from "../libraries/changes.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { applyMetadata } from "./service.ts";
 import { createTvdbMetadataProvider } from "./tvdb.ts";
 import { tvdbResponse } from "./tvdb-fixtures.ts";
@@ -76,10 +77,11 @@ function fetchedResult(
 }
 
 async function fixture(db: Database) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/movies" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/movies",
+  });
   if (!library) throw new Error("Fixture library missing.");
   const item = await insertItem(db, {
     libraryId: library.id,
@@ -248,10 +250,11 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       ).toEqual([]);
 
       // The same provider id in a different Library does not collide.
-      const [otherLibrary] = await db
-        .insert(libraries)
-        .values({ name: "Other", medium: "movies", rootPath: "/other" })
-        .returning();
+      const [otherLibrary] = await insertLibraries(db, {
+        name: "Other",
+        medium: "movies",
+        rootPath: "/other",
+      });
       if (!otherLibrary) throw new Error("Other library missing.");
       const elsewhere = await insertItem(db, {
         libraryId: otherLibrary.id,
@@ -1111,10 +1114,11 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
   test("Seasons and Episodes match by number under their Show and store air dates", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      const [library] = await db
-        .insert(libraries)
-        .values({ name: "Shows", medium: "shows", rootPath: "/shows" })
-        .returning();
+      const [library] = await insertLibraries(db, {
+        name: "Shows",
+        medium: "shows",
+        rootPath: "/shows",
+      });
       if (!library) throw new Error("Fixture library missing.");
       const tree = { libraryId: library.id, canonicalFolder: "Breaking Bad" };
       const show = await insertItem(db, {

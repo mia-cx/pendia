@@ -4,14 +4,7 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import {
-  files,
-  items,
-  jobs,
-  libraries,
-  streams,
-  versions,
-} from "../db/schema/index.ts";
+import { files, items, jobs, streams, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { createJobQueue, listJobs } from "../jobs/queue.ts";
@@ -23,6 +16,7 @@ import {
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { createLibraryRepair } from "./repair.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import { insertLibraries } from "./testing.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
@@ -33,10 +27,11 @@ async function insertLibrary(
   rootPath: string,
   medium: "movies" | "shows" = "movies",
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium, rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium,
+    rootPath,
+  });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
 }

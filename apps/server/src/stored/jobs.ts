@@ -1,6 +1,6 @@
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { and, asc, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
@@ -15,10 +15,8 @@ import {
 } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
-import {
-  MissingLibraryPathError,
-  readLibraryFile,
-} from "../libraries/walker.ts";
+import { locateFile } from "../libraries/roots.ts";
+import { MissingLibraryPathError } from "../libraries/walker.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import {
   copiesAudio,
@@ -148,15 +146,16 @@ async function loadStoreTarget(db: Database, payload: StorePayload) {
     .where(eq(segmentTimelines.id, version.segmentTimelineId))
     .limit(1);
   if (timeline === undefined) return null;
-  let validated: Awaited<ReturnType<typeof readLibraryFile>>;
+  let located: Awaited<ReturnType<typeof locateFile>>;
   try {
-    validated = await readLibraryFile(library.rootPath, file.path);
+    located = await locateFile(db, file);
   } catch (error) {
     // A source missing on disk waits for the scan that removes its File.
     if (error instanceof MissingLibraryPathError) return null;
     throw error;
   }
-  const storedFolder = storedFolderOf(validated.path, rung.name);
+  // The rung folder sits beside its source, in the source File's root.
+  const storedFolder = storedFolderOf(located.path, rung.name);
   return {
     file,
     version,
@@ -165,7 +164,7 @@ async function loadStoreTarget(db: Database, payload: StorePayload) {
     timeline,
     storedFolder,
     run: {
-      inputPath: resolve(library.rootPath, validated.path),
+      inputPath: located.absolute,
       boundariesSeconds: timeline.boundariesSeconds,
       timelineId: timeline.id,
       rung,
@@ -174,7 +173,7 @@ async function loadStoreTarget(db: Database, payload: StorePayload) {
         hdr: video.hdr,
         audioCodec: audio?.codec ?? null,
       },
-      folder: resolve(library.rootPath, storedFolder),
+      folder: storedFolderOf(located.absolute, rung.name),
     } satisfies StoreRun,
   };
 }
@@ -299,13 +298,7 @@ export function registerStoreJobs(
 ) {
   registry.register("store", async (payload) => {
     if ("folder" in payload) {
-      const [library] = await db
-        .select()
-        .from(libraries)
-        .where(eq(libraries.id, payload.libraryId))
-        .limit(1);
-      if (library !== undefined)
-        await sweepStoredFolders(db, library, payload.folder);
+      await sweepStoredFolders(db, payload.libraryId, payload.folder);
       return;
     }
     const target = await loadStoreTarget(db, payload);

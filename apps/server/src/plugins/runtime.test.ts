@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { rm, symlink } from "node:fs/promises";
+import { mkdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Capability } from "@pendia/plugin-api";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries } from "../db/schema/index.ts";
+import { files, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { addRoot, insertLibraries } from "../libraries/testing.ts";
 import { createHost, createRegistrations } from "./host.ts";
 import {
   createPluginRuntime,
@@ -137,10 +138,11 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
         });
         const root = join(folder, "library");
         await Bun.write(join(root, "movie.mkv"), "frames");
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Library missing.");
         const runtime = createPluginRuntime(db, {
           directory: join(folder, "installed"),
@@ -253,6 +255,80 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
       }),
     ));
 
+  test("a root id reads the file in that root only", () =>
+    withFolder((folder) =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        const name = `filer-${Bun.randomUUIDv7()}`;
+        await installFixture(db, folder, {
+          name,
+          capabilities: ["files", "items:read"],
+          source: stashingSource(name),
+        });
+        const rootA = join(folder, "a");
+        const rootB = join(folder, "b");
+        await mkdir(join(rootA, "Movie"), { recursive: true });
+        await mkdir(join(rootB, "Movie"), { recursive: true });
+        await Bun.write(join(rootA, "Movie", "Movie.mkv"), "from a");
+        await Bun.write(join(rootB, "Movie", "Movie.mkv"), "from b");
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: rootA,
+        });
+        if (!library) throw new Error("Library missing.");
+        const rootBId = await addRoot(db, library.id, rootB);
+        const item = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Alien",
+          year: 1979,
+          canonicalFolder: "Movie",
+          extension: {},
+        });
+        const [version] = await db
+          .insert(versions)
+          .values({
+            itemId: item.id,
+            itemKind: "movie",
+            libraryId: library.id,
+            label: "Alien",
+            format: "video",
+            bytes: 1n,
+          })
+          .returning();
+        if (!version) throw new Error("Version missing.");
+        for (const [order, rootId] of [library.rootId, rootBId].entries())
+          await db.insert(files).values({
+            versionId: version.id,
+            itemId: item.id,
+            libraryId: library.id,
+            rootId,
+            path: "Movie/Movie.mkv",
+            order,
+            bytes: 1n,
+            modifiedAt: new Date(0),
+          });
+        const runtime = createPluginRuntime(db, {
+          directory: join(folder, "installed"),
+        });
+        await runtime.load(name);
+        const host = stashedHosts()[name];
+        if (!host?.files) throw new Error("files should be present.");
+        const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+        expect(text(await host.files.read(rootBId, "Movie/Movie.mkv"))).toBe(
+          "from b",
+        );
+        expect(text(await host.files.read(library.id, "Movie/Movie.mkv"))).toBe(
+          "from a",
+        );
+        const got = await host.items?.get(item.id);
+        expect(
+          got?.versions[0]?.files.map((file) => file.rootId).sort(),
+        ).toEqual([library.rootId, rootBId].sort());
+      }),
+    ));
+
   test("items reach the plugin with their library id", () =>
     withFolder((folder) =>
       withDatabase(async (db) => {
@@ -263,10 +339,11 @@ describe.skipIf(!databaseUrl)("plugin runtime", () => {
           capabilities: ["items:read"],
           source: stashingSource(name),
         });
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: folder })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: folder,
+        });
         if (!library) throw new Error("Library missing.");
         const item = await insertItem(db, {
           libraryId: library.id,

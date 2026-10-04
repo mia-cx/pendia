@@ -6,7 +6,6 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   apiKeys,
   items,
-  libraries,
   libraryAccess,
   sessionRegistry,
   sessions,
@@ -15,6 +14,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { createLocalUser, setupAdmin } from "./accounts.ts";
 import { setPermissionOverride } from "./permissions.ts";
 import { issuePlaybackToken, verifyPlaybackToken } from "./playback-tokens.ts";
@@ -51,10 +51,11 @@ async function seedPlayback(db: Database, username = "owner") {
     "192.0.2.1",
   );
   const caller = await authenticate(db, accountToken);
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/srv/movies" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/srv/movies",
+  });
   if (!library) throw new Error("Library insert returned no row.");
   const [item] = await db
     .insert(items)

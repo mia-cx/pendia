@@ -26,7 +26,7 @@ export async function seedMovies(
   const library = await createLibrary(db, admin.id, {
     name: "Movies",
     medium: "movies",
-    rootPath: root,
+    roots: [root],
   });
   const movies = new Map<string, { itemId: string; versionId: string }>();
   for (const title of titles) {

@@ -129,7 +129,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
       const library = await createLibrary(db, admin.id, {
         name: "Movies",
         medium: "movies",
-        rootPath: libraryRoot,
+        roots: [libraryRoot],
       });
       const scanned = await scanDirectory(db, library.id, "Movie (2026)");
       const versionId = scanned.versionIds[0];

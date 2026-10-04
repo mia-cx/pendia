@@ -8,14 +8,10 @@ import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import {
-  artwork,
-  libraries,
-  libraryAccess,
-  settings,
-} from "../db/schema/index.ts";
+import { artwork, libraryAccess, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import type { ArtworkStoreConfig } from "./artwork-backends.ts";
 import { type ArtworkResize, createArtworkHandler } from "./artwork-http.ts";
 import { storeArtworkOriginal } from "./artwork-store.ts";
@@ -53,10 +49,11 @@ async function seed(
   bytes: Uint8Array,
   store: ArtworkStoreConfig = { backend: "colocated" },
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: root })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: root,
+  });
   if (!library) throw new Error("Fixture library missing.");
   const item = await insertItem(db, {
     libraryId: library.id,

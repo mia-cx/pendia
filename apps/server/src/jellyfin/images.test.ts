@@ -5,9 +5,10 @@ import { join } from "node:path";
 import { createHlsHandler } from "../api/hls.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries, settings } from "../db/schema/index.ts";
+import { settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { storeArtworkOriginal } from "../metadata/artwork-store.ts";
 import { createJellyfinHandler } from "./http.ts";
@@ -29,10 +30,11 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
       const root = await mkdtemp(join(tmpdir(), "pendia-images-"));
       try {
         await setupAdmin(db, { username: "mia", password: "secret-pass" });
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Library insert returned no row.");
         const movie = await insertItem(db, {
           libraryId: library.id,

@@ -6,12 +6,13 @@ import { eq, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { events, items, libraries } from "../db/schema/index.ts";
+import { events, items } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJobQueue, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
+import { insertLibraries } from "./testing.ts";
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "pendia-library-"));
@@ -28,10 +29,7 @@ async function insertLibrary(
   rootPath: string,
   medium: "movies" | "shows" = "movies",
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name, medium, rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, { name, medium, rootPath });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
 }
@@ -289,6 +287,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             changes: [
               {
                 kind: "add",
+                rootId: library.rootId,
                 path: oldPath,
                 providerIds: { tmdb: "551" },
               },
@@ -393,6 +392,7 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
             changes: [
               {
                 kind: "add",
+                rootId: library.rootId,
                 path: filePath,
                 providerIds: { tmdb: "999" },
               },

@@ -1,5 +1,5 @@
 import { lstat } from "node:fs/promises";
-import { join, posix } from "node:path";
+import { posix } from "node:path";
 import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -8,12 +8,12 @@ import {
   files,
   itemAncestors,
   items,
-  libraries,
   providerIds as providerIdRows,
   type ScanChange,
   versions,
 } from "../db/schema/index.ts";
 import { type DeletedArtworkFile, deleteItemSubtree } from "../db/tree.ts";
+import { absolutePath, assetRoots, rootedKey } from "./roots.ts";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
@@ -73,6 +73,7 @@ const isEarlyDuplicate = async (
     `${file.bytes}:${file.modifiedAt.getTime()}`;
   const held = await db
     .select({
+      rootId: files.rootId,
       path: files.path,
       bytes: files.bytes,
       modifiedAt: files.modifiedAt,
@@ -82,12 +83,14 @@ const isEarlyDuplicate = async (
     .where(eq(itemAncestors.ancestorId, rootId));
   const pairs: [string, string][] = [];
   for (const file of held) {
-    const from = movedFrom.get(file.path);
+    const from = movedFrom.get(rootedKey(file));
     if (from === undefined) return false;
-    pairs.push([from, stamp(file)]);
+    // A move stays in its root.
+    pairs.push([rootedKey({ rootId: file.rootId, path: from }), stamp(file)]);
   }
   const sources = await db
     .select({
+      rootId: files.rootId,
       path: files.path,
       bytes: files.bytes,
       modifiedAt: files.modifiedAt,
@@ -96,18 +99,17 @@ const isEarlyDuplicate = async (
     .where(
       and(
         eq(files.libraryId, libraryId),
-        inArray(
-          files.path,
-          pairs.map(([from]) => from),
-        ),
+        inArray(files.path, [...movedFrom.values()]),
       ),
     );
-  const sourceStamps = new Map(sources.map((file) => [file.path, stamp(file)]));
+  const sourceStamps = new Map(
+    sources.map((file) => [rootedKey(file), stamp(file)]),
+  );
   return pairs.every(([from, held]) => sourceStamps.get(from) === held);
 };
 
 /** Removes one File, or its Version when no other File remains, and returns the Item that may now be empty. */
-const removeFile = async (
+export const removeFile = async (
   db: Connection,
   file: typeof files.$inferSelect,
 ): Promise<string | undefined> => {
@@ -236,11 +238,9 @@ export async function updateItemCanonicalFolder(
 ): Promise<void> {
   if (item.canonicalFolder === canonicalFolder) return;
   const marker = "/.pendia/artwork/";
-  const [library] = await db
-    .select({ rootPath: libraries.rootPath })
-    .from(libraries)
-    .where(eq(libraries.id, item.libraryId));
-  if (!library) throw new AuthError("NOT_FOUND");
+  const roots = await assetRoots(db, item.id);
+  const inRoot = (rootId: string, storageKey: string) =>
+    absolutePath(db, { rootId, path: storageKey });
   const rows = await db
     .select({ id: artwork.id, storageKey: artwork.storageKey })
     .from(artwork)
@@ -249,9 +249,17 @@ export async function updateItemCanonicalFolder(
     const index = row.storageKey.lastIndexOf(marker);
     if (index < 0) throw new Error("Invalid artwork storage key.");
     const nextStorageKey = `${canonicalFolder}${row.storageKey.slice(index)}`;
+    // The file moved with the Item folder in whichever root actually holds it.
+    let holder: string | undefined;
+    for (const root of roots) {
+      if (await pathExists(await inRoot(root.id, row.storageKey))) {
+        holder = root.id;
+        break;
+      }
+    }
     if (
-      (await pathExists(join(library.rootPath, nextStorageKey))) ||
-      !(await pathExists(join(library.rootPath, row.storageKey)))
+      holder === undefined ||
+      (await pathExists(await inRoot(holder, nextStorageKey)))
     ) {
       await db
         .update(artwork)
@@ -283,26 +291,34 @@ export async function applyScanChanges(
         ? requireRelativePath(change.previousPath, false)
         : undefined,
   }));
+  // Destination to source, keyed in the move's root.
   const movedFrom = new Map(
-    normalized.flatMap(({ path, previousPath }) =>
-      previousPath === undefined ? [] : [[path, previousPath] as const],
+    normalized.flatMap(({ change, path, previousPath }) =>
+      previousPath === undefined
+        ? []
+        : [[rootedKey({ rootId: change.rootId, path }), previousPath] as const],
     ),
   );
+  const fileAt = async (rootId: string, at: string) => {
+    const [file] = await db
+      .select()
+      .from(files)
+      .where(
+        and(
+          eq(files.libraryId, libraryId),
+          eq(files.rootId, rootId),
+          eq(files.path, at),
+        ),
+      );
+    return file;
+  };
   const emptiedItemIds: string[] = [];
   for (const { change, path, previousPath } of normalized) {
     if (change.kind === "add") continue;
     if (change.kind === "move") {
       if (previousPath === undefined) throw new AuthError("INVALID_INPUT");
-      const [file] = await db
-        .select()
-        .from(files)
-        .where(
-          and(eq(files.libraryId, libraryId), eq(files.path, previousPath)),
-        );
-      const [destination] = await db
-        .select()
-        .from(files)
-        .where(and(eq(files.libraryId, libraryId), eq(files.path, path)));
+      const file = await fileAt(change.rootId, previousPath);
+      const destination = await fileAt(change.rootId, path);
       if (file && destination) {
         if (file.id === destination.id) continue;
         // A collision replaces only the colliding Item. The exception is a
@@ -357,10 +373,7 @@ export async function applyScanChanges(
       continue;
     }
     if (change.target === "file") {
-      const [file] = await db
-        .select()
-        .from(files)
-        .where(and(eq(files.libraryId, libraryId), eq(files.path, path)));
+      const file = await fileAt(change.rootId, path);
       if (!file) continue;
       const emptied = await removeFile(db, file);
       if (emptied !== undefined) emptiedItemIds.push(emptied);
@@ -376,7 +389,22 @@ export async function applyScanChanges(
         );
       item = byFolder;
     }
-    if (item) await deleteItemSubtree(db, item.id, deletedArtwork);
+    if (!item) continue;
+    // An Item another root still holds loses only this root's Files.
+    const held = await db
+      .select({ file: files })
+      .from(files)
+      .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
+      .where(eq(itemAncestors.ancestorId, item.id));
+    if (held.every(({ file }) => file.rootId === change.rootId)) {
+      await deleteItemSubtree(db, item.id, deletedArtwork);
+      continue;
+    }
+    for (const { file } of held) {
+      if (file.rootId !== change.rootId) continue;
+      const emptied = await removeFile(db, file);
+      if (emptied !== undefined) emptiedItemIds.push(emptied);
+    }
   }
   return [...new Set(emptiedItemIds)];
 }

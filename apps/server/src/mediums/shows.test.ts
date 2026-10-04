@@ -6,7 +6,6 @@ import {
   episodes,
   groups,
   items,
-  libraries,
   libraryAccess,
   progress,
   seasons,
@@ -15,6 +14,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import {
   createShowsMedium,
   groupShowPaths,
@@ -483,10 +483,11 @@ function episodeId(
 }
 
 async function seedShows(db: Database) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Shows", medium: "shows", rootPath: "/srv/shows" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Shows",
+    medium: "shows",
+    rootPath: "/srv/shows",
+  });
   if (!library) throw new Error("Fixture library missing.");
   const [userA, userB] = await db
     .insert(users)
@@ -577,14 +578,11 @@ describe.skipIf(!databaseUrl)("next up", () => {
       await migrateDatabase(db);
       const { userA, showA, showB } = await seedShows(db);
 
-      const [deniedLibrary] = await db
-        .insert(libraries)
-        .values({
-          name: "Denied",
-          medium: "shows",
-          rootPath: "/srv/denied",
-        })
-        .returning();
+      const [deniedLibrary] = await insertLibraries(db, {
+        name: "Denied",
+        medium: "shows",
+        rootPath: "/srv/denied",
+      });
       if (!deniedLibrary) throw new Error("Fixture library missing.");
       const denied = await addShow(db, deniedLibrary.id, "Denied Show", [
         [1, [1, 2]],

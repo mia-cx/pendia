@@ -3,9 +3,10 @@ import { eq } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { items, libraries } from "../db/schema/index.ts";
+import { items } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import {
   readProviderKeyNames,
   removeProviderKey,
@@ -51,14 +52,10 @@ describe.skipIf(!databaseUrl)("provider keys", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       const { admin } = await seed(db);
-      const [movieLibrary] = await db
-        .insert(libraries)
-        .values({ name: "Movies", medium: "movies", rootPath: "/m" })
-        .returning();
-      const [showLibrary] = await db
-        .insert(libraries)
-        .values({ name: "Shows", medium: "shows", rootPath: "/s" })
-        .returning();
+      const [movieLibrary, showLibrary] = await insertLibraries(db, [
+        { name: "Movies", medium: "movies", rootPath: "/m" },
+        { name: "Shows", medium: "shows", rootPath: "/s" },
+      ]);
       if (!movieLibrary || !showLibrary) {
         throw new Error("Fixture libraries missing.");
       }

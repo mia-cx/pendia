@@ -38,13 +38,13 @@ const cases = [
   write(schema.libraries, {
     name: "Movies",
     medium: "movies",
-    rootPath: "/movies",
     configuration: { watch: true },
   }),
   write(schema.files, {
     versionId: uuid(),
     itemId: uuid(),
     libraryId: uuid(),
+    rootId: uuid(),
     path: uuid(),
     order: 0,
     bytes: 1n,
@@ -59,7 +59,7 @@ const cases = [
     disposition: { default: true },
   }),
   write(schema.probeCache, {
-    libraryId: uuid(),
+    rootId: uuid(),
     path: uuid(),
     bytes: 1n,
     modifiedNs: 1n,

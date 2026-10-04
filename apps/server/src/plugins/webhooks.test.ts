@@ -2,10 +2,10 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { createJobQueue } from "../jobs/queue.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { fetchPlugin, installPlugin } from "./install.ts";
 import { readRegistry } from "./registries.ts";
 import { createPluginRuntime, type PluginRuntime } from "./runtime.ts";
@@ -80,10 +80,11 @@ async function deliverAddedItem(
       body: '{"text":"Added {{item.title}} ({{item.year}})","kind":"{{data.kind}}"}',
     },
   }));
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: folder })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: folder,
+  });
   if (!library) throw new Error("Library missing.");
   await insertItem(db, {
     libraryId: library.id,

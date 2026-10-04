@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
-import { items, libraries } from "../db/schema/index.ts";
+import { items } from "../db/schema/index.ts";
+import { assetRoots } from "../libraries/roots.ts";
 
 /** The formats a stored subtitle track may have. */
 export const subtitleFormats = ["srt", "ass", "vtt"] as const;
@@ -38,49 +39,71 @@ export function trackName(track: StoredSubtitle): string {
 }
 
 /**
- * Where an Item's tracks live: `.pendia/subtitles` in its canonical folder.
+ * The subtitle folders an Item's tracks may sit in, home root first:
+ * `.pendia/subtitles` in its canonical folder under each asset root.
  * Episodes share a Season folder, so each file starts with the Item id.
  */
-export async function subtitleFolder(db: Database, itemId: string) {
+export async function subtitleFolders(db: Database, itemId: string) {
   const [row] = await db
     .select({
       libraryId: items.libraryId,
-      rootPath: libraries.rootPath,
       canonicalFolder: items.canonicalFolder,
     })
     .from(items)
-    .innerJoin(libraries, eq(libraries.id, items.libraryId))
     .where(eq(items.id, itemId));
   if (row === undefined) throw new AuthError("NOT_FOUND");
-  const itemFolder = join(row.rootPath, row.canonicalFolder);
-  return {
-    libraryId: row.libraryId,
-    itemFolder,
-    path: join(itemFolder, ".pendia", "subtitles"),
-    file: (track: StoredSubtitle) =>
-      join(itemFolder, ".pendia", "subtitles", `${itemId}.${trackName(track)}`),
-  };
+  return (await assetRoots(db, itemId)).map((root) => {
+    const folder = join(root.path, row.canonicalFolder);
+    return {
+      libraryId: row.libraryId,
+      itemFolder: folder,
+      path: join(folder, ".pendia", "subtitles"),
+      file: (track: StoredSubtitle) =>
+        join(folder, ".pendia", "subtitles", `${itemId}.${trackName(track)}`),
+    };
+  });
 }
 
-/** Lists an Item's stored tracks by language; a missing folder means none. */
+/** Where an Item's tracks are written: the first of its asset roots' subtitle folders. */
+export async function subtitleFolder(db: Database, itemId: string) {
+  const [home] = await subtitleFolders(db, itemId);
+  if (home === undefined) throw new AuthError("NOT_FOUND");
+  return home;
+}
+
+/** Lists an Item's stored tracks by language across its asset roots; a missing folder means none. */
 export async function listSubtitles(
   db: Database,
   itemId: string,
 ): Promise<StoredSubtitle[]> {
-  const { path } = await subtitleFolder(db, itemId);
-  let names: string[];
-  try {
-    names = await readdir(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
+  const tracks = new Map<string, StoredSubtitle>();
   const prefix = `${itemId}.`;
-  return names
-    .filter((name) => name.startsWith(prefix))
-    .map((name) => readTrackName(name.slice(prefix.length)))
-    .filter((track) => track !== null)
-    .sort((a, b) => a.language.localeCompare(b.language));
+  let firstError: unknown;
+  let answered = false;
+  for (const folder of await subtitleFolders(db, itemId)) {
+    let names: string[];
+    try {
+      names = await readdir(folder.path);
+      answered = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        answered = true;
+        continue;
+      }
+      firstError ??= error;
+      continue;
+    }
+    for (const name of names) {
+      if (!name.startsWith(prefix)) continue;
+      const track = readTrackName(name.slice(prefix.length));
+      if (track !== null) tracks.set(trackName(track), track);
+    }
+  }
+  // A folder that cannot be read counts as none; only if none could is it an error.
+  if (!answered && firstError !== undefined) throw firstError;
+  return [...tracks.values()].sort((a, b) =>
+    a.language.localeCompare(b.language),
+  );
 }
 
 /** Writes one track atomically. The Item folder must exist; only `.pendia/subtitles` is created. */

@@ -18,7 +18,7 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
 - [x] The show reconciler deletes File rows only for imported Versions, like the movie reconciler.
 - [x] A file recreated between the walk and the write lock keeps its row and its watch progress, for movies and shows.
 - [x] `waitForBlockedScan` counts only lock waits in the test's own database, from other backends.
-- [ ] Lint, check, build, and `bun test` with and without `DATABASE_URL` pass.
+- [x] Lint, check, build, and `bun test` with and without `DATABASE_URL` pass.
 
 ## TODOs
 
@@ -32,7 +32,7 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
   - Validation: existing reconcile tests pass. `scan.test.ts` and `jobs.test.ts`: 32 pass.
 - [x] #71: re-stat the paths a reconciling scan is about to drop, inside the write lock, for movies and shows.
   - Validation: new tests recreate a file while the scan waits on the lock and expect the existing abort error with rows and progress kept. Both failed before the change. After: `src/libraries` and `src/watcher` 159 pass.
-- [ ] Run the full gate and record the results here.
+- [x] Run the full gate and record the results here.
 
 ## Notes
 
@@ -46,3 +46,10 @@ Five bugs in `apps/server/src/libraries/scan.ts` and its tests:
   - No case was left that needed the skip-the-later-file fallback, so it is not built.
 - #70: the schema already forbids Files on stored Versions (trigger `files_imported_version`, "Files require an imported Version"; stored Versions are fileless). A stored Version therefore has no File rows the reconciler could delete, and the requested test (a stored Version keeps its File rows) cannot be built. The reconciler now filters on `origin = 'imported'` in its select, matching the movie reconciler and removing the per-Version origin lookup.
 - #71: `ScanSource` gains `confirmMissing(paths)`, next to `verify` and `confirmEmpty`. The local source re-stats each path; the watcher source does nothing, like its `verify` and `confirmEmpty`, because its report is the walk and `exists` there treats an unchecked path as present. Only paths inside the walked scope are checked: a stored path outside the scope was never walked, and aborting on it would fail every retry. `inScope` moves from `watcher/http.ts` to `scan.ts` for both callers.
+- Gate at `af30c19`, from the repo root:
+  - `bun install --frozen-lockfile`: exit 0, no changes.
+  - `bun run lint`: exit 0, Biome checked 376 files.
+  - `bun run check`: exit 0, 6/6 tasks; svelte-check 0 errors, 0 warnings.
+  - `bun run build`: exit 0, 4/4 tasks.
+  - `DATABASE_URL=… bun test`: 1318 pass, 3 skip, 2 fail. Both failures are `EADDRINUSE` on port 3001: another process on the shared machine listens there, and `startPendia` binds the default transcoder port in `api/libraries.test.ts` and `api/wizard.test.ts`. Those two files with `PENDIA_TRANSCODER_PORT=3961`: 7 pass, 0 fail.
+  - `bun test` without `DATABASE_URL`: 774 pass, 567 skip, 0 fail.

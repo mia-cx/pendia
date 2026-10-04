@@ -267,20 +267,22 @@ describe("liveRunArguments", () => {
   });
 
   describe("video transcode", () => {
-    test("scales to the rung and encodes H.264 on the CPU without B-frames", () => {
+    test("scales to the rung and encodes H.264 on the CPU with only forced keyframes", () => {
       const args = liveRunArguments(base({ video: transcode() }));
       expect(after(args, "-filter_complex")).toBe(
         "[0:V:0]scale=w=1280:h=720,format=yuv420p[v]",
       );
       expect(after(args, "-map")).toBe("[v]");
       const codec = args.indexOf("-c:v");
-      expect(args.slice(codec, codec + 6)).toEqual([
+      expect(args.slice(codec, codec + 8)).toEqual([
         "-c:v",
         "libx264",
         "-preset",
         "veryfast",
         "-bf",
         "0",
+        "-x264-params",
+        "scenecut=0:keyint=infinite",
       ]);
       expect(after(args, "-profile:v")).toBe("high");
       expect(after(args, "-level:v")).toBe("4.1");
@@ -288,6 +290,28 @@ describe("liveRunArguments", () => {
       expect(after(args, "-maxrate")).toBe("3000000");
       expect(after(args, "-bufsize")).toBe("6000000");
       expect(after(args, "-fpsmax")).toBe("30");
+    });
+
+    test("lets the muxer take each forced keyframe within half the shortest segment", () => {
+      const boundariesSeconds = [0, 4.04, 8, 13, 16];
+      expect(
+        after(
+          liveRunArguments(base({ video: transcode(), boundariesSeconds })),
+          "-segment_time_delta",
+        ),
+      ).toBe("1980000us");
+      expect(
+        after(
+          liveRunArguments(
+            base({ video: transcode(), boundariesSeconds, startIndex: 2 }),
+          ),
+          "-segment_time_delta",
+        ),
+      ).toBe("2500000us");
+      // A copy cuts on source keyframes, which may sit anywhere.
+      expect(liveRunArguments(base({ boundariesSeconds }))).not.toContain(
+        "-segment_time_delta",
+      );
     });
 
     test("forces keyframes on the timeline boundaries the run reaches", () => {
@@ -393,13 +417,15 @@ describe("liveRunArguments", () => {
         "[0:V:0]scale=w=1280:h=720,format=yuv420p10le[v]",
       );
       const codec = args.indexOf("-c:v");
-      expect(args.slice(codec, codec + 8)).toEqual([
+      expect(args.slice(codec, codec + 10)).toEqual([
         "-c:v",
         "libx265",
         "-preset",
         "superfast",
         "-x265-params",
-        "bframes=0:log-level=error",
+        "bframes=0:scenecut=0:keyint=-1:log-level=error",
+        "-forced-idr",
+        "1",
         "-tag:v",
         "hvc1",
       ]);
@@ -407,17 +433,22 @@ describe("liveRunArguments", () => {
       expect(args).not.toContain("-level:v");
     });
 
-    test("encodes AV1 with SVT-AV1 and lets it pick the profile", () => {
+    test("encodes AV1 with SVT-AV1 at a target bitrate and lets it pick the profile", () => {
       const args = liveRunArguments(
         base({ video: transcode({ codec: "av1", profile: "main", level: 8 }) }),
       );
       const codec = args.indexOf("-c:v");
-      expect(args.slice(codec, codec + 4)).toEqual([
+      expect(args.slice(codec, codec + 6)).toEqual([
         "-c:v",
         "libsvtav1",
         "-preset",
         "10",
+        "-svtav1-params",
+        "keyint=2147483647:scd=0",
       ]);
+      expect(after(args, "-b:v")).toBe("3000000");
+      // SVT-AV1 refuses a bitrate ceiling outside CRF mode.
+      expect(args).not.toContain("-maxrate");
       expect(args).not.toContain("-profile:v");
       expect(args).not.toContain("-level:v");
     });
@@ -703,6 +734,66 @@ describe("live runs", () => {
     });
     expect(whole.segments).toEqual([0]);
   }, 60_000);
+
+  test("a capped frame rate keeps every restart cut on its boundary", async () => {
+    // 25 fps with a boundary at 4.04 s: under a 24 fps cap the restart's
+    // first frame lands at 4.0417 s, after the boundary.
+    const capped = join(dir, "capped.mkv");
+    await runProcess([
+      "ffmpeg",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=320x180:r=25:d=16",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-force_key_frames",
+      "0,4.04,8,12",
+      "-g",
+      "1000",
+      "-sc_threshold",
+      "0",
+      capped,
+    ]);
+    const timeline = [0, 4.04, 8, 12, 16];
+    const codecs = [
+      "h264",
+      ...(hasEncoder("libx265") ? ["hevc"] : []),
+      ...(hasEncoder("libsvtav1") ? ["av1"] : []),
+    ];
+    for (const codec of codecs) {
+      for (const startIndex of [0, 1]) {
+        const run = await runToEnd(`capped-${codec}-${startIndex}`, {
+          inputPath: capped,
+          boundariesSeconds: timeline,
+          startIndex,
+          video: transcode({
+            codec,
+            profile: null,
+            level: null,
+            maxFrameRate: 24,
+            width: 320,
+            height: 180,
+          }),
+        });
+        expect(run.segments).toEqual([0, 1, 2, 3].slice(startIndex));
+        for (const index of run.segments) {
+          const served = await run.served(index);
+          const { pts = Number.NaN } = await firstVideoPts(served);
+          const boundary = timeline[index] ?? Number.NaN;
+          // Within one 24 fps frame of the boundary, and its only keyframe.
+          expect(pts).toBeGreaterThanOrEqual(boundary);
+          expect(pts - boundary).toBeLessThan(1 / 24);
+          expect(await ffprobeKeyframeTimes(served)).toHaveLength(1);
+        }
+      }
+    }
+  }, 120_000);
 
   test.skipIf(!hasLibx265)(
     "an HEVC source transcodes to H.264 cut exactly on the timeline",

@@ -21,6 +21,8 @@ describe("trial arguments", () => {
       "veryfast",
       "-bf",
       "0",
+      "-x264-params",
+      "scenecut=0:keyint=infinite",
       "-f",
       "null",
       "-",

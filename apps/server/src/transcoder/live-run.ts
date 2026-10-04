@@ -27,21 +27,41 @@ export const audioBitrates = { aac: 192_000, eac3: 640_000 } as const;
 /**
  * The live profile's CPU encoder per output codec. It trades quality for start
  * time. No B-frames: with them the fMP4 muxer starts each run's video two
- * frames after its boundary.
+ * frames after its boundary. No keyframes but the forced ones: the muxer may
+ * cut on any keyframe near a boundary.
  */
 export const liveEncoders: Record<string, readonly string[]> = {
-  h264: ["-c:v", "libx264", "-preset", "veryfast", "-bf", "0"],
+  h264: [
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-bf",
+    "0",
+    "-x264-params",
+    "scenecut=0:keyint=infinite",
+  ],
   hevc: [
     "-c:v",
     "libx265",
     "-preset",
     "superfast",
     "-x265-params",
-    "bframes=0:log-level=error",
+    "bframes=0:scenecut=0:keyint=-1:log-level=error",
+    "-forced-idr",
+    "1",
     "-tag:v",
     "hvc1",
   ],
-  av1: ["-c:v", "libsvtav1", "-preset", "10"],
+  av1: [
+    "-c:v",
+    "libsvtav1",
+    "-preset",
+    "10",
+    // SVT-AV1 takes no infinite interval outside CRF mode; the largest it takes.
+    "-svtav1-params",
+    "keyint=2147483647:scd=0",
+  ],
 };
 
 // Probe profile names to encoder profile names; anything else lets the encoder choose.
@@ -129,14 +149,16 @@ function videoArguments(run: LiveRun) {
   if (video.codec === "h264" && video.level !== null) {
     args.push("-level:v", (video.level / 10).toFixed(1));
   }
-  args.push(
-    "-b:v",
-    String(video.bitrate),
-    "-maxrate",
-    String(video.bitrate),
-    "-bufsize",
-    String(video.bitrate * 2),
-  );
+  args.push("-b:v", String(video.bitrate));
+  // SVT-AV1 takes a bitrate ceiling only in CRF mode; with -b:v it runs VBR.
+  if (video.codec !== "av1") {
+    args.push(
+      "-maxrate",
+      String(video.bitrate),
+      "-bufsize",
+      String(video.bitrate * 2),
+    );
+  }
   if (video.maxFrameRate !== null) {
     args.push("-fpsmax", String(video.maxFrameRate));
   }
@@ -229,6 +251,19 @@ export function liveRunArguments(run: LiveRun) {
       "-segment_times",
       cuts.map((time) => `${Math.floor((time - start) * 1e6)}us`).join(","),
     );
+    if (run.video.action === "transcode") {
+      // A re-encode's first frame can land up to a frame after its boundary,
+      // on a frame-rate cap's grid, which moves every cut that much late.
+      // Its only keyframes are the forced ones, so the muxer may take the one
+      // at each boundary from anywhere within half the shortest segment.
+      const shortest = Math.min(
+        ...cuts.map(
+          (time, index) =>
+            time - (run.boundariesSeconds[run.startIndex + index] ?? 0),
+        ),
+      );
+      args.push("-segment_time_delta", `${Math.round(shortest * 5e5)}us`);
+    }
   } else {
     // Without a list the muxer cuts every 2 s at any keyframe; the run's one
     // segment must run to the end.

@@ -1,9 +1,15 @@
 <script lang="ts">
 const sections = [
   {
+    href: "/admin/activity",
+    label: "Activity",
+    blurb: "See who is playing what, and follow store jobs.",
+  },
+  {
     href: "/admin/libraries",
     label: "Libraries",
-    blurb: "Add, rename, scan and delete media libraries.",
+    blurb:
+      "Add, rename, scan and delete media libraries, and choose the Versions each one stores.",
   },
   {
     href: "/admin/users",
@@ -26,7 +32,7 @@ const sections = [
     href: "/admin/settings",
     label: "Settings",
     blurb:
-      "Set trusted proxies and provider keys, toggle artwork auth and check OIDC.",
+      "Set trusted proxies, the bitrate cap, the store window and provider keys, toggle artwork auth, and check the artwork store and OIDC.",
   },
 ];
 </script>

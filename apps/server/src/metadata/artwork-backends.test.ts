@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   artworkBackend,
+  describeArtworkStore,
   readArtworkStoreConfig,
   writeArtworkOriginal,
 } from "./artwork-backends.ts";
@@ -39,7 +40,29 @@ describe("readArtworkStoreConfig", () => {
       expect(config.backend).toBe("s3");
       if (config.backend === "s3")
         expect(config.client).toBeInstanceOf(Bun.S3Client);
+      expect(describeArtworkStore(config)).toEqual({
+        backend: "s3",
+        path: null,
+        bucket: "art",
+        endpoint: null,
+      });
     }
+  });
+
+  test("describes a directory store by its path", () => {
+    expect(
+      describeArtworkStore(
+        readArtworkStoreConfig({
+          PENDIA_ARTWORK_STORE: "path",
+          PENDIA_ARTWORK_PATH: "/srv/artwork",
+        }),
+      ),
+    ).toEqual({
+      backend: "configured-path",
+      path: "/srv/artwork",
+      bucket: null,
+      endpoint: null,
+    });
   });
 
   test("rejects missing, partial and blank S3 credentials", () => {

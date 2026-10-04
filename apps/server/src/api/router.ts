@@ -4,6 +4,7 @@ import { isBuiltInAdmin } from "../auth/permissions.ts";
 import { refreshItem as queueItemRefresh } from "../metadata/jobs.ts";
 import { RungName } from "../stored/policy.ts";
 import { requestStoredVersion } from "../stored/service.ts";
+import { readStoreStatus } from "../stored/status.ts";
 import {
   groupProcedures,
   settingsProcedures,
@@ -30,6 +31,7 @@ import {
   ItemSort,
   Me,
   PageSize,
+  StoreStatus,
 } from "./schema.ts";
 
 const me = authenticated
@@ -85,6 +87,13 @@ const storedVersionRequest = authenticatedMutation
     ),
   );
 
+const storeStatus = authenticated
+  .route({ method: "GET", path: "/store/status" })
+  .output(Schema.standardSchemaV1(StoreStatus))
+  .handler(async ({ context }) =>
+    runApi(fromHost(() => readStoreStatus(context.db, context.caller.user.id))),
+  );
+
 const refreshItem = authenticatedMutation
   .route({ method: "POST", path: "/items/{id}/refresh" })
   .input(Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID })))
@@ -137,6 +146,7 @@ export const pendiaRouter = {
     requestStoredVersion: storedVersionRequest,
   },
   libraries: libraryProcedures,
+  store: { status: storeStatus },
   playback: playbackProcedures,
   marks: markProcedures,
   shelves: shelfProcedures,

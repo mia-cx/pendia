@@ -10,13 +10,14 @@ if (!s3Url)
 /** An S3 artwork store on the bucket TEST_S3_URL names. */
 export function testS3Store() {
   const url = new URL(s3Url ?? "");
+  const bucket = url.pathname.slice(1);
   const client = new Bun.S3Client({
     endpoint: url.origin,
-    bucket: url.pathname.slice(1),
+    bucket,
     // Bun signs a custom endpoint for "auto", which versitygw rejects.
     region: "us-east-1",
     accessKeyId: decodeURIComponent(url.username),
     secretAccessKey: decodeURIComponent(url.password),
   });
-  return { backend: "s3" as const, client };
+  return { backend: "s3" as const, client, bucket, endpoint: url.origin };
 }

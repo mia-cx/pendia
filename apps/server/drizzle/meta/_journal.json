@@ -78,6 +78,13 @@
       "when": 1791091664734,
       "tag": "0010_subtitle_fetch_job",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791101028881,
+      "tag": "0011_session_client",
+      "breakpoints": true
     }
   ]
 }

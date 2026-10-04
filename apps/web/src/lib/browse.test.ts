@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type BrowseCard,
+  cardLabel,
   episodeCode,
   formatBytes,
   formatDuration,
@@ -52,6 +53,24 @@ describe("browse helpers", () => {
       ),
     ).toBe("S0 E2–E3");
     expect(episodeCode(card({}))).toBeNull();
+  });
+
+  test("a card label places an Episode in its Show", () => {
+    expect(cardLabel(card({}))).toBe("Arrival (2016)");
+    expect(
+      cardLabel(
+        card({
+          kind: "episode",
+          title: "Good News About Hell",
+          seasonNumber: 1,
+          episodeNumber: 1,
+          show,
+        }),
+      ),
+    ).toBe("Severance · S1 E1 · Good News About Hell");
+    expect(cardLabel(card({ kind: "season", title: "Season 1", show }))).toBe(
+      "Severance · Season 1",
+    );
   });
 
   test("durations and sizes read as people say them", () => {

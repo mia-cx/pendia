@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { jobs, streams, versions } from "../db/schema/index.ts";
+import { jobs, settings, streams, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
@@ -160,6 +160,40 @@ describe.skipIf(!databaseUrl)("store job", () => {
           expect(await readStoreManifest(folder)).toMatchObject({
             complete: true,
           });
+        });
+      }),
+    120_000,
+  );
+
+  test(
+    "a stopped encode books its continuation in the window as it is now",
+    () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withStoredLibrary(db, twoRungPolicy, async ({ file }) => {
+          await enqueueStore(db, { sourceFileId: file.id, rung: "360p" });
+          const started = Date.now();
+          const nearEnd = () =>
+            new Date(
+              local(4, 6, 59, 58).getTime() + 500 + Date.now() - started,
+            );
+          const run = runNextStore(db, {
+            now: nearEnd,
+            readRate: { rate: 1, initialBurstSeconds: 0 },
+          });
+          // An admin stretches the window to noon while the encode runs.
+          await Bun.sleep(300);
+          await db.insert(settings).values({
+            key: "store",
+            value: { idleWindow: { start: "01:00", end: "12:00" } },
+          });
+          await run;
+          // Bounded by this run's own wall-clock span, so the old window's
+          // next 01:00 fails here whatever today's date is.
+          const [continuation] = await queuedStores(db);
+          const runAfter = continuation?.runAfter.getTime() ?? 0;
+          expect(runAfter).toBeGreaterThanOrEqual(started - 1_000);
+          expect(runAfter).toBeLessThanOrEqual(Date.now());
         });
       }),
     120_000,

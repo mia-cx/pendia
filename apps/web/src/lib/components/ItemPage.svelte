@@ -12,6 +12,7 @@ import {
 import Failure from "$lib/components/Failure.svelte";
 import Poster from "$lib/components/Poster.svelte";
 import PosterCard from "$lib/components/PosterCard.svelte";
+import StoreRequest from "$lib/components/StoreRequest.svelte";
 import { resource } from "$lib/resource.svelte.ts";
 
 const {
@@ -167,6 +168,7 @@ const titleCase = (role: string) =>
             </li>
           {/each}
         </ul>
+        <StoreRequest {detail} />
       </section>
     {/if}
 

@@ -234,7 +234,7 @@ function scanCell(row: LibraryRow): string {
                 <Failure failure={editFailure} />
               {/if}
             {:else}
-              {row.name}
+              <a href="/admin/libraries/{row.id}">{row.name}</a>
             {/if}
           </td>
           <td>{mediumNames[row.medium]}</td>

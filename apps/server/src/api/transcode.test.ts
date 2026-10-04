@@ -406,7 +406,8 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
               payload.sessionId === third.sessionId,
           )
           .map((payload) => payload.state);
-        expect(kinds).toEqual(["queued", "starting"]);
+        // The plan announces the session, admission queues it, a free slot starts it.
+        expect(kinds).toEqual(["starting", "queued", "starting"]);
       }),
     90_000,
   );

@@ -13,6 +13,7 @@ import { authenticate, createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
+  events,
   files,
   items,
   libraries,
@@ -27,6 +28,7 @@ import {
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { planPlayback, refreshPlayback } from "../playback/planning.ts";
+import { writeGlobalBitrateCap } from "../playback/settings.ts";
 import type { pendiaRouter } from "./router.ts";
 
 const device = {
@@ -1060,5 +1062,73 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       );
       expect(planned.method).toBe("direct-play");
       expect(planned.sessionId).not.toBeNull();
+    }));
+
+  test("a changed global cap applies to the next plan", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db);
+      // A transcode plan opens an HLS session, which needs a timeline.
+      await alignTimeline(db, fx.version);
+      const input = { itemId: fx.item.id, versionId: fx.version.id, profile };
+      const wan = { request: planRequest(), peerAddress: "203.0.113.8" };
+      expect((await planPlayback(db, fx.keyCaller, input, wan)).method).toBe(
+        "direct-play",
+      );
+      // The 5 Mbit/s source no longer fits under 3 Mbit/s.
+      await writeGlobalBitrateCap(db, fx.admin.id, 3_000_000);
+      expect((await planPlayback(db, fx.keyCaller, input, wan)).method).toBe(
+        "transcode",
+      );
+      await writeGlobalBitrateCap(db, fx.admin.id, null);
+      expect((await planPlayback(db, fx.keyCaller, input, wan)).method).toBe(
+        "direct-play",
+      );
+    }));
+
+  test("a planned session records its client and announces itself", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db);
+      const input = { itemId: fx.item.id, versionId: fx.version.id, profile };
+      const transport = { request: planRequest(), peerAddress: "127.0.0.1" };
+      const bySession = await planPlayback(db, fx.caller, input, transport);
+      const byKey = await planPlayback(db, fx.keyCaller, input, transport);
+      const clientOf = async (sessionId: string | null) => {
+        if (sessionId === null) throw new Error("Expected a session.");
+        const [row] = await db
+          .select({
+            clientName: sessionRegistry.clientName,
+            deviceName: sessionRegistry.deviceName,
+          })
+          .from(sessionRegistry)
+          .where(eq(sessionRegistry.id, sessionId));
+        return row;
+      };
+      expect(await clientOf(bySession.sessionId)).toEqual({
+        clientName: "Test Client",
+        deviceName: "Living Room",
+      });
+      expect(await clientOf(byKey.sessionId)).toEqual({
+        clientName: "player",
+        deviceName: null,
+      });
+      const announced = await db
+        .select({ payload: events.payload })
+        .from(events)
+        .where(eq(events.kind, "session.state"))
+        .orderBy(events.id);
+      expect(announced.map((row) => row.payload)).toEqual([
+        {
+          kind: "session.state",
+          sessionId: bySession.sessionId,
+          state: "starting",
+        },
+        {
+          kind: "session.state",
+          sessionId: byKey.sessionId,
+          state: "starting",
+        },
+      ]);
     }));
 });

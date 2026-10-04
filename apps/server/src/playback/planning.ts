@@ -1,5 +1,6 @@
 import { and, asc, eq, sql } from "drizzle-orm";
 import { Schema } from "effect";
+import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { issuePlaybackToken } from "../auth/playback-tokens.ts";
@@ -8,10 +9,11 @@ import { readAuthSettings } from "../auth/settings.ts";
 import { requestIdentity } from "../auth/transport.ts";
 import type { Database } from "../db/client.ts";
 import {
+  apiKeys,
   files,
   items,
   sessionRegistry,
-  settings,
+  sessions,
   streams,
   type TranscoderBackend,
   transcoderCapabilities,
@@ -36,6 +38,7 @@ import {
   type Hdr,
   type PlaybackCaps,
 } from "./policy.ts";
+import { readGlobalBitrateCap } from "./settings.ts";
 
 /** The decoded input every playback planning call receives. */
 export type PlanInput = {
@@ -231,23 +234,6 @@ export async function readCapabilityTable(
   };
 }
 
-async function globalBitrateCap(db: Database): Promise<number | null> {
-  const [row] = await db
-    .select({ value: settings.value })
-    .from(settings)
-    .where(eq(settings.key, "playback"))
-    .limit(1);
-  if (row === undefined) return null;
-  const raw: unknown = row.value;
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
-    throw new Error("Invalid playback settings.");
-  const cap = (raw as Record<string, unknown>).bitrateCapBps;
-  if (cap === null || cap === undefined) return null;
-  if (typeof cap !== "number" || !Number.isSafeInteger(cap) || cap <= 0)
-    throw new Error("Invalid playback settings.");
-  return cap;
-}
-
 async function userBitrateCap(
   db: Database,
   userId: string,
@@ -262,6 +248,27 @@ async function userBitrateCap(
   if (!Number.isSafeInteger(cap) || cap <= 0)
     throw new Error("Invalid playback settings.");
   return cap;
+}
+
+/** Names the app and device behind a caller's credential; an API key names the client only. */
+async function callerClient(db: Database, caller: Caller) {
+  if (caller.credential.kind === "api-key") {
+    const [key] = await db
+      .select({ name: apiKeys.name })
+      .from(apiKeys)
+      .where(eq(apiKeys.id, caller.credential.id))
+      .limit(1);
+    return { clientName: key?.name ?? null, deviceName: null };
+  }
+  const [session] = await db
+    .select({
+      clientName: sessions.clientName,
+      deviceName: sessions.deviceName,
+    })
+    .from(sessions)
+    .where(eq(sessions.id, caller.credential.id))
+    .limit(1);
+  return session ?? { clientName: null, deviceName: null };
 }
 
 function isLanAddress(address: string): boolean {
@@ -328,7 +335,7 @@ export async function planPlayback(
     config.trustedProxyAddresses,
   );
   const caps: PlaybackCaps = {
-    globalDefault: await globalBitrateCap(db),
+    globalDefault: await readGlobalBitrateCap(db),
     userOverride: await userBitrateCap(db, caller.user.id),
     sessionRequest: input.bitrateCapBps ?? null,
     isLan: isLanAddress(identity.address),
@@ -377,6 +384,7 @@ export async function planPlayback(
     (version.segmentTimelineId === null || !version.timelineAligned)
   )
     throw new AuthError("CONFLICT");
+  const client = await callerClient(db, caller);
   // Tracks a subtitle provider stored next to the Item, served on the side.
   const subtitles = (await listSubtitles(db, item.id)).map((track) => ({
     ...track,
@@ -394,9 +402,15 @@ export async function planPlayback(
         decision: stored
           ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
           : decision,
+        ...client,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");
+    await publishEvent(tx, {
+      kind: "session.state",
+      sessionId: session.id,
+      state: "starting",
+    });
     const issued = await issuePlaybackToken(tx, caller, {
       sessionId: session.id,
       itemId: item.id,

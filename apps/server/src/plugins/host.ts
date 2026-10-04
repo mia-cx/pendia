@@ -19,6 +19,7 @@ import type { JsonObject } from "../db/schema/common.ts";
 import {
   files,
   items,
+  libraryRoots,
   progress,
   providerIds,
   versions,
@@ -174,7 +175,11 @@ async function readItems(
         durationSeconds: version.durationSeconds,
         files: fileRows
           .filter((file) => file.versionId === version.id)
-          .map((file) => ({ path: file.path, bytes: Number(file.bytes) })),
+          .map((file) => ({
+            path: file.path,
+            bytes: Number(file.bytes),
+            rootId: file.rootId,
+          })),
       })),
   }));
 }
@@ -213,10 +218,16 @@ function readQuery(raw: ItemQuery) {
 
 async function libraryPath(
   db: Database,
-  libraryId: string,
+  rootOrLibraryId: string,
   path: string,
 ): Promise<string> {
-  const roots = await rootsOf(db, requireUuid(libraryId, "libraryId"));
+  const id = requireUuid(rootOrLibraryId, "rootOrLibraryId");
+  // A root id names that root alone; a library id names all of its roots.
+  const [matched] = await db
+    .select({ id: libraryRoots.id, path: libraryRoots.path })
+    .from(libraryRoots)
+    .where(eq(libraryRoots.id, id));
+  const roots = matched === undefined ? await rootsOf(db, id) : [matched];
   const relative = requireString(path, "path");
   const outside = () => new Error(`${relative} is outside the library.`);
   // A path resolves in the first root holding it, else the first holding its folder.
@@ -230,7 +241,7 @@ async function libraryPath(
     (await findRoot(roots, holds(dirname(relative)))) ??
     roots[0];
   if (chosen === undefined)
-    throw new Error(`Library ${libraryId} does not exist.`);
+    throw new Error(`Library ${rootOrLibraryId} does not exist.`);
   const root = await realpath(chosen.path);
   const target = resolve(root, relative);
   if (isAbsolute(relative) || !target.startsWith(`${root}${sep}`))
@@ -292,10 +303,10 @@ export function createHost(context: HostContext): PluginHost {
   const { db, name, registrations } = context;
   const has = (capability: Capability) => context.capabilities.has(capability);
 
-  async function filePath(libraryId: string, path: string) {
+  async function filePath(rootOrLibraryId: string, path: string) {
     if (!(await context.filesAllowed()))
       throw new Error(`File access is switched off for ${name}.`);
-    return libraryPath(db, libraryId, path);
+    return libraryPath(db, rootOrLibraryId, path);
   }
 
   return {
@@ -358,9 +369,9 @@ export function createHost(context: HostContext): PluginHost {
     }),
     ...(has("files") && {
       files: {
-        async stat(libraryId: string, path: string) {
+        async stat(rootOrLibraryId: string, path: string) {
           try {
-            const found = await stat(await filePath(libraryId, path));
+            const found = await stat(await filePath(rootOrLibraryId, path));
             return found.isFile()
               ? { bytes: found.size, modifiedAt: found.mtime.toISOString() }
               : null;
@@ -370,11 +381,11 @@ export function createHost(context: HostContext): PluginHost {
           }
         },
         async read(
-          libraryId: string,
+          rootOrLibraryId: string,
           path: string,
           range?: { offset: number; length: number },
         ) {
-          const file = Bun.file(await filePath(libraryId, path));
+          const file = Bun.file(await filePath(rootOrLibraryId, path));
           const offset = range?.offset ?? 0;
           const length = range?.length ?? file.size - offset;
           if (
@@ -390,13 +401,13 @@ export function createHost(context: HostContext): PluginHost {
             );
           return file.slice(offset, offset + length).bytes();
         },
-        async write(libraryId: string, path: string, bytes: Uint8Array) {
+        async write(rootOrLibraryId: string, path: string, bytes: Uint8Array) {
           if (!(bytes instanceof Uint8Array))
             throw new TypeError("bytes must be a Uint8Array.");
-          await Bun.write(await filePath(libraryId, path), bytes);
+          await Bun.write(await filePath(rootOrLibraryId, path), bytes);
         },
-        async delete(libraryId: string, path: string) {
-          await rm(await filePath(libraryId, path));
+        async delete(rootOrLibraryId: string, path: string) {
+          await rm(await filePath(rootOrLibraryId, path));
         },
       },
     }),

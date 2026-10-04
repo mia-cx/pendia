@@ -47,6 +47,18 @@ export function episodeCode(card: BrowseCard): string | null {
   return `S${card.seasonNumber} E${card.episodeNumber}${end}`;
 }
 
+/** A card's full name on one line: the Show and code before an Episode, the year after a Movie. */
+export function cardLabel(card: BrowseCard): string {
+  const code = episodeCode(card);
+  if (card.show !== null && card.kind === "episode")
+    return [card.show.title, code, card.title]
+      .filter((part) => part !== null)
+      .join(" · ");
+  if (card.show !== null && card.kind === "season")
+    return `${card.show.title} · ${card.title}`;
+  return card.year === null ? card.title : `${card.title} (${card.year})`;
+}
+
 /** A running time in hours and minutes, such as `2 h 46 min` or `55 min`. */
 export function formatDuration(seconds: number): string {
   const minutes = Math.round(seconds / 60);

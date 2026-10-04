@@ -6,6 +6,7 @@ import type { LayoutProps } from "./$types";
 const { data, children }: LayoutProps = $props();
 
 const sections = [
+  { href: "/admin/activity", label: "Activity" },
   { href: "/admin/libraries", label: "Libraries" },
   { href: "/admin/users", label: "Users" },
   { href: "/admin/groups", label: "Groups" },

@@ -142,6 +142,68 @@ describe.skipIf(!databaseUrl)("jellyfin progress and marks", () => {
       expect(hidden.status).toBe(403);
     }));
 
+  test("reports stay on their own device and a stopped play counts once", () =>
+    withDatabase(async (db) => {
+      const s = await seedBrowse(db);
+      const item = toGuid(s.matrix.id);
+      const states = async () =>
+        (
+          await db
+            .select({ id: sessionRegistry.id, state: sessionRegistry.state })
+            .from(sessionRegistry)
+            .where(eq(sessionRegistry.itemId, s.matrix.id))
+            .orderBy(sessionRegistry.createdAt)
+        ).map((row) => row.state);
+      const playCount = async (call: Awaited<ReturnType<typeof client>>) =>
+        (
+          (await (await call("GET", `/Items/${item}`)).json()) as {
+            UserData: { PlayCount: number };
+          }
+        ).UserData.PlayCount;
+
+      // The same account plays the movie on a TV, then reports from a phone
+      // without naming a session, as Findroid does.
+      const tv = await client(db, kodi);
+      const phone = await client(db, findroid);
+      await tv("POST", "/Sessions/Playing", { ItemId: item, PositionTicks: 0 });
+      await phone("POST", "/Sessions/Playing", {
+        ItemId: item,
+        PositionTicks: 0,
+      });
+      await phone("POST", "/Sessions/Playing/Stopped", {
+        ItemId: item,
+        PositionTicks: ticks(60),
+      });
+      expect(await states()).toEqual(["playing", "stopped"]);
+
+      // A retried stop for a named play changes nothing.
+      const [tvSession] = await db
+        .select({ id: sessionRegistry.id })
+        .from(sessionRegistry)
+        .where(eq(sessionRegistry.state, "playing"));
+      const stop = {
+        ItemId: item,
+        PlaySessionId: toGuid(tvSession?.id ?? ""),
+        PositionTicks: ticks(8000),
+      };
+      expect((await tv("POST", "/Sessions/Playing/Stopped", stop)).status).toBe(
+        204,
+      );
+      const counted = await playCount(tv);
+      expect((await tv("POST", "/Sessions/Playing/Stopped", stop)).status).toBe(
+        204,
+      );
+      expect(await states()).toEqual(["stopped", "stopped"]);
+      expect(await playCount(tv)).toBe(counted);
+
+      // A late stop for that play leaves a newer play on the same device alone.
+      await tv("POST", "/Sessions/Playing", { ItemId: item, PositionTicks: 0 });
+      expect((await tv("POST", "/Sessions/Playing/Stopped", stop)).status).toBe(
+        204,
+      );
+      expect(await states()).toEqual(["stopped", "stopped", "playing"]);
+    }));
+
   test("played and favourite marks answer UserItemDataDto", () =>
     withDatabase(async (db) => {
       const s = await seedBrowse(db);

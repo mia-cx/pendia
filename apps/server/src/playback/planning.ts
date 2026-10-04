@@ -397,6 +397,7 @@ export async function planPlayback(
         decision: stored
           ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
           : decision,
+        credentialId: caller.credential.id,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");

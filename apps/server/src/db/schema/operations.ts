@@ -183,6 +183,9 @@ export const sessionRegistry = pgTable(
     state: playbackState("state").notNull(),
     transcoderNodeId: uuid("transcoder_node_id"),
     decision: jsonb("decision").$type<SessionDecision>(),
+    // The device session or API key that opened it, so a report that names no
+    // session finds the reporting device's own. Either table, so no foreign key.
+    credentialId: uuid("credential_id"),
     createdAt: instant("created_at").notNull().defaultNow(),
     lastSeenAt: instant("last_seen_at").notNull().defaultNow(),
   },

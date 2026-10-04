@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, or, sql } from "drizzle-orm";
 import { Schema } from "effect";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
@@ -233,28 +233,51 @@ async function touchSession(tx: LifecycleDb, sessionId: string) {
 
 /**
  * Finds the play session a client reports against, for clients that play
- * without asking Pendia to plan: the named session when it is the caller's,
- * live and on this Item; else the caller's newest live session on the Item,
- * since a client may name a session Pendia never issued; else a new
- * direct-play session on the named Version, or the Item's first.
+ * without asking Pendia to plan. The named session wins when it is the
+ * caller's and on this Item, in any state, so a repeated or late report
+ * changes only its own play. A client may name a session Pendia never
+ * issued, or none, so next comes the newest live session the same device
+ * opened on the Item and Version; else a new direct-play session on the
+ * named Version, or the Item's first.
  */
 export async function resolvePlaySession(
   db: Database,
   userId: string,
-  report: { itemId: string; sessionId?: string; versionId?: string },
+  report: {
+    itemId: string;
+    credentialId: string;
+    sessionId?: string;
+    versionId?: string;
+  },
 ) {
-  const { itemId, sessionId } = report;
+  const { itemId, sessionId, credentialId, versionId } = report;
   await requireViewableItem(db, userId, itemId);
   await requirePermission(db, userId, "play");
-  const live = and(
-    eq(sessionRegistry.userId, userId),
-    eq(sessionRegistry.itemId, itemId),
-    ne(sessionRegistry.state, "stopped"),
-  );
   const [found] = await db
-    .select({ id: sessionRegistry.id, versionId: sessionRegistry.versionId })
+    .select({
+      id: sessionRegistry.id,
+      versionId: sessionRegistry.versionId,
+      state: sessionRegistry.state,
+    })
     .from(sessionRegistry)
-    .where(live)
+    .where(
+      and(
+        eq(sessionRegistry.userId, userId),
+        eq(sessionRegistry.itemId, itemId),
+        or(
+          sessionId === undefined
+            ? undefined
+            : eq(sessionRegistry.id, sessionId),
+          and(
+            ne(sessionRegistry.state, "stopped"),
+            eq(sessionRegistry.credentialId, credentialId),
+            versionId === undefined
+              ? undefined
+              : eq(sessionRegistry.versionId, versionId),
+          ),
+        ),
+      ),
+    )
     .orderBy(
       sql`${sessionRegistry.id} = ${sessionId ?? null} desc nulls last`,
       desc(sessionRegistry.createdAt),
@@ -270,16 +293,17 @@ export async function resolvePlaySession(
         eq(versions.origin, "imported"),
         found !== undefined
           ? eq(versions.id, found.versionId)
-          : report.versionId === undefined
+          : versionId === undefined
             ? undefined
-            : eq(versions.id, report.versionId),
+            : eq(versions.id, versionId),
       ),
     )
     .orderBy(asc(versions.label), asc(versions.id))
     .limit(1);
   if (version === undefined) throw new AuthError("NOT_FOUND");
+  const { durationSeconds } = version;
   if (found !== undefined)
-    return { sessionId: found.id, durationSeconds: version.durationSeconds };
+    return { sessionId: found.id, state: found.state, durationSeconds };
   const [opened] = await db
     .insert(sessionRegistry)
     .values({
@@ -288,10 +312,11 @@ export async function resolvePlaySession(
       versionId: version.id,
       playMethod: "direct-play",
       state: "starting",
+      credentialId,
     })
-    .returning({ id: sessionRegistry.id });
+    .returning({ id: sessionRegistry.id, state: sessionRegistry.state });
   if (opened === undefined) throw new Error("Session insert returned no row.");
-  return { sessionId: opened.id, durationSeconds: version.durationSeconds };
+  return { sessionId: opened.id, state: opened.state, durationSeconds };
 }
 
 /** Marks a planned session playing and records its first position. */

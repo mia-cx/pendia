@@ -956,6 +956,13 @@ export async function scanShowDirectory(
         })
         .from(files)
         .innerJoin(
+          versions,
+          and(
+            eq(versions.id, files.versionId),
+            eq(versions.origin, "imported"),
+          ),
+        )
+        .innerJoin(
           itemAncestors,
           and(
             eq(itemAncestors.descendantId, files.itemId),
@@ -971,11 +978,6 @@ export async function scanShowDirectory(
         ...new Set(stale.map((file) => file.versionId)),
       ];
       for (const versionId of affectedVersionIds) {
-        const [version] = await tx
-          .select({ origin: versions.origin })
-          .from(versions)
-          .where(eq(versions.id, versionId));
-        if (version?.origin !== "imported") continue;
         const [remaining] = await tx
           .select({ id: files.id })
           .from(files)

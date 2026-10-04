@@ -60,6 +60,16 @@ const fixtures: Record<string, VideoFixtureOptions> = {
     audioCodec: "ac3",
     audioChannels: 6,
   },
+  // H.264 with a silent first audio Stream and a tone in the second.
+  Dubbed: {
+    width: 320,
+    height: 180,
+    durationSeconds: 4,
+    frameRate: 25,
+    gopSeconds: 2,
+    toneAudio: true,
+    subtitles: [],
+  },
   // H.264 with a PGS track the browser cannot draw.
   Signs: {
     width: 320,
@@ -203,8 +213,13 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
     context: { base: string; client: Client; dir: string },
     media: { itemId: string; versionId: string },
     profile: Profile,
+    streams: { audioStreamIndex?: number; subtitleStreamIndex?: null } = {},
   ) => {
-    const planned = await context.client.playback.plan({ ...media, profile });
+    const planned = await context.client.playback.plan({
+      ...media,
+      profile,
+      ...streams,
+    });
     if (planned.sessionId === null || planned.url === null) {
       throw new Error("An HLS plan must return a session and URL.");
     }
@@ -329,6 +344,100 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
         expect(
           await server.transcoder?.sessions.inspect(planned.sessionId ?? ""),
         ).toMatchObject({ video: "transcode", burnSubtitle: 0 });
+        const probe = await probeVideo(path);
+        expect(probe.streams.map((stream) => stream.kind)).toEqual([
+          "video",
+          "audio",
+        ]);
+      }),
+    90_000,
+  );
+
+  test(
+    "the second audio Stream plays when asked, over remux and transcode",
+    () =>
+      withServer(async ({ base, client, dir, server, scan }) => {
+        const media = await scan("Dubbed");
+        // The loudest sample of the played audio, in dB: silence or the tone.
+        const peak = async (path: string) => {
+          const proc = Bun.spawn(
+            [
+              "ffmpeg",
+              "-hide_banner",
+              "-i",
+              path,
+              "-map",
+              "0:a:0",
+              "-af",
+              "volumedetect",
+              "-f",
+              "null",
+              "-",
+            ],
+            { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+          );
+          const log = await new Response(proc.stderr).text();
+          await proc.exited;
+          const match = /max_volume: (-?[\d.]+|-inf) dB/.exec(log);
+          if (match?.[1] === undefined) throw new Error(log);
+          return Number.parseFloat(match[1]);
+        };
+        const audioStreams = async (path: string) =>
+          (await probeVideo(path)).streams.filter(
+            (stream) => stream.kind === "audio",
+          ).length;
+
+        const first = await play({ base, client, dir }, media, browser);
+        expect(first.planned.method).toBe("remux");
+        expect(first.planned.audioStreamIndex).toBe(1);
+        expect(await peak(first.path)).toBeLessThan(-60);
+
+        const small: Profile = {
+          ...browser,
+          videoCodecs: [{ codec: "h264", maxWidth: 160, maxHeight: 90 }],
+        };
+        for (const [profile, method] of [
+          [browser, "remux"],
+          [small, "transcode"],
+        ] as const) {
+          const { planned, path } = await play(
+            { base, client, dir },
+            media,
+            profile,
+            { audioStreamIndex: 2 },
+          );
+          expect(planned.method).toBe(method);
+          expect(planned.audioStreamIndex).toBe(2);
+          expect(planned.audioStreams.map((stream) => stream.language)).toEqual(
+            ["eng", "jpn"],
+          );
+          expect(
+            await server.transcoder?.sessions.inspect(planned.sessionId ?? ""),
+          ).toMatchObject({ audioStream: 1 });
+          expect(await audioStreams(path)).toBe(1);
+          expect(await peak(path)).toBeGreaterThan(-40);
+        }
+      }),
+    90_000,
+  );
+
+  test(
+    "an unselected PGS track plays without burn-in when subtitles are off",
+    () =>
+      withServer(async ({ base, client, dir, server, scan }) => {
+        const media = await scan("Signs");
+        const { planned, variant, path } = await play(
+          { base, client, dir },
+          media,
+          browser,
+          { subtitleStreamIndex: null },
+        );
+        expect(planned.method).toBe("remux");
+        expect(planned.subtitleStreamIndex).toBeNull();
+        expect(variant.subtitles).toEqual([]);
+        expect(
+          await server.transcoder?.sessions.inspect(planned.sessionId ?? ""),
+        ).toMatchObject({ video: "copy", burnSubtitle: null });
         const probe = await probeVideo(path);
         expect(probe.streams.map((stream) => stream.kind)).toEqual([
           "video",

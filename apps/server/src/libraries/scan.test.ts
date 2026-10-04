@@ -1232,6 +1232,87 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
       });
     }));
 
+  test("merges overlapping ranges from one scan into one widened Episode", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const earlier = join(seasonDir, "Show S01E01-E03.mkv");
+        await createVideoFixture(earlier);
+        await copyFile(earlier, join(seasonDir, "Show S01E02-E04.mkv"));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        const first = await scanShowDirectory(db, library.id, show);
+        expect(first.versionIds).toHaveLength(2);
+        const episodeRows = await db.select().from(episodes);
+        expect(episodeRows).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: 4 },
+        ]);
+        const episodeId = episodeRows[0]?.itemId;
+        if (!episodeId) throw new Error("Fixture Episode missing.");
+        const fileRows = await db.select().from(files);
+        expect(fileRows.map((file) => file.itemId)).toEqual([
+          episodeId,
+          episodeId,
+        ]);
+
+        // The later file keeps its Episode once the earlier one is gone.
+        await rm(earlier);
+        const second = await scanShowDirectory(db, library.id, show, {
+          reconcileMissing: true,
+        });
+        expect(second.versionIds).toHaveLength(1);
+        expect(await db.select().from(episodes)).toEqual(episodeRows);
+        expect(await db.select().from(files)).toMatchObject([
+          {
+            path: "Show/Season 01/Show S01E02-E04.mkv",
+            itemId: episodeId,
+          },
+        ]);
+      });
+    }));
+
+  test("keeps a retained Episode when a new range overlaps it", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const show = "Show";
+        const seasonDir = join(root, show, "Season 01");
+        await mkdir(seasonDir, { recursive: true });
+        const retained = join(seasonDir, "Show S01E02.mkv");
+        await createVideoFixture(retained);
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+
+        await scanShowDirectory(db, library.id, show);
+        const [retainedEpisode] = await db.select().from(episodes);
+        if (!retainedEpisode) throw new Error("Fixture Episode missing.");
+
+        await copyFile(retained, join(seasonDir, "Show S01E01-E03.mkv"));
+        const second = await scanShowDirectory(db, library.id, show);
+        expect(second.versionIds).toHaveLength(2);
+        expect(
+          await db.select().from(episodes).orderBy(asc(episodes.episodeNumber)),
+        ).toMatchObject([
+          { episodeNumber: 1, episodeEndNumber: null },
+          retainedEpisode,
+        ]);
+        const ranged = (await db.select().from(files)).find(
+          (file) => file.path === "Show/Season 01/Show S01E01-E03.mkv",
+        );
+        expect(ranged?.itemId).not.toBe(retainedEpisode.itemId);
+      });
+    }));
+
   test("reconcileMissing removes a missing Season while the default retains it", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

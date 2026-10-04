@@ -19,7 +19,11 @@ import {
 } from "../db/tree.ts";
 import type { ScanRules } from "../mediums/medium.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
-import { groupShowPaths, showsScan } from "../mediums/shows.ts";
+import {
+  groupShowPaths,
+  mergeEpisodeRanges,
+  showsScan,
+} from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
 import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
@@ -677,7 +681,28 @@ export async function scanShowDirectory(
         .from(episodes)
         .where(eq(episodes.seasonId, seasonId));
 
-      const discoveredStarts = seasonGroup.episodes.map(
+      const owners = await tx
+        .select({ path: files.path, episodeNumber: episodes.episodeNumber })
+        .from(files)
+        .innerJoin(episodes, eq(episodes.itemId, files.itemId))
+        .where(
+          and(
+            eq(episodes.seasonId, seasonId),
+            inArray(
+              files.path,
+              seasonGroup.episodes.flatMap((episode) =>
+                episode.versions.flatMap((version) => version.paths),
+              ),
+            ),
+          ),
+        );
+      const seasonEpisodes = mergeEpisodeRanges(
+        seasonGroup.episodes,
+        persistedEpisodes.map((persisted) => persisted.episodeNumber),
+        new Map(owners.map((owner) => [owner.path, owner.episodeNumber])),
+      );
+
+      const discoveredStarts = seasonEpisodes.map(
         (episode) => episode.episodeNumber,
       );
       for (const persisted of persistedEpisodes) {
@@ -695,11 +720,9 @@ export async function scanShowDirectory(
               normalizedEnd === persisted.episodeNumber ? null : normalizedEnd,
           })
           .where(eq(episodes.itemId, persisted.itemId));
-        persisted.episodeEndNumber =
-          normalizedEnd === persisted.episodeNumber ? null : normalizedEnd;
       }
 
-      for (const episodeGroup of seasonGroup.episodes) {
+      for (const episodeGroup of seasonEpisodes) {
         const [existingEpisode] = await tx
           .select({ item: items, episode: episodes })
           .from(episodes)
@@ -731,26 +754,13 @@ export async function scanShowDirectory(
               })
               .where(eq(items.id, episodeId));
           }
+          // Merged ranges stop before every later start, so widening is safe.
           const existingEnd =
             existingEpisode.episode.episodeEndNumber ??
             existingEpisode.episode.episodeNumber;
           const discoveredEnd =
             episodeGroup.episodeEndNumber ?? episodeGroup.episodeNumber;
-          const overlapsDiscoveredEpisode = seasonGroup.episodes.some(
-            (candidate) =>
-              candidate.episodeNumber > discoveredEnd &&
-              candidate.episodeNumber <= existingEnd,
-          );
-          const blocksWidening = persistedEpisodes.some(
-            (candidate) =>
-              candidate.itemId !== episodeId &&
-              candidate.episodeNumber > existingEnd &&
-              candidate.episodeNumber <= discoveredEnd,
-          );
-          if (
-            (discoveredEnd > existingEnd && !blocksWidening) ||
-            (discoveredEnd < existingEnd && overlapsDiscoveredEpisode)
-          ) {
+          if (discoveredEnd > existingEnd) {
             await tx
               .update(episodes)
               .set({ episodeEndNumber: episodeGroup.episodeEndNumber })

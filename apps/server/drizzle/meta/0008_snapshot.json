@@ -1,5 +1,5 @@
 {
-  "id": "2d43834c-33a0-4938-a84d-de85a30801b6",
+  "id": "b231e24e-0f53-469a-a7ab-20a0f3b9f914",
   "prevId": "f29e0c4d-d531-4fbb-91fe-1e301bb8e090",
   "version": "7",
   "dialect": "postgresql",
@@ -405,6 +405,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "address": {
+          "name": "address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "user_id": {
           "name": "user_id",
           "type": "uuid",
@@ -429,6 +435,27 @@
         "quick_connect_requests_expires_idx": {
           "name": "quick_connect_requests_expires_idx",
           "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "quick_connect_requests_address_idx": {
+          "name": "quick_connect_requests_address_idx",
+          "columns": [
+            {
+              "expression": "address",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
             {
               "expression": "expires_at",
               "isExpression": false,

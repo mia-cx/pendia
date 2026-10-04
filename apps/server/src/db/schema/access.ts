@@ -205,6 +205,8 @@ export const quickConnectRequests = pgTable(
     clientVersion: text("client_version").notNull(),
     deviceId: text("device_id").notNull(),
     deviceName: text("device_name").notNull(),
+    // Where the request came from, so one address cannot hold unbounded rows.
+    address: text("address").notNull(),
     userId: uuid("user_id").references(() => users.id, owned),
     createdAt: instant("created_at").notNull().defaultNow(),
     expiresAt: instant("expires_at").notNull(),
@@ -219,6 +221,10 @@ export const quickConnectRequests = pgTable(
       sql`${table.code} ~ '^[0-9]{6}$'`,
     ),
     index("quick_connect_requests_expires_idx").on(table.expiresAt),
+    index("quick_connect_requests_address_idx").on(
+      table.address,
+      table.expiresAt,
+    ),
   ],
 );
 

@@ -5,7 +5,7 @@ import {
   initiateQuickConnect,
   quickConnectState,
 } from "../auth/quick-connect.ts";
-import { json, type Route } from "./http.ts";
+import { identify, json, type Route } from "./http.ts";
 import { parseGuid, readBody } from "./request.ts";
 import { authenticationResult, deviceOf } from "./users.ts";
 
@@ -37,11 +37,14 @@ export const quickConnectRoutes: Route[] = [
     method: "POST",
     path: "/QuickConnect/Initiate",
     anonymous: true,
-    handle: async ({ db, client }) => {
-      const { secret, request } = await initiateQuickConnect(db, {
-        ...deviceOf(client),
-        clientVersion: client.version ?? "",
-      });
+    handle: async (context) => {
+      const { db, client } = context;
+      const { address } = await identify(context);
+      const { secret, request } = await initiateQuickConnect(
+        db,
+        { ...deviceOf(client), clientVersion: client.version ?? "" },
+        address,
+      );
       return json(quickConnectResult(request, secret));
     },
   },

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { and, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, count, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { quickConnectRequests } from "../db/schema/index.ts";
 import { AuthError, postgresCode } from "./errors.ts";
@@ -9,6 +9,8 @@ import { readAuthSettings } from "./settings.ts";
 // How long a device may wait for approval. Jellyfin also allows 10 minutes.
 const quickConnectLifetimeSeconds = 600;
 
+// Pending requests one address may hold. A household rarely waits on more than one.
+const maxPendingPerAddress = 10;
 const secretPattern = /^[A-Za-z0-9_-]{43}$/;
 const codeAttempts = 5;
 const maxVersionLength = 128;
@@ -28,7 +30,11 @@ const requestFields = {
   authorized: sql<boolean>`${quickConnectRequests.userId} is not null`,
 };
 
-/** Starts a Quick Connect login. The device shows the code and polls with the secret. */
+/**
+ * Starts a Quick Connect login from an address. The device shows the code and
+ * polls with the secret. The route is anonymous, so each address may hold only
+ * a few pending requests.
+ */
 export async function initiateQuickConnect(
   db: Database,
   input: {
@@ -37,6 +43,7 @@ export async function initiateQuickConnect(
     deviceId: string;
     deviceName: string;
   },
+  address: string,
 ) {
   const device = prepareDevice(input);
   if (input.clientVersion.length > maxVersionLength)
@@ -44,6 +51,12 @@ export async function initiateQuickConnect(
   await db
     .delete(quickConnectRequests)
     .where(lt(quickConnectRequests.expiresAt, sql`statement_timestamp()`));
+  const [pending] = await db
+    .select({ count: count() })
+    .from(quickConnectRequests)
+    .where(eq(quickConnectRequests.address, address));
+  if ((pending?.count ?? 0) >= maxPendingPerAddress)
+    throw new AuthError("RATE_LIMITED", quickConnectLifetimeSeconds);
   // Six digits can collide with another pending code, so a clash draws again.
   for (let attempt = 1; ; attempt++) {
     const secret = randomBytes(32).toString("base64url");
@@ -53,6 +66,7 @@ export async function initiateQuickConnect(
         .values({
           ...device,
           clientVersion: input.clientVersion,
+          address,
           secretHash: hashSecret(secret),
           code: String(randomInt(1_000_000)).padStart(6, "0"),
           expiresAt: sql`clock_timestamp() + ${quickConnectLifetimeSeconds} * interval '1 second'`,

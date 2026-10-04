@@ -16,7 +16,9 @@ export function createPendiaClient(
 ): PendiaClient {
   const transport = options.fetch;
   const link = new RPCLink({
-    url: `${options.origin ?? ""}/rpc`,
+    // oRPC builds `new URL(url)`, which rejects a bare path, so same origin
+    // resolves against the page at call time.
+    url: () => `${options.origin ?? location.origin}/rpc`,
     headers: options.headers ?? {},
     fetch:
       transport === undefined

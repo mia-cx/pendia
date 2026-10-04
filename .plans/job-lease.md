@@ -32,7 +32,7 @@ The `retryAfter` test stores a whole-second `expiresAt`, so the `Math.ceil` boun
 ## Notes
 
 - Test Postgres runs on 127.0.0.1:55574, not 55564: RootlessKit reported 55564 in use with nothing listening on it.
-- `claim_token` is `uuid not null default gen_random_uuid()`, so the type is never null and existing rows backfill. `lease_expires_at` is `timestamptz not null default now()`, so rows running at migration time count as expired and the next claim takes them back.
+- `claim_token` is `uuid not null default gen_random_uuid()`, so the type is never null and existing rows backfill. `lease_expires_at` is `timestamptz not null default now()`. The migration gives rows running at migration time one 60-second lease, so a previous-release worker still running one is not doubled at once; after that the next claim takes them back.
 - Only running jobs with a live lease count toward a concurrency key. Otherwise an expired job would block its own reclaim.
 - Reclaiming a job records `leaseExpiredError` ("Job lease expired before its holder finished.") as its error, the way a retried failure keeps its error.
 - The watcher already posts a heartbeat every poll interval during a scan. That heartbeat now carries the job id and claim token and renews the lease; a 409 answer means the watcher lost the job.

@@ -33,6 +33,15 @@ export type StoreRun = {
   readRate?: RemuxRun["readRate"]; // tests only
 };
 
+/** Returns whether a rung carries the source's first audio track as is: only the remux, and only an fMP4-safe codec. */
+export function copiesAudio(rung: Rung, source: StoreSource) {
+  return (
+    !("height" in rung) &&
+    source.audioCodec !== null &&
+    hlsCopyAudio.has(source.audioCodec)
+  );
+}
+
 const toneMap =
   "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv";
 
@@ -58,15 +67,14 @@ export function storeArguments(
     "-sn",
     "-dn",
   ];
-  const aac = ["-c:a", "aac", "-b:a", String(storedAudioBitrate), "-ac", "2"];
+  const audio = copiesAudio(run.rung, run.source)
+    ? ["-c:a", "copy"]
+    : ["-c:a", "aac", "-b:a", String(storedAudioBitrate), "-ac", "2"];
   if (!("height" in run.rung)) {
     args.push("-c:v", "copy");
     // The muxer writes hev1 on a stream copy; Apple clients need hvc1.
     if (run.source.codec === "hevc") args.push("-tag:v", "hvc1");
-    const copyAudio =
-      run.source.audioCodec !== null && hlsCopyAudio.has(run.source.audioCodec);
-    args.push(...(copyAudio ? ["-c:a", "copy"] : aac));
-    return [...args, ...segments];
+    return [...args, ...audio, ...segments];
   }
   const filters = [`scale=-2:${run.rung.height}`];
   if (run.source.hdr !== "sdr") filters.push(toneMap);
@@ -96,7 +104,7 @@ export function storeArguments(
   // Keyframes land on the timeline, so every cut starts a closed GOP.
   const keyframes = cutTimes(run.boundariesSeconds);
   if (keyframes !== null) args.push("-force_key_frames", keyframes);
-  return [...args, ...aac, ...segments];
+  return [...args, ...audio, ...segments];
 }
 
 /** The manifest a complete rung folder carries, written last. */

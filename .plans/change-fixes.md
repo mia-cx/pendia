@@ -1,0 +1,39 @@
+# #69 #74 Change detection fixes: cross-show moves and library-root webhook paths
+
+## Summary
+
+Two change-detection bugs, both in `apps/server/src/libraries/changes.ts` and `webhooks.ts`.
+
+#69: a move that lands on another Show's existing file deletes the whole destination Show, because the collision branch deletes the destination's root subtree. A move between two Shows also passes webhook validation and queues only the destination folder, which can leave the Episode under the source Show while its File points into the destination.
+
+#74: a webhook change whose scan folder is the library root (`"."`) is accepted with 202. The scan job then rejects every root job that carries changes, so it fails each attempt and applies nothing.
+
+## Acceptance criteria
+
+- [ ] A move onto an existing file replaces only the colliding destination Item, never its whole root subtree.
+- [ ] A move whose source and destination fall in different root Items (two Shows) is a removal at the source plus a scan of the destination folder. Progress does not follow it.
+- [ ] A move within one root keeps today's behaviour, Progress included.
+- [ ] A webhook move between two folders queues scans for both folders.
+- [ ] A webhook change whose scan folder is the library root answers with the `InvalidWebhookError` 400 and queues nothing: both a delete of the root itself and a file directly in the root.
+- [ ] Tests: one Episode moved onto another Show's Episode deletes only that Episode, and every other Season and Episode of the destination Show survives. After a cross-show move, the Episode belongs to the destination Show.
+
+## TODOs
+
+- [ ] 1. Replace only the colliding Item, and apply a cross-root move as a removal plus a destination scan.
+  - `applyScanChanges`: a collision deletes the destination's Version when both Files share one Item, else the destination Item's subtree. After the collision, a move whose destination path lies in another root Item's folder removes the source File like a file delete. Otherwise the move re-paths the File as before.
+  - Validation: new tests in `changes.test.ts` for the collision onto another Show's Episode and for a cross-show move without a collision, including the source-folder job running first. Existing move tests pass.
+- [ ] 2. Queue both folders for a webhook move, and reject library-root scan folders.
+  - `submitChanges` computes one scan folder per path: the Show folder for Sonarr, the Movie folder for Radarr, `"."` at the library root. A `"."` folder for the change or a move's source throws `Webhook path must name a folder inside the library root.` A move between folders also queues the move on the source folder, without provider ids.
+  - Validation: `webhooks.test.ts` covers a Radarr file directly in the root, a delete of the root itself, and a cross-show Sonarr move that queues both folders.
+- [ ] 3. Document the root rejection and cross-show moves in `apps/server/README.md`.
+  - Validation: the webhook section states the root 400 and that a cross-show move does not carry Progress.
+- [ ] 4. Run the full repository gate.
+  - From the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55563/pendia bun test`, and `bun test` without `DATABASE_URL`.
+  - Validation: all pass, and Notes record the real results.
+
+## Notes
+
+- A root Item is a Show or Movie: an Item without a parent. The destination root is the root Item whose canonical folder holds the destination path. With no such Item (a Show folder rename into a new folder), the move stays within its root.
+- The collision runs before the root check. A Movie moved onto another Movie's file replaces that Movie and then re-paths into its folder, so the moved Movie keeps its Progress.
+- The source-folder job carries the move without provider ids: Sonarr's ids name the destination Show, and the source Show's scan would match them and conflict. Either job order gives the same result, because the second application finds no File at the old path.
+- The watcher keeps its single destination job. `applyScanChanges` now handles a cross-show move inside that one job. A watcher file directly in a movies root still queues a `"."` job; #74 covers webhooks only.

@@ -25,7 +25,7 @@ Build the plugin host from `docs/spec/plugins.md`, `docs/spec/plugin-api.d.ts` a
   - Resolve a source to package bytes: a folder, an http(s) tarball, an npm spec through the npm registry, or a registry entry's source. Integrity is SRI sha512 of the tarball, or of a canonical file listing for a folder. Install into `PENDIA_PLUGIN_DIR` atomically and verify the lockfile integrity on reinstall.
   - Registries: add and remove URLs, read `pendia-registry.json`; a GitHub repo URL maps to the file at its root.
   - Validation: disposable Postgres and local Bun.serve tests for folder, tarball, npm and registry installs, integrity mismatch and reinstall into an empty folder.
-- [ ] 3. Host object and runtime with failure isolation.
+- [x] 3. Host object and runtime with failure isolation.
   - `plugins/host.ts` builds the host per plugin from approved capabilities minus switched-off files, so an absent capability is an absent member. items, progress, files (path containment, per-call switch check), network-restricted fetch, config and log.
   - `plugins/runtime.ts` imports a plugin on first use, calls setup, holds its registrations and wraps every plugin callback: a throw or boundary violation marks it failed with the error logged and unloads it.
   - Validation: Postgres tests with fixture plugins for gating, the boundary check, the files switches and a throwing setup.

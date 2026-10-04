@@ -1,7 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Capability } from "@pendia/plugin-api";
+import type { Capability, PluginHost } from "@pendia/plugin-api";
+import type { Database } from "../db/client.ts";
+import { fetchPlugin, installPlugin } from "./install.ts";
 
 /** A fixture plugin: its package.json fields and the source of its entry module. */
 export type FixturePlugin = {
@@ -58,4 +60,37 @@ export async function writeFixture(folder: string, plugin: FixturePlugin) {
   for (const [path, text] of Object.entries(fixtureFiles(plugin)))
     await Bun.write(join(folder, path), text);
   return folder;
+}
+
+/** Installs a fixture plugin from a folder under `folder`, as an admin would after the preview. */
+export async function installFixture(
+  db: Database,
+  folder: string,
+  plugin: FixturePlugin,
+) {
+  const source = await writeFixture(
+    join(folder, "sources", plugin.name),
+    plugin,
+  );
+  const { integrity } = await fetchPlugin(source);
+  return installPlugin(db, join(folder, "installed"), source, integrity);
+}
+
+/** The hosts fixture plugins stash on globalThis so tests can inspect them. */
+export function stashedHosts(): Record<string, PluginHost> {
+  globalThis.pendiaHosts ??= {};
+  return globalThis.pendiaHosts;
+}
+
+declare global {
+  var pendiaHosts: Record<string, PluginHost> | undefined;
+}
+
+/** A fixture entry that stashes its host under `key` and then runs `body`. */
+export function stashingSource(key: string, body = "") {
+  return `export default async (host) => {
+  globalThis.pendiaHosts ??= {};
+  globalThis.pendiaHosts[${JSON.stringify(key)}] = host;
+  ${body}
+};`;
 }

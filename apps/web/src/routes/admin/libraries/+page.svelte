@@ -1,9 +1,10 @@
 <script lang="ts">
-import { onDestroy, untrack } from "svelte";
+import { onDestroy, tick, untrack } from "svelte";
 import { client } from "$lib/api.ts";
 import Failure from "$lib/components/Failure.svelte";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
+import { refusedRoot } from "$lib/roots.ts";
 import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 
 const list = resource(() => client.libraries.list());
@@ -33,10 +34,14 @@ function holdsStatus(id: string, ticket: number): boolean {
 }
 
 let addName = $state("");
-let addRoot = $state("");
+let addRows = $state<string[]>([""]);
+let addInputs: HTMLInputElement[] = [];
 let addMedium = $state<LibraryRow["medium"]>("movies");
 let addBusy = $state(false);
 let addFailure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
+let addRefusal = $state<{ index: number; message: string } | undefined>(
+  undefined,
+);
 let addNotice = $state("");
 
 let editingId = $state<string | null>(null);
@@ -85,26 +90,36 @@ async function loadStatuses(rows: readonly LibraryRow[]) {
   );
 }
 
+async function addFolderRow() {
+  addRows = [...addRows, ""];
+  await tick();
+  addInputs[addRows.length - 1]?.focus();
+}
+
 async function addLibrary(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
+  addRefusal = undefined;
   addNotice = "";
   const name = addName;
   const medium = addMedium;
-  const root = addRoot;
+  const rows = addRows;
   try {
     const created = await client.libraries.create({
       name,
       medium,
-      rootPath: root,
+      roots: rows,
     });
     if (addName === name) addName = "";
-    if (addRoot === root) addRoot = "";
+    if (addRows === rows) addRows = [""];
     addNotice = `Added ${created.name}.`;
     await list.reload();
   } catch (error) {
-    addFailure = readFailure(error);
+    const refused = refusedRoot(error);
+    if (refused !== undefined && refused.index < rows.length)
+      addRefusal = refused;
+    else addFailure = readFailure(error);
   } finally {
     addBusy = false;
   }
@@ -215,7 +230,7 @@ function scanCell(row: LibraryRow): string {
       <tr>
         <th>Name</th>
         <th>Medium</th>
-        <th>Root path</th>
+        <th>Folders</th>
         <th>Scan</th>
         <th><span class="sr-only">Actions</span></th>
       </tr>
@@ -238,7 +253,9 @@ function scanCell(row: LibraryRow): string {
             {/if}
           </td>
           <td>{mediumNames[row.medium]}</td>
-          <td class="path">{row.rootPath}</td>
+          <td class="path">
+            {#each row.roots as root (root.id)}<span>{root.path}</span>{/each}
+          </td>
           <td class="scan">
             {#if scanFailures[row.id]}
               {scanFailures[row.id]}
@@ -311,9 +328,44 @@ function scanCell(row: LibraryRow): string {
   {/if}
   <label for="addName">Name</label>
   <input id="addName" name="name" required bind:value={addName} />
-  <label for="addRoot">Root path</label>
-  <input id="addRoot" name="rootPath" required bind:value={addRoot} />
-  <p class="muted">Enter an absolute path on the server, like /srv/movies.</p>
+  <fieldset>
+    <legend>Folders</legend>
+    {#each addRows as row, index (index)}
+      <div class="folder">
+        <input
+          aria-label="Folder {index + 1} path"
+          required
+          bind:this={addInputs[index]}
+          bind:value={addRows[index]}
+          aria-invalid={addRefusal?.index === index ? "true" : undefined}
+          aria-describedby={addRefusal?.index === index
+            ? `addFolderError${index}`
+            : undefined}
+          oninput={() => {
+            if (addRefusal?.index === index) addRefusal = undefined;
+          }}
+        />
+        {#if addRows.length > 1}
+          <button
+            type="button"
+            onclick={() => {
+              addRows = addRows.filter((_, i) => i !== index);
+              if (addRefusal?.index === index) addRefusal = undefined;
+            }}>Remove</button
+          >
+        {/if}
+      </div>
+      {#if addRefusal?.index === index}
+        <p class="field-error" id="addFolderError{index}">
+          {addRefusal.message}
+        </p>
+      {/if}
+    {/each}
+    <button type="button" onclick={addFolderRow}>Add folder</button>
+    <p class="muted">
+      Enter absolute paths on the server, like /srv/movies.
+    </p>
+  </fieldset>
   <label for="addMedium">Medium</label>
   <select id="addMedium" name="medium" bind:value={addMedium}>
     {#each Object.entries(mediumNames) as [value, label] (value)}
@@ -341,6 +393,12 @@ td {
   white-space: nowrap;
 }
 
+.path span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .name input {
   width: 100%;
 }
@@ -362,6 +420,37 @@ form {
 
 form h3 {
   margin: 0 0 8px;
+}
+
+fieldset {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  width: 100%;
+}
+
+fieldset legend {
+  padding: 0;
+  font-weight: 600;
+}
+
+fieldset > p {
+  margin: 0;
+}
+
+.folder {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+}
+
+.folder input {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-error {
+  color: var(--danger);
 }
 
 form :global(.failure) {

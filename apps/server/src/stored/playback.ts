@@ -20,6 +20,7 @@ import {
   buildMediaPlaylist,
   type HlsName,
   type PlaylistVariant,
+  type SubtitleRendition,
   segmentCount,
   variantCodecs,
 } from "../playback/playlists.ts";
@@ -161,13 +162,14 @@ const notFound = () =>
     { status: 404, headers: standardHeaders },
   );
 
-/** Serves a stored session from disk: the master over its variants, and each variant's playlist, init and segments. */
+/** Serves a stored session from disk: the master over its variants with the session's WebVTT renditions, and each variant's playlist, init and segments. */
 export async function serveStoredHls(
   db: Database,
   session: { itemId: string; variantIds: readonly string[] },
   variantId: string | null,
   name: HlsName,
   query: string,
+  subtitles: readonly SubtitleRendition[] = [],
 ) {
   if (variantId === null) {
     if (name.kind !== "master") return notFound();
@@ -190,9 +192,15 @@ export async function serveStoredHls(
         }),
       );
     if (variants.length === 0) return notFound();
-    return playlist(buildMasterPlaylist(variants, query));
+    return playlist(buildMasterPlaylist(variants, query, subtitles));
   }
-  if (!session.variantIds.includes(variantId) || name.kind === "master")
+  // Subtitles live beside the master, not inside a rung.
+  if (
+    !session.variantIds.includes(variantId) ||
+    name.kind === "master" ||
+    name.kind === "subtitles" ||
+    name.kind === "subtitle"
+  )
     return notFound();
   const [row] = await db
     .select({

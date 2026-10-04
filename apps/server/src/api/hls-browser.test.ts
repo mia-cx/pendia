@@ -31,6 +31,10 @@ const profile = {
   hdr: ["sdr" as const],
 };
 
+// No HEVC and WebVTT only, like the web player: HEVC re-encodes and the SRT
+// becomes a WebVTT rendition.
+const transcodeProfile = { ...profile, subtitleFormats: ["webvtt"] };
+
 function rpcClient(base: string, token?: string) {
   const link = new RPCLink({
     url: `${base}/rpc`,
@@ -79,6 +83,8 @@ type Report = {
   seekedTo: number;
   width: number;
   height: number;
+  cues: { start: number; end: number; text: string }[];
+  tracks: string; // "<hls.js subtitle tracks>:<kind/label/mode per text track>"
 };
 
 // The api sets no CORS headers, so the harness serves the page, hls.js and the
@@ -88,7 +94,10 @@ const page = (masterUrl: string) => `<!doctype html>
 <script src="/hls.js"></script>
 <script>
   const video = document.getElementById("video");
-  const report = { errors: [], playedTo: 0, seekedTo: 0, width: 0, height: 0 };
+  const report = {
+    errors: [], playedTo: 0, seekedTo: 0, width: 0, height: 0, cues: [],
+    tracks: "",
+  };
   let seeked = false;
   let done = false;
   const finish = () => {
@@ -96,6 +105,16 @@ const page = (masterUrl: string) => `<!doctype html>
     done = true;
     report.width = video.videoWidth;
     report.height = video.videoHeight;
+    report.tracks = hls.subtitleTracks.length + ":" + [...video.textTracks]
+      .map((track) => track.kind + "/" + track.label + "/" + track.mode)
+      .join(",");
+    for (const track of video.textTracks) {
+      for (const cue of track.cues ?? []) {
+        report.cues.push({
+          start: cue.startTime, end: cue.endTime, text: cue.text,
+        });
+      }
+    }
     fetch("/report", { method: "POST", body: JSON.stringify(report) });
   };
   const hls = new Hls();
@@ -105,6 +124,11 @@ const page = (masterUrl: string) => `<!doctype html>
     finish();
   });
   hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play(); });
+  // A viewer turns subtitles on in the video's captions menu, which sets the
+  // track's mode; hls.js follows it and loads the WebVTT rendition.
+  video.textTracks.addEventListener("addtrack", (event) => {
+    event.track.mode = "showing";
+  });
   video.addEventListener("timeupdate", () => {
     if (!seeked && video.currentTime >= 1) {
       seeked = true;
@@ -132,25 +156,46 @@ describe.skipIf(!databaseUrl || browser === undefined)(
       libraryRoot = await mkdtemp(
         join(tmpdir(), "pendia-hls-browser-library-"),
       );
-      const folder = join(libraryRoot, "Movie (2026)");
-      await mkdir(folder);
-      await createVideoFixture(join(folder, "Movie.mkv"), {
-        width: 1920,
-        height: 1080,
-        durationSeconds: 12,
-        frameRate: 25,
-        gopSeconds: 3,
-        pattern: "testsrc2",
-      });
+      for (const [title, videoCodec, width, height] of [
+        ["Movie", "h264", 1920, 1080],
+        ["Hevc", "hevc", 1280, 720],
+      ] as const) {
+        const folder = join(libraryRoot, `${title} (2026)`);
+        await mkdir(folder);
+        await createVideoFixture(join(folder, `${title}.mkv`), {
+          width,
+          height,
+          durationSeconds: 12,
+          frameRate: 25,
+          gopSeconds: 3,
+          pattern: "testsrc2",
+          videoCodec,
+        });
+      }
     }, 60_000);
 
     afterAll(async () => {
       await rm(libraryRoot, { recursive: true, force: true });
     });
 
-    test(
-      "plays a 1080p fixture in hls.js",
-      () =>
+    test.each([
+      {
+        name: "plays a 1080p remux in hls.js",
+        title: "Movie",
+        plan: profile,
+        method: "remux",
+        size: [1920, 1080],
+      },
+      {
+        name: "plays a live HEVC transcode in hls.js with its WebVTT track",
+        title: "Hevc",
+        plan: transcodeProfile,
+        method: "transcode",
+        size: [1280, 720],
+      },
+    ] as const)(
+      "$name",
+      ({ title, plan, method, size }) =>
         withDatabase(async (db, url) => {
           if (browser === undefined) {
             throw new Error("Expected a Chromium binary.");
@@ -162,7 +207,11 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             medium: "movies",
             rootPath: libraryRoot,
           });
-          const scanned = await scanDirectory(db, library.id, "Movie (2026)");
+          const scanned = await scanDirectory(
+            db,
+            library.id,
+            `${title} (2026)`,
+          );
           const versionId = scanned.versionIds[0];
           if (scanned.itemId === null || versionId === undefined) {
             throw new Error("Expected exactly one scanned item and version.");
@@ -193,10 +242,11 @@ describe.skipIf(!databaseUrl || browser === undefined)(
           const planned = await client.playback.plan({
             itemId: scanned.itemId,
             versionId,
-            profile,
+            profile: plan,
           });
+          expect(planned.method).toBe(method);
           if (planned.sessionId === null || planned.url === null) {
-            throw new Error("Remux must return a session and URL.");
+            throw new Error("An HLS plan must return a session and URL.");
           }
           const sessionId = planned.sessionId;
           const master = new URL(planned.url, apiBase);
@@ -264,10 +314,19 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               );
             }
             expect(report.errors).toEqual([]);
-            expect(report.width).toBe(1920);
-            expect(report.height).toBe(1080);
+            expect([report.width, report.height]).toEqual([...size]);
             expect(report.playedTo).toBeGreaterThanOrEqual(1);
             expect(report.seekedTo).toBeGreaterThanOrEqual(10);
+            if (method === "transcode") {
+              // The fixture's one cue, on the video's own clock.
+              // hls.js lists one rendition and made it a showing text track.
+              expect(report.tracks).toBe("1:subtitles/nld/showing");
+              expect(report.cues).toHaveLength(1);
+              const [cue] = report.cues;
+              expect(cue?.text).toBe("Fixture");
+              expect(cue?.start).toBeCloseTo(0, 1);
+              expect(cue?.end).toBeCloseTo(0.8, 1);
+            }
             console.info(
               "runs",
               (await server.transcoder?.sessions.inspect(sessionId))?.runs,

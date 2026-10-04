@@ -221,12 +221,18 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
               );
 
               // Only the incomplete 240p rung fits a 300-line screen: the live
-              // path, as before.
+              // path, a transcode session of its own.
               const starved = await plan({
                 ...remuxClient,
                 videoCodecs: [{ codec: "h264", maxHeight: 300 }],
               });
-              expect(starved).toMatchObject({ method: "transcode", url: null });
+              expect(starved.method).toBe("transcode");
+              expect(starved.url).toMatch(/\/hls\/master\.m3u8\?token=/);
+              const [starvedRow] = await db
+                .select({ decision: sessionRegistry.decision })
+                .from(sessionRegistry)
+                .where(eq(sessionRegistry.id, starved.sessionId ?? ""));
+              expect(starvedRow?.decision?.storedVariantIds).toBeUndefined();
 
               // Another Version on the same timeline never borrows these rungs:
               // it may be another translation or release.
@@ -247,7 +253,12 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
                 versionId: copyId ?? "",
                 profile: { ...remuxClient, maxBitrate: 1_500_000 },
               });
-              expect(copy).toMatchObject({ method: "transcode", url: null });
+              expect(copy.method).toBe("transcode");
+              const [copyRow] = await db
+                .select({ decision: sessionRegistry.decision })
+                .from(sessionRegistry)
+                .where(eq(sessionRegistry.id, copy.sessionId ?? ""));
+              expect(copyRow?.decision?.storedVariantIds).toBeUndefined();
 
               // Without the source rung, a remux keeps the source over lower rungs.
               await db.delete(versions).where(eq(versions.id, idOf("source")));

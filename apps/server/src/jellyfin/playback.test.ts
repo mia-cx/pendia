@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHlsHandler } from "../api/hls.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
@@ -63,7 +64,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
       if (movie === undefined) throw new Error("Expected the movie.");
       const handle = createJellyfinHandler(
         db,
-        jellyfinRoutes(createArtworkHandler(db)),
+        jellyfinRoutes(createArtworkHandler(db), createHlsHandler(db)),
       );
       const send = async (request: Request) => {
         const response = await handle(request, "127.0.0.1");

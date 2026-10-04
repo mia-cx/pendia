@@ -1,5 +1,6 @@
 import { startEventBroker } from "./api/events.ts";
 import { createApiHandler } from "./api/handler.ts";
+import { createHlsHandler } from "./api/hls.ts";
 import { startApiServer } from "./api.ts";
 import { createAuthHandler } from "./auth/http.ts";
 import { createDatabase, probeDatabase } from "./db/client.ts";
@@ -314,7 +315,10 @@ export async function startPendia(
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
         artwork,
         plugins: createPluginRouteHandler(database.db, plugins),
-        jellyfin: createJellyfinHandler(database.db, jellyfinRoutes(artwork)),
+        jellyfin: createJellyfinHandler(
+          database.db,
+          jellyfinRoutes(artwork, createHlsHandler(database.db, transcoder)),
+        ),
         watcher: createWatcherHandler(database.db, changeDebouncer),
       });
     }

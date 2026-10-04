@@ -127,6 +127,7 @@ export function startApiServer(
         const response = await handlers.jellyfin(
           request,
           server.requestIP(request)?.address ?? "",
+          server,
         );
         if (response !== undefined) return response;
       }

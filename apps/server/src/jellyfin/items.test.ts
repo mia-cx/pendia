@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
 import type { Database } from "../db/client.ts";
 import { progress } from "../db/schema/index.ts";
@@ -33,7 +34,7 @@ function conforms(result: QueryResult) {
 async function signIn(db: Database, username: string, password: string) {
   const handle = createJellyfinHandler(
     db,
-    jellyfinRoutes(createArtworkHandler(db)),
+    jellyfinRoutes(createArtworkHandler(db), createHlsHandler(db)),
   );
   const send = async (path: string, header: string, body?: object) => {
     const response = await handle(

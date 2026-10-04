@@ -1449,6 +1449,9 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const second = await scanShowDirectory(db, library.id, show);
         expect(second.versionIds).toEqual([firstVersion.id]);
         expect(await db.select().from(files)).toHaveLength(2);
+        expect(await db.select().from(versions)).toMatchObject([
+          { keyframesSeconds: null, lazyIndexPending: true },
+        ]);
 
         const third = await scanShowDirectory(db, library.id, show, {
           reconcileMissing: true,

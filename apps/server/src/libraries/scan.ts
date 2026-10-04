@@ -828,12 +828,14 @@ export async function scanShowDirectory(
           const first = members[0];
           if (!first) throw new Error("Show Version has no Files.");
           const label = videoVersionLabel(first.path, first.probe);
-          // Each split File has its own index, so only a single File indexes the Version.
-          const keyframesSeconds =
-            members.length === 1 ? first.probe.keyframesSeconds : null;
-          const index = {
-            keyframesSeconds,
-            lazyIndexPending: keyframesSeconds === null,
+          // Each split File has its own index, so only a lone File indexes the Version.
+          const indexFor = (fileCount: number) => {
+            const keyframesSeconds =
+              fileCount === 1 ? first.probe.keyframesSeconds : null;
+            return {
+              keyframesSeconds,
+              lazyIndexPending: keyframesSeconds === null,
+            };
           };
 
           const existingFiles = await tx
@@ -847,6 +849,7 @@ export async function scanShowDirectory(
             );
           const existingFile = existingFiles[0];
           let versionId: string;
+          let versionFiles: { id: string; path: string; order: number }[] = [];
           if (existingFile) {
             for (const file of existingFiles) {
               if (
@@ -868,11 +871,24 @@ export async function scanShowDirectory(
             ) {
               throw new AuthError("CONFLICT");
             }
+            versionId = version.id;
+            versionFiles = await tx
+              .select({ id: files.id, path: files.path, order: files.order })
+              .from(files)
+              .where(eq(files.versionId, versionId));
+            // A scan without reconciliation keeps Files it did not find.
+            const retained = versionFiles.filter(
+              (file) => !versionGroup.paths.includes(file.path),
+            ).length;
             await tx
               .update(versions)
-              .set({ label, bytes, durationSeconds, ...index })
-              .where(eq(versions.id, version.id));
-            versionId = version.id;
+              .set({
+                label,
+                bytes,
+                durationSeconds,
+                ...indexFor(members.length + retained),
+              })
+              .where(eq(versions.id, versionId));
           } else {
             const [version] = await tx
               .insert(versions)
@@ -884,7 +900,7 @@ export async function scanShowDirectory(
                 format: "video",
                 bytes,
                 durationSeconds,
-                ...index,
+                ...indexFor(members.length),
               })
               .returning();
             if (!version) {
@@ -894,10 +910,6 @@ export async function scanShowDirectory(
           }
           versionIds.push(versionId);
 
-          const versionFiles = await tx
-            .select({ id: files.id, path: files.path, order: files.order })
-            .from(files)
-            .where(eq(files.versionId, versionId));
           const maxOrder = versionFiles.reduce(
             (maximum, file) => Math.max(maximum, file.order),
             -1,

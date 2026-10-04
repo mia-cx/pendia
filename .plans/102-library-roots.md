@@ -26,7 +26,8 @@ A Library gets one or more roots in a new `library_roots` table, and `libraries.
   - Validation: `bun test apps/web/src/lib/roots.test.ts`; `bun run --cwd apps/web check`.
 - [x] Docs: `CONTEXT.md` (Library, Root, home root), server README API and watcher sections, `docs/operations.md` and `compose.watcher.yaml` for the new `PENDIA_WATCH` form, the plugin API files comment.
   - Result: all five files updated plus `docs/spec/plugins.md`; `bun run lint` clean.
-- [ ] Full gate and screenshots per the brief.
+- [x] Full gate and screenshots per the brief.
+  - Result: see the Gate note; 24 screenshots, before on main and after on this branch, at 1440x900 and 390x844 in light and dark.
 
 ## Call-site inventory
 
@@ -70,6 +71,8 @@ Every non-test use of `libraries.rootPath`, of `files.path` joined to a root, an
   - The WIP checkpoint `aa09cf1` stays in history as one commit. It covers the first four TODOs of the original plan, so they collapse into one server TODO whose remaining fixes land as their own commit. Every later TODO gets its own commit.
   - The UI says "folder" where the API says "root", matching the server's error messages ("This folder overlaps another folder of this library.").
   - The Library page's heading and the library read move into a new `LibraryEditor.svelte`, so a rename shows in the heading at once. `PolicyEditor.svelte` keeps only the Stored Versions form.
+  - A scan that walked a root which an update removes before the scan writes fails on the `files_root_library_fk` foreign key, and the job retries against the new roots. A repoint during a scan is reconciled by the full scan the update queues.
+  - Colocated artwork stays in the Item's home root on disk. Removing that root leaves the artwork rows of Items another root still holds pointing at the old folder, until artwork is fetched again. The issue does not ask to move artwork, so this PR does not.
 - Gate (e6ef32e):
   - `bun install --frozen-lockfile`: pass.
   - `bun run lint`: pass.
@@ -77,5 +80,3 @@ Every non-test use of `libraries.rootPath`, of `files.path` joined to a root, an
   - `bun run build`: pass.
   - `bun test` with `DATABASE_URL`: 1369 pass, 3 skip, 0 fail.
   - `bun test` without `DATABASE_URL`: 796 pass, 594 skip, 0 fail.
-  - A scan that walked a root which an update removes before the scan writes fails on the `files_root_library_fk` foreign key, and the job retries against the new roots. A repoint during a scan is reconciled by the full scan the update queues.
-  - Colocated artwork stays in the Item's home root on disk. Removing that root leaves the artwork rows of Items another root still holds pointing at the old folder, until artwork is fetched again. The issue does not ask to move artwork, so this PR does not.

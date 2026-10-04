@@ -24,6 +24,8 @@ services:
       DATABASE_URL: postgresql://pendia:pendia@postgres:5432/pendia
       # Artwork goes here when the media folder is read-only to Pendia.
       PENDIA_ARTWORK_PATH: /var/lib/pendia/artwork
+      # Optional; set it in .env or the shell. A key stored in Pendia wins.
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:3000/readyz"]
       interval: 5s

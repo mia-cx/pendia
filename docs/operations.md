@@ -14,7 +14,7 @@ One binary runs every role, chosen with `--role`. The image runs `all` unless yo
 | `transcoder` | The startup trial, then live HLS sessions on `PENDIA_TRANSCODER_PORT`. | A migrated Postgres, local scratch disk |
 | `watcher` | File changes and scans for media on its own disks, pushed to the api. | The api's URL and an API key |
 
-Start an `api` or `all` process first: it applies migrations under a Postgres advisory lock, so replicas wait for each other. The api, worker and transcoder read media at each library's root path, so mount the shares at the same path in each. The watcher runs on the storage host, next to the disks; [compose.watcher.yaml](../compose.watcher.yaml) is an example.
+Start an `api` or `all` process first: it applies migrations under a Postgres advisory lock, so replicas wait for each other. The api, worker and transcoder read media at each root's path, so mount the shares at the same path in each. The watcher runs on the storage host, next to the disks; [compose.watcher.yaml](../compose.watcher.yaml) is an example.
 
 ## Environment
 
@@ -37,7 +37,7 @@ Environment variables only bootstrap a process. Everything else lives in Postgre
 | `TMDB_API_KEY` | `worker`, `all` | none | TMDB's v3 API key, the 32-character one, not the Read Access Token. Used only when Pendia's settings hold no TMDB key, neither a provider key nor the legacy `metadata.tmdb.apiKey`. |
 | `PENDIA_API_URL` | `watcher` | required | The api's origin, such as `http://pendia.lan:3000`. |
 | `PENDIA_WATCHER_TOKEN` | `watcher` | required | An API key whose owner has `manage-libraries`. |
-| `PENDIA_WATCH` | `watcher` | required | `<library-id>=<absolute path>` pairs, separated by commas. |
+| `PENDIA_WATCH` | `watcher` | required | `<root-id>=<absolute path>` pairs, separated by commas. A root id is shown on the Library page. A watcher claims a Library's scans only when it watches every root of that Library. |
 
 The compose files read three more. They configure Docker, not Pendia.
 

@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import type { SubtitleMatch, SubtitleProvider } from "@pendia/plugin-api";
 import { and, asc, eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
@@ -6,11 +5,11 @@ import {
   episodes,
   files,
   items,
-  libraries,
   providerIds,
   seasons,
   versions,
 } from "../db/schema/index.ts";
+import { locateFile } from "../libraries/roots.ts";
 import { readBoundedBytes } from "../metadata/bounded-body.ts";
 import { jsonDecoders, requestJson } from "../metadata/provider-http.ts";
 import { readLanguage, subtitleFormats } from "./store.ts";
@@ -68,15 +67,13 @@ async function searchParameters(db: Database, itemId: string) {
       kind: items.kind,
       title: items.title,
       year: items.year,
-      rootPath: libraries.rootPath,
     })
     .from(items)
-    .innerJoin(libraries, eq(libraries.id, items.libraryId))
     .where(eq(items.id, itemId));
   if (item === undefined) throw new Error(`Item ${itemId} does not exist.`);
   const params: Record<string, string | undefined> = {};
   const [file] = await db
-    .select({ path: files.path })
+    .select({ rootId: files.rootId, path: files.path })
     .from(files)
     .innerJoin(versions, eq(versions.id, files.versionId))
     .where(
@@ -89,7 +86,9 @@ async function searchParameters(db: Database, itemId: string) {
     .orderBy(asc(versions.id), asc(files.order))
     .limit(1);
   if (file !== undefined)
-    params.moviehash = await openSubtitlesHash(join(item.rootPath, file.path));
+    params.moviehash = await openSubtitlesHash(
+      (await locateFile(db, file)).absolute,
+    );
   if (item.kind === "episode") {
     const [episode] = await db
       .select({

@@ -54,7 +54,7 @@ export interface Version {
   format: "video" | "audio" | "ebook" | "image";
   bytes: number;
   durationSeconds: number | null;
-  files: { path: string; bytes: number }[];
+  files: { path: string; bytes: number; rootId: string }[];
 }
 
 export interface ItemQuery {
@@ -98,15 +98,17 @@ export interface PluginHost {
   /**
    * Present with "files", which the admin approves at install behind a warning
    * and can switch off per plugin or globally, temporarily or for good. Paths
-   * are relative to the root of the library `libraryId` names, as in
-   * `Version.files`. There are no file handles: a plugin asks Pendia to act
-   * on a path.
+   * are relative to a root of the library `rootOrLibraryId` names, as in
+   * `Version.files`. Passing a root id from `Version.files` resolves the
+   * path in that root only; a library id keeps the wider rule: the first
+   * root by position that holds the path, or its folder, else the first
+   * root. There are no file handles: a plugin asks Pendia to act on a path.
    */
   readonly files?: {
-    stat(libraryId: string, path: string): Promise<{ bytes: number; modifiedAt: string } | null>;
-    read(libraryId: string, path: string, range?: { offset: number; length: number }): Promise<Uint8Array>;
-    write(libraryId: string, path: string, bytes: Uint8Array): Promise<void>;
-    delete(libraryId: string, path: string): Promise<void>;
+    stat(rootOrLibraryId: string, path: string): Promise<{ bytes: number; modifiedAt: string } | null>;
+    read(rootOrLibraryId: string, path: string, range?: { offset: number; length: number }): Promise<Uint8Array>;
+    write(rootOrLibraryId: string, path: string, bytes: Uint8Array): Promise<void>;
+    delete(rootOrLibraryId: string, path: string): Promise<void>;
   };
 
   /** Present with "providers". */

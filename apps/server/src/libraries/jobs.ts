@@ -15,7 +15,7 @@ import { groupShowPaths } from "../mediums/shows.ts";
 import { queueProviderFetch } from "../metadata/jobs.ts";
 import { reconcileStoredVersions } from "../stored/reconcile.ts";
 import {
-  localScanSource,
+  libraryScanSource,
   type ScanSource,
   scanDirectory,
   scanShowDirectory,
@@ -46,7 +46,7 @@ export async function runScanJob(
     .from(libraries)
     .where(eq(libraries.id, payload.libraryId));
   if (!library) throw new AuthError("NOT_FOUND");
-  const files = source ?? localScanSource(db, library);
+  const files = source ?? (await libraryScanSource(db, library));
   if (
     payload.path === "." &&
     payload.changes !== undefined &&

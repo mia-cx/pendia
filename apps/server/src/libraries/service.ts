@@ -1,37 +1,59 @@
 import { isAbsolute, resolve } from "node:path";
-import { and, asc, desc, eq, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import {
   artwork,
+  files,
   items,
   jobs,
   libraries,
+  libraryRoots,
   versions,
 } from "../db/schema/index.ts";
+import type { DeletedArtworkFile } from "../db/tree.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import {
   type ArtworkStoreConfig,
   artworkStoreConfig,
 } from "../metadata/artwork-backends.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
+import { removeFile } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
+import { rootsOf } from "./roots.ts";
+import { pruneEmptiedItems } from "./scan.ts";
 
 const maxNameLength = 128;
+
+/** The advisory lock class serialising root writes, so overlap checks see every committed root. */
+const rootsLockClass = 0x726f6f74;
 
 const fields = {
   id: libraries.id,
   name: libraries.name,
   medium: libraries.medium,
-  rootPath: libraries.rootPath,
 };
+
+type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+type Connection = Database | Transaction;
 
 /** The writable fields accepted when a library is created. */
 export type CreateLibraryInput = Pick<
   typeof libraries.$inferInsert,
-  "name" | "medium" | "rootPath"
->;
+  "name" | "medium"
+> & { roots: readonly string[] };
+
+/** A refused root: `root` is its index in the request, absent when the list as a whole is wrong. */
+export class RootError extends Error {
+  constructor(
+    message: string,
+    readonly root?: number,
+  ) {
+    super(message);
+    this.name = "RootError";
+  }
+}
 
 function normalizeName(name: string): string {
   const trimmed = name.trim();
@@ -44,37 +66,117 @@ function normalizeName(name: string): string {
   return trimmed;
 }
 
-function normalizeRoot(rootPath: string): string {
-  if (
-    rootPath.trim().length < 1 ||
-    rootPath.includes("\0") ||
-    !isAbsolute(rootPath)
-  )
-    throw new AuthError("INVALID_INPUT");
-  return resolve(rootPath);
+/** Normalizes requested root paths: absolute, at least one. */
+function normalizeRoots(paths: readonly string[]): string[] {
+  if (paths.length === 0)
+    throw new RootError("A library needs at least one folder.");
+  return paths.map((path, index) => {
+    if (path.trim().length < 1 || path.includes("\0") || !isAbsolute(path))
+      throw new RootError("Enter an absolute path, like /srv/movies.", index);
+    return resolve(path);
+  });
 }
 
-/** Lists every library for a caller holding manage-libraries. */
-export async function listLibraries(db: Database, actorId: string) {
-  await requirePermission(db, actorId, "manage-libraries");
-  return db
-    .select(fields)
-    .from(libraries)
-    .orderBy(asc(libraries.name), asc(libraries.id));
+const contains = (outer: string, inner: string) =>
+  outer === inner ||
+  inner.startsWith(outer.endsWith("/") ? outer : `${outer}/`);
+
+const overlaps = (a: string, b: string) => contains(a, b) || contains(b, a);
+
+/**
+ * Refuses roots that equal or contain each other, or a root of another
+ * Library, so a path always resolves to one root. Holds the roots lock until
+ * the transaction ends.
+ */
+async function checkRoots(
+  tx: Transaction,
+  paths: readonly string[],
+  libraryId?: string,
+) {
+  await tx.execute(sql`select pg_advisory_xact_lock(${rootsLockClass}, 0)`);
+  for (const [index, path] of paths.entries())
+    if (paths.some((other, at) => at < index && overlaps(path, other)))
+      throw new RootError(
+        "This folder overlaps another folder of this library.",
+        index,
+      );
+  const others = await tx
+    .select({ path: libraryRoots.path, library: libraries.name })
+    .from(libraryRoots)
+    .innerJoin(libraries, eq(libraries.id, libraryRoots.libraryId))
+    .where(
+      libraryId === undefined
+        ? undefined
+        : ne(libraryRoots.libraryId, libraryId),
+    );
+  for (const [index, path] of paths.entries()) {
+    const taken = others.find((other) => overlaps(path, other.path));
+    if (taken !== undefined)
+      throw new RootError(
+        `This folder overlaps a folder of ${taken.library}.`,
+        index,
+      );
+  }
 }
 
-/** Loads one library for a caller holding manage-libraries. */
-export async function getLibrary(db: Database, actorId: string, id: string) {
-  await requirePermission(db, actorId, "manage-libraries");
-  const [library] = await db
-    .select(fields)
-    .from(libraries)
-    .where(eq(libraries.id, id));
+/** Attaches each library's roots, first root first. */
+async function withRoots<T extends { id: string }>(
+  db: Connection,
+  rows: readonly T[],
+) {
+  const roots =
+    rows.length === 0
+      ? []
+      : await db
+          .select({
+            id: libraryRoots.id,
+            libraryId: libraryRoots.libraryId,
+            path: libraryRoots.path,
+          })
+          .from(libraryRoots)
+          .where(
+            inArray(
+              libraryRoots.libraryId,
+              rows.map((row) => row.id),
+            ),
+          )
+          .orderBy(asc(libraryRoots.position), asc(libraryRoots.id));
+  return rows.map((row) => ({
+    ...row,
+    roots: roots
+      .filter((root) => root.libraryId === row.id)
+      .map(({ id, path }) => ({ id, path })),
+  }));
+}
+
+async function readLibrary(db: Connection, id: string) {
+  const [library] = await withRoots(
+    db,
+    await db.select(fields).from(libraries).where(eq(libraries.id, id)),
+  );
   if (!library) throw new AuthError("NOT_FOUND");
   return library;
 }
 
-/** Creates a library for a caller holding manage-libraries. */
+/** Lists every library with its roots for a caller holding manage-libraries. */
+export async function listLibraries(db: Database, actorId: string) {
+  await requirePermission(db, actorId, "manage-libraries");
+  return withRoots(
+    db,
+    await db
+      .select(fields)
+      .from(libraries)
+      .orderBy(asc(libraries.name), asc(libraries.id)),
+  );
+}
+
+/** Loads one library with its roots for a caller holding manage-libraries. */
+export async function getLibrary(db: Database, actorId: string, id: string) {
+  await requirePermission(db, actorId, "manage-libraries");
+  return readLibrary(db, id);
+}
+
+/** Creates a library with one or more roots for a caller holding manage-libraries. */
 export async function createLibrary(
   db: Database,
   actorId: string,
@@ -82,30 +184,146 @@ export async function createLibrary(
 ) {
   await requirePermission(db, actorId, "manage-libraries");
   const name = normalizeName(input.name);
-  const rootPath = normalizeRoot(input.rootPath);
-  const [library] = await db
-    .insert(libraries)
-    .values({ name, medium: input.medium, rootPath })
-    .returning(fields);
-  if (!library) throw new Error("Library insert returned no row.");
-  return library;
+  const paths = normalizeRoots(input.roots);
+  return db.transaction(async (tx) => {
+    await checkRoots(tx, paths);
+    const [library] = await tx
+      .insert(libraries)
+      .values({ name, medium: input.medium })
+      .returning(fields);
+    if (!library) throw new Error("Library insert returned no row.");
+    await tx.insert(libraryRoots).values(
+      paths.map((path, position) => ({
+        libraryId: library.id,
+        path,
+        position,
+      })),
+    );
+    return readLibrary(tx, library.id);
+  });
 }
 
-/** Renames a library for a caller holding manage-libraries. */
+/**
+ * What `updateLibrary` changes. `roots` is the whole new list, first root
+ * first: an entry with an `id` repoints that root, one without adds a root,
+ * and a root left out is removed with its Files.
+ */
+export type UpdateLibraryInput = {
+  name?: string;
+  roots?: readonly { id?: string; path: string }[];
+};
+
+/**
+ * Removes roots and their Files, then the Items left without Files. Their
+ * progress goes with them; Items another root still holds keep theirs.
+ */
+async function removeRoots(
+  tx: Transaction,
+  rootIds: readonly string[],
+  deletedArtwork: DeletedArtworkFile[],
+) {
+  if (rootIds.length === 0) return;
+  const held = await tx
+    .select()
+    .from(files)
+    .where(inArray(files.rootId, [...rootIds]));
+  const emptied: string[] = [];
+  for (const file of held) {
+    const itemId = await removeFile(tx, file);
+    if (itemId !== undefined) emptied.push(itemId);
+  }
+  await pruneEmptiedItems(tx, emptied, deletedArtwork);
+  await tx.delete(libraryRoots).where(inArray(libraryRoots.id, [...rootIds]));
+}
+
+/**
+ * Renames a library and edits its roots for a caller holding
+ * manage-libraries. It runs under the Library's row lock, which scans hold
+ * while they write, and queues a full scan when a root was added or repointed.
+ */
 export async function updateLibrary(
   db: Database,
   actorId: string,
   id: string,
-  input: { name: string },
+  input: UpdateLibraryInput,
 ) {
   await requirePermission(db, actorId, "manage-libraries");
-  const name = normalizeName(input.name);
-  const [library] = await db
-    .update(libraries)
-    .set({ name })
-    .where(eq(libraries.id, id))
-    .returning(fields);
-  if (!library) throw new AuthError("NOT_FOUND");
+  const name = input.name === undefined ? undefined : normalizeName(input.name);
+  const requested =
+    input.roots === undefined
+      ? undefined
+      : normalizeRoots(input.roots.map((root) => root.path)).map(
+          (path, index) => ({ id: input.roots?.[index]?.id, path }),
+        );
+  const deletedArtwork: DeletedArtworkFile[] = [];
+  const library = await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ id: libraries.id })
+      .from(libraries)
+      .where(eq(libraries.id, id))
+      .for("update");
+    if (!locked) throw new AuthError("NOT_FOUND");
+    if (name !== undefined)
+      await tx.update(libraries).set({ name }).where(eq(libraries.id, id));
+    if (requested === undefined) return readLibrary(tx, id);
+
+    const current = new Map(
+      (await rootsOf(tx, id)).map((root) => [root.id, root.path]),
+    );
+    const seen = new Set<string>();
+    for (const [index, root] of requested.entries()) {
+      if (root.id === undefined) continue;
+      if (!current.has(root.id) || seen.has(root.id))
+        throw new RootError("This folder is not part of this library.", index);
+      seen.add(root.id);
+    }
+    await checkRoots(
+      tx,
+      requested.map((root) => root.path),
+      id,
+    );
+    const removed = [...current.keys()].filter((rootId) => !seen.has(rootId));
+    await removeRoots(tx, removed, deletedArtwork);
+    const repointed = requested.filter(
+      (root) => root.id !== undefined && current.get(root.id) !== root.path,
+    );
+    // Scans holding a roots snapshot from before this write refuse to write.
+    if (
+      removed.length > 0 ||
+      repointed.length > 0 ||
+      requested.some((root) => root.id === undefined)
+    )
+      await tx
+        .update(libraries)
+        .set({ rootsRevision: sql`${libraries.rootsRevision} + 1` })
+        .where(eq(libraries.id, id));
+    // Park repointed paths on their ids first, so two roots can swap paths.
+    for (const root of repointed)
+      if (root.id !== undefined)
+        await tx
+          .update(libraryRoots)
+          .set({ path: root.id })
+          .where(eq(libraryRoots.id, root.id));
+    for (const [position, root] of requested.entries()) {
+      if (root.id === undefined)
+        await tx
+          .insert(libraryRoots)
+          .values({ libraryId: id, path: root.path, position });
+      else
+        await tx
+          .update(libraryRoots)
+          .set({ path: root.path, position })
+          .where(eq(libraryRoots.id, root.id));
+    }
+    // One full scan covers every added and repointed root.
+    if (repointed.length > 0 || requested.some((root) => root.id === undefined))
+      await createJobQueue(tx).enqueue(
+        { type: "scan", libraryId: id, path: "." },
+        { concurrencyKey: libraryConcurrencyKey(id) },
+      );
+    return readLibrary(tx, id);
+  });
+  await removeArtworkFiles(deletedArtwork);
   return library;
 }
 
@@ -120,7 +338,7 @@ export async function deleteLibrary(
   const orphaned = await db.transaction(async (tx) => {
     // The row lock serializes this snapshot against concurrent artwork stores.
     const [library] = await tx
-      .select({ rootPath: libraries.rootPath })
+      .select({ id: libraries.id })
       .from(libraries)
       .where(eq(libraries.id, id))
       .for("update");
@@ -138,7 +356,8 @@ export async function deleteLibrary(
         ),
       );
     await tx.delete(libraries).where(eq(libraries.id, id));
-    return stored.map((row) => ({ ...row, rootPath: library.rootPath }));
+    // Only colocated keys resolve in a root, and those are not removed here.
+    return stored.map((row) => ({ ...row, rootPaths: [""] }));
   });
   await removeArtworkFiles(orphaned, store);
   return { ok: true };

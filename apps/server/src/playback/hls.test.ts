@@ -6,13 +6,9 @@ import { issuePlaybackToken } from "../auth/playback-tokens.ts";
 import { authenticate, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import {
-  items,
-  libraries,
-  sessionRegistry,
-  versions,
-} from "../db/schema/index.ts";
+import { items, sessionRegistry, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { authorizeHlsRequest, type HlsPrefix, parseHlsPath } from "./hls.ts";
 
 const device = {
@@ -73,10 +69,11 @@ async function seed(db: Database) {
     "127.0.0.1",
   );
   const caller = await authenticate(db, token);
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: "/srv/movies" })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: "/srv/movies",
+  });
   if (!library) throw new Error("Library insert returned no row.");
   const [item] = await db
     .insert(items)

@@ -87,7 +87,7 @@ async function withScannedLibrary(
     const library = await createLibrary(db, adminId, {
       name: "Movies",
       medium: "movies",
-      rootPath: root,
+      roots: [root],
     });
     const scanned = await scanDirectory(db, library.id, "Movie (2026)");
     const versionId = scanned.versionIds[0];

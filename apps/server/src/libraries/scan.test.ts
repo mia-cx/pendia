@@ -7,7 +7,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { asc, eq, sql } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createDatabase, type Database } from "../db/client.ts";
@@ -17,7 +17,6 @@ import {
   files,
   itemAncestors,
   items,
-  libraries,
   movies,
   progress,
   providerIds,
@@ -32,7 +31,9 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
+import { locateFile } from "./roots.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import { addRoot, insertLibraries } from "./testing.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
@@ -64,12 +65,17 @@ async function populate(root: string) {
 async function withLibrary(
   db: Database,
   rootPath: string,
-  run: (library: { id: string; rootPath: string }) => Promise<void>,
+  run: (library: {
+    id: string;
+    rootId: string;
+    rootPath: string;
+  }) => Promise<void>,
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath,
+  });
   if (!library) throw new Error("Fixture library missing.");
   await run(library);
 }
@@ -542,10 +548,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
       await migrateDatabase(db);
       await withVideoFixture(async (root) => {
         await populateShow(root);
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const result = await scanShowDirectory(db, library.id, showFolder);
@@ -804,10 +811,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await copyFile(source, join(seasonDir, "Show S01E01 - part2.mkv"));
         await copyFile(source, join(seasonDir, "Show S01E02 - part3.mkv"));
 
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const showPath = (name: string) => `${show}/Season 01/${name}`;
@@ -866,10 +874,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await createVideoFixture(part1);
         await copyFile(part1, part2);
 
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -912,10 +921,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const part1 = join(season1Dir, "Show S01E01 - part1.mkv");
         await createVideoFixture(part1);
 
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -988,10 +998,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await createVideoFixture(ranged);
         await copyFile(ranged, single);
 
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -1105,10 +1116,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await createVideoFixture(firstPath);
         await copyFile(firstPath, secondPath);
 
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -1201,10 +1213,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const rangedPath = join(seasonDir, "Show S01E01-E02.mkv");
         await createVideoFixture(rangedPath);
 
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -1293,10 +1306,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const earlier = join(seasonDir, "Show S01E01-E03.mkv");
         await createVideoFixture(earlier);
         await copyFile(earlier, join(seasonDir, "Show S01E02-E04.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -1338,10 +1352,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await mkdir(seasonDir, { recursive: true });
         const retained = join(seasonDir, "Show S01E02.mkv");
         await createVideoFixture(retained);
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         await scanShowDirectory(db, library.id, show);
@@ -1375,10 +1390,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await mkdir(seasonTwoDir, { recursive: true });
         await createVideoFixture(join(seasonOneDir, "Foundation S01E01.mkv"));
         await createVideoFixture(join(seasonTwoDir, "Foundation S02E01.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -1427,10 +1443,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const part2 = join(seasonDir, "Show S01E01 - part2.mkv");
         await createVideoFixture(part1);
         await createVideoFixture(part2);
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const first = await scanShowDirectory(db, library.id, show);
@@ -1495,10 +1512,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await mkdir(seasonDir, { recursive: true });
         await createVideoFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
         await createVideoFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await scanShowDirectory(db, library.id, show);
 
@@ -1512,6 +1530,7 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
           changes: [
             {
               kind: "move",
+              rootId: library.rootId,
               path: renamed,
               previousPath: `${show}/Season 01/Show S01E01 - part2.mkv`,
               providerIds: {},
@@ -1534,10 +1553,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         const seasonDir = join(root, show, "Season 01");
         await mkdir(seasonDir, { recursive: true });
         await createVideoFixture(join(seasonDir, "Foundation S01E01.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
 
         const scanned = await scanShowDirectory(db, library.id, show);
@@ -1596,10 +1616,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await mkdir(seasonDir, { recursive: true });
         await createVideoFixture(join(seasonDir, "Foundation S01E01.mkv"));
         await createVideoFixture(recreated);
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await scanShowDirectory(db, library.id, show);
         await recordProgress(db, `${show}/Season 01/Foundation S01E02.mkv`);
@@ -1636,10 +1657,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await createVideoFixture(
           join(root, "Show A/Season 01/Show S01E02.mkv"),
         );
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await scanShowDirectory(db, library.id, "Show A");
         const itemsBefore = await db.select().from(items);
@@ -1651,6 +1673,7 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
             changes: [
               {
                 kind: "move",
+                rootId: library.rootId,
                 path: after,
                 previousPath: before,
                 providerIds: {},
@@ -1673,10 +1696,11 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         await mkdir(join(root, "Old Show", "Season 01"), { recursive: true });
         await createVideoFixture(join(root, before));
         await createVideoFixture(join(root, gone));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         const { itemId: showId } = await scanShowDirectory(
           db,
@@ -1691,6 +1715,7 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
           changes: [
             {
               kind: "move",
+              rootId: library.rootId,
               path: after,
               previousPath: before,
               providerIds: {},
@@ -1703,6 +1728,108 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
           .from(items)
           .where(eq(items.kind, "show"));
         expect(show).toMatchObject({ id: showId, canonicalFolder: "New Show" });
+      });
+    }));
+});
+
+describe.skipIf(!databaseUrl)("scans across roots", () => {
+  /** Creates each root-relative file under its root, at the given height. */
+  async function populateRoots(
+    entries: readonly [root: string, path: string, height: number][],
+  ) {
+    for (const [root, path, height] of entries) {
+      await mkdir(join(root, dirname(path)), { recursive: true });
+      await createVideoFixture(join(root, path), {
+        width: (height * 16) / 9,
+        height,
+      });
+    }
+  }
+
+  test("a movie folder in two roots is one Item with a Version per root", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const hq = join(dir, "hq");
+        const transcoded = join(dir, "transcoded");
+        const movie = "Blade Runner (1982)/Blade Runner (1982).mkv";
+        await populateRoots([
+          [hq, movie, 1080],
+          [transcoded, movie, 720],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: hq,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const transcodedId = await addRoot(db, library.id, transcoded);
+        const scanned = await scanDirectory(db, library.id, dirname(movie));
+        expect(scanned.versionIds).toHaveLength(2);
+        if (!scanned.itemId) throw new Error("scanDirectory returned no item.");
+        expect(await db.select().from(items)).toHaveLength(1);
+        const stored = await db
+          .select()
+          .from(files)
+          .orderBy(asc(files.versionId));
+        expect(
+          new Map(stored.map((file) => [file.rootId, file.itemId])),
+        ).toEqual(
+          new Map([
+            [library.rootId, scanned.itemId],
+            [transcodedId, scanned.itemId],
+          ]),
+        );
+        // Playback resolves each Version's File in its own root.
+        const rootPaths = new Map([
+          [library.rootId, hq],
+          [transcodedId, transcoded],
+        ]);
+        for (const file of stored)
+          expect((await locateFile(db, file)).absolute).toBe(
+            join(rootPaths.get(file.rootId) ?? "", movie),
+          );
+
+        // A File is missing only when its own root lacks it.
+        await rm(join(transcoded, movie));
+        await scanDirectory(db, library.id, dirname(movie), {
+          reconcileMissing: true,
+        });
+        expect(await db.select().from(files)).toMatchObject([
+          { rootId: library.rootId, itemId: scanned.itemId },
+        ]);
+      });
+    }));
+
+  test("a Show folder in two roots is one Show whose Episodes hold each root's Versions", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const hq = join(dir, "hq");
+        const transcoded = join(dir, "transcoded");
+        const first = "Show/Season 01/Show S01E01.mkv";
+        const second = "Show/Season 01/Show S01E02.mkv";
+        await populateRoots([
+          [hq, first, 1080],
+          [transcoded, first, 720],
+          [transcoded, second, 720],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: hq,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        await addRoot(db, library.id, transcoded);
+        await scanShowDirectory(db, library.id, "Show");
+        const kinds = (await db.select().from(items)).map((item) => item.kind);
+        expect(kinds.sort()).toEqual(["episode", "episode", "season", "show"]);
+        const perEpisode = await db
+          .select({ number: episodes.episodeNumber, versionId: versions.id })
+          .from(versions)
+          .innerJoin(episodes, eq(episodes.itemId, versions.itemId));
+        expect(perEpisode.filter((row) => row.number === 1).length).toBe(2);
+        expect(perEpisode.filter((row) => row.number === 2).length).toBe(1);
       });
     }));
 });

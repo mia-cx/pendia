@@ -1,13 +1,12 @@
-import { resolve } from "node:path";
 import { and, asc, eq, inArray, type SQL } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
-  libraries,
+  files,
   segmentTimelines,
   streams,
   versions,
 } from "../db/schema/index.ts";
-import { readLibraryFile } from "../libraries/walker.ts";
+import { locateFile } from "../libraries/roots.ts";
 import {
   type PlaybackVersion,
   selectAdaptiveGroup,
@@ -205,11 +204,11 @@ export async function serveStoredHls(
   const [row] = await db
     .select({
       storedFolder: versions.storedFolder,
-      rootPath: libraries.rootPath,
+      rootId: files.rootId,
       boundariesSeconds: segmentTimelines.boundariesSeconds,
     })
     .from(versions)
-    .innerJoin(libraries, eq(libraries.id, versions.libraryId))
+    .innerJoin(files, eq(files.id, versions.sourceFileId))
     .innerJoin(
       segmentTimelines,
       eq(segmentTimelines.id, versions.segmentTimelineId),
@@ -231,16 +230,16 @@ export async function serveStoredHls(
   )
     return notFound();
   // The same no-symlink walk direct play uses keeps reads inside the library.
-  let validated: Awaited<ReturnType<typeof readLibraryFile>>;
+  let located: Awaited<ReturnType<typeof locateFile>>;
   try {
-    validated = await readLibraryFile(
-      row.rootPath,
-      `${row.storedFolder}/${name.kind === "init" ? "init.mp4" : `${name.index}.m4s`}`,
-    );
+    located = await locateFile(db, {
+      rootId: row.rootId,
+      path: `${row.storedFolder}/${name.kind === "init" ? "init.mp4" : `${name.index}.m4s`}`,
+    });
   } catch {
     return notFound();
   }
-  return new Response(Bun.file(resolve(row.rootPath, validated.path)), {
+  return new Response(Bun.file(located.absolute), {
     headers: {
       ...standardHeaders,
       "content-type": name.kind === "init" ? "video/mp4" : "video/iso.segment",

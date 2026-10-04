@@ -14,7 +14,6 @@ import {
 // The route keys this component on the id, so it never outlives its library.
 const { id }: { id: string } = $props();
 
-const library = resource(() => client.libraries.get({ id }));
 const policy = resource(() => client.libraries.storedVersions({ id }));
 
 const maxRungs = 8;
@@ -76,15 +75,6 @@ async function save() {
   }
 }
 </script>
-
-<svelte:head>
-  <title>{library.data?.name ?? "Library"} · Pendia admin</title>
-</svelte:head>
-
-<h2>{library.data?.name ?? "Library"}</h2>
-{#if library.data}
-  <p class="muted path">{library.data.rootPath}</p>
-{/if}
 
 <section aria-labelledby="stored-heading">
   <h3 id="stored-heading">Stored Versions</h3>
@@ -232,11 +222,6 @@ async function save() {
 <style>
 section {
   max-width: 720px;
-}
-
-.path {
-  margin-top: -8px;
-  overflow-wrap: anywhere;
 }
 
 form {

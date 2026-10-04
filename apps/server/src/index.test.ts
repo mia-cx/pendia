@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 import type { JobPayload } from "./db/schema/index.ts";
-import { items, libraries } from "./db/schema/index.ts";
+import { items } from "./db/schema/index.ts";
 import { databaseUrl, withDatabase } from "./db/testing.ts";
 import { insertItem } from "./db/tree.ts";
 import {
@@ -17,6 +17,7 @@ import {
 } from "./index.ts";
 import { createJobQueue, type Job, listJobs } from "./jobs/queue.ts";
 import { createJobRegistry } from "./jobs/registry.ts";
+import { insertLibraries } from "./libraries/testing.ts";
 import { createVideoFixture } from "./mediums/video-common/fixtures.ts";
 
 describe("parseRole", () => {
@@ -66,10 +67,11 @@ describe.skipIf(!databaseUrl)("startPendia job registration", () => {
       registry.register("scan", async (payload) => {
         scans.push(payload);
       });
-      const [library] = await db
-        .insert(libraries)
-        .values({ name: "Movies", medium: "movies", rootPath: "/unused" })
-        .returning();
+      const [library] = await insertLibraries(db, {
+        name: "Movies",
+        medium: "movies",
+        rootPath: "/unused",
+      });
       if (!library) throw new Error("Fixture library missing.");
       const item = await insertItem(db, {
         libraryId: library.id,
@@ -131,10 +133,11 @@ describe.skipIf(!databaseUrl)("startPendia job registration", () => {
         registry.register("provider-fetch", async (payload) => {
           delivered.resolve(payload);
         });
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         const server = await startPendia("worker", {
           databaseUrl: url,

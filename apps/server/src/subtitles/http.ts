@@ -3,7 +3,12 @@ import { readSessionToken } from "../auth/http.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { readTrackName, type StoredSubtitle, subtitleFolder } from "./store.ts";
+import { firstInRoots } from "../libraries/roots.ts";
+import {
+  readTrackName,
+  type StoredSubtitle,
+  subtitleFolders,
+} from "./store.ts";
 
 const routePattern =
   /^\/api\/subtitles\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/([^/]+)$/i;
@@ -37,12 +42,17 @@ export function createSubtitleHandler(db: Database) {
       const caller = await authenticate(db, readSessionToken(request));
       const track = readTrackName(name);
       if (track === null) return failure(404, "No such subtitle track.");
-      const folder = await subtitleFolder(db, itemId);
-      await requirePermission(db, caller.user.id, "view", folder.libraryId);
-      const file = Bun.file(folder.file(track));
-      if (!(await file.exists()))
-        return failure(404, "No such subtitle track.");
-      return new Response(file, {
+      // A track may sit in any asset root; the home root holds the newest.
+      const folders = await subtitleFolders(db, itemId);
+      const [first] = folders;
+      if (first === undefined) return failure(404, "No such subtitle track.");
+      await requirePermission(db, caller.user.id, "view", first.libraryId);
+      const found = await firstInRoots(folders, async (folder) => {
+        const file = Bun.file(folder.file(track));
+        return (await file.exists()) ? file : null;
+      });
+      if (found === null) return failure(404, "No such subtitle track.");
+      return new Response(found, {
         headers: {
           "content-type": contentTypes[track.format],
           "cache-control": "private, no-cache",

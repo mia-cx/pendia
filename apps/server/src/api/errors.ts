@@ -16,6 +16,8 @@ export type ApiErrorCode =
 export class ApiError extends Data.TaggedError("ApiError")<{
   readonly code: ApiErrorCode;
   readonly reason?: string;
+  /** Detail a client acts on, such as the index of a refused field. */
+  readonly data?: Readonly<Record<string, number>>;
 }> {}
 
 const authCodeMap = {
@@ -60,8 +62,8 @@ export async function runApi<A>(
   if (Exit.isSuccess(exit)) return exit.value;
   const failure = Cause.failureOption(exit.cause);
   if (Option.isSome(failure)) {
-    const { code, reason } = failure.value;
-    throw new ORPCError(code, { message: reason });
+    const { code, reason, data } = failure.value;
+    throw new ORPCError(code, { message: reason, data });
   }
   console.error(
     JSON.stringify({

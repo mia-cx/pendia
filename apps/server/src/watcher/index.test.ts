@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { jobs, libraries, probeCache, streams } from "../db/schema/index.ts";
+import { jobs, probeCache, streams } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { libraryConcurrencyKey } from "../libraries/jobs.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import {
   createChangeDebouncer,
   type WatchedChange,
@@ -21,7 +22,7 @@ import {
 import { createWatcherHandler } from "./http.ts";
 import { readWatcherConfig, startWatcher } from "./index.ts";
 
-const libraryId = "0199a000-0000-7000-8000-000000000001";
+const rootId = "0199a000-0000-7000-8000-000000000001";
 
 /** Waits up to `ms` for a pushed change that matches. */
 async function waitForChange(
@@ -40,15 +41,15 @@ async function waitForChange(
 }
 
 describe("readWatcherConfig", () => {
-  test("maps Library ids to absolute local roots", () => {
+  test("maps root ids to absolute local paths", () => {
     const config = readWatcherConfig({
       PENDIA_API_URL: "http://pendia:3000",
       PENDIA_WATCHER_TOKEN: "token",
-      PENDIA_WATCH: `${libraryId}=/srv/movies,other=/srv/a=b`,
+      PENDIA_WATCH: `${rootId}=/srv/movies,other=/srv/a=b`,
     });
     expect(config.apiUrl.href).toBe("http://pendia:3000/");
     expect([...config.roots]).toEqual([
-      [libraryId, "/srv/movies"],
+      [rootId, "/srv/movies"],
       ["other", "/srv/a=b"],
     ]);
   });
@@ -58,13 +59,13 @@ describe("readWatcherConfig", () => {
       readWatcherConfig({
         PENDIA_API_URL: "http://pendia:3000",
         PENDIA_WATCHER_TOKEN: "token",
-        PENDIA_WATCH: `${libraryId}=movies`,
+        PENDIA_WATCH: `${rootId}=movies`,
       }),
     ).toThrow("PENDIA_WATCH");
   });
 });
 
-test("pushes adds, moves and deletes within 1 s with library-relative paths", async () => {
+test("pushes adds, moves and deletes within 1 s with root-relative paths", async () => {
   const root = await mkdtemp(join(tmpdir(), "pendia-watch-"));
   const seen: WatchedChange[] = [];
   const authorizations = new Set<string | null>();
@@ -77,9 +78,9 @@ test("pushes adds, moves and deletes within 1 s with library-relative paths", as
         return Response.json({ job: null });
       if (pathname !== "/api/watcher/events")
         return new Response(null, { status: 404 });
-      const batch: { libraryId: string; changes: WatchedChange[] } =
+      const batch: { rootId: string; changes: WatchedChange[] } =
         await request.json();
-      expect(batch.libraryId).toBe(libraryId);
+      expect(batch.rootId).toBe(rootId);
       seen.push(...batch.changes);
       return Response.json({ accepted: batch.changes.length }, { status: 202 });
     },
@@ -88,7 +89,7 @@ test("pushes adds, moves and deletes within 1 s with library-relative paths", as
   const watcher = await startWatcher({
     apiUrl: new URL(api.url),
     token: "watcher-token",
-    roots: new Map([[libraryId, root]]),
+    roots: new Map([[rootId, root]]),
   });
   try {
     await writeFile(join(root, "Alien (1979)/Alien.mkv"), "frames");
@@ -146,7 +147,8 @@ test("retries a scan report the api refused with 403", async () => {
               ? {
                   id: jobId,
                   claimToken,
-                  libraryId,
+                  libraryId: "0199a000-0000-7000-8000-000000000003",
+                  rootIds: [rootId],
                   path: ".",
                   medium: "movies",
                   cached: [],
@@ -167,7 +169,7 @@ test("retries a scan report the api refused with 403", async () => {
     {
       apiUrl: new URL(api.url),
       token: "t",
-      roots: new Map([[libraryId, root]]),
+      roots: new Map([[rootId, root]]),
     },
     { pollIntervalMs: 20, onError: () => {} },
   );
@@ -196,10 +198,11 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           password: "admin-pass",
         });
         const { token } = await createApiKey(db, admin.id, "Watcher");
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: "/nfs/movies" })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: "/nfs/movies",
+        });
         if (!library) throw new Error("Library insert returned no row.");
         const queue = createJobQueue(db);
         const first = await queue.enqueue(
@@ -239,7 +242,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           {
             apiUrl: new URL(api.url),
             token,
-            roots: new Map([[library.id, root]]),
+            roots: new Map([[library.rootId, root]]),
           },
           { pollIntervalMs: 20, onError: (error) => errors.push(error) },
         );
@@ -291,16 +294,17 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         });
         const { token } = await createApiKey(db, admin.id, "Watcher");
         // The api role has no worker, and this root does not exist on its disk.
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: "/nfs/movies" })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: "/nfs/movies",
+        });
         if (!library) throw new Error("Library insert returned no row.");
         const watcher = await startWatcher(
           {
             apiUrl: new URL(base),
             token,
-            roots: new Map([[library.id, dir]]),
+            roots: new Map([[library.rootId, dir]]),
           },
           { pollIntervalMs: 50 },
         );
@@ -321,7 +325,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           }
           expect(written.map((stream) => stream.kind)).toContain("video");
           expect(await db.select().from(probeCache)).toMatchObject([
-            { libraryId: library.id, path: "Alien (1979)/Alien (1979).mkv" },
+            { rootId: library.rootId, path: "Alien (1979)/Alien (1979).mkv" },
           ]);
         } finally {
           await watcher.stop();

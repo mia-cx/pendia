@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -8,6 +8,7 @@ import {
   itemAncestors,
   items,
   libraries,
+  libraryRoots,
   type ScanChange,
   seasons,
   streams,
@@ -23,6 +24,7 @@ import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import {
   groupShowPaths,
   mergeEpisodeRanges,
+  type ShowPathGroup,
   showsScan,
 } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
@@ -35,6 +37,7 @@ import {
   updateItemCanonicalFolder,
 } from "./changes.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
+import { type LibraryRoot, type RootedPath, rootedKey } from "./roots.ts";
 import { persistScanTimelines } from "./timelines.ts";
 import {
   type LibraryFile,
@@ -43,20 +46,28 @@ import {
   walkLibrary,
 } from "./walker.ts";
 
+/** A walked file in one root. */
+export type RootedFile = LibraryFile & { rootId: string };
+
+/** A probed file in one root. */
+export type ProbedRootedFile = ProbedLibraryFile & { rootId: string };
+
 /** Where a scan reads its files: the local disk, or a watcher's report. */
 export type ScanSource = {
-  /** Lists accepted media files under a library-relative scope; a missing scope lists none. */
-  walk(path: string, recursive: boolean): Promise<LibraryFile[]>;
+  /** The Library's roots revision when this source read its roots; a write under a newer revision is refused. */
+  rootsRevision: number;
+  /** Lists accepted media files under a root-relative scope in every root; a missing scope lists none. */
+  walk(path: string, recursive: boolean): Promise<RootedFile[]>;
   /** Returns one walked file with its probe result. */
-  probe(path: string): Promise<ProbedLibraryFile>;
+  probe(file: RootedPath): Promise<ProbedRootedFile>;
   /** Fails when a probed file changed before the write. Runs under the write lock. */
-  verify(file: ProbedLibraryFile): Promise<void>;
-  /** Fails when an empty scope gained files before the write. Runs under the write lock. */
+  verify(file: ProbedRootedFile): Promise<void>;
+  /** Fails when an empty scope gained files in any root before the write. Runs under the write lock. */
   confirmEmpty(path: string, recursive: boolean): Promise<void>;
-  /** Fails when a path the walk missed holds a file again before the write. Runs under the write lock. */
-  confirmMissing(paths: readonly string[]): Promise<void>;
-  /** Whether a stored File's path outside the scope still holds a file. */
-  exists(path: string): Promise<boolean>;
+  /** Fails when a file the walk missed exists again before the write. Runs under the write lock. */
+  confirmMissing(files: readonly RootedPath[]): Promise<void>;
+  /** Whether a stored File outside the scope still exists. */
+  exists(file: RootedPath): Promise<boolean>;
 };
 
 /** Optional collaborators and queued changes for one directory scan. */
@@ -85,6 +96,36 @@ export const inScope = (scope: string, recursive: boolean, path: string) =>
     : posix.dirname(path) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/**
+ * Splits each grouped Version of a Show into one Version per root holding
+ * its paths: a Version's Files all sit in one root. Roots keep walk order.
+ */
+function splitVersionsByRoot(
+  group: ShowPathGroup | undefined,
+  walked: readonly RootedFile[],
+) {
+  if (group === undefined) return undefined;
+  const rootIds = [...new Set(walked.map((file) => file.rootId))];
+  const held = new Set(walked.map(rootedKey));
+  return {
+    ...group,
+    seasons: group.seasons.map((season) => ({
+      ...season,
+      episodes: season.episodes.map((episode) => ({
+        ...episode,
+        versions: episode.versions.flatMap((version) =>
+          rootIds.flatMap((rootId) => {
+            const paths = version.paths.filter((path) =>
+              held.has(rootedKey({ rootId, path })),
+            );
+            return paths.length === 0 ? [] : [{ rootId, paths }];
+          }),
+        ),
+      })),
+    })),
+  };
+}
 
 /** Replace one File's Stream inventory from a probe, reusing (fileId, index) ids. */
 async function upsertFileStreams(
@@ -163,16 +204,23 @@ async function confirmScopeEmpty(
   }
 }
 
-/** Reads a Library's own disk through the walker and the persistent probe cache. */
+/** Reads a Library's roots on the local disk through the walker and the persistent probe cache. */
 export function localScanSource(
   db: Database,
-  library: Pick<typeof libraries.$inferSelect, "id" | "rootPath" | "medium">,
+  roots: readonly LibraryRoot[],
+  rootsRevision: number,
+  medium: (typeof libraries.$inferSelect)["medium"],
   probe: typeof probeVideo = probeVideo,
 ): ScanSource {
-  const { rules } = scanScope(library.medium, ".");
-  const exists = async (path: string) => {
+  const { rules } = scanScope(medium, ".");
+  const rootOf = (rootId: string) => {
+    const root = roots.find((candidate) => candidate.id === rootId);
+    if (root === undefined) throw new Error(`Unknown library root ${rootId}.`);
+    return root;
+  };
+  const exists = async (file: RootedPath) => {
     try {
-      await readLibraryFile(library.rootPath, path);
+      await readLibraryFile(rootOf(file.rootId).path, file.path);
       return true;
     } catch (error) {
       if (error instanceof MissingLibraryPathError) return false;
@@ -180,41 +228,81 @@ export function localScanSource(
     }
   };
   return {
+    rootsRevision,
     async walk(path, recursive) {
-      const walked: LibraryFile[] = [];
-      try {
-        for await (const file of walkLibrary(library.rootPath, rules, {
-          path,
-          recursive,
-        }))
-          walked.push(file);
-      } catch (error) {
-        if (
-          !(error instanceof MissingLibraryPathError) ||
-          error.scope !== "requested"
-        )
-          throw error;
+      const walked: RootedFile[] = [];
+      for (const root of roots) {
+        try {
+          for await (const file of walkLibrary(root.path, rules, {
+            path,
+            recursive,
+          }))
+            walked.push({ ...file, rootId: root.id });
+        } catch (error) {
+          if (
+            !(error instanceof MissingLibraryPathError) ||
+            error.scope !== "requested"
+          )
+            throw error;
+        }
       }
       return walked;
     },
-    probe: (path) => probeLibraryFile(db, library, path, probe),
+    probe: async (file) => ({
+      ...(await probeLibraryFile(db, rootOf(file.rootId), file.path, probe)),
+      rootId: file.rootId,
+    }),
     async verify(file) {
-      const current = await readLibraryFile(library.rootPath, file.path);
+      const current = await readLibraryFile(
+        rootOf(file.rootId).path,
+        file.path,
+      );
       if (
         current.bytes !== file.bytes ||
         current.modifiedNs !== file.modifiedNs
       )
         throw new Error("File changed before scan write.");
     },
-    confirmEmpty: (path, recursive) =>
-      confirmScopeEmpty(library.rootPath, rules, path, recursive),
-    async confirmMissing(paths) {
-      for (const path of paths)
-        if (await exists(path))
+    async confirmEmpty(path, recursive) {
+      for (const root of roots)
+        await confirmScopeEmpty(root.path, rules, path, recursive);
+    },
+    async confirmMissing(missing) {
+      for (const file of missing)
+        if (await exists(file))
           throw new Error("Library directory changed before scan write.");
     },
     exists,
   };
+}
+
+/**
+ * Reads a Library's own roots on the local disk. The roots and their
+ * revision come from one statement, so a scan never pairs old roots with
+ * the revision a root edit already bumped.
+ */
+export async function libraryScanSource(
+  db: Database,
+  library: Pick<typeof libraries.$inferSelect, "id" | "medium">,
+  probe: typeof probeVideo = probeVideo,
+) {
+  const rows = await db
+    .select({
+      id: libraryRoots.id,
+      path: libraryRoots.path,
+      rootsRevision: libraries.rootsRevision,
+    })
+    .from(libraries)
+    .innerJoin(libraryRoots, eq(libraryRoots.libraryId, libraries.id))
+    .where(eq(libraries.id, library.id))
+    .orderBy(asc(libraryRoots.position), asc(libraryRoots.id));
+  return localScanSource(
+    db,
+    rows.map(({ id, path }) => ({ id, path })),
+    rows[0]?.rootsRevision ?? 0,
+    library.medium,
+    probe,
+  );
 }
 
 /**
@@ -242,7 +330,7 @@ async function findShowOwningFiles(
     .limit(1);
   if (owner === undefined) return undefined;
   const elsewhere = await tx
-    .select({ path: files.path })
+    .select({ rootId: files.rootId, path: files.path })
     .from(files)
     .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
     .where(
@@ -251,8 +339,7 @@ async function findShowOwningFiles(
         notInArray(files.path, [...paths]),
       ),
     );
-  for (const file of elsewhere)
-    if (await source.exists(file.path)) return undefined;
+  for (const file of elsewhere) if (await source.exists(file)) return undefined;
   return owner.item;
 }
 
@@ -275,6 +362,42 @@ async function deleteEmptiedItems(
   }
 }
 
+/** Deletes leaf Items left without Versions, then the Seasons and Shows above them left without children. */
+export async function pruneEmptiedItems(
+  tx: Transaction,
+  itemIds: readonly string[],
+  deletedArtwork: DeletedArtworkFile[],
+) {
+  if (itemIds.length === 0) return;
+  const ancestors = await tx
+    .selectDistinct({
+      id: itemAncestors.ancestorId,
+      depth: itemAncestors.depth,
+    })
+    .from(itemAncestors)
+    .where(
+      and(
+        inArray(itemAncestors.descendantId, [...itemIds]),
+        sql`${itemAncestors.depth} > 0`,
+      ),
+    );
+  await deleteEmptiedItems(tx, itemIds, deletedArtwork);
+  // Nearest first, so a Season goes before the Show it empties.
+  for (const ancestor of ancestors.sort((a, b) => a.depth - b.depth)) {
+    const [child] = await tx
+      .select({ id: items.id })
+      .from(items)
+      .where(eq(items.parentId, ancestor.id))
+      .limit(1);
+    const [exists] = await tx
+      .select({ id: items.id })
+      .from(items)
+      .where(eq(items.id, ancestor.id));
+    if (child === undefined && exists !== undefined)
+      await deleteItemSubtree(tx, ancestor.id, deletedArtwork);
+  }
+}
+
 /** Scan one canonical directory of a movies library into Items, Versions, Files and Streams. */
 export async function scanDirectory(
   db: Database,
@@ -289,16 +412,19 @@ export async function scanDirectory(
     .where(eq(libraries.id, libraryId));
   if (!library) throw new AuthError("NOT_FOUND");
   if (library.medium !== "movies") throw new AuthError("INVALID_INPUT");
-  const source = options.source ?? localScanSource(db, library, options.probe);
+  const source =
+    options.source ?? (await libraryScanSource(db, library, options.probe));
 
-  const walked = (await source.walk(path, false)).map((file) => file.path);
-  const [group] = groupMoviePaths(walked);
+  // Grouping reads root-relative paths, so the same folder in two roots is
+  // one Item; each root's file at a member path is its own Version.
+  const walked = await source.walk(path, false);
+  const [group] = groupMoviePaths(walked.map((file) => file.path));
 
-  const members: ProbedLibraryFile[] = [];
+  const members: ProbedRootedFile[] = [];
   let probed = 0;
-  if (group) {
-    for (const memberPath of group.paths) {
-      const member = await source.probe(memberPath);
+  for (const memberPath of group?.paths ?? []) {
+    for (const file of walked.filter((file) => file.path === memberPath)) {
+      const member = await source.probe(file);
       if (
         !member.probe.streams.some(
           (stream) =>
@@ -328,6 +454,9 @@ export async function scanDirectory(
       .where(eq(libraries.id, libraryId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
+    // A root edit between the walk and this lock made the snapshot stale.
+    if (locked.rootsRevision !== source.rootsRevision)
+      throw new Error("Library roots changed before scan write.");
 
     const emptiedItemIds = await applyScanChanges(
       tx,
@@ -396,7 +525,7 @@ export async function scanDirectory(
         .select()
         .from(files)
         .where(
-          and(eq(files.libraryId, libraryId), eq(files.path, member.path)),
+          and(eq(files.rootId, member.rootId), eq(files.path, member.path)),
         );
 
       let versionId: string;
@@ -449,6 +578,7 @@ export async function scanDirectory(
             versionId: version.id,
             itemId,
             libraryId,
+            rootId: member.rootId,
             path: member.path,
             order: 0,
             bytes: member.bytes,
@@ -469,7 +599,11 @@ export async function scanDirectory(
     }
     if (options.reconcileMissing === true) {
       const itemFiles = await tx
-        .select({ versionId: files.versionId, path: files.path })
+        .select({
+          versionId: files.versionId,
+          rootId: files.rootId,
+          path: files.path,
+        })
         .from(files)
         .innerJoin(
           versions,
@@ -479,13 +613,12 @@ export async function scanDirectory(
           ),
         )
         .where(eq(files.itemId, itemId));
-      const present = new Set(group.paths);
-      const missing = itemFiles.filter((file) => !present.has(file.path));
+      // A File is missing only when its own root lacks it.
+      const present = new Set(members.map(rootedKey));
+      const missing = itemFiles.filter((file) => !present.has(rootedKey(file)));
       // Only a path inside the scope can have come back since the walk.
       await source.confirmMissing(
-        missing
-          .map((file) => file.path)
-          .filter((missingPath) => inScope(path, false, missingPath)),
+        missing.filter((file) => inScope(path, false, file.path)),
       );
       if (missing.length > 0)
         await tx.delete(versions).where(
@@ -537,21 +670,26 @@ export async function scanShowDirectory(
     .where(eq(libraries.id, libraryId));
   if (!library) throw new AuthError("NOT_FOUND");
   if (library.medium !== "shows") throw new AuthError("INVALID_INPUT");
-  const source = options.source ?? localScanSource(db, library, options.probe);
+  const source =
+    options.source ?? (await libraryScanSource(db, library, options.probe));
 
-  const walked = (await source.walk(path, true)).map((file) => file.path);
-  const group = groupShowPaths(walked).find(
-    (candidate) => candidate.canonicalFolder === path,
+  const walked = await source.walk(path, true);
+  const group = splitVersionsByRoot(
+    groupShowPaths(walked.map((file) => file.path)).find(
+      (candidate) => candidate.canonicalFolder === path,
+    ),
+    walked,
   );
 
-  const memberByPath = new Map<string, ProbedLibraryFile>();
+  const memberByKey = new Map<string, ProbedRootedFile>();
   let probed = 0;
   for (const season of group?.seasons ?? []) {
     for (const episode of season.episodes) {
       for (const version of episode.versions) {
         for (const memberPath of version.paths) {
-          if (memberByPath.has(memberPath)) continue;
-          const member = await source.probe(memberPath);
+          const file = { rootId: version.rootId, path: memberPath };
+          if (memberByKey.has(rootedKey(file))) continue;
+          const member = await source.probe(file);
           if (
             !member.probe.streams.some(
               (stream) =>
@@ -563,7 +701,7 @@ export async function scanShowDirectory(
             );
           }
           if (!member.cached) probed += 1;
-          memberByPath.set(memberPath, member);
+          memberByKey.set(rootedKey(file), member);
         }
       }
     }
@@ -583,6 +721,9 @@ export async function scanShowDirectory(
       .where(eq(libraries.id, libraryId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
+    // A root edit between the walk and this lock made the snapshot stale.
+    if (locked.rootsRevision !== source.rootsRevision)
+      throw new Error("Library roots changed before scan write.");
 
     const emptiedItemIds = await applyScanChanges(
       tx,
@@ -591,7 +732,7 @@ export async function scanShowDirectory(
       deletedArtwork,
     );
 
-    for (const member of memberByPath.values()) await source.verify(member);
+    for (const member of memberByKey.values()) await source.verify(member);
 
     if (!group) {
       await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
@@ -628,7 +769,7 @@ export async function scanShowDirectory(
         : await findShowOwningFiles(
             tx,
             libraryId,
-            [...memberByPath.keys()],
+            [...memberByKey.values()].map((member) => member.path),
             source,
           ));
     if (existingShow && found && existingShow.id !== found.id)
@@ -808,8 +949,11 @@ export async function scanShowDirectory(
         }
 
         for (const versionGroup of episodeGroup.versions) {
+          const { rootId } = versionGroup;
           const members = versionGroup.paths.map((memberPath) => {
-            const member = memberByPath.get(memberPath);
+            const member = memberByKey.get(
+              rootedKey({ rootId, path: memberPath }),
+            );
             if (!member) throw new Error(`Unprobed member: ${memberPath}`);
             return member;
           });
@@ -843,13 +987,13 @@ export async function scanShowDirectory(
             .from(files)
             .where(
               and(
-                eq(files.libraryId, libraryId),
+                eq(files.rootId, rootId),
                 inArray(files.path, versionGroup.paths),
               ),
             );
           const existingFile = existingFiles[0];
           let versionId: string;
-          let versionFiles: { id: string; path: string; order: number }[] = [];
+          let versionFiles: (RootedPath & { id: string; order: number })[] = [];
           if (existingFile) {
             for (const file of existingFiles) {
               if (
@@ -873,7 +1017,12 @@ export async function scanShowDirectory(
             }
             versionId = version.id;
             versionFiles = await tx
-              .select({ id: files.id, path: files.path, order: files.order })
+              .select({
+                id: files.id,
+                rootId: files.rootId,
+                path: files.path,
+                order: files.order,
+              })
               .from(files)
               .where(eq(files.versionId, versionId));
             // Reconciliation deletes only Files the walk missed; the rest stay.
@@ -881,7 +1030,7 @@ export async function scanShowDirectory(
               (file) =>
                 !versionGroup.paths.includes(file.path) &&
                 (options.reconcileMissing !== true ||
-                  memberByPath.has(file.path)),
+                  memberByKey.has(rootedKey(file))),
             ).length;
             await tx
               .update(versions)
@@ -950,6 +1099,7 @@ export async function scanShowDirectory(
                   versionId,
                   itemId: episodeId,
                   libraryId,
+                  rootId,
                   path: member.path,
                   order,
                   bytes: member.bytes,
@@ -993,6 +1143,7 @@ export async function scanShowDirectory(
         .select({
           id: files.id,
           versionId: files.versionId,
+          rootId: files.rootId,
           path: files.path,
         })
         .from(files)
@@ -1010,12 +1161,13 @@ export async function scanShowDirectory(
             eq(itemAncestors.ancestorId, showId),
           ),
         );
-      const stale = showFiles.filter((file) => !memberByPath.has(file.path));
+      // A File is stale only when its own root lacks it.
+      const stale = showFiles.filter(
+        (file) => !memberByKey.has(rootedKey(file)),
+      );
       // Only a path inside the scope can have come back since the walk.
       await source.confirmMissing(
-        stale
-          .map((file) => file.path)
-          .filter((stalePath) => inScope(path, true, stalePath)),
+        stale.filter((file) => inScope(path, true, file.path)),
       );
       const staleFileIds = stale.map((file) => file.id);
       if (staleFileIds.length > 0) {

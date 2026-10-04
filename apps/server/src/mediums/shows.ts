@@ -251,11 +251,13 @@ export interface ShowVersionPathGroup {
 }
 
 /** One Episode parsed from accepted paths. */
-export interface EpisodePathGroup {
+export interface EpisodePathGroup<
+  V extends ShowVersionPathGroup = ShowVersionPathGroup,
+> {
   episodeNumber: number;
   episodeEndNumber: number | null;
   title: string;
-  versions: ShowVersionPathGroup[];
+  versions: V[];
 }
 
 /** One Season under a canonical Show folder. */
@@ -283,11 +285,11 @@ const episodeTitle = (start: number, end: number | null) =>
  * hold every Version. A Version stays at the start of the Episode that
  * already owns its Files, and no range reaches the next persisted start.
  */
-export function mergeEpisodeRanges(
-  discovered: readonly EpisodePathGroup[],
+export function mergeEpisodeRanges<V extends ShowVersionPathGroup>(
+  discovered: readonly EpisodePathGroup<V>[],
   persistedStarts: readonly number[],
   ownerStarts: ReadonlyMap<string, number>,
-): EpisodePathGroup[] {
+): EpisodePathGroup<V>[] {
   const limit = (start: number) =>
     Math.min(...persistedStarts.filter((persisted) => persisted > start)) - 1;
   const entries = discovered
@@ -306,11 +308,7 @@ export function mergeEpisodeRanges(
         a.start - b.start ||
         (a.version.paths[0] ?? "").localeCompare(b.version.paths[0] ?? ""),
     );
-  const merged: {
-    start: number;
-    end: number;
-    versions: ShowVersionPathGroup[];
-  }[] = [];
+  const merged: { start: number; end: number; versions: V[] }[] = [];
   for (const { start, end, version } of entries) {
     const last = merged.at(-1);
     if (last !== undefined && start <= last.end) {

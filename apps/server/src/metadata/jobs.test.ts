@@ -12,7 +12,6 @@ import {
   events,
   items,
   jobs,
-  libraries,
   providerIds,
   settings,
   shows,
@@ -22,6 +21,7 @@ import { insertItem } from "../db/tree.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import { registerLibraryJobs } from "../libraries/jobs.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { setProviderKey } from "../providers/keys.ts";
 import { queueProviderFetch, registerMetadataJobs } from "./jobs.ts";
@@ -68,10 +68,11 @@ async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
 }
 
 async function fixture(db: Database, rootPath: string) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath,
+  });
   if (!library) throw new Error("Fixture library missing.");
   const item = await insertItem(db, {
     libraryId: library.id,
@@ -87,10 +88,11 @@ async function fixture(db: Database, rootPath: string) {
 
 /** A tagged Show with one Season and Episode, and a stored TVDB key. */
 async function showFixture(db: Database, rootPath: string) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Shows", medium: "shows", rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Shows",
+    medium: "shows",
+    rootPath,
+  });
   if (!library) throw new Error("Fixture library missing.");
   const show = await insertItem(db, {
     libraryId: library.id,
@@ -166,10 +168,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const folder = "Alien (1979) {tmdb-550}";
         await mkdir(join(root, folder));
         await createVideoFixture(join(root, folder, "Alien.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await db.insert(settings).values({
           key: "metadata",
@@ -284,10 +287,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const folder = "Alien (1979) {tmdb-550}";
         await mkdir(join(root, folder));
         await createVideoFixture(join(root, folder, "Alien.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await db.insert(settings).values({
           key: "metadata",
@@ -349,10 +353,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const folder = "Alien (1979) {tmdb-550}";
         await mkdir(join(root, folder));
         await createVideoFixture(join(root, folder, "Alien.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await db.insert(settings).values({
           key: "metadata",
@@ -401,10 +406,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const folder = "Alien (1979) {tmdb-550}";
         await mkdir(join(root, folder));
         await createVideoFixture(join(root, folder, "Alien.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         const { calls, request } = mockRequest((url) => {
           if (url.hostname === "api.themoviedb.org")
@@ -452,10 +458,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const folder = "King Kong (1933)";
         await mkdir(join(root, folder));
         await createVideoFixture(join(root, folder, "King Kong.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await db.insert(settings).values({
           key: "metadata",
@@ -532,10 +539,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const folder = "Die Verurteilten (1994)";
         await mkdir(join(root, folder));
         await createVideoFixture(join(root, folder, "Die Verurteilten.mkv"));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Movies", medium: "movies", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await db.insert(settings).values({
           key: "metadata",
@@ -830,10 +838,11 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
           "Breaking Bad S01E02.mkv",
         ])
           await createVideoFixture(join(root, folder, "Season 01", name));
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         await db
           .insert(settings)

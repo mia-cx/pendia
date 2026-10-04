@@ -4,7 +4,6 @@ import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   groups,
-  libraries,
   libraryAccess,
   type Permission,
   permissions,
@@ -12,6 +11,7 @@ import {
   users,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import {
   checkPermission,
   createGroup,
@@ -44,10 +44,11 @@ async function createUser(
 }
 
 async function createLibrary(db: Database, name: string) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name, medium: "shows", rootPath: `/${name}` })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name,
+    medium: "shows",
+    rootPath: `/${name}`,
+  });
   if (!library) throw new Error("Fixture library missing.");
   return library;
 }

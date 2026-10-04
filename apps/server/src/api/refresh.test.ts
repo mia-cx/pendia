@@ -9,18 +9,13 @@ import { eq } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import {
-  items,
-  jobs,
-  libraries,
-  providerIds,
-  settings,
-} from "../db/schema/index.ts";
+import { items, jobs, providerIds, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { startPendia } from "../index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { registerMetadataJobs } from "../metadata/jobs.ts";
 import { tvdbResponse } from "../metadata/tvdb-fixtures.ts";
 import type { pendiaRouter } from "./router.ts";
@@ -64,10 +59,11 @@ describe.skipIf(!databaseUrl)("items.refresh", () => {
         });
         const { token: adminToken } = await createApiKey(db, admin.id, "a");
         const { token: viewerToken } = await createApiKey(db, viewer.id, "v");
-        const [library] = await db
-          .insert(libraries)
-          .values({ name: "Shows", medium: "shows", rootPath: root })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
         if (!library) throw new Error("Fixture library missing.");
         const show = await insertItem(db, {
           libraryId: library.id,

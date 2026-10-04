@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import { and, eq } from "drizzle-orm";
 import { Schema } from "effect";
 import { AuthError } from "../auth/errors.ts";
@@ -8,8 +7,8 @@ import { authenticate } from "../auth/sessions.ts";
 import { readAuthSettings } from "../auth/settings.ts";
 import { requestIdentity } from "../auth/transport.ts";
 import type { Database } from "../db/client.ts";
-import { libraries, sessionRegistry } from "../db/schema/index.ts";
-import { type LibraryFile, readLibraryFile } from "../libraries/walker.ts";
+import { sessionRegistry } from "../db/schema/index.ts";
+import { locateFile } from "../libraries/roots.ts";
 import { loadPlaybackSource } from "./planning.ts";
 
 const directPath = /^\/api\/playback\/([^/]+)\/([^/]+)\/direct$/;
@@ -90,19 +89,11 @@ export async function locateVersionFile(
   versionId: string,
 ) {
   const loaded = await loadPlaybackSource(db, userId, itemId, versionId);
-  const [library] = await db
-    .select({ rootPath: libraries.rootPath })
-    .from(libraries)
-    .where(eq(libraries.id, loaded.item.libraryId))
-    .limit(1);
-  if (library === undefined) throw new AuthError("NOT_FOUND");
-  let validated: LibraryFile;
   try {
-    validated = await readLibraryFile(library.rootPath, loaded.file.path);
+    return { ...loaded, path: (await locateFile(db, loaded.file)).absolute };
   } catch {
     return { ...loaded, path: undefined };
   }
-  return { ...loaded, path: resolve(library.rootPath, validated.path) };
 }
 
 /** Serves a Version's File for byte-range playback; Bun answers Range requests on a file body itself. */

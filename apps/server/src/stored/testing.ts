@@ -3,11 +3,13 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { files, libraries, versions } from "../db/schema/index.ts";
+import type { libraries } from "../db/schema/index.ts";
+import { files, versions } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import { registerLibraryJobs } from "../libraries/jobs.ts";
 import { scanDirectory } from "../libraries/scan.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import {
   createVideoFixture,
   type VideoFixtureOptions,
@@ -51,15 +53,12 @@ export async function withStoredLibrary(
       pattern: "testsrc2",
       ...options,
     });
-    const [library] = await db
-      .insert(libraries)
-      .values({
-        name: "Movies",
-        medium: "movies",
-        rootPath: root,
-        configuration: storedVersions === null ? {} : { storedVersions },
-      })
-      .returning();
+    const [library] = await insertLibraries(db, {
+      name: "Movies",
+      medium: "movies",
+      rootPath: root,
+      configuration: storedVersions === null ? {} : { storedVersions },
+    });
     if (library === undefined) throw new Error("Fixture library missing.");
     const { itemId } = await scanDirectory(db, library.id, fixtureFolder);
     if (itemId === null) throw new Error("Fixture scan found no Item.");

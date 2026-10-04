@@ -13,8 +13,12 @@ A kind of media with its own model, scanner, browser and translation layer: movi
 _Avoid_: media type, library type, content type, category
 
 **Library**:
-A configured root folder that holds one medium.
+One medium's collection, reached through one or more roots.
 _Avoid_: folder, source, collection
+
+**Root**:
+An absolute folder of a Library. No root equals or contains another, in any Library. A File's path is relative to its root.
+_Avoid_: root folder, mount point
 
 **Item**:
 Any node in a library tree: a movie, show, season, episode, album, track, book, photo, channel. It has a kind, at most one parent, metadata, artwork, credits, provider ids and per-user progress.
@@ -35,6 +39,10 @@ _Avoid_: media type, mime type
 **File**:
 One on-disk part of a Version. Most Versions have one.
 _Avoid_: part, media file, source file
+
+**Home root**:
+The lowest-position root holding one of an Item's imported Files. Artwork and fetched subtitles go there.
+_Avoid_: primary root, default root
 
 **Stream**:
 One track inside a File: video, audio or subtitle.

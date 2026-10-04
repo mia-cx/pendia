@@ -1,18 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { asc, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import {
-  files,
-  items,
-  libraries,
-  providerIds,
-  versions,
-} from "../db/schema/index.ts";
+import { files, items, providerIds, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { createJobQueue, type Job, listJobs } from "../jobs/queue.ts";
@@ -22,8 +16,9 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
-import { scanShowDirectory } from "./scan.ts";
+import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import type { ChangeEvent } from "./servarr.ts";
+import { addRoot, insertLibraries } from "./testing.ts";
 import {
   createChangeDebouncer,
   createServarrWebhookHandler,
@@ -52,10 +47,7 @@ async function insertLibrary(
   rootPath: string,
   medium: "movies" | "shows" = "movies",
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name, medium, rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, { name, medium, rootPath });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
 }
@@ -110,11 +102,13 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           changes: [
             {
               kind: "add",
+              rootId: library.rootId,
               path: "Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
               providerIds: movieIds,
             },
             {
               kind: "move",
+              rootId: library.rootId,
               path: "Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-2160p].mkv",
               previousPath:
                 "Alien (1979) {tmdb-348}/Alien.1979.2160p.BluRay.mkv",
@@ -122,6 +116,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             },
             {
               kind: "delete",
+              rootId: library.rootId,
               path: "Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
               target: "file",
               providerIds: movieIds,
@@ -162,6 +157,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
               changes: [
                 {
                   kind: "add",
+                  rootId: library.rootId,
                   path: "Alien (1979)/Alien.mkv",
                   providerIds: {},
                 },
@@ -174,6 +170,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
               changes: [
                 {
                   kind: "add",
+                  rootId: library.rootId,
                   path: "Blade Runner (1982)/Blade Runner.mkv",
                   providerIds: {},
                 },
@@ -212,6 +209,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           changes: [
             {
               kind: "delete",
+              rootId: library.rootId,
               path: "Alien (1979)",
               target: "item",
               providerIds: movieIds,
@@ -221,50 +219,68 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       ]);
     }));
 
-  test("nested same-medium libraries bind the most specific root", () =>
+  test("a path binds its root, and a move between roots lands in the destination root", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      await insertLibrary(db, "Movies", "/media/movies");
-      const anime = await insertLibrary(db, "Anime", "/media/movies/anime");
-      const debouncer = createChangeDebouncer(db, { delayMs: 10 });
-      try {
+      await withVideoFixture(async (dir) => {
+        const hq = join(dir, "hq");
+        const transcoded = join(dir, "transcoded");
+        const file = "Alien (1979)/Alien (1979).mkv";
+        await mkdir(join(hq, dirname(file)), { recursive: true });
+        await mkdir(join(transcoded, dirname(file)), { recursive: true });
+        await createVideoFixture(join(hq, file));
+        const library = await insertLibrary(db, "Movies", hq);
+        const transcodedId = await addRoot(db, library.id, transcoded);
+        await scanDirectory(db, library.id, dirname(file));
+        const [before] = await db.select().from(files);
+        if (!before) throw new Error("Alien was not scanned.");
+        expect(before.rootId).toBe(library.rootId);
+
+        await rename(join(hq, file), join(transcoded, file));
+        const debouncer = createChangeDebouncer(db, { delayMs: 10 });
         await debouncer.submit("radarr", [
           {
-            kind: "add",
-            path: "/media/movies/anime/Cowboy Bebop (1998)/Cowboy Bebop.mkv",
-            providerIds: {},
+            kind: "move",
+            path: join(transcoded, file),
+            previousPath: join(hq, file),
+            providerIds: movieIds,
           },
         ]);
-        const jobs = await waitForScanJobs(db, 1);
-        expect(jobs[0]?.payload).toEqual({
+        await debouncer.close();
+        const [job] = await listJobs(db, { type: "scan" });
+        expect(job?.payload).toEqual({
           type: "scan",
-          libraryId: anime.id,
-          path: "Cowboy Bebop (1998)",
+          libraryId: library.id,
+          path: dirname(file),
           changes: [
             {
-              kind: "add",
-              path: "Cowboy Bebop (1998)/Cowboy Bebop.mkv",
+              kind: "delete",
+              rootId: library.rootId,
+              path: file,
+              target: "file",
               providerIds: {},
+            },
+            {
+              kind: "add",
+              rootId: transcodedId,
+              path: file,
+              providerIds: movieIds,
             },
           ],
         });
-        expect(jobs[0]?.concurrencyKey).toBe(libraryConcurrencyKey(anime.id));
-        await expect(
-          debouncer.submit("radarr", [
-            {
-              kind: "move",
-              path: "/media/movies/anime/Cowboy Bebop (1998)/Cowboy Bebop.mkv",
-              previousPath:
-                "/media/movies/Cowboy Bebop (1998)/Cowboy Bebop.mkv",
-              providerIds: {},
-            },
-          ]),
-        ).rejects.toThrow();
-        await Bun.sleep(30);
-        expect(await listJobs(db, { type: "scan" })).toHaveLength(1);
-      } finally {
-        await debouncer.close();
-      }
+
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        const claimed = await queue.claim(["scan"]);
+        if (!claimed) throw new Error("The scan was not queued.");
+        await registry.run(claimed);
+        await queue.complete(claimed);
+        const after = await db.select().from(files);
+        expect(after).toMatchObject([
+          { rootId: transcodedId, path: file, itemId: before.itemId },
+        ]);
+      });
     }));
 
   test("close waits for a submission blocked on the libraries lock", () =>
@@ -335,6 +351,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           changes: [
             {
               kind: "add",
+              rootId: library.rootId,
               path: "Alien (1979)/Alien.mkv",
               providerIds: {},
             },
@@ -421,12 +438,14 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           changes: [
             {
               kind: "move",
+              rootId: library.rootId,
               path: "Alien (1979)/Alien-B.mkv",
               previousPath: "Alien (1979)/Alien-A.mkv",
               providerIds: {},
             },
             {
               kind: "move",
+              rootId: library.rootId,
               path: "Alien (1979)/Alien-C.mkv",
               previousPath: "Alien (1979)/Alien-B.mkv",
               providerIds: {},
@@ -478,11 +497,13 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
         changes: [
           {
             kind: "add",
+            rootId: library.rootId,
             path: "Alien (1979)/Alien.1080p.mkv",
             providerIds: {},
           },
           {
             kind: "delete",
+            rootId: library.rootId,
             path: "Alien (1979)/Alien.720p.mkv",
             target: "file",
             providerIds: {},
@@ -516,29 +537,6 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       while (errors.length === 0 && Date.now() < deadline) await Bun.sleep(10);
       expect(errors.length).toBeGreaterThanOrEqual(1);
       await expect(debouncer.close()).rejects.toThrow();
-    }));
-
-  test("duplicate library roots reject as ambiguous", () =>
-    withDatabase(async (db) => {
-      await migrateDatabase(db);
-      await insertLibrary(db, "Movies A", "/media/movies");
-      await insertLibrary(db, "Movies B", "/media/movies/");
-      const debouncer = createChangeDebouncer(db, { delayMs: 10 });
-      try {
-        await expect(
-          debouncer.submit("radarr", [
-            {
-              kind: "add",
-              path: "/media/movies/Alien (1979)/Alien.mkv",
-              providerIds: {},
-            },
-          ]),
-        ).rejects.toThrow();
-        await Bun.sleep(30);
-        expect(await listJobs(db, { type: "scan" })).toEqual([]);
-      } finally {
-        await debouncer.close();
-      }
     }));
 
   test("a debouncer defect rejects instead of answering 400", () =>
@@ -664,6 +662,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           previousPath: "Show A/Season 01/Show A S01E02.mkv",
         } as const;
         const providerIds = { tvdb: "2" };
+        const { rootId } = library;
         const debouncer = createChangeDebouncer(db, { delayMs: 10 });
         try {
           await debouncer.submit(
@@ -681,9 +680,9 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           expect(jobs.map((job) => job.payload)).toEqual(
             expect.arrayContaining(
               [
-                ["Show A", { ...intoShow, providerIds: {} }],
-                ["Show B", { ...intoShow, providerIds }],
-                ["Show C", { ...intoFolder, providerIds }],
+                ["Show A", { ...intoShow, rootId, providerIds: {} }],
+                ["Show B", { ...intoShow, rootId, providerIds }],
+                ["Show C", { ...intoFolder, rootId, providerIds }],
               ].map(([path, change]) => ({
                 type: "scan",
                 libraryId: library.id,
@@ -749,11 +748,13 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           changes: [
             {
               kind: "add",
+              rootId: movies.rootId,
               path: "Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [Bluray-1080p].mkv",
               providerIds: movieIds,
             },
             {
               kind: "delete",
+              rootId: movies.rootId,
               path: "Alien (1979) {tmdb-348}/Alien (1979) {tmdb-348} [WEBDL-720p].mkv",
               target: "file",
               providerIds: movieIds,
@@ -889,6 +890,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             changes: [
               {
                 kind: "add",
+                rootId: shows.rootId,
                 path: "Foundation/Season 01/Foundation S01E01.mkv",
                 providerIds: {
                   imdb: "tt0804484",

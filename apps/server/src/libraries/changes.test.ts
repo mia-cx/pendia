@@ -19,7 +19,6 @@ import {
   files,
   itemAncestors,
   items,
-  libraries,
   progress,
   providerIds,
   type ScanChange,
@@ -40,6 +39,7 @@ import {
 import { findItemByProviderIds, setItemProviderIds } from "./changes.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import { insertLibraries } from "./testing.ts";
 import { MissingLibraryPathError } from "./walker.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
@@ -80,10 +80,11 @@ async function insertLibrary(
   rootPath: string,
   medium: "movies" | "shows" = "movies",
 ) {
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium, rootPath })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium,
+    rootPath,
+  });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
 }
@@ -217,6 +218,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, folder, [
           {
             kind: "move",
+            rootId: library.rootId,
             path: movedPath,
             previousPath: file1080,
             providerIds: { tmdb: "348", imdb: "tt0078748" },
@@ -300,6 +302,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, movedFolder, [
           {
             kind: "move",
+            rootId: library.rootId,
             path: movedPath,
             previousPath: file1080,
             providerIds: { tmdb: "348" },
@@ -473,6 +476,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, folder, [
           {
             kind: "delete",
+            rootId: library.rootId,
             path: file1080,
             target: "file",
             providerIds: {},
@@ -522,6 +526,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, folder, [
           {
             kind: "delete",
+            rootId: library.rootId,
             path: deleted.path,
             target: "file",
             providerIds: {},
@@ -580,11 +585,13 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, folder, [
           {
             kind: "add",
+            rootId: library.rootId,
             path: upgraded,
             providerIds: { tmdb: "348", imdb: "tt0078748" },
           },
           {
             kind: "delete",
+            rootId: library.rootId,
             path: file1080,
             target: "file",
             providerIds: { tmdb: "348", imdb: "tt0078748" },
@@ -641,6 +648,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, staleFolder, [
           {
             kind: "delete",
+            rootId: library.rootId,
             path: staleFolder,
             target: "item",
             providerIds: { tmdb: "348" },
@@ -737,6 +745,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           runScanJob(db, library.id, folder, [
             {
               kind: "add",
+              rootId: library.rootId,
               path: file1080,
               providerIds: { tmdb: "78" },
             },
@@ -773,23 +782,27 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         const invalid: ScanChange[] = [
           {
             kind: "add",
+            rootId: library.rootId,
             path: "/abs/Alien.mkv",
             providerIds: {},
           },
           {
             kind: "move",
+            rootId: library.rootId,
             path: `${folder}/Moved.mkv`,
             previousPath: "../outside.mkv",
             providerIds: {},
           },
           {
             kind: "delete",
+            rootId: library.rootId,
             path: ".",
             target: "file",
             providerIds: {},
           },
           {
             kind: "delete",
+            rootId: library.rootId,
             path: "",
             target: "item",
             providerIds: {},
@@ -806,6 +819,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             changes: [
               {
                 kind: "delete",
+                rootId: library.rootId,
                 path: "has\0nul.mkv",
                 target: "item",
                 providerIds: {},
@@ -865,6 +879,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, "Foundation", [
           {
             kind: "delete",
+            rootId: library.rootId,
             path: deletedPath,
             target: "file",
             providerIds: { tvdb: "366972" },
@@ -917,6 +932,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, "Show B", [
           {
             kind: "move",
+            rootId: library.rootId,
             path: showBEpisodes[0],
             previousPath: showAEpisodes[0],
             providerIds: {},
@@ -955,6 +971,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           changes: [
             {
               kind: "move",
+              rootId: library.rootId,
               path: target,
               previousPath: source,
               providerIds: {},
@@ -998,6 +1015,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             changes: [
               {
                 kind: "move",
+                rootId: library.rootId,
                 path: movedTo,
                 previousPath: movedFrom,
                 providerIds: {},
@@ -1070,6 +1088,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, "Foundation", [
           {
             kind: "delete",
+            rootId: library.rootId,
             path: deletedPath,
             target: "file",
             providerIds: { tvdb: "366972" },
@@ -1154,6 +1173,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           await runScanJob(db, library.id, newShow, [
             {
               kind: "move",
+              rootId: library.rootId,
               path: newPath,
               previousPath: oldPath,
               providerIds: withProviderIds ? showProviderIds : {},
@@ -1235,6 +1255,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, destinationFolder, [
           {
             kind: "move",
+            rootId: library.rootId,
             path: movedPath,
             previousPath: file1080,
             providerIds: { tmdb: "348" },
@@ -1302,6 +1323,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         await runScanJob(db, library.id, renamedFolder, [
           {
             kind: "move",
+            rootId: library.rootId,
             path: movedPath,
             previousPath: file1080,
             providerIds: { tmdb: "348" },
@@ -1360,7 +1382,12 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         // Radarr corrects the movie; the folder keeps its old {tmdb-348} tag.
         await scanDirectory(db, library.id, folder, {
           changes: [
-            { kind: "add", path: file1080, providerIds: { tmdb: "349" } },
+            {
+              kind: "add",
+              rootId: library.rootId,
+              path: file1080,
+              providerIds: { tmdb: "349" },
+            },
           ],
         });
         await scanDirectory(db, library.id, folder);

@@ -17,7 +17,6 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   files,
   items,
-  libraries,
   libraryAccess,
   sessionRegistry,
   streams,
@@ -26,6 +25,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { type PlanInput, planPlayback } from "./planning.ts";
 
 const device = {
@@ -83,10 +83,11 @@ async function seedDirect(db: Database, root: string) {
   );
   const { token: keyToken } = await createApiKey(db, owner.id, "player");
   const keyCaller = await authenticate(db, keyToken);
-  const [library] = await db
-    .insert(libraries)
-    .values({ name: "Movies", medium: "movies", rootPath: root })
-    .returning();
+  const [library] = await insertLibraries(db, {
+    name: "Movies",
+    medium: "movies",
+    rootPath: root,
+  });
   if (!library) throw new Error("Library insert returned no row.");
   const [item] = await db
     .insert(items)
@@ -117,6 +118,7 @@ async function seedDirect(db: Database, root: string) {
       versionId: version.id,
       itemId: item.id,
       libraryId: library.id,
+      rootId: library.rootId,
       path: "movie.mp4",
       order: 0,
       bytes: 36n,

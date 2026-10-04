@@ -5,6 +5,7 @@ import { createJobQueue } from "../jobs/queue.ts";
 import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import { groupShowPaths, showsScan } from "../mediums/shows.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
+import { rootedKey, rootsOf } from "./roots.ts";
 import {
   type LibraryDirectory,
   MissingLibraryPathError,
@@ -74,15 +75,20 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
               group: groupShowPaths,
               itemKind: "show" as const,
             };
+      // Snapshots key each directory by its root; scans name root-relative folders.
       const walked = new Map<string, LibraryDirectory>();
       try {
-        for await (const directory of walkLibraryDirectories(
-          library.rootPath,
-          medium.rules,
-        )) {
-          walked.set(directory.path, directory);
-        }
+        for (const root of await rootsOf(db, library.id))
+          for await (const directory of walkLibraryDirectories(
+            root.path,
+            medium.rules,
+          ))
+            walked.set(
+              rootedKey({ rootId: root.id, path: directory.path }),
+              directory,
+            );
       } catch (error) {
+        // A missing root may be an unmounted share, so the Library waits.
         if (
           error instanceof MissingLibraryPathError &&
           error.scope === "root"
@@ -91,6 +97,9 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
         }
         throw error;
       }
+      const walkedPaths = new Set(
+        [...walked.values()].map((directory) => directory.path),
+      );
       const previous = snapshots.get(library.id) ?? new Map<string, bigint>();
       const perLibrary =
         trackedJobs.get(library.id) ?? new Map<string, TrackedJob>();
@@ -145,21 +154,22 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
         }
         updates.set(snapshotPath, modifiedNs);
       };
-      for (const [path, directory] of walked) {
-        if (previous.get(path) === directory.modifiedNs) {
-          next.set(path, directory.modifiedNs);
+      for (const [key, directory] of walked) {
+        const { path } = directory;
+        if (previous.get(key) === directory.modifiedNs) {
+          next.set(key, directory.modifiedNs);
           continue;
         }
         const folders = medium
           .group(directory.files)
           .map((group) => group.canonicalFolder);
         for (const folder of folders) {
-          addUpdate(folder, path, directory.modifiedNs);
+          addUpdate(folder, key, directory.modifiedNs);
         }
         const top = topLevel(path);
         let needsScan = folders.length > 0;
         if (medium.itemKind === "movie" && itemFolders.has(path)) {
-          addUpdate(path, path, directory.modifiedNs);
+          addUpdate(path, key, directory.modifiedNs);
           needsScan = true;
         }
         if (
@@ -167,29 +177,31 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
           top !== undefined &&
           itemFolders.has(top)
         ) {
-          addUpdate(top, path, directory.modifiedNs);
+          addUpdate(top, key, directory.modifiedNs);
           needsScan = true;
         }
         if (!needsScan) {
-          next.set(path, directory.modifiedNs);
+          next.set(key, directory.modifiedNs);
           continue;
         }
-        const acknowledged = previous.get(path);
-        if (acknowledged !== undefined) next.set(path, acknowledged);
+        const acknowledged = previous.get(key);
+        if (acknowledged !== undefined) next.set(key, acknowledged);
       }
-      for (const path of previous.keys()) {
-        if (walked.has(path)) continue;
+      for (const key of previous.keys()) {
+        if (walked.has(key)) continue;
+        // Root ids hold no colon, so the path follows the first one.
+        const path = key.slice(key.indexOf(":") + 1);
         if (medium.itemKind === "movie") {
-          if (itemFolders.has(path)) addUpdate(path, path, undefined);
+          if (itemFolders.has(path)) addUpdate(path, key, undefined);
         } else {
           const top = topLevel(path);
           if (top !== undefined && itemFolders.has(top)) {
-            addUpdate(top, path, undefined);
+            addUpdate(top, key, undefined);
           }
         }
       }
       for (const folder of itemFolders) {
-        if (!walked.has(folder)) addUpdate(folder, folder, undefined);
+        if (!walkedPaths.has(folder)) addUpdate(folder, folder, undefined);
       }
       for (const [scanPath, priorUpdates] of retry) {
         for (const update of priorUpdates) {

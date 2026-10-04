@@ -17,7 +17,8 @@ import {
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { runScanJob } from "../libraries/jobs.ts";
-import { localScanSource } from "../libraries/scan.ts";
+import { libraryScanSource } from "../libraries/scan.ts";
+import { insertLibraries } from "../libraries/testing.ts";
 import { readStoreManifest } from "./encode.ts";
 import { requestStoredVersion, setStoredVersionPolicy } from "./service.ts";
 import { sweepStoredFolders } from "./sweep.ts";
@@ -77,7 +78,7 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
                 reconcileMissing: true,
               },
               { id: Bun.randomUUIDv7() },
-              localScanSource(db, library),
+              await libraryScanSource(db, library),
             );
             expect(await readdir(orphan)).toEqual(["source"]);
           } finally {
@@ -183,7 +184,7 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
 
             await rm(join(root, fixturePath));
             // While its File row stands, the rungs of a complete Version stay.
-            await sweepStoredFolders(db, library, fixtureFolder);
+            await sweepStoredFolders(db, library.id, fixtureFolder);
             expect(await readdir(pendia)).toEqual(["source"]);
             await scanFolder(db, library.id);
             await drain(db);
@@ -278,15 +279,12 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
           viewer.id,
           "viewer",
         );
-        const [library] = await db
-          .insert(libraries)
-          .values({
-            name: "Movies",
-            medium: "movies",
-            rootPath: "/srv/movies",
-            configuration: { keep: true },
-          })
-          .returning();
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: "/srv/movies",
+          configuration: { keep: true },
+        });
         const server = await startPendia("api", { databaseUrl: url, port: 0 });
         try {
           const route = `http://127.0.0.1:${server.apiServer?.port}/api/libraries/${library?.id}/stored-versions`;

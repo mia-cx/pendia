@@ -56,7 +56,7 @@ export async function createFirstLibrary(
   return session.client.libraries.create({
     name: input.name,
     medium: input.medium,
-    rootPath: input.rootPath,
+    roots: [input.rootPath],
   });
 }
 

@@ -16,6 +16,8 @@ export interface VideoFixtureOptions {
   hdr?: "hdr10" | "hlg";
   audioCodec?: "aac" | "ac3" | "flac" | "truehd";
   audioChannels?: 2 | 6;
+  /** Adds a second audio Stream, Japanese stereo AAC carrying a 440 Hz tone; the first stays silent. */
+  toneAudio?: boolean;
   /** Subtitle Streams in order, each showing "Fixture" from 0 to 0.8 s; default one SRT. */
   subtitles?: readonly ("srt" | "ass" | "pgs")[];
 }
@@ -130,6 +132,7 @@ export async function createVideoFixture(
     hdr,
     audioCodec = "aac",
     audioChannels = 2,
+    toneAudio = false,
     subtitles = ["srt"],
   } = options;
   if (hdr !== undefined && videoCodec !== "hevc") {
@@ -208,6 +211,28 @@ export async function createVideoFixture(
       ? ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=Opening\n"
       : ";FFMETADATA1\n",
   );
+  // Inputs: video, silence, the optional tone, the subtitles, the metadata.
+  const firstSubtitle = toneAudio ? 3 : 2;
+  const metadataInput = firstSubtitle + subtitleFiles.length;
+  const tone = toneAudio
+    ? {
+        input: [
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:sample_rate=48000,aformat=channel_layouts=stereo",
+        ],
+        map: ["-map", "2:a:0"],
+        encode: [
+          "-c:a:1",
+          "aac",
+          "-metadata:s:a:1",
+          "language=jpn",
+          "-disposition:a:1",
+          "0",
+        ],
+      }
+    : { input: [], map: [], encode: [] };
   try {
     const proc = Bun.spawn(
       [
@@ -223,6 +248,7 @@ export async function createVideoFixture(
         "lavfi",
         "-i",
         `anullsrc=r=48000:cl=${audioChannels === 6 ? "5.1" : "stereo"}`,
+        ...tone.input,
         ...subtitleFiles.flatMap(({ format, path: subtitlePath }) => [
           "-f",
           format === "pgs" ? "sup" : format,
@@ -237,11 +263,15 @@ export async function createVideoFixture(
         "0:v:0",
         "-map",
         "1:a:0",
-        ...subtitleFiles.flatMap((_, index) => ["-map", `${index + 2}:s:0`]),
+        ...tone.map,
+        ...subtitleFiles.flatMap((_, index) => [
+          "-map",
+          `${index + firstSubtitle}:s:0`,
+        ]),
         "-map_metadata",
-        String(subtitleFiles.length + 2),
+        String(metadataInput),
         "-map_chapters",
-        String(subtitleFiles.length + 2),
+        String(metadataInput),
         "-t",
         String(durationSeconds),
         ...(videoCodec === "hevc" ? hevc : h264),
@@ -249,6 +279,7 @@ export async function createVideoFixture(
         audioCodec,
         // ffmpeg's TrueHD encoder is still marked experimental.
         ...(audioCodec === "truehd" ? ["-strict", "experimental"] : []),
+        ...tone.encode,
         ...subtitleFiles.flatMap(({ format }, index) => [
           `-c:s:${index}`,
           format === "pgs" ? "copy" : format,

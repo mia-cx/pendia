@@ -95,6 +95,21 @@ describe("remux", () => {
       expect(args.at(-1)).toBe("/run/%d.m4s");
     });
 
+    test("maps the first audio Stream if any, or the selected one", () => {
+      const run = {
+        inputPath,
+        boundariesSeconds: boundaries,
+        startIndex: 0,
+        directory: "/run",
+        videoCodec: "h264",
+      };
+      const audioMap = (args: string[]) => args[args.lastIndexOf("-map") + 1];
+      expect(audioMap(remuxArguments(run))).toBe("0:a:0?");
+      expect(audioMap(remuxArguments({ ...run, audioStream: 1 }))).toBe(
+        "0:a:1",
+      );
+    });
+
     test("a restart seeks before the input and lists later cuts from its start", () => {
       const args = remuxArguments({
         inputPath,

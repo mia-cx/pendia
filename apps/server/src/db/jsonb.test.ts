@@ -84,7 +84,7 @@ const cases = [
     versionId: uuid(),
     playMethod: "remux",
     state: "playing",
-    decision: { method: "stored" },
+    decision: { method: "stored", selection: { audio: 0 } },
   }),
   write(schema.jobs, {
     type: "probe",

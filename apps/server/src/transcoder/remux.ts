@@ -7,6 +7,8 @@ export type RemuxRun = {
   startIndex: number; // segment index to start at
   directory: string; // the run directory, created by the caller
   videoCodec: string; // probed codec name, "hevc" gets -tag:v hvc1
+  /** The audio Stream to copy, counted among audio Streams; absent copies the first when the File has one. */
+  audioStream?: number;
   readRate?: { rate: number; initialBurstSeconds: number }; // optional throttle, tests only
   /** The engine decided the client plays the HDR10 base layer of a profile 7 or 8 source. */
   stripDolbyVision?: boolean;
@@ -35,6 +37,11 @@ export function inputArguments(
   return args;
 }
 
+/** Maps a run's audio Stream, counted among audio Streams; without a choice, the first one if the File has any. */
+export function audioMap(stream: number | undefined) {
+  return ["-map", stream === undefined ? "0:a:0?" : `0:a:${stream}`];
+}
+
 /** Builds the ffmpeg argument list for a remux run. */
 export function remuxArguments(run: RemuxRun) {
   const segments = segmentArguments(
@@ -52,8 +59,7 @@ export function remuxArguments(run: RemuxRun) {
     run.inputPath,
     "-map",
     "0:V:0",
-    "-map",
-    "0:a:0?",
+    ...audioMap(run.audioStream),
     "-sn",
     "-dn",
     "-c",

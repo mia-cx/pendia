@@ -211,6 +211,7 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
                 .where(eq(sessionRegistry.id, belowLadder.sessionId ?? ""));
               expect(belowSession?.decision).toEqual({
                 method: "stored",
+                selection: { audio: 0 },
                 storedVariantIds: [idOf("360p")],
               });
               const belowMaster = await get(

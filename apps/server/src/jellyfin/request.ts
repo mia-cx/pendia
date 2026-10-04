@@ -127,6 +127,15 @@ export function readQuery(params: URLSearchParams) {
         throw new AuthError("INVALID_INPUT");
       return number;
     },
+    /** Reads a whole number that may be negative, such as a Stream index of -1. */
+    integer: (name: string) => {
+      const value = get(name);
+      if (value === undefined) return undefined;
+      const number = Number(value);
+      if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(number))
+        throw new AuthError("INVALID_INPUT");
+      return number;
+    },
   };
 }
 

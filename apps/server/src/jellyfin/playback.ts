@@ -155,6 +155,19 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
           body.number("MaxStreamingBitrate") ??
             query.count("maxStreamingBitrate"),
         );
+        // Jellyfin numbers Streams across the File, as Pendia does. A
+        // negative audio index asks for the default; -1 turns subtitles off.
+        const audioIndex =
+          body.number("AudioStreamIndex") ?? query.integer("AudioStreamIndex");
+        const subtitleIndex =
+          body.number("SubtitleStreamIndex") ??
+          query.integer("SubtitleStreamIndex");
+        const subtitleStreamIndex =
+          subtitleIndex === undefined
+            ? undefined
+            : subtitleIndex < 0
+              ? null
+              : subtitleIndex;
         let planned: PlannedSource | null = null;
         let sessionId: string | undefined;
         try {
@@ -166,6 +179,12 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
               versionId: version.id,
               profile,
               tokenLifetimeSeconds: jellyfinTokenLifetimeSeconds,
+              ...(audioIndex === undefined || audioIndex < 0
+                ? {}
+                : { audioStreamIndex: audioIndex }),
+              ...(subtitleStreamIndex === undefined
+                ? {}
+                : { subtitleStreamIndex }),
             },
             { request, peerAddress },
           );
@@ -174,6 +193,15 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
             plan.url === null
               ? null
               : new URL(plan.url, request.url).searchParams.get("token");
+          // The URLs keep the selection, as Jellyfin's own do.
+          const selection = {
+            ...(plan.audioStreamIndex === null
+              ? {}
+              : { AudioStreamIndex: String(plan.audioStreamIndex) }),
+            ...(subtitleStreamIndex === undefined
+              ? {}
+              : { SubtitleStreamIndex: String(subtitleStreamIndex ?? -1) }),
+          };
           planned = {
             method: plan.method,
             query:
@@ -182,8 +210,11 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
                 : new URLSearchParams({
                     PlaySessionId: toGuid(plan.sessionId),
                     MediaSourceId: toGuid(version.id),
+                    ...selection,
                     token,
                   }),
+            audioStreamIndex: plan.audioStreamIndex,
+            subtitleStreamIndex,
           };
         } catch (error) {
           // No path plays for this profile. The source still answers, with

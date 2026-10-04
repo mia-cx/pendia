@@ -8,7 +8,7 @@ import type { Database } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import { databaseUrl, withDatabase } from "./testing.ts";
 
-const rootsMigration = "0015_library_roots";
+const rootsMigration = "0016_library_roots";
 const drizzleFolder = new URL("../../drizzle", import.meta.url).pathname;
 
 /** Applies every migration before the roots migration. */

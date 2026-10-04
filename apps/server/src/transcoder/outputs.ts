@@ -1,4 +1,8 @@
-import type { PlaybackSource, SessionDecision } from "../playback/decisions.ts";
+import {
+  type PlaybackSource,
+  resolveSelection,
+  type SessionDecision,
+} from "../playback/decisions.ts";
 import {
   type PlaylistVariant,
   type SubtitleRendition,
@@ -21,6 +25,8 @@ export type SubtitleDetails = {
 export type SessionOutputs = {
   video: VideoDecision;
   audio: AudioDecision | undefined;
+  /** The audio Stream the runs map, counted among audio Streams; undefined without audio. */
+  audioStream: number | undefined;
   burnSubtitle: number | undefined;
   variant: PlaylistVariant;
   subtitles: SubtitleRendition[];
@@ -33,10 +39,11 @@ const audioOutput = (audio: AudioDecision) =>
 
 /**
  * Derives a session's outputs from the decision persisted at plan time. A
- * session without a live decision copies the video and the first audio Stream.
- * A session served from stored rungs only ever asks the transcoder for
- * subtitles, so its video counts as a copy and takes no slot.
- * Subtitle Streams are counted in File order, details aligned with the source.
+ * session without a live decision copies the video and its selected audio
+ * Stream. A session served from stored rungs only ever asks the transcoder
+ * for subtitles, so its video counts as a copy and takes no slot.
+ * Streams are counted among their kind in File order, details aligned with
+ * the source's subtitles.
  */
 export function sessionOutputs(
   persisted: SessionDecision | null | undefined,
@@ -53,23 +60,36 @@ export function sessionOutputs(
     hdr: source.video.hdr,
     stripDolbyVision: false,
   };
-  const audio = decision?.audio[0];
+  const selection = persisted?.selection ?? resolveSelection(source);
+  const audio = decision?.audio ?? undefined;
+  const chosen = selection.subtitle;
   const subtitleDecisions =
     decision?.subtitles ??
-    source.subtitles.map((subtitle) => ({
-      action:
-        subtitle.kind === "text" ? ("convert" as const) : ("burn" as const),
-      format: subtitle.format,
-    }));
-  const burned = subtitleDecisions.findIndex(
+    source.subtitles.flatMap((subtitle, stream) =>
+      chosen === undefined || chosen === stream
+        ? [
+            {
+              stream,
+              action:
+                subtitle.kind === "text"
+                  ? ("convert" as const)
+                  : ("burn" as const),
+              format: subtitle.format,
+            },
+          ]
+        : [],
+    );
+  const burned = subtitleDecisions.find(
     (subtitle) => subtitle.action === "burn",
   );
   const burnSubtitle =
-    video.action === "transcode" && video.burnSubtitles && burned >= 0
-      ? burned
+    video.action === "transcode" && video.burnSubtitles
+      ? burned?.stream
       : undefined;
 
-  const sourceAudio = source.audio[0];
+  const audioStream = selection.audio ?? undefined;
+  const sourceAudio =
+    audioStream === undefined ? undefined : source.audio[audioStream];
   const outputAudio =
     audio?.action === "transcode"
       ? audioOutput(audio)
@@ -111,10 +131,10 @@ export function sessionOutputs(
   };
 
   // Over HLS only WebVTT reaches the client: text converts, WebVTT copies.
-  const offered = subtitleDecisions.flatMap((subtitle, index) =>
+  const offered = subtitleDecisions.flatMap((subtitle) =>
     subtitle.action === "convert" ||
     (subtitle.action === "copy" && subtitle.format === "webvtt")
-      ? [index]
+      ? [subtitle.stream]
       : [],
   );
   const names = offered.map((index) => {
@@ -133,9 +153,13 @@ export function sessionOutputs(
       index,
       name: unique,
       language: stream?.language ?? null,
-      default: stream?.disposition.default === true,
+      // A chosen subtitle is the one the player shows.
+      default:
+        chosen === undefined
+          ? stream?.disposition.default === true
+          : chosen === index,
       forced: stream?.disposition.forced === true,
     };
   });
-  return { video, audio, burnSubtitle, variant, subtitles };
+  return { video, audio, audioStream, burnSubtitle, variant, subtitles };
 }

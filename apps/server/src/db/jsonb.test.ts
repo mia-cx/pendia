@@ -1,6 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { eq, getTableColumns, getTableName, is, sql } from "drizzle-orm";
-import { type PgInsertValue, PgTable } from "drizzle-orm/pg-core";
+import {
+  eq,
+  getTableColumns,
+  getTableName,
+  inArray,
+  is,
+  sql,
+} from "drizzle-orm";
+import {
+  jsonb as legacyJsonb,
+  type PgInsertValue,
+  PgTable,
+  pgTable,
+} from "drizzle-orm/pg-core";
 import type { Database } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import * as schema from "./schema/index.ts";
@@ -81,7 +93,7 @@ const cases = [
   }),
 ];
 
-/** The table's jsonb column, its id, and the value the case writes to it. */
+/** The case's table, its jsonb column and id, and the value the case writes. */
 const target = ({ table, row }: Case) => {
   const columns = getTableColumns(table);
   const found = Object.entries(columns).find(
@@ -91,7 +103,8 @@ const target = ({ table, row }: Case) => {
   if (!found || !id) throw new Error(`${getTableName(table)} has no target.`);
   const [key, column] = found;
   const value = new Map<string, unknown>(Object.entries(row)).get(key);
-  return { column, id, value, label: `${getTableName(table)}.${column.name}` };
+  const label = `${getTableName(table)}.${column.name}`;
+  return { table, column, id, value, label };
 };
 
 const jsonTypeOf = (value: unknown) =>
@@ -151,5 +164,80 @@ describe.skipIf(!databaseUrl)("jsonb columns", () => {
           expect([label, read?.value]).toEqual([label, value]);
         });
       }
+    }));
+
+  test("the 0013 migration unwraps JSON strings and keeps plain strings", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      // jobs.payload always stored objects, and no drizzle writer stored a top-level number.
+      const legacy = cases.filter((item) => {
+        const { label, value } = target(item);
+        return label !== "jobs.payload" && typeof value !== "number";
+      });
+      const ids = await Promise.all(
+        legacy.map(async (item) => {
+          const { table, row } = item;
+          const { column, id, value } = target(item);
+          // drizzle's own jsonb column is the old write path.
+          const old = pgTable(getTableName(table), {
+            value: legacyJsonb(column.name),
+          });
+          let written: unknown;
+          await unchecked(db, async (tx) => {
+            const [inserted] = await tx
+              .insert(table)
+              .values(row)
+              .returning({ id });
+            written = inserted?.id;
+            await tx.update(old).set({ value }).where(sql`id = ${written}`);
+          });
+          return written;
+        }),
+      );
+      const plain = ["tmdb-key", "{not json", '"unterminated'];
+      for (const text of plain)
+        await db.insert(schema.settings).values({
+          key: text,
+          value: sql`to_jsonb(${text}::text)`,
+        });
+      const types = await Promise.all(
+        legacy.map(async (item, index) => {
+          const { table, column } = target(item);
+          const [read] = await db.execute<{ type: string }>(
+            sql`select jsonb_typeof(${column}) as type from ${table} where id = ${ids[index]}`,
+          );
+          return read?.type;
+        }),
+      );
+      expect(new Set(types)).toEqual(new Set(["string"]));
+
+      const migration = await Bun.file(
+        new URL("../../drizzle/0013_jsonb_values.sql", import.meta.url),
+      ).text();
+      for (const statement of migration.split("--> statement-breakpoint"))
+        await db.execute(sql.raw(statement));
+
+      for (const [index, item] of legacy.entries()) {
+        const { table, column, id, value, label } = target(item);
+        const [read] = await db.execute<{ type: string }>(
+          sql`select jsonb_typeof(${column}) as type from ${table} where id = ${ids[index]}`,
+        );
+        const [row] = await db
+          .select({ value: column })
+          .from(table)
+          .where(eq(id, ids[index]));
+        expect([label, read?.type, row?.value]).toEqual([
+          label,
+          jsonTypeOf(value),
+          value,
+        ]);
+      }
+      const kept = await db
+        .select({ key: schema.settings.key, value: schema.settings.value })
+        .from(schema.settings)
+        .where(inArray(schema.settings.key, plain));
+      expect(new Map(kept.map((row) => [row.key, row.value]))).toEqual(
+        new Map(plain.map((text) => [text, text])),
+      );
     }));
 });

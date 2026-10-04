@@ -7,8 +7,14 @@ let {
   value = $bindable(),
   orientation = "horizontal",
   class: className,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledby,
+  thumbLabels,
   ...restProps
-}: WithoutChildrenOrChild<SliderPrimitive.RootProps> = $props();
+}: WithoutChildrenOrChild<SliderPrimitive.RootProps> & {
+  // Per-thumb names for multi-value sliders, falling back to aria-label.
+  thumbLabels?: readonly string[];
+} = $props();
 </script>
 
 <!--
@@ -45,6 +51,8 @@ get along, so we shut typescript up by casting `value` to `never`.
       <SliderPrimitive.Thumb
         data-slot="slider-thumb"
         index={thumb.index}
+        aria-label={thumbLabels?.[thumb.index] ?? ariaLabel}
+        aria-labelledby={ariaLabelledby}
         class="relative block size-5 shrink-0 select-none rounded-full border border-separator bg-white shadow-float transition-transform duration-(--duration-quick) motion-safe:data-active:scale-110 disabled:pointer-events-none disabled:opacity-45"
       />
     {/each}

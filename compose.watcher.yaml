@@ -2,7 +2,7 @@
 # It reaches the api over HTTP and needs no database.
 services:
   watcher:
-    image: pendia:dev
+    image: ghcr.io/mia-cx/pendia:${PENDIA_VERSION:-latest}
     build:
       context: .
     command: ["--role", "watcher"]

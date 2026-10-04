@@ -20,8 +20,8 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
   - Validation: the PR's `image` job shows the size; the `publish` job is skipped on the PR.
 - [x] Log a failed startup as a JSON line like every other line.
   - Validation: a test or a manual run with a bad `DATABASE_URL` prints one JSON line. Done: `DATABASE_URL=not-a-url bun src/index.ts --role api` and `--role nope` each print one `server.failed` line and exit 1.
-- [ ] Write `docs/operations.md`: roles, environment reference, health, log format and releases. Give the README a quick start and link the document; move the artwork store table there.
-  - Validation: every variable the server reads appears once; links resolve.
+- [x] Write `docs/operations.md`: roles, environment reference, health, log format and releases. Give the README a quick start and link the document; move the artwork store table there.
+  - Validation: every variable the server reads appears once; links resolve. Done: the 15 variables `rg` finds outside tests are all in the table, and the README, server README, compose and anchor links resolve.
 - [ ] Follow the README quick start in an empty directory and reach the admin wizard; screenshot it. Run the full gate and record the results here.
   - Validation: wizard screenshot; `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `bun test` with and without `DATABASE_URL`.
 

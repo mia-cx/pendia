@@ -21,6 +21,8 @@ docker compose up -d
 
 Open http://localhost:3000 and create the admin account in the setup wizard. Inside Pendia, your media lives under `/media`: put it in `./media`, or set `PENDIA_MEDIA` to its folder before `docker compose up`.
 
+Movie metadata and artwork come from TMDB. Put your TMDB v3 API key, the 32-character one, in `.env` as `TMDB_API_KEY=<key>`, or run `scripts/tmdb-key-wizard.sh` to write it there. Then run `docker compose up -d` again. Pendia does not use the Read Access Token.
+
 Without access to the image, build it from the clone instead:
 
 ```sh

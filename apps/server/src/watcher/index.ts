@@ -22,7 +22,7 @@ export type WatcherConfig = {
 
 /** Timing and error options for a running watcher. */
 export type WatcherOptions = {
-  /** How often an idle watcher asks for a scan; also its heartbeat. */
+  /** How often an idle watcher asks for a scan; also its heartbeat, which must stay under the job lease. */
   pollIntervalMs?: number;
   settleMs?: number;
   onError?: (error: unknown) => void;
@@ -69,7 +69,7 @@ const cacheKey = (file: ReturnType<typeof encodeFile>) =>
 
 /** Walks and probes one claimed scan on local disk, skipping files with a current cached probe. */
 async function runScan(root: string, job: Job): Promise<WatcherReport> {
-  const { attempts } = job;
+  const { claimToken } = job;
   try {
     const { rules, recursive } = scanScope(job.medium, job.path);
     const files: LibraryFile[] = [];
@@ -111,10 +111,10 @@ async function runScan(root: string, job: Job): Promise<WatcherReport> {
         missing.push(path);
       }
     }
-    return { attempts, files: files.map(encodeFile), probes, missing };
+    return { claimToken, files: files.map(encodeFile), probes, missing };
   } catch (error) {
     return {
-      attempts,
+      claimToken,
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -225,8 +225,11 @@ export async function startWatcher(
         if (job !== null) {
           const root = roots.get(job.libraryId);
           if (root === undefined) throw new Error("Claimed an unwatched scan.");
+          // Also renews the job's lease; a 409 means another claim took the job.
+          const held = { id: job.id, claimToken: job.claimToken };
           const heartbeat = setInterval(
-            () => void post("heartbeat", { libraryIds }).catch(onError),
+            () =>
+              void post("heartbeat", { libraryIds, job: held }).catch(onError),
             pollIntervalMs,
           );
           try {

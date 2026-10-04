@@ -132,6 +132,7 @@ test("pushes adds, moves and deletes within 1 s with library-relative paths", as
 test("retries a scan report the api refused with 403", async () => {
   const root = await mkdtemp(join(tmpdir(), "pendia-watch-"));
   const jobId = "0199a000-0000-7000-8000-000000000002";
+  const claimToken = crypto.randomUUID();
   let claims = 0;
   const reports: unknown[] = [];
   const api = Bun.serve({
@@ -144,7 +145,7 @@ test("retries a scan report the api refused with 403", async () => {
             claims++ === 0
               ? {
                   id: jobId,
-                  attempts: 1,
+                  claimToken,
                   libraryId,
                   path: ".",
                   medium: "movies",
@@ -174,8 +175,8 @@ test("retries a scan report the api refused with 403", async () => {
     const deadline = Date.now() + 1_000;
     while (reports.length < 2 && Date.now() < deadline) await Bun.sleep(10);
     expect(reports).toEqual([
-      { attempts: 1, files: [], probes: [], missing: [] },
-      { attempts: 1, files: [], probes: [], missing: [] },
+      { claimToken, files: [], probes: [], missing: [] },
+      { claimToken, files: [], probes: [], missing: [] },
     ]);
   } finally {
     await watcher.stop();
@@ -261,9 +262,13 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           expect(reports).toHaveLength(2);
           expect(reports[1]).toEqual(reports[0]);
           expect(nextClaimed).toBe(true);
-          expect(errors).toHaveLength(failure === "after" ? 2 : 1);
+          // The first copy settled the job, so heartbeats before the retry answer 409.
+          const reportErrors = errors.filter(
+            (error) => !String(error).includes("heartbeat failed (409)"),
+          );
+          expect(reportErrors).toHaveLength(failure === "after" ? 2 : 1);
           if (failure === "after")
-            expect(String(errors[1])).toContain("answered 404");
+            expect(String(reportErrors[1])).toContain("answered 404");
         } finally {
           await watcher.stop();
           await api.stop();

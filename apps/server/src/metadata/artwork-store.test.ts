@@ -14,14 +14,25 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq, sql } from "drizzle-orm";
+import { setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { artwork, libraries } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { insertItem } from "../db/tree.ts";
-import type { ArtworkOpen } from "./artwork-backends.ts";
-import { readArtworkOriginal, storeArtworkOriginal } from "./artwork-store.ts";
+import {
+  type DeletedArtworkFile,
+  deleteItemSubtree,
+  insertItem,
+} from "../db/tree.ts";
+import { deleteLibrary } from "../libraries/service.ts";
+import type { ArtworkOpen, ArtworkStoreConfig } from "./artwork-backends.ts";
+import {
+  readArtworkOriginal,
+  removeArtworkFiles,
+  removeSelectedArtwork,
+  storeArtworkOriginal,
+} from "./artwork-store.ts";
 import { s3Url, testS3Store } from "./testing.ts";
 
 const png = Buffer.from(
@@ -105,6 +116,49 @@ function mockRequest(responder: (url: string) => Response) {
     return responder(url);
   }) as typeof fetch;
   return { calls, request };
+}
+
+/** Proves a removed selection, a deleted Item and a deleted Library each take their original along. */
+async function expectRemovals(
+  db: Database,
+  root: string,
+  store: ArtworkStoreConfig,
+  exists: (storageKey: string) => Promise<boolean>,
+) {
+  const { library, item } = await fixture(db, root);
+  const { request } = mockRequest(() => new Response(png));
+  const selected = await storeArtworkOriginal(db, item.id, poster, request, {
+    store,
+  });
+  expect(await removeSelectedArtwork(db, item.id, "poster", store)).toBe(true);
+  expect(await exists(selected.storageKey)).toBe(false);
+
+  const owned = await storeArtworkOriginal(db, item.id, poster, request, {
+    store,
+  });
+  const deletedArtwork: DeletedArtworkFile[] = [];
+  await deleteItemSubtree(db, item.id, deletedArtwork);
+  await removeArtworkFiles(deletedArtwork, store);
+  expect(await exists(owned.storageKey)).toBe(false);
+
+  const sibling = await insertItem(db, {
+    libraryId: library.id,
+    kind: "movie",
+    title: "Aliens",
+    year: 1986,
+    canonicalFolder: "Aliens (1986)",
+    extension: {},
+  });
+  const kept = await storeArtworkOriginal(db, sibling.id, poster, request, {
+    store,
+  });
+  expect(await exists(kept.storageKey)).toBe(true);
+  const admin = await setupAdmin(db, {
+    username: "admin",
+    password: "admin-pass",
+  });
+  await deleteLibrary(db, admin.id, library.id, store);
+  expect(await exists(kept.storageKey)).toBe(false);
 }
 
 describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
@@ -494,6 +548,25 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
           const original = await readArtworkOriginal(db, row.id, store);
           expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
           expect(await readArtworkOriginal(db, row.id)).toBeNull();
+        });
+      });
+    }));
+
+  test("removes configured-path originals with their selection, Item and Library", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await withTempRoot(async (path) => {
+          await expectRemovals(
+            db,
+            root,
+            { backend: "configured-path", path },
+            (storageKey) =>
+              access(join(path, storageKey)).then(
+                () => true,
+                () => false,
+              ),
+          );
         });
       });
     }));
@@ -924,6 +997,17 @@ describe.skipIf(!databaseUrl || !s3Url)("S3 artwork store", () => {
         expect(await store.client.exists(replaced.storageKey)).toBe(true);
         await store.client.delete(replaced.storageKey);
         expect(await readArtworkOriginal(db, row.id, store)).toBeNull();
+      });
+    }));
+
+  test("removes objects with their selection, Item and Library", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const store = testS3Store();
+        await expectRemovals(db, root, store, (storageKey) =>
+          store.client.exists(storageKey),
+        );
       });
     }));
 });

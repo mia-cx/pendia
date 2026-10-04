@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { startApiServer } from "../api.ts";
-import { removeColocatedArtworkFiles } from "../metadata/artwork-store.ts";
+import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import { type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import {
@@ -337,8 +337,10 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
         const deletedArtwork: DeletedArtworkFile[] = [];
         await deleteItemSubtree(db, item.id, deletedArtwork);
         expect(await db.select().from(artwork)).toEqual([]);
-        expect(deletedArtwork).toEqual([{ rootPath: root, storageKey }]);
-        await removeColocatedArtworkFiles(deletedArtwork);
+        expect(deletedArtwork).toEqual([
+          { backend: "colocated", rootPath: root, storageKey },
+        ]);
+        await removeArtworkFiles(deletedArtwork);
         await expect(access(target)).rejects.toThrow();
       } finally {
         await rm(root, { recursive: true, force: true });

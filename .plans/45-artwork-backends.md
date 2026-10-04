@@ -20,7 +20,7 @@ Add the two remaining artwork store backends next to the colocated one from #28:
   - Validation: a round-trip test against versitygw, skipped locally without `TEST_S3_URL` and required in CI.
 - [x] Fall back to the configured path when the colocated write hits a read-only share.
   - Validation: a test makes the Item folder unwritable and proves the poster lands in the configured path and reads back.
-- [ ] Remove artwork from every backend when its Item, its selection or its Library goes away.
+- [x] Remove artwork from every backend when its Item, its selection or its Library goes away.
   - Validation: tests prove scan deletes, `removeSelectedArtwork` and library deletion remove path and S3 originals.
 - [ ] Prove a fresh install serves artwork on each backend and document the settings.
   - Validation: an artwork route test per backend on a freshly migrated database; README and topology spec updated.

@@ -145,7 +145,7 @@ export async function writeArtworkOriginal(
 }
 
 /** Resolves a storage key under a root, rejecting any key that could escape it. */
-export function resolveStoragePath(
+function resolveStoragePath(
   rootPath: string,
   storageKey: string,
 ): { root: string; target: string } {
@@ -179,7 +179,7 @@ async function statOrNull(path: string) {
 }
 
 /** Walks from root to directory without following symlinks, creating missing parts on request. */
-export async function walkStorageDirectory(
+async function walkStorageDirectory(
   root: string,
   directory: string,
   create: boolean,

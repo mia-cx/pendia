@@ -1,5 +1,4 @@
-import { open, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { open } from "node:fs/promises";
 import type { MetadataResult } from "@pendia/plugin-api";
 import { and, eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
@@ -11,9 +10,7 @@ import {
   type ArtworkStoreConfig,
   artworkBackend,
   artworkStoreConfig,
-  resolveStoragePath,
   type WrittenOriginal,
-  walkStorageDirectory,
   writeArtworkOriginal,
 } from "./artwork-backends.ts";
 import { readBoundedBytes } from "./bounded-body.ts";
@@ -190,41 +187,40 @@ export async function storeArtworkOriginal(
     })
     .catch(async (error: unknown) => {
       if (fresh !== undefined) {
-        const { backend, storageKey } = fresh;
         const referenced = await db
           .select({ id: artwork.id })
           .from(artwork)
-          .where(eq(artwork.storageKey, storageKey))
+          .where(eq(artwork.storageKey, fresh.storageKey))
           .limit(1)
           .then((rows) => rows.length > 0)
           .catch(() => true);
         if (!referenced)
-          await artworkBackend(store, backend, library.rootPath)
-            ?.remove(storageKey)
-            .catch(() => {});
+          await removeArtworkFiles(
+            [{ ...fresh, rootPath: library.rootPath }],
+            store,
+          );
       }
       throw error;
     });
   const { previous } = stored;
   if (previous !== undefined && previous.storageKey !== stored.row.storageKey)
-    await artworkBackend(store, previous.backend, library.rootPath)
-      ?.remove(previous.storageKey)
-      .catch(() => {});
+    await removeArtworkFiles(
+      [{ ...previous, rootPath: library.rootPath }],
+      store,
+    );
   return stored.row;
 }
 
-/** Removes committed colocated artwork files without failing the database operation. */
-export async function removeColocatedArtworkFiles(
+/** Removes committed artwork originals from their backends without failing the database operation. */
+export async function removeArtworkFiles(
   files: readonly DeletedArtworkFile[],
+  store: ArtworkStoreConfig = artworkStoreConfig(),
 ): Promise<void> {
   for (const entry of files) {
     try {
-      const { root, target } = resolveStoragePath(
-        entry.rootPath,
+      await artworkBackend(store, entry.backend, entry.rootPath)?.remove(
         entry.storageKey,
       );
-      await walkStorageDirectory(root, dirname(target), false);
-      await rm(target, { force: true });
     } catch {
       // Best effort: a committed database delete is never reported as rolled back.
     }
@@ -236,6 +232,7 @@ export async function removeSelectedArtwork(
   db: Database,
   itemId: string,
   type: ArtworkCandidate["type"],
+  store: ArtworkStoreConfig = artworkStoreConfig(),
 ): Promise<boolean> {
   const removed = await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -261,14 +258,14 @@ export async function removeSelectedArtwork(
       );
     if (!selected) return undefined;
     await tx.delete(artwork).where(eq(artwork.id, selected.id));
-    if (selected.backend !== "colocated") return true;
     return {
+      backend: selected.backend,
       rootPath: library.rootPath,
       storageKey: selected.storageKey,
     };
   });
   if (removed === undefined) return false;
-  if (removed !== true) await removeColocatedArtworkFiles([removed]);
+  await removeArtworkFiles([removed], store);
   return true;
 }
 

@@ -59,8 +59,13 @@ const fraction = $derived(
           class="absolute inset-x-0 bottom-0 h-[30%] bg-linear-to-t from-black/60 to-transparent"
           aria-hidden="true"
         ></span>
+      {/if}
+      {#if fraction !== null}
         <span
-          class="absolute inset-x-2 bottom-2 h-1 overflow-hidden rounded-full bg-white/35"
+          class="absolute inset-x-2 bottom-2 h-1 overflow-hidden rounded-full {posterId !==
+          null
+            ? 'bg-white/35'
+            : 'bg-fill-strong'}"
           aria-hidden="true"
         >
           <span class="block h-full bg-tint" style:width={`${fraction * 100}%`}

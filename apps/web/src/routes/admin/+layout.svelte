@@ -44,8 +44,9 @@ const sections = [
 <style>
   header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 24px;
+    gap: 8px 24px;
     padding: 12px 24px;
     border-bottom: 1px solid color-mix(in oklch, var(--ink) 16%, transparent);
   }
@@ -60,8 +61,9 @@ const sections = [
 
   nav {
     display: flex;
-    flex: 1;
-    gap: 16px;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: 4px 16px;
   }
 
   nav a {

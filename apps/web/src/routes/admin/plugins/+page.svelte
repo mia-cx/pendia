@@ -385,7 +385,7 @@ h4 {
 }
 
 .title {
-  flex: 1 1 16rem;
+  flex: 1 0 min(100%, 20rem);
   min-width: 0;
 }
 

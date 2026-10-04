@@ -7,9 +7,18 @@ import type { Database } from "../db/client.ts";
 import { libraries, type ScanChange } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
+import { scanScope } from "./scan.ts";
 import { type ChangeEvent, radarrChanges, sonarrChanges } from "./servarr.ts";
+import { acceptsLibraryFile } from "./walker.ts";
 
 const defaultDelayMs = 10_000;
+
+/** A library-relative file change a watcher saw on disk. */
+export type WatchedChange =
+  | { kind: "add" | "delete"; path: string }
+  | { kind: "move"; path: string; previousPath: string };
+
+type ResolvedChange = { libraryId: string; path: string; scan: ScanChange };
 
 class InvalidWebhookError extends Error {
   constructor(message: string) {
@@ -68,7 +77,7 @@ export function createChangeDebouncer(
   const queue = createJobQueue(db);
   const pending = new Map<string, PendingBatch>();
   const inFlight = new Set<Promise<void>>();
-  const submissions = new Set<Promise<void>>();
+  const submissions = new Set<Promise<unknown>>();
   let closed = false;
   let closePromise: Promise<void> | undefined;
   let flushFailed = false;
@@ -186,12 +195,7 @@ export function createChangeDebouncer(
         throw new InvalidWebhookError("Webhook path must be absolute.");
     };
 
-    const resolved: {
-      key: string;
-      libraryId: string;
-      path: string;
-      scan: ScanChange;
-    }[] = [];
+    const resolved: ResolvedChange[] = [];
     for (const change of changes) {
       requireAbsolute(change.path);
       if (change.kind === "move") requireAbsolute(change.previousPath);
@@ -258,45 +262,84 @@ export function createChangeDebouncer(
           directory = dirname(found.relativePath);
         }
       }
+      resolved.push({ libraryId: found.libraryId, path: directory, scan });
+    }
+    queueChanges(resolved);
+  };
+
+  /** Turns a watcher's library-relative file changes into scan changes of the medium's files. */
+  const submitWatchedChanges = async (
+    libraryId: string,
+    changes: readonly WatchedChange[],
+  ): Promise<number> => {
+    const [library] = await db
+      .select({ medium: libraries.medium })
+      .from(libraries)
+      .where(eq(libraries.id, libraryId));
+    if (library === undefined) throw new AuthError("NOT_FOUND");
+    const { rules } = scanScope(library.medium, ".");
+    const accepts = (path: string) => acceptsLibraryFile(rules, path);
+    const resolved: ResolvedChange[] = [];
+    for (const change of changes) {
+      // A rename into or out of the medium's files is an add or a delete.
+      const scan: ScanChange | undefined =
+        change.kind === "move" && accepts(change.previousPath)
+          ? accepts(change.path)
+            ? { ...change, providerIds: {} }
+            : {
+                kind: "delete",
+                path: change.previousPath,
+                target: "file",
+                providerIds: {},
+              }
+          : !accepts(change.path)
+            ? undefined
+            : change.kind === "delete"
+              ? { ...change, target: "file", providerIds: {} }
+              : { kind: "add", path: change.path, providerIds: {} };
+      if (scan === undefined) continue;
       resolved.push({
-        key: `${found.libraryId}:${directory}`,
-        libraryId: found.libraryId,
-        path: directory,
+        libraryId,
+        path:
+          library.medium === "shows"
+            ? (scan.path.split("/")[0] ?? scan.path)
+            : dirname(scan.path),
         scan,
       });
     }
+    queueChanges(resolved);
+    return resolved.length;
+  };
 
-    for (const entry of resolved) {
-      let batch = pending.get(entry.key);
+  const queueChanges = (resolved: readonly ResolvedChange[]) => {
+    for (const { libraryId, path, scan } of resolved) {
+      const key = `${libraryId}:${path}`;
+      let batch = pending.get(key);
       if (batch === undefined) {
         batch = {
-          libraryId: entry.libraryId,
-          path: entry.path,
+          libraryId,
+          path,
           changes: [],
           timer: undefined,
           flushing: undefined,
         };
-        pending.set(entry.key, batch);
+        pending.set(key, batch);
       }
-      batch.changes.push(entry.scan);
-      schedule(entry.key, batch);
+      batch.changes.push(scan);
+      schedule(key, batch);
     }
   };
 
   let submissionTail: Promise<void> = Promise.resolve();
 
-  const submit = (
-    source: "sonarr" | "radarr",
-    changes: ChangeEvent[],
-  ): Promise<void> => {
+  /** Runs submissions one at a time, in arrival order. */
+  const serialize = <T>(run: () => Promise<T>): Promise<T> => {
     if (closed) {
       return Promise.reject(
         new InvalidWebhookError("Change debouncer is closed."),
       );
     }
-    const submission = submissionTail.then(() =>
-      submitChanges(source, changes),
-    );
+    const submission = submissionTail.then(run);
     submissionTail = submission.then(
       () => undefined,
       () => undefined,
@@ -308,6 +351,15 @@ export function createChangeDebouncer(
     );
     return submission;
   };
+
+  const submit = (source: "sonarr" | "radarr", changes: ChangeEvent[]) =>
+    serialize(() => submitChanges(source, changes));
+
+  /** Queues a watcher's library-relative changes and returns how many were media files. */
+  const submitWatched = (
+    libraryId: string,
+    changes: readonly WatchedChange[],
+  ) => serialize(() => submitWatchedChanges(libraryId, changes));
 
   const close = (): Promise<void> => {
     closePromise ??= (async () => {
@@ -336,13 +388,13 @@ export function createChangeDebouncer(
     return closePromise;
   };
 
-  return { submit, close };
+  return { submit, submitWatched, close };
 }
 
 /** Creates the Sonarr and Radarr webhook HTTP handler. */
 export function createServarrWebhookHandler(
   db: Database,
-  debouncer: ReturnType<typeof createChangeDebouncer>,
+  debouncer: Pick<ReturnType<typeof createChangeDebouncer>, "submit">,
 ) {
   return async (request: Request): Promise<Response | undefined> => {
     const match = new URL(request.url).pathname.match(webhookPattern);

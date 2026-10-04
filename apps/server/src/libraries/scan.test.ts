@@ -1383,4 +1383,86 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(await db.select().from(progress)).toEqual(progressBefore);
       });
     }));
+
+  test("one Episode moved to a new folder without provider ids leaves its Show in place", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const before = "Show A/Season 01/Show S01E01.mkv";
+        const after = "Show B/Season 01/Show S01E01.mkv";
+        await mkdir(join(root, "Show A", "Season 01"), { recursive: true });
+        await mkdir(join(root, "Show B", "Season 01"), { recursive: true });
+        await createVideoFixture(join(root, before));
+        await createVideoFixture(
+          join(root, "Show A/Season 01/Show S01E02.mkv"),
+        );
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await scanShowDirectory(db, library.id, "Show A");
+        const itemsBefore = await db.select().from(items);
+
+        await rename(join(root, before), join(root, after));
+        // The moved File still belongs to Show A's Episode, so a new Show B cannot take it.
+        await expect(
+          scanShowDirectory(db, library.id, "Show B", {
+            changes: [
+              {
+                kind: "move",
+                path: after,
+                previousPath: before,
+                providerIds: {},
+              },
+            ],
+          }),
+        ).rejects.toThrow("Auth record already exists.");
+
+        expect(await db.select().from(items)).toEqual(itemsBefore);
+      });
+    }));
+
+  test("a Show folder move without provider ids ignores a File already gone from disk", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const before = "Old Show/Season 01/Show S01E01.mkv";
+        const after = "New Show/Season 01/Show S01E01.mkv";
+        const gone = "Old Show/Season 01/Show S01E02.mkv";
+        await mkdir(join(root, "Old Show", "Season 01"), { recursive: true });
+        await createVideoFixture(join(root, before));
+        await createVideoFixture(join(root, gone));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        const { itemId: showId } = await scanShowDirectory(
+          db,
+          library.id,
+          "Old Show",
+        );
+
+        // E02 vanished with no delete, so its File row waits for reconciliation.
+        await rm(join(root, gone));
+        await rename(join(root, "Old Show"), join(root, "New Show"));
+        await scanShowDirectory(db, library.id, "New Show", {
+          changes: [
+            {
+              kind: "move",
+              path: after,
+              previousPath: before,
+              providerIds: {},
+            },
+          ],
+        });
+
+        const [show] = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "show"));
+        expect(show).toMatchObject({ id: showId, canonicalFolder: "New Show" });
+      });
+    }));
 });

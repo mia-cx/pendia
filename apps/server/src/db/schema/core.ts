@@ -48,6 +48,8 @@ export const libraries = pgTable("libraries", {
     .$type<JsonObject>()
     .notNull()
     .default({}),
+  // A watcher's last claim. While it is recent, the watcher runs the Library's scans.
+  watcherSeenAt: instant("watcher_seen_at"),
 });
 
 export const items = pgTable(

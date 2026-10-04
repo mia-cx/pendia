@@ -1,0 +1,1 @@
+ALTER TABLE "libraries" ADD COLUMN "watcher_seen_at" timestamp with time zone;

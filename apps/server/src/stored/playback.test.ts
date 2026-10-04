@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
@@ -156,6 +157,31 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
               );
               expect((await fetch(outside)).status).toBe(404);
 
+              // Symlinks in a rung folder never lead reads out of the library.
+              const sentinel = join(root, "..", `sentinel-${itemId}`);
+              await writeFile(sentinel, "outside the library");
+              try {
+                const p360 = join(root, `${fixturePath}.pendia`, "360p");
+                await rm(join(p360, "init.mp4"));
+                await symlink(sentinel, join(p360, "init.mp4"));
+                const sourceRung = join(
+                  root,
+                  `${fixturePath}.pendia`,
+                  "source",
+                );
+                await rename(sourceRung, `${sourceRung}.moved`);
+                await symlink(`${sourceRung}.moved`, sourceRung);
+                for (const variant of master.variants) {
+                  const mediaUrl = new URL(variant.uri, masterUrl);
+                  const init = await fetch(
+                    new URL(`init.mp4${mediaUrl.search}`, mediaUrl),
+                  );
+                  expect(init.status).toBe(404);
+                }
+              } finally {
+                await rm(sentinel, { force: true });
+              }
+
               // A capped client cannot take the source, so a transcode decision
               // gets the one stored rung that fits instead of a live encode.
               const capped = await plan({
@@ -171,6 +197,28 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
               expect(cappedSession?.decision?.storedVariantIds).toEqual([
                 idOf("360p"),
               ]);
+
+              // A cap under the live ladder's 1.5 Mbit/s floor has no live
+              // path at all, but the 1 Mbit/s rung still fits.
+              const belowLadder = await plan({
+                ...remuxClient,
+                maxBitrate: 1_200_000,
+              });
+              expect(belowLadder.method).toBe("remux");
+              const [belowSession] = await db
+                .select({ decision: sessionRegistry.decision })
+                .from(sessionRegistry)
+                .where(eq(sessionRegistry.id, belowLadder.sessionId ?? ""));
+              expect(belowSession?.decision).toEqual({
+                method: "stored",
+                storedVariantIds: [idOf("360p")],
+              });
+              const belowMaster = await get(
+                new URL(belowLadder.url ?? "", base).href,
+              );
+              expect(await belowMaster.text()).toContain(
+                `${idOf("360p")}/media.m3u8`,
+              );
 
               // Only the incomplete 240p rung fits a 300-line screen: the live
               // path, as before.

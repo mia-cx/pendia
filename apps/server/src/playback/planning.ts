@@ -20,6 +20,7 @@ import { selectStoredVariants } from "../stored/playback.ts";
 import {
   type AudioStream,
   decidePlayback,
+  type PlaybackDecision,
   type PlaybackSource,
   type SubtitleStream,
 } from "./decisions.ts";
@@ -275,11 +276,13 @@ export async function planPlayback(
     sessionRequest: input.bitrateCapBps ?? null,
     isLan: isLanAddress(identity.address),
   };
-  let decision: ReturnType<typeof decidePlayback>;
+  // No live path, such as a cap under every ladder rung, can still leave a
+  // stored rung that fits.
+  let decision: PlaybackDecision | null;
   try {
     decision = decidePlayback(source, input.profile, caps);
   } catch {
-    throw new AuthError("INVALID_INPUT");
+    decision = null;
   }
   // Stored rungs that pass replace the live session; the api serves them from disk.
   const storedVariantIds = await selectStoredVariants(
@@ -290,14 +293,15 @@ export async function planPlayback(
       segmentTimelineId: version.timelineAligned
         ? version.segmentTimelineId
         : null,
-      decision,
+      liveMethod: decision?.method ?? null,
     },
     input.profile,
     caps,
   );
   const stored = storedVariantIds.length > 0;
+  if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
   const base = {
-    method: stored ? ("remux" as const) : decision.method,
+    method: stored || decision === null ? ("remux" as const) : decision.method,
     itemId: item.id,
     versionId: version.id,
     sessionId: null as string | null,
@@ -322,7 +326,9 @@ export async function planPlayback(
         versionId: version.id,
         playMethod: method,
         state: "starting",
-        decision: stored ? { ...decision, storedVariantIds } : decision,
+        decision: stored
+          ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
+          : decision,
       })
       .returning();
     if (!session) throw new Error("Session insert returned no row.");

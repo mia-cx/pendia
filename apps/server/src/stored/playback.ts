@@ -7,6 +7,7 @@ import {
   streams,
   versions,
 } from "../db/schema/index.ts";
+import { readLibraryFile } from "../libraries/walker.ts";
 import {
   type PlaybackVersion,
   selectAdaptiveGroup,
@@ -88,22 +89,19 @@ const accepts = (client: ClientProfile, audio: StreamRow | undefined) =>
       candidate.maxChannels >= (audio.channels ?? Infinity),
   );
 
-/** Picks the stored rungs a client gets instead of a live session; empty when the live path should run. */
+/** Picks the stored rungs a client gets instead of a live session; empty when the live path should run. A null live method means no live path exists. */
 export async function selectStoredVariants(
   db: Database,
   source: {
     itemId: string;
     fileId: string;
     segmentTimelineId: string | null;
-    decision: PlaybackDecision;
+    liveMethod: PlaybackDecision["method"] | null;
   },
   client: ClientProfile,
   caps: PlaybackCaps,
 ) {
-  if (
-    source.decision.method === "direct-play" ||
-    source.segmentTimelineId === null
-  )
+  if (source.liveMethod === "direct-play" || source.segmentTimelineId === null)
     return [];
   // Only rungs of the played File: another Version may be another
   // translation or release on the same timeline. A trigger keeps their
@@ -138,7 +136,7 @@ export async function selectStoredVariants(
   const variants = group.variants.map((variant) => variant.id);
   // A remux already plays the source untouched; stored rungs replace it only
   // when they include that source, so quality never drops to save nothing.
-  if (source.decision.method === "remux") {
+  if (source.liveMethod === "remux") {
     const keepsSource = stored.some(
       (row) =>
         variants.includes(row.version.id) &&
@@ -224,15 +222,17 @@ export async function serveStoredHls(
     name.index >= segmentCount(row.boundariesSeconds)
   )
     return notFound();
-  const file = Bun.file(
-    resolve(
+  // The same no-symlink walk direct play uses keeps reads inside the library.
+  let validated: Awaited<ReturnType<typeof readLibraryFile>>;
+  try {
+    validated = await readLibraryFile(
       row.rootPath,
-      row.storedFolder,
-      name.kind === "init" ? "init.mp4" : `${name.index}.m4s`,
-    ),
-  );
-  if (!(await file.exists())) return notFound();
-  return new Response(file, {
+      `${row.storedFolder}/${name.kind === "init" ? "init.mp4" : `${name.index}.m4s`}`,
+    );
+  } catch {
+    return notFound();
+  }
+  return new Response(Bun.file(resolve(row.rootPath, validated.path)), {
     headers: {
       ...standardHeaders,
       "content-type": name.kind === "init" ? "video/mp4" : "video/iso.segment",

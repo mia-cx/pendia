@@ -72,7 +72,9 @@ describe("storeArguments", () => {
     const args = storeArguments({ ...base, rung: p360, source: sdr }, 1, "/p");
     expect(valueAfter(args, "-ss")).toBe("3000000us");
     expect(valueAfter(args, "-segment_start_number")).toBe("1");
+    // Keyframes are forced at output pts; cuts count from the run's first pts.
     expect(valueAfter(args, "-force_key_frames")).toBe("6000000us");
+    expect(valueAfter(args, "-segment_times")).toBe("3000000us");
   });
 
   test("an encoded rung tone maps an HDR source", () => {
@@ -177,6 +179,7 @@ describe("runStore", () => {
           "3.m4s",
           "init.mp4",
           "manifest.json",
+          "rung.json",
         ].sort(),
       );
       expect(await readStoreManifest(run.folder)).toEqual({
@@ -205,6 +208,19 @@ describe("runStore", () => {
     const after = await stat(join(run.folder, "manifest.json"));
     expect(after.mtimeMs).toBe(before.mtimeMs);
   });
+
+  test("an edited rung under the same name starts its folder over", async () => {
+    const run = runFor(p360);
+    const edited = { ...run, rung: { ...p360, height: 240 } };
+    expect(await runStore(edited, never)).toBe("complete");
+    const encoded = await probeVideo(
+      await joined(run.folder, [0], "edited.mp4"),
+    );
+    expect(encoded.streams.find((s) => s.kind === "video")?.height).toBe(240);
+    expect(
+      JSON.parse(await readFile(join(run.folder, "rung.json"), "utf8")),
+    ).toEqual(edited.rung);
+  }, 60_000);
 
   test.skipIf(process.platform !== "linux")(
     "a stopped run resumes at the first missing segment without rewriting present ones",
@@ -274,3 +290,121 @@ async function niceOf(directory: string) {
   }
   return null;
 }
+
+describe("runStore on a nonuniform timeline", () => {
+  let dir: string;
+  let boundaries: number[];
+  const never = new AbortController().signal;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pendia-store-uneven-"));
+    // Keyframes at 0, 5, 8 and 12 s: segments of 5, 3, 4 and 4 s.
+    const encode = Bun.spawnSync([
+      "ffmpeg",
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=640x360:r=25:d=16",
+      "-f",
+      "lavfi",
+      "-i",
+      "anullsrc=r=48000:cl=stereo",
+      "-t",
+      "16",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-force_key_frames",
+      "0,5,8,12",
+      "-g",
+      "1000",
+      "-sc_threshold",
+      "0",
+      "-c:a",
+      "aac",
+      join(dir, "uneven.mkv"),
+    ]);
+    if (encode.exitCode !== 0) throw new Error(encode.stderr.toString());
+    const probe = await probeVideo(join(dir, "uneven.mkv"));
+    if (probe.durationSeconds === null || probe.keyframesSeconds === null)
+      throw new Error("Fixture probe returned no duration or keyframes.");
+    boundaries = [0, 5, 8, 12, probe.durationSeconds];
+    expect(probe.keyframesSeconds).toEqual([0, 5, 8, 12]);
+  }, 60_000);
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** Returns the first and last video pts of each segment, decoded with the init. */
+  const intervals = async (folder: string) => {
+    const init = await readFile(join(folder, "init.mp4"));
+    const result: [number, number][] = [];
+    for (let index = 0; index < boundaries.length - 1; index++) {
+      const path = join(dir, "probe.mp4");
+      await Bun.write(
+        path,
+        Buffer.concat([init, await readFile(join(folder, `${index}.m4s`))]),
+      );
+      const probe = Bun.spawnSync([
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v",
+        "-show_entries",
+        "packet=pts_time",
+        "-of",
+        "csv=p=0",
+        path,
+      ]);
+      const times = probe.stdout
+        .toString()
+        .trim()
+        .split("\n")
+        .map(Number)
+        .sort((a, b) => a - b);
+      result.push([times[0] ?? -1, times.at(-1) ?? -1]);
+    }
+    return result;
+  };
+
+  const expectIntervals = async (folder: string) => {
+    const measured = await intervals(folder);
+    measured.forEach(([first, last], index) => {
+      expect(first).toBeCloseTo(boundaries[index] ?? -1, 3);
+      expect(last).toBeLessThan(boundaries[index + 1] ?? 0);
+    });
+  };
+
+  test.each([
+    ["the source rung", source],
+    ["an encoded rung", p360],
+  ])(
+    "%s resumes from segment 1 and from the last segment on the timeline",
+    async (_name, rung) => {
+      const run: StoreRun = {
+        inputPath: join(dir, "uneven.mkv"),
+        boundariesSeconds: boundaries,
+        timelineId: "uneven",
+        rung,
+        source: sdr,
+        folder: join(dir, "uneven.mkv.pendia", rung.name),
+      };
+      expect(await runStore(run, never)).toBe("complete");
+      await expectIntervals(run.folder);
+      for (const kept of [1, 3]) {
+        await rm(join(run.folder, "manifest.json"));
+        for (let index = kept; index < boundaries.length - 1; index++)
+          await rm(join(run.folder, `${index}.m4s`));
+        expect(await runStore(run, never)).toBe("complete");
+        await expectIntervals(run.folder);
+      }
+    },
+    60_000,
+  );
+});

@@ -102,7 +102,13 @@ export function segmentArguments(
     "-segment_header_filename",
     `${directory}/init.mp4`,
   ];
-  const interior = cutTimes(boundariesSeconds);
+  // The muxer measures its cut list from the run's first pts and starts at
+  // the list's first entry, so a run from segment N lists the later cuts
+  // relative to boundary N. Absolute times only line up on a uniform timeline.
+  const interior = cutTimes(
+    boundariesSeconds.slice(startIndex),
+    boundariesSeconds[startIndex],
+  );
   if (interior !== null) {
     args.push("-segment_times", interior);
   }
@@ -118,12 +124,17 @@ export function segmentArguments(
   return args;
 }
 
-/** The interior timeline boundaries as an ffmpeg time list; null for a one-segment timeline. */
-export function cutTimes(boundariesSeconds: readonly number[]) {
+/** The interior timeline boundaries as an ffmpeg time list measured from an origin; null for a one-segment timeline. */
+export function cutTimes(
+  boundariesSeconds: readonly number[],
+  originSeconds = 0,
+) {
   const interior = boundariesSeconds.slice(1, -1);
   if (interior.length === 0) return null;
   // Cut times are floored so a frame at the boundary falls inside its segment.
-  return interior.map((time) => `${Math.floor(time * 1e6)}us`).join(",");
+  return interior
+    .map((time) => `${Math.floor((time - originSeconds) * 1e6)}us`)
+    .join(",");
 }
 
 /** Reads the segment indexes ffmpeg's own m3u8 list declares complete. */

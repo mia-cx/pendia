@@ -343,7 +343,9 @@ export function createSessionManager(
       .limit(1);
     const decision = row?.decision;
     const stripDolbyVision =
-      decision?.video.action === "copy" &&
+      decision != null &&
+      "video" in decision &&
+      decision.video.action === "copy" &&
       decision.video.stripDolbyVision === true;
     const audio = source.audio[0];
     const variant: PlaylistVariant = {

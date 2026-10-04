@@ -81,7 +81,7 @@ A library's policy names the rungs Pendia stores next to each source and an opti
 }
 ```
 
-`source` is a remux of the source video. Every other rung is H.264 High at its height, capped at its bitrate, with AAC stereo; HDR sources are tone mapped to SDR. A source matches when any one `when` criterion holds, and every source matches without `when`. A rung taller than the source is skipped, and so is the source rung when fMP4 cannot carry its codec.
+`source` is a remux of the source video. Every other rung is H.264 High at its height, capped at its bitrate, with AAC stereo; HDR sources are tone mapped to SDR. A source matches when any one `when` criterion holds, and every source matches without `when`. `hdr` only takes `true`. A rung taller than the source is skipped, and so is the source rung when fMP4 cannot carry its codec.
 
 | Procedure | REST route | Input | Output |
 | --- | --- | --- | --- |
@@ -93,7 +93,7 @@ All three need `manage-transcoding`. A manual request names a rung the policy de
 
 Every folder scan queues the wanted rungs of each Item's best aligned source, deletes rungs the policy no longer names, and removes `<file>.pendia` folders whose source left the disk. Replacing a policy reconciles the whole library at once.
 
-A `store` job writes `<source file>.pendia/<rung>/`: `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
+A `store` job writes `<source file>.pendia/<rung>/`: `rung.json` with the rung definition, `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Editing a rung's height or bitrate under the same name stores it again. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
 
 When a plan is not direct play, the complete stored rungs that pass the client become the variants of one master playlist. A remux plan takes them only when they include the source rung. The api serves `hls/<versionId>/media.m3u8`, `init.mp4` and `N.m4s` from the library share, so every api needs read access to the libraries. The live session answers only when no stored rung passes.
 

@@ -95,7 +95,7 @@ describe("remux", () => {
       expect(args.at(-1)).toBe("/run/%d.m4s");
     });
 
-    test("a restart seeks before the input and keeps every cut time", () => {
+    test("a restart seeks before the input and lists later cuts from its start", () => {
       const args = remuxArguments({
         inputPath,
         boundariesSeconds: boundaries,
@@ -108,9 +108,8 @@ describe("remux", () => {
       expect(args[seek - 1]).toBe("1");
       expect(args[seek + 1]).toBe("6000000us");
       expect(seek).toBeLessThan(args.indexOf("-i"));
-      expect(args[args.indexOf("-segment_times") + 1]).toBe(
-        "3000000us,6000000us,9000000us",
-      );
+      // The muxer measures cuts from the run's first pts: 9 s is 3 s after 6 s.
+      expect(args[args.indexOf("-segment_times") + 1]).toBe("3000000us");
       expect(args[args.indexOf("-segment_start_number") + 1]).toBe("2");
     });
 

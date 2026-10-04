@@ -7,7 +7,13 @@ import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { files, jobs, libraries, versions } from "../db/schema/index.ts";
+import {
+  files,
+  jobs,
+  libraries,
+  streams,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { readStoreManifest } from "./encode.ts";
@@ -67,6 +73,36 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
             await scanFolder(db, library.id);
             await drain(db);
             expect(await queuedStores(db)).toEqual([]);
+
+            // Editing a rung under the same name stores it again.
+            const [old360] = (await stored(db)).filter(
+              (row) => row.rung === "360p",
+            );
+            await setStoredVersionPolicy(db, admin.id, library.id, {
+              rungs: [
+                { name: "source" },
+                { name: "360p", height: 240, bitrate: 500_000 },
+              ],
+            });
+            expect((await stored(db)).map((row) => row.rung)).toEqual([
+              "source",
+            ]);
+            expect(await queuedStores(db)).toHaveLength(1);
+            await drain(db);
+            const [new360] = (await stored(db)).filter(
+              (row) => row.rung === "360p",
+            );
+            expect(new360?.id).not.toBe(old360?.id);
+            const [video] = await db
+              .select({ height: streams.height, bitrate: streams.bitrate })
+              .from(streams)
+              .where(
+                and(
+                  eq(streams.versionId, new360?.id ?? ""),
+                  eq(streams.kind, "video"),
+                ),
+              );
+            expect(video).toEqual({ height: 240, bitrate: 500_000n });
 
             await setStoredVersionPolicy(db, admin.id, library.id, {
               rungs: [{ name: "source" }],

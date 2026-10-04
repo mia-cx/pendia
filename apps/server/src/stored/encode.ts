@@ -124,6 +124,7 @@ export const StoreManifest = Schema.Struct({
 
 const manifestName = "manifest.json";
 const initName = "init.mp4";
+const rungName = "rung.json";
 const segmentName = (index: number) => `${index}.m4s`;
 
 /** Reads a rung folder's manifest; null when it is missing or unreadable. */
@@ -172,12 +173,20 @@ export async function runStore(
 ): Promise<StoreOutcome> {
   const count = segmentCount(run.boundariesSeconds);
   const manifest = await readStoreManifest(run.folder);
-  if (manifest?.timelineId === run.timelineId) return "complete";
+  // The folder records the rung definition it was cut for, so an edited
+  // height or bitrate under the same name starts the rung over.
+  const definition = JSON.stringify(run.rung);
+  const sameRung =
+    (await Bun.file(join(run.folder, rungName))
+      .text()
+      .catch(() => null)) === definition;
+  if (sameRung && manifest?.timelineId === run.timelineId) return "complete";
   const initPath = join(run.folder, initName);
-  // A folder cut on another timeline, or segments without their init, cannot be resumed.
-  if (manifest !== null || !(await Bun.file(initPath).exists()))
+  // A folder cut on another timeline or rung, or segments without their init, cannot be resumed.
+  if (!sameRung || manifest !== null || !(await Bun.file(initPath).exists()))
     await rm(run.folder, { recursive: true, force: true });
   await mkdir(run.folder, { recursive: true });
+  await Bun.write(join(run.folder, rungName), definition);
   const present = await presentSegments(run.folder, count);
   const start = Array.from({ length: count }, (_, index) => index).find(
     (index) => !present.has(index),

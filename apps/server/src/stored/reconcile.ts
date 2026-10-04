@@ -113,23 +113,28 @@ export async function requestStore(
   return true;
 }
 
-/** Brings the stored rungs of a library folder in line with its policy: drops rungs it no longer names or whose source moved, and enqueues missing wanted ones. */
+/** Brings the stored rungs of a library folder in line with its policy: drops rungs it no longer names, whose definition changed or whose source moved, and enqueues missing wanted ones. */
 export async function reconcileStoredVersions(
   db: Database,
   library: Library,
   folder = ".",
 ) {
   const policy = readStoredVersionPolicy(library.configuration);
-  const named = new Set(policy?.rungs.map((rung) => rung.name));
   const stored = await db
     .select({
       id: versions.id,
       rung: versions.rung,
       storedFolder: versions.storedFolder,
       sourcePath: files.path,
+      height: streams.height,
+      bitrate: streams.bitrate,
     })
     .from(versions)
     .innerJoin(files, eq(files.id, versions.sourceFileId))
+    .leftJoin(
+      streams,
+      and(eq(streams.versionId, versions.id), eq(streams.kind, "video")),
+    )
     .where(
       and(
         eq(versions.libraryId, library.id),
@@ -139,8 +144,17 @@ export async function reconcileStoredVersions(
     );
   for (const row of stored) {
     if (row.rung === null || row.storedFolder === null) continue;
+    const rung = policy?.rungs.find((candidate) => candidate.name === row.rung);
+    // A finished encode records the rung's height and bitrate on its video
+    // Stream; an edited definition under the same name stores it again.
+    const edited =
+      rung !== undefined &&
+      "height" in rung &&
+      row.height !== null &&
+      (row.height !== rung.height || row.bitrate !== BigInt(rung.bitrate));
     if (
-      named.has(row.rung) &&
+      rung !== undefined &&
+      !edited &&
       row.storedFolder === storedFolderOf(row.sourcePath, row.rung)
     )
       continue;

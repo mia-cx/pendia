@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { planPlayback, refreshPlayback } from "../playback/planning.ts";
 import { authenticatedMutation } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
+import { playbackSessions } from "./playback-sessions.ts";
 import { progressProcedures } from "./progress.ts";
 
 const shortString = Schema.String.pipe(
@@ -97,5 +98,10 @@ const refresh = authenticatedMutation
     ),
   );
 
-/** The playback planning and lifecycle procedures mounted under `playback`. */
-export const playbackProcedures = { plan, refresh, ...progressProcedures };
+/** The playback planning, lifecycle and dashboard procedures mounted under `playback`. */
+export const playbackProcedures = {
+  plan,
+  refresh,
+  sessions: playbackSessions,
+  ...progressProcedures,
+};

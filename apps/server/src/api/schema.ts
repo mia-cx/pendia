@@ -199,6 +199,54 @@ export const ServerSettings = Schema.Struct({
   artworkRequiresAuth: Schema.Boolean,
   oidcConfigured: Schema.Boolean,
   providerKeys: Schema.Array(Schema.String),
+  bitrateCapBps: Schema.NullOr(Schema.Int),
+  idleWindow: Schema.Struct({ start: Schema.String, end: Schema.String }),
+  artworkStore: Schema.Struct({
+    backend: Schema.Literal("colocated", "configured-path", "s3"),
+    path: Schema.NullOr(Schema.String),
+    bucket: Schema.NullOr(Schema.String),
+    endpoint: Schema.NullOr(Schema.String),
+  }),
+});
+
+/** A live or queued playback session as the sessions dashboard lists it. */
+export const PlaybackSession = Schema.Struct({
+  id: Schema.UUID,
+  state: Schema.Literal("queued", "starting", "playing", "stopped"),
+  playMethod: Schema.Literal("direct-play", "remux", "transcode"),
+  user: Schema.Struct({ id: Schema.UUID, displayName: Schema.String }),
+  clientName: Schema.NullOr(Schema.String),
+  deviceName: Schema.NullOr(Schema.String),
+  item: BrowseCard,
+  // Stored rung names, the live transcode height such as "720p", or "source".
+  rungs: Schema.Array(Schema.String),
+  transcoder: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  lastSeenAt: Schema.String,
+});
+
+/** Store job progress: running encodes with finished segments, and the queue. */
+export const StoreStatus = Schema.Struct({
+  running: Schema.Array(
+    Schema.Struct({
+      jobId: Schema.UUID,
+      item: BrowseCard,
+      rung: Schema.String,
+      segmentsDone: Schema.Int,
+      segmentsTotal: Schema.Int,
+    }),
+  ),
+  queued: Schema.Struct({
+    total: Schema.Int,
+    next: Schema.Array(
+      Schema.Struct({
+        jobId: Schema.UUID,
+        item: BrowseCard,
+        rung: Schema.String,
+        runAfter: Schema.String,
+      }),
+    ),
+  }),
 });
 
 /** The newest scan run's job counts and newest job for one library. */

@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
+import type { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import {
   items,
@@ -11,7 +12,9 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { emitPluginEvents } from "../plugins/events.ts";
+import { callerClient } from "./planning.ts";
 
+type Caller = Awaited<ReturnType<typeof authenticate>>;
 type ProgressDb = Pick<Database, "select">;
 type LifecycleDb = Pick<
   Database,
@@ -242,15 +245,12 @@ async function touchSession(tx: LifecycleDb, sessionId: string) {
  */
 export async function resolvePlaySession(
   db: Database,
-  userId: string,
-  report: {
-    itemId: string;
-    credentialId: string;
-    sessionId?: string;
-    versionId?: string;
-  },
+  caller: Caller,
+  report: { itemId: string; sessionId?: string; versionId?: string },
 ) {
-  const { itemId, sessionId, credentialId, versionId } = report;
+  const { itemId, sessionId, versionId } = report;
+  const userId = caller.user.id;
+  const credentialId = caller.credential.id;
   await requireViewableItem(db, userId, itemId);
   await requirePermission(db, userId, "play");
   const [found] = await db
@@ -304,18 +304,28 @@ export async function resolvePlaySession(
   const { durationSeconds } = version;
   if (found !== undefined)
     return { sessionId: found.id, state: found.state, durationSeconds };
-  const [opened] = await db
-    .insert(sessionRegistry)
-    .values({
-      userId,
-      itemId,
-      versionId: version.id,
-      playMethod: "direct-play",
+  const client = await callerClient(db, caller);
+  const opened = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(sessionRegistry)
+      .values({
+        userId,
+        itemId,
+        versionId: version.id,
+        playMethod: "direct-play",
+        state: "starting",
+        ...client,
+        credentialId,
+      })
+      .returning({ id: sessionRegistry.id, state: sessionRegistry.state });
+    if (row === undefined) throw new Error("Session insert returned no row.");
+    await publishEvent(tx, {
+      kind: "session.state",
+      sessionId: row.id,
       state: "starting",
-      credentialId,
-    })
-    .returning({ id: sessionRegistry.id, state: sessionRegistry.state });
-  if (opened === undefined) throw new Error("Session insert returned no row.");
+    });
+    return row;
+  });
   return { sessionId: opened.id, state: opened.state, durationSeconds };
 }
 

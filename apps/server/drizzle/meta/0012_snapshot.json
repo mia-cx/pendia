@@ -1,6 +1,6 @@
 {
-  "id": "a66eedd0-f8d7-482a-904c-d9dc8636062c",
-  "prevId": "765d4297-63cc-4572-850e-2f7fe3accff9",
+  "id": "72b92ab1-c034-4c2c-9bf6-782ca0069c6b",
+  "prevId": "a66eedd0-f8d7-482a-904c-d9dc8636062c",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -3329,6 +3329,12 @@
         "device_name": {
           "name": "device_name",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "credential_id": {
+          "name": "credential_id",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },

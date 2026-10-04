@@ -90,8 +90,11 @@ export type IdleWindow = { start: string; end: string };
 
 const clock = Schema.String.pipe(Schema.pattern(/^([01]\d|2[0-3]):[0-5]\d$/));
 
+/** An idle window as the settings row and the API carry it. */
+export const IdleWindow = Schema.Struct({ start: clock, end: clock });
+
 const StoreSettings = Schema.Struct({
-  idleWindow: Schema.optional(Schema.Struct({ start: clock, end: clock })),
+  idleWindow: Schema.optional(IdleWindow),
 });
 
 /** The window store jobs run in when the `store` settings row names none. */

@@ -311,8 +311,12 @@ export function registerStoreJobs(
     const target = await loadStoreTarget(db, payload);
     if (target === null) return;
     const { idleWindow } = await readStoreSettings(db);
+    // The window may have changed while an encode ran; book against the current one.
     const reschedule = async () => {
-      const next = idleWindowAt(idleWindow, now());
+      const next = idleWindowAt(
+        (await readStoreSettings(db)).idleWindow,
+        now(),
+      );
       await enqueueStore(
         db,
         { sourceFileId: payload.sourceFileId, rung: payload.rung },

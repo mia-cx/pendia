@@ -175,6 +175,21 @@ describe.skipIf(!databaseUrl)("jellyfin progress and marks", () => {
         PositionTicks: ticks(60),
       });
       expect(await states()).toEqual(["playing", "stopped"]);
+      // The sessions dashboard names each device.
+      expect(
+        (
+          await db
+            .select({
+              client: sessionRegistry.clientName,
+              device: sessionRegistry.deviceName,
+            })
+            .from(sessionRegistry)
+            .orderBy(sessionRegistry.createdAt)
+        ).map((row) => [row.client, row.device]),
+      ).toEqual([
+        ["Kodi", "htpc"],
+        ["Findroid", "Pixel"],
+      ]);
 
       // A retried stop for a named play changes nothing.
       const [tvSession] = await db

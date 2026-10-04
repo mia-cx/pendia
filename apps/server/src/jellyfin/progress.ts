@@ -32,9 +32,8 @@ async function readReport({ db, request, caller }: UserContext) {
   const body = await readBody(request);
   const itemId = requiredGuid(body.optionalString("ItemId"));
   const sourceId = optionalGuid(body.optionalString("MediaSourceId"));
-  const session = await resolvePlaySession(db, caller.user.id, {
+  const session = await resolvePlaySession(db, caller, {
     itemId,
-    credentialId: caller.credential.id,
     sessionId: optionalGuid(
       body.optionalString("PlaySessionId") ?? body.optionalString("SessionId"),
     ),

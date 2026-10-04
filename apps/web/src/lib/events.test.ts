@@ -1,0 +1,59 @@
+import { describe, expect, test } from "bun:test";
+import { followEvents, type ServerEvent } from "./events.ts";
+
+const sessionId = "11111111-1111-4111-8111-111111111111";
+
+const starting: ServerEvent = {
+  kind: "session.state",
+  sessionId,
+  state: "starting",
+};
+const stopped: ServerEvent = {
+  kind: "session.state",
+  sessionId,
+  state: "stopped",
+};
+
+describe("followEvents", () => {
+  test("delivers events, reopens a dropped stream and stops on abort", async () => {
+    const controller = new AbortController();
+    const seen: ServerEvent[] = [];
+    let opened = 0;
+    await followEvents(
+      async () => {
+        opened += 1;
+        if (opened === 1)
+          return (async function* () {
+            yield starting;
+            throw new Error("The stream dropped.");
+          })();
+        return (async function* () {
+          yield stopped;
+          controller.abort();
+        })();
+      },
+      (event) => seen.push(event),
+      controller.signal,
+      1,
+    );
+    expect(seen).toEqual([starting, stopped]);
+    expect(opened).toBe(2);
+  });
+
+  test("a failed open retries after the pause", async () => {
+    const controller = new AbortController();
+    let opened = 0;
+    await followEvents(
+      async () => {
+        opened += 1;
+        if (opened < 3) throw new Error("Unreachable.");
+        controller.abort();
+        return (async function* () {})();
+      },
+      () => {},
+      controller.signal,
+      1,
+    );
+    expect(opened).toBe(3);
+  });
+});

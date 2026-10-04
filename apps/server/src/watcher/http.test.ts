@@ -18,8 +18,10 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertItem } from "../db/tree.ts";
 import { createJobQueue, listJobs, watcherHeartbeatMs } from "../jobs/queue.ts";
 import { scanShowDirectory } from "../libraries/scan.ts";
+import { updateLibrary } from "../libraries/service.ts";
 import { addRoot, insertLibraries } from "../libraries/testing.ts";
 import { readLibraryFile } from "../libraries/walker.ts";
 import { createChangeDebouncer } from "../libraries/webhooks.ts";
@@ -213,6 +215,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         claimToken: expect.any(String),
         libraryId: library.id,
         rootIds: [library.rootId],
+        rootsRevision: 0,
         path: "Alien (1979)",
         medium: "movies",
         cached: [],
@@ -276,6 +279,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         const file = await readLibraryFile(dir, path);
         const report = {
           claimToken: claimed.job.claimToken,
+          rootsRevision: claimed.job.rootsRevision,
           files: [
             {
               rootId: library.rootId,
@@ -349,6 +353,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
               `jobs/${claimed.job.id}`,
               {
                 claimToken: claimed.job.claimToken,
+                rootsRevision: claimed.job.rootsRevision,
                 files: [
                   {
                     rootId: library.rootId,
@@ -574,6 +579,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       expect(reclaimed?.attempts).toBe(2);
       send({
         claimToken: claimed.job.claimToken,
+        rootsRevision: claimed.job.rootsRevision,
         files: [
           {
             rootId: library.rootId,
@@ -624,5 +630,89 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       expect(await listJobs(db)).toMatchObject([
         { id: job.id, state: "running", error: null },
       ]);
+    }));
+
+  test("a report sent after a root repoint fails the scan instead of writing", () =>
+    withDatabase(async (db) => {
+      const { admin, token, library } = await setup(db);
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      const item = await insertItem(db, {
+        libraryId: library.id,
+        kind: "movie",
+        title: "Alien",
+        year: 1979,
+        canonicalFolder: "Alien (1979)",
+        extension: {},
+      });
+      const [version] = await db
+        .insert(versions)
+        .values({
+          itemId: item.id,
+          itemKind: "movie",
+          libraryId: library.id,
+          label: "Alien",
+          format: "video",
+          bytes: 1n,
+        })
+        .returning();
+      if (!version) throw new Error("Version insert returned no row.");
+      await db.insert(files).values({
+        versionId: version.id,
+        itemId: item.id,
+        libraryId: library.id,
+        rootId: library.rootId,
+        path: "Alien (1979)/Alien (1979).mkv",
+        order: 0,
+        bytes: 1n,
+        modifiedAt: new Date(0),
+      });
+      await db.insert(progress).values({
+        userId: admin.id,
+        itemId: item.id,
+        format: "video",
+        positionSeconds: 12,
+      });
+      const job = await createJobQueue(db).enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: "Alien (1979)",
+        reconcileMissing: true,
+      });
+      const claimed: WatcherClaim = await (
+        await handler(post("claim", { rootIds: [library.rootId] }, token))
+      )?.json();
+      if (claimed.job === null) throw new Error("No scan was claimed.");
+      expect(claimed.job.rootsRevision).toBe(0);
+      const before = await db.select().from(progress);
+
+      // The repoint bumps the revision; the stale report must not reconcile.
+      await updateLibrary(db, admin.id, library.id, {
+        roots: [{ id: library.rootId, path: "/media/repointed" }],
+      });
+      const response = await handler(
+        post(
+          `jobs/${job.id}`,
+          {
+            claimToken: claimed.job.claimToken,
+            rootsRevision: claimed.job.rootsRevision,
+            files: [],
+            probes: [],
+          } satisfies WatcherReport,
+          token,
+        ),
+      );
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toEqual({ state: "queued" });
+      const settled = (await listJobs(db, { type: "scan" })).find(
+        (queued) => queued.id === job.id,
+      );
+      expect(settled).toMatchObject({
+        state: "queued",
+        error: "Library roots changed before scan write.",
+      });
+      expect(await db.select().from(items)).toMatchObject([
+        { id: item.id, canonicalFolder: "Alien (1979)" },
+      ]);
+      expect(await db.select().from(progress)).toEqual(before);
     }));
 });

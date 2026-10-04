@@ -128,7 +128,13 @@ async function runScan(
         missing.push(checked);
       }
     }
-    return { claimToken, files: files.map(encodeFile), probes, missing };
+    return {
+      claimToken,
+      rootsRevision: job.rootsRevision,
+      files: files.map(encodeFile),
+      probes,
+      missing,
+    };
   } catch (error) {
     return {
       claimToken,

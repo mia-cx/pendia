@@ -33,4 +33,5 @@ ALTER TABLE "probe_cache" DROP COLUMN "library_id";--> statement-breakpoint
 ALTER TABLE "probe_cache" ADD CONSTRAINT "probe_cache_root_id_library_roots_id_fk" FOREIGN KEY ("root_id") REFERENCES "public"."library_roots"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "probe_cache" ADD CONSTRAINT "probe_cache_root_path_unique" UNIQUE("root_id","path");--> statement-breakpoint
 UPDATE "jobs" SET "payload" = jsonb_set("payload", '{changes}', (SELECT jsonb_agg("change" || jsonb_build_object('rootId', "library_roots"."id")) FROM jsonb_array_elements("jobs"."payload"->'changes') AS "change")) FROM "library_roots" WHERE "jobs"."type" = 'scan' AND "jobs"."state" IN ('queued', 'running') AND jsonb_typeof("jobs"."payload"->'changes') = 'array' AND jsonb_array_length("jobs"."payload"->'changes') > 0 AND "library_roots"."library_id" = ("jobs"."payload"->>'libraryId')::uuid;--> statement-breakpoint
+ALTER TABLE "libraries" ADD COLUMN "roots_revision" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "libraries" DROP COLUMN "root_path";

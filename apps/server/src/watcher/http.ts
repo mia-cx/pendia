@@ -88,6 +88,8 @@ const ReportedFile = Schema.Struct({
 const ScanReport = Schema.Union(
   Schema.Struct({
     ...HeldClaim.fields,
+    /** The Library's roots revision at claim time; a root edit since fails the scan. */
+    rootsRevision: Schema.Int,
     files: Schema.Array(ReportedFile),
     probes: Schema.Array(
       Schema.Struct({
@@ -113,6 +115,8 @@ export type WatcherClaim = {
     libraryId: string;
     /** The Library's root ids, first root first: the scan walks its path in each. */
     rootIds: string[];
+    /** The roots revision the root ids were read at; sent back with the report. */
+    rootsRevision: number;
     path: string;
     medium: (typeof libraries.$inferSelect)["medium"];
     /** Files whose cached probe is current at this size and mtime. */
@@ -163,8 +167,10 @@ async function beat(db: Database, rootIds: readonly string[]) {
     .select({
       libraryId: libraryRoots.libraryId,
       rootId: libraryRoots.id,
+      rootsRevision: libraries.rootsRevision,
     })
     .from(libraryRoots)
+    .innerJoin(libraries, eq(libraries.id, libraryRoots.libraryId))
     .where(
       inArray(
         libraryRoots.libraryId,
@@ -178,6 +184,9 @@ async function beat(db: Database, rootIds: readonly string[]) {
   const known = roots.filter((root) => watchedRoots.has(root.rootId));
   if (known.length !== watchedRoots.size) throw new AuthError("NOT_FOUND");
   const rootIdsOf = Map.groupBy(roots, (root) => root.libraryId);
+  const revisionOf = new Map(
+    roots.map((root) => [root.libraryId, root.rootsRevision]),
+  );
   const whole = [...rootIdsOf]
     .filter(([, held]) => held.every((root) => watchedRoots.has(root.rootId)))
     .map(([libraryId]) => libraryId);
@@ -192,6 +201,7 @@ async function beat(db: Database, rootIds: readonly string[]) {
   return watched.map((library) => ({
     ...library,
     rootIds: (rootIdsOf.get(library.id) ?? []).map((root) => root.rootId),
+    rootsRevision: revisionOf.get(library.id) ?? 0,
   }));
 }
 
@@ -249,6 +259,7 @@ async function claim(
       claimToken: job.claimToken,
       libraryId,
       rootIds: library.rootIds,
+      rootsRevision: library.rootsRevision,
       path,
       medium: library.medium,
       cached: cached.map((file) => Schema.encodeSync(ReportedFile)(file)),
@@ -306,6 +317,7 @@ function reportedScanSource(
   );
   const missing = new Set(report.missing.map(rootedKey));
   return {
+    rootsRevision: report.rootsRevision,
     async walk(path, recursive) {
       const walked = [...reportedFiles.values()];
       if (walked.some((file) => !inScope(path, recursive, file.path)))

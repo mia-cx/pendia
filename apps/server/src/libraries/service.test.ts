@@ -23,6 +23,7 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
+import { libraryScanSource, scanDirectory } from "./scan.ts";
 import {
   createLibrary,
   deleteLibrary,
@@ -645,6 +646,50 @@ describe.skipIf(!databaseUrl)("library service", () => {
         expect(after).toHaveLength(2);
         expect(after.every((file) => file.itemId === before.itemId)).toBe(true);
         expect(await itemFiles(db, "Alien")).toHaveLength(1);
+      });
+    }));
+
+  test("a scan built on roots from before a repoint refuses to write", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      await withTwoRoots(async ({ hq, transcoded }) => {
+        const library = await createLibrary(db, admin.id, {
+          name: "Movies",
+          medium: "movies",
+          roots: [hq],
+        });
+        const [hqRoot] = library.roots;
+        if (!hqRoot) throw new Error("Root missing.");
+        await scanLibrary(db, admin.id, library.id);
+        await drainScans(db);
+        const [before] = await itemFiles(db, "Blade Runner");
+        if (!before) throw new Error("Blade Runner was not scanned.");
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: before.itemId,
+          format: "video",
+          positionSeconds: 42,
+        });
+
+        // The source read the roots at revision 0; the repoint bumps it.
+        const source = await libraryScanSource(db, {
+          id: library.id,
+          medium: "movies",
+        });
+        await updateLibrary(db, admin.id, library.id, {
+          roots: [{ id: hqRoot.id, path: transcoded }],
+        });
+        await expect(
+          scanDirectory(db, library.id, "Blade Runner (1982)", {
+            source,
+            reconcileMissing: true,
+          }),
+        ).rejects.toThrow("Library roots changed before scan write.");
+        expect(await itemFiles(db, "Blade Runner")).toEqual([before]);
+        expect(
+          (await db.select().from(progress)).map((row) => row.itemId),
+        ).toEqual([before.itemId]);
       });
     }));
 });

@@ -48,6 +48,8 @@ export const libraries = pgTable("libraries", {
     .default({}),
   // A watcher's last claim. While it is recent, the watcher runs the Library's scans.
   watcherSeenAt: instant("watcher_seen_at"),
+  // Bumps when a root is added, repointed or removed, so a scan built on a stale root list refuses to write.
+  rootsRevision: integer("roots_revision").notNull().default(0),
 });
 
 /** One absolute folder of a Library. No root equals or contains another; the service checks that. */

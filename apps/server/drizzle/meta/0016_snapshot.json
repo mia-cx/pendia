@@ -1,5 +1,5 @@
 {
-  "id": "5730c718-5839-48c6-b6f9-8cfd192df9a1",
+  "id": "68fe493a-4f13-4062-8100-fee8665b77e5",
   "prevId": "168cfcd4-9df8-4aed-9258-e01d625456e1",
   "version": "7",
   "dialect": "postgresql",
@@ -1899,6 +1899,13 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "roots_revision": {
+          "name": "roots_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         }
       },
       "indexes": {},

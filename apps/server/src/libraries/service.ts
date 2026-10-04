@@ -282,14 +282,21 @@ export async function updateLibrary(
       requested.map((root) => root.path),
       id,
     );
-    await removeRoots(
-      tx,
-      [...current.keys()].filter((rootId) => !seen.has(rootId)),
-      deletedArtwork,
-    );
+    const removed = [...current.keys()].filter((rootId) => !seen.has(rootId));
+    await removeRoots(tx, removed, deletedArtwork);
     const repointed = requested.filter(
       (root) => root.id !== undefined && current.get(root.id) !== root.path,
     );
+    // Scans holding a roots snapshot from before this write refuse to write.
+    if (
+      removed.length > 0 ||
+      repointed.length > 0 ||
+      requested.some((root) => root.id === undefined)
+    )
+      await tx
+        .update(libraries)
+        .set({ rootsRevision: sql`${libraries.rootsRevision} + 1` })
+        .where(eq(libraries.id, id));
     // Park repointed paths on their ids first, so two roots can swap paths.
     for (const root of repointed)
       if (root.id !== undefined)

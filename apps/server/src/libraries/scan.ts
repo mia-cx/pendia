@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import {
@@ -8,6 +8,7 @@ import {
   itemAncestors,
   items,
   libraries,
+  libraryRoots,
   type ScanChange,
   seasons,
   streams,
@@ -40,7 +41,6 @@ import {
   type LibraryRoot,
   type RootedPath,
   rootedKey,
-  rootsOf,
 } from "./roots.ts";
 import { persistScanTimelines } from "./timelines.ts";
 import {
@@ -58,6 +58,8 @@ export type ProbedRootedFile = ProbedLibraryFile & { rootId: string };
 
 /** Where a scan reads its files: the local disk, or a watcher's report. */
 export type ScanSource = {
+  /** The Library's roots revision when this source read its roots; a write under a newer revision is refused. */
+  rootsRevision: number;
   /** Lists accepted media files under a root-relative scope in every root; a missing scope lists none. */
   walk(path: string, recursive: boolean): Promise<RootedFile[]>;
   /** Returns one walked file with its probe result. */
@@ -210,6 +212,7 @@ async function confirmScopeEmpty(
 export function localScanSource(
   db: Database,
   roots: readonly LibraryRoot[],
+  rootsRevision: number,
   medium: (typeof libraries.$inferSelect)["medium"],
   probe: typeof probeVideo = probeVideo,
 ): ScanSource {
@@ -229,6 +232,7 @@ export function localScanSource(
     }
   };
   return {
+    rootsRevision,
     async walk(path, recursive) {
       const walked: RootedFile[] = [];
       for (const root of roots) {
@@ -276,15 +280,30 @@ export function localScanSource(
   };
 }
 
-/** Reads a Library's own roots on the local disk. */
+/**
+ * Reads a Library's own roots on the local disk. The roots and their
+ * revision come from one statement, so a scan never pairs old roots with
+ * the revision a root edit already bumped.
+ */
 export async function libraryScanSource(
   db: Database,
   library: Pick<typeof libraries.$inferSelect, "id" | "medium">,
   probe: typeof probeVideo = probeVideo,
 ) {
+  const rows = await db
+    .select({
+      id: libraryRoots.id,
+      path: libraryRoots.path,
+      rootsRevision: libraries.rootsRevision,
+    })
+    .from(libraries)
+    .innerJoin(libraryRoots, eq(libraryRoots.libraryId, libraries.id))
+    .where(eq(libraries.id, library.id))
+    .orderBy(asc(libraryRoots.position), asc(libraryRoots.id));
   return localScanSource(
     db,
-    await rootsOf(db, library.id),
+    rows.map(({ id, path }) => ({ id, path })),
+    rows[0]?.rootsRevision ?? 0,
     library.medium,
     probe,
   );
@@ -439,6 +458,9 @@ export async function scanDirectory(
       .where(eq(libraries.id, libraryId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
+    // A root edit between the walk and this lock made the snapshot stale.
+    if (locked.rootsRevision !== source.rootsRevision)
+      throw new Error("Library roots changed before scan write.");
 
     const emptiedItemIds = await applyScanChanges(
       tx,
@@ -703,6 +725,9 @@ export async function scanShowDirectory(
       .where(eq(libraries.id, libraryId))
       .for("update");
     if (!locked) throw new AuthError("NOT_FOUND");
+    // A root edit between the walk and this lock made the snapshot stale.
+    if (locked.rootsRevision !== source.rootsRevision)
+      throw new Error("Library roots changed before scan write.");
 
     const emptiedItemIds = await applyScanChanges(
       tx,

@@ -19,7 +19,7 @@ import {
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { decidePlayback } from "../playback/decisions.ts";
-import { listSessions } from "./playback-sessions.ts";
+import { listPlaybackSessions } from "./playback-sessions.ts";
 import type { pendiaRouter } from "./router.ts";
 
 async function seed(db: Database) {
@@ -173,7 +173,7 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
         lastSeenAt: new Date(Date.now() - 6 * 60_000),
       });
 
-      const listed = await listSessions(db, fx.admin.id);
+      const listed = await listPlaybackSessions(db, fx.admin.id);
       expect(listed.map((session) => session.id)).toEqual([
         live.id,
         stored.id,
@@ -208,7 +208,9 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
         .set({ state: "stopped" })
         .where(eq(sessionRegistry.id, live.id));
       expect(
-        (await listSessions(db, fx.admin.id)).map((session) => session.id),
+        (await listPlaybackSessions(db, fx.admin.id)).map(
+          (session) => session.id,
+        ),
       ).toEqual([stored.id, direct.id]);
     }));
 
@@ -216,7 +218,9 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seed(db);
-      await expect(listSessions(db, fx.viewer.id)).rejects.toMatchObject({
+      await expect(
+        listPlaybackSessions(db, fx.viewer.id),
+      ).rejects.toMatchObject({
         code: "FORBIDDEN",
       });
       const { token: adminToken } = await createApiKey(db, fx.admin.id, "a");

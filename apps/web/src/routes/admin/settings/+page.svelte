@@ -403,6 +403,10 @@ section {
   align-content: start;
 }
 
+.stack p {
+  margin: 0;
+}
+
 .keys {
   margin-top: 16px;
 }

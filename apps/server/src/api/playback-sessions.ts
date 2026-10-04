@@ -34,7 +34,7 @@ function rungsOf(
 }
 
 /** Lists live and queued sessions, newest first, for a caller holding manage-server. */
-export async function listSessions(db: Database, actorId: string) {
+export async function listPlaybackSessions(db: Database, actorId: string) {
   await requirePermission(db, actorId, "manage-server");
   const rows = await db
     .select({
@@ -104,5 +104,7 @@ export const playbackSessions = authenticated
   .route({ method: "GET", path: "/playback/sessions" })
   .output(Schema.standardSchemaV1(Schema.Array(PlaybackSession)))
   .handler(async ({ context }) =>
-    runApi(fromHost(() => listSessions(context.db, context.caller.user.id))),
+    runApi(
+      fromHost(() => listPlaybackSessions(context.db, context.caller.user.id)),
+    ),
   );

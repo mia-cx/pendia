@@ -8,11 +8,11 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, topology.md, ADR 0003 a
 
 ## Acceptance criteria
 
-- [ ] An HEVC fixture plays on a client profile without HEVC through a live transcode; an audio-only mismatch re-encodes audio and passes video untouched.
-- [ ] SRT and ASS become WebVTT tracks; a PGS fixture takes the burn-in path.
-- [ ] A third concurrent session queues and starts when one ends.
-- [ ] The capability table is populated at startup and readiness waits for it.
-- [ ] ffmpeg argument construction has tests per path.
+- [x] An HEVC fixture plays on a client profile without HEVC through a live transcode; an audio-only mismatch re-encodes audio and passes video untouched.
+- [x] SRT and ASS become WebVTT tracks; a PGS fixture takes the burn-in path.
+- [x] A third concurrent session queues and starts when one ends.
+- [x] The capability table is populated at startup and readiness waits for it.
+- [x] ffmpeg argument construction has tests per path.
 
 ## TODOs
 
@@ -22,7 +22,7 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, topology.md, ADR 0003 a
 - [x] 4. Session manager for transcode and subtitles. Sessions build their run from the persisted decision; the master playlist advertises the output (rung resolution, bandwidth, codecs) and a `SUBTITLES` group with one WebVTT rendition per text subtitle Stream; `subs-<n>.m3u8` and `subs-<n>.vtt` serve a one-segment playlist and the converted file, cached in scratch. Validation: playlists parse strictly with `hls-parser`; Postgres-backed manager tests serve a transcode session's segments and a converted subtitle.
 - [x] 5. Admission cap. The manager admits at most `transcodeSlots` transcode sessions (option, `PENDIA_TRANSCODE_SLOTS`, default 2); remux sessions never queue. A session beyond the cap waits in FIFO order, flips its registry state from `starting` to `queued` and publishes `session.state`; init and segment requests wait for admission up to the wait limit, then answer 503 `SESSION_QUEUED`. A slot frees when a session stops: idle, shutdown, or the client's stop, which the transcoder hears on the events channel. Admission flips `queued` back to `starting`. `stopPlayback` accepts a queued session. Validation: manager test with three sessions: the third queues, its request waits, and it serves once the first ends; event and registry state checked.
 - [x] 6. Planning and the HLS route. A transcode plan opens a session and returns the master URL; refresh works for transcode; HLS requests accept transcode sessions; a Version needs an aligned timeline only when its video is copied. README documents the cap and the trial. Validation: api tests on the HEVC fixture with an H.264-only profile (playlists validate, segments decode as H.264), an audio-only mismatch (video packets identical to the source, audio AAC stereo), SRT and ASS tracks in the master playlist, a PGS fixture planned as burn-in, three sessions through the route with the third queued until a stop; the hls.js browser test plays a transcode session with its subtitle track.
-- [ ] 7. Final validation from the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=... bun test`, `bun test` without it. Record results here.
+- [x] 7. Final validation from the repo root: `bun install --frozen-lockfile`, `bun run lint`, `bun run check`, `bun run build`, `DATABASE_URL=... bun test`, `bun test` without it. Record results here.
 
 ## Notes
 
@@ -50,3 +50,5 @@ Read: CONTEXT.md, docs/spec/transcoding.md, playback.md, topology.md, ADR 0003 a
 - Only a `starting` session becomes `queued` in the registry. A session that was `playing`, idled out and revives behind a full cap waits the same way, but its registry state stays `playing` so the player's heartbeats still land.
 - Hardware backends are trialled and recorded, never chosen: this slice builds CPU arguments only, so planning reads only the `cpu` entry. Choosing a hardware backend comes with its argument builder.
 - Burn-in takes the first bitmap subtitle Stream whose decision is `burn`. The engine marks burn-in whenever the client cannot render a bitmap Stream, without a viewer's subtitle choice, so every Blu-ray remux with PGS transcodes for a browser today. That rule predates this slice (#24).
+- The gate's first full run, at load average 25, failed eight tests. Two were real or environmental and fast: the queue test read the registry row before its `session.state` event committed (fixed in c91d3f7: row and event now commit in one transaction; 3 of 3 focused runs pass), and `wizard.test.ts` starts a transcoder on the default port 3001, which another process on this host holds. The rest were 6 to 43 s timeouts under that load and pass in the rerun.
+- Final validation on 2026-10-04, Bun 1.4.2, ffmpeg 7.1.5, Postgres 18, at c91d3f7 merged with origin/main 27bc7b4 (up to date): `bun install --frozen-lockfile` exit 0; `bun run lint` exit 0; `bun run check` exit 0; `bun run build` exit 0; `PENDIA_TRANSCODER_PORT=3934 DATABASE_URL=... bun test` exit 0 with 1054 pass, 0 fail across 79 files in 381 s; `env -u DATABASE_URL -u CI bun test` exit 0 with 599 pass, 467 skip, 0 fail. `PENDIA_TRANSCODER_PORT` only steers the wizard test off this host's busy port 3001.

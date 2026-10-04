@@ -134,8 +134,10 @@ export function mediaSource(
   const subtitles = version.streams.filter(
     (stream) => stream.kind === "subtitle",
   );
-  const defaultAudio =
-    audio.find((stream) => stream.disposition.default) ?? audio[0];
+  // An HLS session carries the first audio Stream; a file plays its default.
+  const defaultAudio = hls
+    ? audio[0]
+    : (audio.find((stream) => stream.disposition.default) ?? audio[0]);
   const defaultSubtitle = subtitles.find(
     (stream) => stream.disposition.forced || stream.disposition.default,
   );

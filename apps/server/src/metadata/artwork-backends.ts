@@ -12,6 +12,7 @@ import {
   dirname,
   isAbsolute,
   join,
+  parse,
   posix,
   relative,
   resolve,
@@ -53,14 +54,20 @@ export function readArtworkStoreConfig(
     const bucket = s3("BUCKET");
     if (bucket === undefined)
       throw new Error("PENDIA_ARTWORK_STORE=s3 needs S3_BUCKET.");
+    const accessKeyId = s3("ACCESS_KEY_ID");
+    const secretAccessKey = s3("SECRET_ACCESS_KEY");
+    if (accessKeyId === undefined || secretAccessKey === undefined)
+      throw new Error(
+        "PENDIA_ARTWORK_STORE=s3 needs S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).",
+      );
     return {
       backend: "s3",
       client: new Bun.S3Client({
         bucket,
         endpoint: s3("ENDPOINT"),
         region: s3("REGION"),
-        accessKeyId: s3("ACCESS_KEY_ID"),
-        secretAccessKey: s3("SECRET_ACCESS_KEY"),
+        accessKeyId,
+        secretAccessKey,
       }),
     };
   }
@@ -101,7 +108,7 @@ export function artworkBackend(
   if (name === "colocated") return directoryBackend(libraryRoot, openFile);
   if (name === "configured-path")
     return store.backend !== "s3" && store.path !== undefined
-      ? directoryBackend(store.path, openFile)
+      ? directoryBackend(store.path, openFile, true)
       : null;
   return store.backend === "s3" ? s3Backend(store.client) : null;
 }
@@ -125,7 +132,7 @@ export async function writeArtworkOriginal(
     return { backend: "s3", storageKey: name };
   }
   if (store.backend === "configured-path") {
-    await directoryBackend(store.path).write(name, bytes);
+    await directoryBackend(store.path, open, true).write(name, bytes);
     return { backend: "configured-path", storageKey: name };
   }
   const storageKey = `${itemFolder}/.pendia/artwork/${name}`;
@@ -140,7 +147,7 @@ export async function writeArtworkOriginal(
     if (store.path === undefined || (code !== "EROFS" && code !== "EACCES"))
       throw error;
   }
-  await directoryBackend(store.path).write(name, bytes);
+  await directoryBackend(store.path, open, true).write(name, bytes);
   return { backend: "configured-path", storageKey: name };
 }
 
@@ -247,11 +254,16 @@ async function openOriginal(
 function directoryBackend(
   rootPath: string,
   openFile: ArtworkOpen = open,
+  createRoot = false,
 ): ArtworkBackend {
   return {
     async write(key, bytes) {
       const { root, target } = resolveStoragePath(rootPath, key);
-      await walkStorageDirectory(root, dirname(target), true);
+      await walkStorageDirectory(
+        createRoot ? parse(root).root : root,
+        dirname(target),
+        true,
+      );
       const temporary = `${target}.${Bun.randomUUIDv7()}.tmp`;
       try {
         await writeFile(temporary, bytes);

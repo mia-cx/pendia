@@ -52,6 +52,6 @@ Pendia keeps artwork originals in one store, chosen once at setup with environme
 | --- | --- | --- |
 | `colocated` (default) | each Item's `.pendia/artwork` folder | `PENDIA_ARTWORK_PATH` to fall back to when the media share is read-only |
 | `path` | `PENDIA_ARTWORK_PATH` | `PENDIA_ARTWORK_PATH`, an absolute path |
-| `s3` | an S3-compatible bucket | `S3_BUCKET`, plus `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` as the server needs. The `AWS_` names work too. |
+| `s3` | an S3-compatible bucket | `S3_BUCKET`, `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`, plus `S3_ENDPOINT` and `S3_REGION` as the server needs. The `AWS_` names work too. |
 
 Every role that serves the API or runs jobs reads the same settings and refuses to start when they are invalid.

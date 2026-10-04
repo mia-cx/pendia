@@ -6,10 +6,10 @@ Add `--role watcher`: a process on the storage host, configured with the api URL
 
 ## Acceptance criteria
 
-- [ ] Creating, moving and deleting files in a local fixture tree produces events at the api within 1 s, with library-relative paths.
-- [ ] A walk requested for a library runs on the watcher and its probe results land in the database.
-- [ ] A missing or wrong token is rejected.
-- [ ] The documented compose snippet runs the watcher against a local folder.
+- [x] Creating, moving and deleting files in a local fixture tree produces events at the api within 1 s, with library-relative paths.
+- [x] A walk requested for a library runs on the watcher and its probe results land in the database.
+- [x] A missing or wrong token is rejected.
+- [x] The documented compose snippet runs the watcher against a local folder.
 
 ## TODOs
 
@@ -23,8 +23,9 @@ Add `--role watcher`: a process on the storage host, configured with the api URL
   - Validation: a fixture-tree test against a stub api sees add, move and delete within 1 s with relative paths; a database test requests a library scan through the api and finds the watcher's probe results in `probe_cache` and Streams. Done: `bun test src/watcher` 10 pass, the tree test 5 of 5 runs; `src/roles.test.ts src/index.test.ts` 19 pass.
 - [x] Document the watcher in the server README and add a compose snippet for the storage host; run it against a local folder.
   - Validation: `docker compose -f compose.watcher.yaml config`, and the watcher container started from it pushes events for a local folder. Done: config names each missing variable, and resolves with them set. A local `--role api` (no worker) plus the compose watcher on host networking: a fixture `Alien (1979).mkv` became one add (the fixture's temporary `.srt` files were dropped), the watcher claimed and probed the scan, and the movie Item, File and three Streams landed. A rename became a move job, and a delete became a delete job that removed the File and Item.
-- [ ] Run the full gate and record the real results here.
+- [x] Run the full gate and record the real results here.
   - Validation: `bun install --frozen-lockfile`; `bun run lint`; `bun run check`; `bun run build`; `DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55531/pendia bun test`; `bun test`.
+  - Results on the tree merged with main at 27bc7b4: install no changes; lint clean (256 files); check 6 of 6 tasks; build 4 of 4 tasks. With DATABASE_URL: 1006 pass, 2 fail. Both failures were `EADDRINUSE` on port 3001, the transcoder's default port, held for a moment by another session on this machine. `src/api/wizard.test.ts` and `src/api/libraries.test.ts` then passed on re-run, 7 of 7. Before the merge, the same suite ran 999 pass, 0 fail. Without DATABASE_URL: 560 pass, 458 skip, 0 fail.
 
 ## Notes
 

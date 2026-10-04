@@ -1,5 +1,7 @@
 import { AuthError } from "../auth/errors.ts";
 import { authenticate } from "../auth/sessions.ts";
+import { readAuthSettings } from "../auth/settings.ts";
+import { requestIdentity } from "../auth/transport.ts";
 import type { Database } from "../db/client.ts";
 import {
   type ClientInfo,
@@ -39,6 +41,12 @@ export function json(body: unknown, status = 200): Response {
     status,
     headers: { "Cache-Control": "no-store" },
   });
+}
+
+/** Resolves the caller's address and protocol, trusting forwarding headers from configured proxies only. */
+export async function identify({ db, request, peerAddress }: RequestContext) {
+  const { trustedProxyAddresses } = await readAuthSettings(db);
+  return requestIdentity(request, peerAddress, trustedProxyAddresses);
 }
 
 /** Answers 204 No Content. */
@@ -118,8 +126,12 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
       const caller = await authenticate(db, token);
       return await found.route.handle({ ...context, caller, token });
     } catch (error) {
-      if (error instanceof AuthError)
-        return failure(error.status, error.code, error.message);
+      if (error instanceof AuthError) {
+        const response = failure(error.status, error.code, error.message);
+        if (error.retryAfterSeconds !== undefined)
+          response.headers.set("Retry-After", String(error.retryAfterSeconds));
+        return response;
+      }
       console.error(
         JSON.stringify({
           level: "error",

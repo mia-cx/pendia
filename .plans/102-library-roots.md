@@ -24,7 +24,8 @@ A Library gets one or more roots in a new `library_roots` table, and `libraries.
 - [x] Admin UI. The create form takes folder rows you can add and remove. The Library page gains an edit form with the name, editable folder rows with remove buttons, an add-folder button, and each saved folder's id with a copy button. Saving with a folder removed asks first. A refused folder shows its error under its row. A pure `lib/roots.ts` holds the draft logic.
   - Result: `bun test apps/web/src/lib/roots.test.ts` 6 pass, 0 fail; `bun run --cwd apps/web check` clean; `bun run lint` clean.
   - Validation: `bun test apps/web/src/lib/roots.test.ts`; `bun run --cwd apps/web check`.
-- [ ] Docs: `CONTEXT.md` (Library, Root, home root), server README API and watcher sections, `docs/operations.md` and `compose.watcher.yaml` for the new `PENDIA_WATCH` form, the plugin API files comment.
+- [x] Docs: `CONTEXT.md` (Library, Root, home root), server README API and watcher sections, `docs/operations.md` and `compose.watcher.yaml` for the new `PENDIA_WATCH` form, the plugin API files comment.
+  - Result: all five files updated plus `docs/spec/plugins.md`; `bun run lint` clean.
 - [ ] Full gate and screenshots per the brief.
 
 ## Call-site inventory

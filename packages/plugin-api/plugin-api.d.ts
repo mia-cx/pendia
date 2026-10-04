@@ -98,9 +98,10 @@ export interface PluginHost {
   /**
    * Present with "files", which the admin approves at install behind a warning
    * and can switch off per plugin or globally, temporarily or for good. Paths
-   * are relative to the root of the library `libraryId` names, as in
-   * `Version.files`. There are no file handles: a plugin asks Pendia to act
-   * on a path.
+   * are relative to a root of the library `libraryId` names, as in
+   * `Version.files`. A path resolves in the first root by position that
+   * holds it, or its folder, else the first root. There are no file handles:
+   * a plugin asks Pendia to act on a path.
    */
   readonly files?: {
     stat(libraryId: string, path: string): Promise<{ bytes: number; modifiedAt: string } | null>;

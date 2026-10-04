@@ -55,7 +55,7 @@ Declared in the manifest, approved at install. `files` is the loud one: it lets 
 
 `network` is restricted to the hosts in the manifest, over http and https. `"*"` in the list means any host, for a plugin such as webhooks that calls whatever URL the admin enters; its install screen says so. Redirects come back to the plugin rather than being followed, so every hop passes the same check.
 
-Files paths are relative to a library root and name that library: `files.read(libraryId, path)`, as in `Version.files`. A path that leaves the library is refused, and every call rechecks both switches, so switching file access off stops a loaded plugin at once.
+Files paths are relative to a library's roots and name that library: `files.read(libraryId, path)`, as in `Version.files`. A path resolves in the first root by position that holds it, or its folder, else the first root. A path that leaves every root is refused, and every call rechecks both switches, so switching file access off stops a loaded plugin at once.
 
 ## Providers
 

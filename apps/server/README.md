@@ -402,24 +402,24 @@ Library administration requires `manage-libraries` on every procedure. The API e
 | --- | --- | --- | --- |
 | `libraries.list` | GET `/api/libraries` | None | Library array |
 | `libraries.get` | GET `/api/libraries/{id}` | `id` | Library |
-| `libraries.create` | POST `/api/libraries` | `name`, `medium: "movies" \| "shows"`, `rootPath` | Library |
-| `libraries.update` | PATCH `/api/libraries/{id}` | `id`, `name` | Library |
+| `libraries.create` | POST `/api/libraries` | `name`, `medium: "movies" \| "shows"`, `roots: string[]` | Library |
+| `libraries.update` | PATCH `/api/libraries/{id}` | `id`, `name?`, `roots?: { id?, path }[]` | Library |
 | `libraries.delete` | DELETE `/api/libraries/{id}` | `id` | `{ ok: true }` |
 | `libraries.scan` | POST `/api/libraries/{id}/scan` | `id` | `{ jobId }` |
 | `libraries.scanStatus` | GET `/api/libraries/{id}/scan-status` | `id`, `runId?` | `ScanStatus` |
 
 A ScanStatus describes one scan invocation, identified by the `jobId` that `libraries.scan` returned: the library id, counts for the four job states covering that run's root job and the directory jobs it fanned out, the newest scan job's id, state and error or null, and `runId`, the run's root job id. Directory jobs inherit the run id in their payload, so the counts cover exactly one run even when another scan starts while a run is still fanning out. Omitting `runId` reports the newest run (the newest root job, `path` of `.`), and an unknown `runId` answers 404. When the library has never scanned, the counts answer zero, `latest` and `runId` answer null.
-A Library contains `id`, `name`, `medium` and `rootPath`. Names trim surrounding whitespace and allow 1 to 128 characters. Roots must be absolute. Roots and mediums cannot change through `update`. Deleting a library removes its database records, never its files. Mutations use the auth module's origin checks.
+A Library contains `id`, `name`, `medium` and `roots`, an ordered list of `{ id, path }` folders that must be absolute and not overlap any root of any Library. `create` takes `roots` as an array of absolute paths, at least one. `get` and `list` return `roots` with their ids. `update` takes the whole new `roots` list in order: an entry with `id` keeps or repoints that root, an entry without adds one, and a saved root left out is removed. Adding or repointing a root queues a full scan. The last root cannot be removed, and the medium cannot change. A refused root answers BAD_REQUEST with the message and `data.root` set to its index in the request list. Deleting a library removes its database records, never its files. Mutations use the auth module's origin checks.
 
-The returned scan job walks the root and enqueues one scan per canonical movie or show folder in one transaction. Every root and directory job carries `library:<id>` as its concurrency key. The existing queue key limit applies. Worker and all roles register the built-in handler on startup. An explicit custom scan handler takes precedence.
+The returned scan job walks every root and enqueues one scan per canonical movie or show folder in one transaction. Every root and directory job carries `library:<id>` as its concurrency key. The existing queue key limit applies. Worker and all roles register the built-in handler on startup. An explicit custom scan handler takes precedence.
 
-Each media file directly inside a movie folder becomes an imported Version of that folder's Item. Nested collection folders work. Loose videos at the library root are skipped. Titles and years come from folder names such as `Alien (1979) {tmdb-348}`. Version labels come from probe dimensions, codecs and HDR. Only explicit filename tags such as `{edition-Director's Cut}` contribute to those labels.
+Each media file directly inside a movie folder becomes an imported Version of that folder's Item. Nested collection folders work. Loose videos at a root are skipped. Titles and years come from folder names such as `Alien (1979) {tmdb-348}`. Version labels come from probe dimensions, codecs and HDR. Only explicit filename tags such as `{edition-Director's Cut}` contribute to those labels.
 
 A shows library uses each top-level show folder as canonical. `Season N` folders and `Specials` hold Episodes, with Specials as season zero. Episode names use `SxxEyy`; a range such as `S01E02-E03` becomes one Episode carrying that range. Files ending in `partN`, `ptN` or `cdN` form ordered Files in one Version. Only Episodes hold Versions; Shows and Seasons are containers. Show folders carry provider ids the same way movie folders do, such as `The Expanse (2015) {tvdb-280619}` or Jellyfin's `[tvdbid-280619]`.
 
 The literal `extras` directory is always reserved, case-insensitively, even for same-name videos. Use a dated folder such as `Extras (2005)` for a movie named Extras. Other extras-category names can identify movies when the filename matches the canonical title, including `Collection/Shorts/Shorts.mkv`.
 
-The walker skips symlinks, excluded extras directories, extra filename suffixes, `.pendia` folders and `<source>.pendia` stores. Probe results persist in Postgres by library-relative path, byte size and nanosecond mtime. Changed files get one ffprobe for streams, duration and chapters. Unchanged scans reuse the cache across processes.
+The walker skips symlinks, excluded extras directories, extra filename suffixes, `.pendia` folders and `<source>.pendia` stores. Probe results persist in Postgres by root and root-relative path, byte size and nanosecond mtime. Changed files get one ffprobe for streams, duration and chapters. Unchanged scans reuse the cache across processes.
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 
@@ -431,9 +431,9 @@ Scan tests generate short MKV fixtures with ffmpeg and compare their stream list
 
 Sonarr and Radarr report file changes through webhook routes so scans stay current between manual runs. Create one API key per integration through the auth service's `createApiKey`. The token is shown once and becomes the secret URL segment. Point Sonarr at `<pendia-origin>/api/webhooks/sonarr/<secret>` and Radarr at `<pendia-origin>/api/webhooks/radarr/<secret>` with POST. Enable Download or import, Rename, Episode File Delete and Series Delete in Sonarr, and Download or import, Rename, Movie File Delete and Movie Delete in Radarr.
 
-The secret must be a live API key owned by a caller with `manage-libraries`. Session tokens in the URL are rejected. Wrong, revoked or expired secrets answer 401. Treat the full webhook URL as a secret and redact it from logs. Accepted payloads answer 202 with the number of translated changes. Unknown Servarr event types are accepted with zero changes. Malformed payloads, paths outside the matching medium's Library, and paths whose scan folder is the library root itself answer 400.
+The secret must be a live API key owned by a caller with `manage-libraries`. Session tokens in the URL are rejected. Wrong, revoked or expired secrets answer 401. Treat the full webhook URL as a secret and redact it from logs. Accepted payloads answer 202 with the number of translated changes. Unknown Servarr event types are accepted with zero changes. Malformed payloads, paths outside the matching medium's Library, and paths whose scan folder is a root itself answer 400.
 
-Absolute writer paths become library-relative paths and debounce for 10 seconds per Library directory. A burst of events queues one scan job under the Library concurrency key `library:<id>`.
+Absolute writer paths become root-relative paths and debounce for 10 seconds per Library directory. A burst of events queues one scan job under the Library concurrency key `library:<id>`.
 
 A rename updates the stored File and Item paths before the scan writes, so Item, Version, File and Progress identity survive. A rename onto an existing file replaces only the Item that file belonged to. A rename into another Show or Movie queues scans of both folders: the File leaves its source Item, and the destination scan adds it to the destination, so Progress does not follow it. A delete removes the missing Version, and the Item goes only when no Version remains. Provider ids from Servarr persist on the Item. Sonarr and Radarr changes both queue scans through their matching medium.
 
@@ -445,11 +445,11 @@ Media on NFS gives the api no inotify events, so `--role watcher` runs on the st
 
 - `PENDIA_API_URL`: the api origin, such as `http://pendia.lan:3000`.
 - `PENDIA_WATCHER_TOKEN`: an API key owned by a caller with `manage-libraries`.
-- `PENDIA_WATCH`: `<library-id>=<local root>` pairs separated by commas. Use Library ids, because names are not unique. A local root is the Library's root as the storage host sees it, so mount points may differ from the api's.
+- `PENDIA_WATCH`: `<root-id>=<absolute local path>` pairs separated by commas. A root id is shown on the Library page in the admin UI. A local path is that root's folder as the storage host sees it, so mount points may differ from the api's.
 
-The watcher watches each root recursively. After a file stays quiet for 200 ms, it posts the add, move or delete to `POST /api/watcher/events` with a library-relative path. A path that appears with the inode of a vanished path is a move, so renames keep Item and Progress identity. The api keeps changes to the medium's own files and debounces them like webhook changes. A failed post is logged and dropped; the repair pass heals what it missed.
+The watcher watches each root recursively. After a file stays quiet for 200 ms, it posts the add, move or delete to `POST /api/watcher/events` with a root-relative path. A path that appears with the inode of a vanished path is a move, so renames keep Item and Progress identity. The api keeps changes to the medium's own files and debounces them like webhook changes. A failed post is logged and dropped; the repair pass heals what it missed.
 
-The watcher also runs its Libraries' scans on local disk. It claims scan jobs through `POST /api/watcher/claim`, walks and probes, and posts the files and raw ffprobe output to `POST /api/watcher/jobs/<id>`. The api writes them like a local scan and fills the probe cache, which the next claim shares so unchanged files skip ffprobe. Each claim, and a heartbeat every 5 s during a scan, marks the watcher's Libraries as watched for 30 s. Workers leave scans of a watched Library queued. When the watcher stops, workers scan the Library again after 30 s. The claim carries a claim token. The heartbeat during a scan sends it back and renews the job's lease, and a 409 answer means another claim took the job. The report carries the token too. The api renews the lease with it before writing anything and holds the lease while it writes, so a report from a claim that lost the job answers 409. A report the api fails to take is retried every 5 s, because the running job holds the Library's concurrency key. A watcher killed during a scan stops renewing, so the job is claimable again once its lease expires.
+The watcher also runs its Libraries' scans on local disk. A watcher claims a Library's scans only when it watches every root of that Library. It claims scan jobs through `POST /api/watcher/claim`, walks and probes, and posts the files and raw ffprobe output to `POST /api/watcher/jobs/<id>`. The api writes them like a local scan and fills the probe cache, which the next claim shares so unchanged files skip ffprobe. Each claim, and a heartbeat every 5 s during a scan, marks the watcher's Libraries as watched for 30 s. Workers leave scans of a watched Library queued. When the watcher stops, workers scan the Library again after 30 s. The claim carries a claim token. The heartbeat during a scan sends it back and renews the job's lease, and a 409 answer means another claim took the job. The report carries the token too. The api renews the lease with it before writing anything and holds the lease while it writes, so a report from a claim that lost the job answers 409. A report the api fails to take is retried every 5 s, because the running job holds the Library's concurrency key. A watcher killed during a scan stops renewing, so the job is claimable again once its lease expires.
 
 All watcher routes take the API key as `Authorization: Bearer <key>`. Missing, wrong and session tokens answer 401.
 
@@ -459,7 +459,7 @@ On the storage host, run [compose.watcher.yaml](../../compose.watcher.yaml). It 
 PENDIA_API_URL=http://pendia.lan:3000 \
 PENDIA_WATCHER_TOKEN=<api key> \
 PENDIA_MEDIA=/srv/media \
-PENDIA_WATCH=<movies-library-id>=/media/movies,<shows-library-id>=/media/shows \
+PENDIA_WATCH=<movies-root-id>=/media/movies,<shows-root-id>=/media/shows \
 docker compose -f compose.watcher.yaml up -d
 ```
 

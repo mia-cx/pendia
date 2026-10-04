@@ -7,8 +7,9 @@ services:
     environment:
       PENDIA_API_URL: ${PENDIA_API_URL:?set the api origin, such as http://pendia.lan:3000}
       PENDIA_WATCHER_TOKEN: ${PENDIA_WATCHER_TOKEN:?set an API key with manage-libraries}
-      # <library-id>=<path inside this container>, comma separated.
-      PENDIA_WATCH: ${PENDIA_WATCH:?set <library-id>=/media/<folder> pairs}
+      # <root-id>=<path inside this container>, comma separated.
+      # A root id is shown on the Library page in the admin UI.
+      PENDIA_WATCH: ${PENDIA_WATCH:?set <root-id>=/media/<folder> pairs}
     volumes:
       # The watcher only reads the media.
       - ${PENDIA_MEDIA:-/srv/media}:/media:ro

@@ -57,6 +57,23 @@ describe("MediaBrowser header", () => {
     });
     expect(readClient(request).token).toBe("first");
   });
+
+  test("takes the token from the legacy token headers, never the query", () => {
+    const read = (headers: Record<string, string>) =>
+      readClient(
+        new Request("http://pendia.test/?ApiKey=query&api_key=query", {
+          headers,
+        }),
+      );
+    expect(read({ "X-Emby-Token": "emby" }).token).toBe("emby");
+    expect(
+      read({
+        "X-Emby-Authorization": 'MediaBrowser Client="Infuse-Direct"',
+        "X-MediaBrowser-Token": "mb",
+      }),
+    ).toMatchObject({ client: "Infuse-Direct", token: "mb" });
+    expect(read({}).token).toBeUndefined();
+  });
 });
 
 describe("GUIDs", () => {

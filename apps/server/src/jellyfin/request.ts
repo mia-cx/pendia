@@ -50,14 +50,23 @@ export function parseAuthorization(header: string): ClientInfo | undefined {
   };
 }
 
-/** Reads the client header from `Authorization`, falling back to Infuse's `X-Emby-Authorization`. */
+/**
+ * Reads the client header from `Authorization`, falling back to Infuse's
+ * `X-Emby-Authorization`. A bare `X-Emby-Token` or `X-MediaBrowser-Token`
+ * header supplies the token when the client header carries none. Tokens in
+ * the query string stay unread: the account token never belongs in a URL.
+ */
 export function readClient(request: Request): ClientInfo {
-  for (const name of ["authorization", "x-emby-authorization"]) {
-    const header = request.headers.get(name);
-    const parsed = header === null ? undefined : parseAuthorization(header);
-    if (parsed !== undefined) return parsed;
-  }
-  return {};
+  const client = ["authorization", "x-emby-authorization"]
+    .map((name) => request.headers.get(name))
+    .map((header) => (header === null ? undefined : parseAuthorization(header)))
+    .find((parsed) => parsed !== undefined);
+  const token =
+    client?.token ??
+    request.headers.get("x-emby-token") ??
+    request.headers.get("x-mediabrowser-token") ??
+    undefined;
+  return { ...client, token: token?.trim() || undefined };
 }
 
 /** Formats a Pendia UUID as a Jellyfin GUID: the same UUID without dashes. */

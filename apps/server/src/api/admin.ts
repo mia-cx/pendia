@@ -110,13 +110,24 @@ export const setupProcedures = {
       spec: (current) => ({ ...current, security: [] }),
     })
     .output(
-      Schema.standardSchemaV1(Schema.Struct({ complete: Schema.Boolean })),
+      Schema.standardSchemaV1(
+        Schema.Struct({
+          complete: Schema.Boolean,
+          oidcConfigured: Schema.Boolean,
+          oidcName: Schema.NullOr(Schema.String),
+        }),
+      ),
     )
     .handler(async ({ context }) =>
       runApi(
-        fromHost(async () => ({
-          complete: await isSetupComplete(context.db),
-        })),
+        fromHost(async () => {
+          const { oidc } = await readAuthSettings(context.db);
+          return {
+            complete: await isSetupComplete(context.db),
+            oidcConfigured: oidc !== null,
+            oidcName: oidc?.name ?? null,
+          };
+        }),
       ),
     ),
 };

@@ -305,7 +305,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `items.refresh` | POST `/api/items/{id}/refresh` | `id` in the path | `{ jobId }` |
 | `shelves.home` | GET `/api/shelves/home` | None | `Shelf` array |
 | `events.stream` | GET `/api/events` | `Last-Event-ID` header | `text/event-stream` |
-| `setup.status` | GET `/api/setup/status` | None | `{ complete }` |
+| `setup.status` | GET `/api/setup/status` | None | `{ complete, oidcConfigured, oidcName }` |
 | `users.list` | GET `/api/users` | None | `AdminUser` array |
 | `users.get` | GET `/api/users/{id}` | `id` | `UserAccess` |
 | `users.create` | POST `/api/users` | `username`, `password`, optional `displayName` | `UserAccount` |
@@ -326,7 +326,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
 
-`setup.status` is the only unauthenticated procedure. The first-run wizard asks it before any account exists, and it leaks one boolean that `POST /api/auth/setup` already leaks through its 409.
+`setup.status` is the only unauthenticated procedure. The first-run wizard asks it before any account exists, and it leaks one boolean that `POST /api/auth/setup` already leaks through its 409. The login page also reads whether OIDC is configured and its button name, which `GET /api/auth/oidc/login` already reveals.
 The other admin procedures check permissions inside the auth slice: `manage-users` for user reads and settings, `manage-server` for server settings, and built-in admin membership for group and library access writes.
 
 `users.get` and the four `users.set*` mutations all answer the full `UserAccess` shape, so the per-user screen refreshes in one round trip. The mutations read that shape back without re-checking the caller, which exposes nothing new because reaching that line already required passing the write's own check; it lets an admin demote themselves and still receive the saved state.

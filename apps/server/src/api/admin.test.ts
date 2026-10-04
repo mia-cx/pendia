@@ -9,6 +9,7 @@ import {
   setUserGroups,
 } from "../auth/permissions.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
+import { writeAuthSettings } from "../auth/settings.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { groups, jobs, libraries, settings } from "../db/schema/index.ts";
@@ -66,12 +67,61 @@ describe.skipIf(!databaseUrl)("admin api", () => {
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = createPendiaClient({ origin: base });
-        expect(await client.setup.status()).toEqual({ complete: false });
+        const closed = { oidcConfigured: false, oidcName: null };
+        expect(await client.setup.status()).toEqual({
+          complete: false,
+          ...closed,
+        });
         const rest = await fetch(`${base}/api/setup/status`);
         expect(rest.status).toBe(200);
-        expect(await rest.json()).toEqual({ complete: false });
-        await setupAdmin(db, { username: "admin", password: "admin-pass" });
-        expect(await client.setup.status()).toEqual({ complete: true });
+        expect(await rest.json()).toEqual({ complete: false, ...closed });
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        expect(await client.setup.status()).toEqual({
+          complete: true,
+          ...closed,
+        });
+        await db.insert(settings).values({
+          key: "auth",
+          value: {
+            oidc: {
+              issuer: "https://id.mia.cx/application/o/pendia",
+              clientId: "pendia",
+              scopes: ["openid"],
+            },
+          },
+        });
+        expect(await client.setup.status()).toMatchObject(closed);
+        await writeAuthSettings(db, admin.id, { oidcClientSecret: "secret" });
+        expect(await client.setup.status()).toEqual({
+          complete: true,
+          oidcConfigured: true,
+          oidcName: null,
+        });
+        await db
+          .update(settings)
+          .set({
+            value: {
+              oidc: {
+                issuer: "https://id.mia.cx/application/o/pendia",
+                clientId: "pendia",
+                clientSecret: "secret",
+                scopes: ["openid"],
+                name: "Authentik",
+              },
+            },
+          })
+          .where(eq(settings.key, "auth"));
+        const named = await fetch(`${base}/api/setup/status`);
+        const namedText = await named.text();
+        expect(namedText).not.toContain("secret");
+        expect(JSON.parse(namedText)).toEqual({
+          complete: true,
+          oidcConfigured: true,
+          oidcName: "Authentik",
+        });
       } finally {
         await server.stop();
       }

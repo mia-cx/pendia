@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -59,3 +61,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build --tag pendia:ci .
+      - name: Record the image size and ffmpeg version
+        run: |
+          size="$(docker image ls pendia:ci --format '{{.Size}}')"
+          ffmpeg="$(docker run --rm --entrypoint ffmpeg pendia:ci -version | head -n 1)"
+          echo "Image size: $size. $ffmpeg"
+          {
+            echo "| Image size | ffmpeg |"
+            echo "| --- | --- |"
+            echo "| $size | $ffmpeg |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Pushing a v1.2.3 tag publishes ghcr.io/mia-cx/pendia:1.2.3, :1.2 and :latest.
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [checks, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

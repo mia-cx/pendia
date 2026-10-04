@@ -16,7 +16,7 @@ Make Pendia installable. The image already builds with ffmpeg, the compiled serv
   - Validation: `DATABASE_URL=... bun test src/roles.test.ts` in `apps/server`. Done: 12 pass.
 - [x] Name the image `ghcr.io/mia-cx/pendia` in `compose.yaml` and `compose.watcher.yaml`, pinned by `PENDIA_VERSION`, with the build kept as the fallback, and give the healthcheck a start period for the trial.
   - Validation: `docker compose config` and `docker compose -f compose.watcher.yaml config` resolve. Done: both resolve, and so does the test override.
-- [ ] CI: the `image` job records the image size and the ffmpeg version in the run summary; a `publish` job pushes the image to GHCR on `v*` tags after `checks` and `image` pass.
+- [x] CI: the `image` job records the image size and the ffmpeg version in the run summary; a `publish` job pushes the image to GHCR on `v*` tags after `checks` and `image` pass.
   - Validation: the PR's `image` job shows the size; the `publish` job is skipped on the PR.
 - [ ] Log a failed startup as a JSON line like every other line.
   - Validation: a test or a manual run with a bad `DATABASE_URL` prints one JSON line.

@@ -26,7 +26,7 @@ export function createApiHandler(
   return async (
     request: Request,
     peerAddress: string,
-    server: Bun.Server<undefined>,
+    server: Pick<Bun.Server<undefined>, "timeout">,
   ): Promise<Response | undefined> => {
     const { pathname } = new URL(request.url);
     if (pathname === "/api/openapi.json" && request.method === "GET")

@@ -241,4 +241,10 @@ export const ApiEvent = Schema.Union(
     sessionId: Schema.UUID,
     index: Schema.Int,
   }),
+  Schema.Struct({
+    kind: Schema.Literal("user-data.changed"),
+    userId: Schema.UUID,
+    // Mutable, as the events table's JSON column types its arrays.
+    itemIds: Schema.mutable(Schema.Array(Schema.UUID)),
+  }),
 );

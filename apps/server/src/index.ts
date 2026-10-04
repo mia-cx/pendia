@@ -7,6 +7,7 @@ import { createDatabase, probeDatabase } from "./db/client.ts";
 import { migrateDatabase } from "./db/migrate.ts";
 import { createJellyfinHandler } from "./jellyfin/http.ts";
 import { jellyfinRoutes } from "./jellyfin/routes.ts";
+import { createJellyfinSocket } from "./jellyfin/socket.ts";
 import { createJobRegistry, jobRegistry } from "./jobs/registry.ts";
 import { startJobWorker } from "./jobs/worker.ts";
 import { registerLibraryJobs } from "./libraries/jobs.ts";
@@ -125,7 +126,7 @@ function log(
 
 function startRoles(
   role: Role,
-  apiServer: Bun.Server<undefined> | undefined,
+  apiServer: ReturnType<typeof startApiServer> | undefined,
   workerStarted: boolean,
   transcoder: Transcoder | undefined,
   watcherStarted: boolean,
@@ -198,7 +199,7 @@ export async function startPendia(
     servesApi || runsJobs || runsTranscoder
       ? createDatabase(databaseUrl)
       : undefined;
-  let apiServer: Bun.Server<undefined> | undefined;
+  let apiServer: ReturnType<typeof startApiServer> | undefined;
   let worker: Awaited<ReturnType<typeof startJobWorker>> | undefined;
   let eventBroker: Awaited<ReturnType<typeof startEventBroker>> | undefined;
   let changeDebouncer: ReturnType<typeof createChangeDebouncer> | undefined;
@@ -319,6 +320,7 @@ export async function startPendia(
           database.db,
           jellyfinRoutes(artwork, createHlsHandler(database.db, transcoder)),
         ),
+        socket: createJellyfinSocket(database.db, eventBroker),
         watcher: createWatcherHandler(database.db, changeDebouncer),
       });
     }

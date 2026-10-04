@@ -400,6 +400,11 @@ export async function stopPlayback(
         input.completed ?? false,
         false,
       );
+      await publishEvent(tx, {
+        kind: "user-data.changed",
+        userId,
+        itemIds: [scope.itemId],
+      });
     }
     await tx
       .update(sessionRegistry)

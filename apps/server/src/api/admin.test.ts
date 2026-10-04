@@ -481,6 +481,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           trustedProxyAddresses: [],
           artworkRequiresAuth: false,
           oidcConfigured: true,
+          oidcClientSecretSet: true,
           providerKeys: ["tmdb"],
           ...serverDefaults,
         });
@@ -511,8 +512,21 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           trustedProxyAddresses: ["10.0.0.2", "10.0.0.3"],
           artworkRequiresAuth: true,
           oidcConfigured: false,
+          oidcClientSecretSet: false,
           providerKeys: [],
           ...serverDefaults,
+        });
+        const secret = await fetch(`${base}/api/settings`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ oidcClientSecret: "oidc-secret-value" }),
+        });
+        expect(secret.status).toBe(200);
+        const secretText = await secret.text();
+        expect(secretText).not.toContain("oidc-secret-value");
+        expect(JSON.parse(secretText)).toMatchObject({
+          oidcConfigured: false,
+          oidcClientSecretSet: true,
         });
         const bad = await fetch(`${base}/api/settings`, {
           method: "PATCH",

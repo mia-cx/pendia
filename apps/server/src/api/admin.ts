@@ -89,6 +89,7 @@ async function readServerSettings(db: Database) {
     trustedProxyAddresses: config.trustedProxyAddresses,
     artworkRequiresAuth: config.artworkRequiresAuth,
     oidcConfigured: config.oidc !== null,
+    oidcClientSecretSet: config.oidcClientSecretSet,
     providerKeys,
     bitrateCapBps: await readGlobalBitrateCap(db),
     idleWindow: (await readStoreSettings(db)).idleWindow,
@@ -371,6 +372,7 @@ export const settingsProcedures = {
         Schema.Struct({
           trustedProxyAddresses: Schema.optional(Schema.Array(Schema.String)),
           artworkRequiresAuth: Schema.optional(Schema.Boolean),
+          oidcClientSecret: Schema.optional(Schema.String),
           // Null clears the global cap.
           bitrateCapBps: Schema.optional(
             Schema.NullOr(

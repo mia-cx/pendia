@@ -24,7 +24,46 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
         trustedProxyAddresses: [],
         artworkRequiresAuth: false,
         oidc: null,
+        oidcClientSecretSet: false,
       });
+    }));
+
+  test("OIDC stays off until the secret arrives, which the writer sets and replaces", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const admin = await setupAdmin(db, {
+        username: "admin",
+        password: "secret",
+      });
+      const { clientSecret: _, ...withoutSecret } = oidcConfig;
+      await writeAuthSettings(db, admin.id, { oidcClientSecret: " first " });
+      const early = await readAuthSettings(db);
+      expect(early.oidc).toBeNull();
+      expect(early.oidcClientSecretSet).toBe(true);
+      await db
+        .update(settings)
+        .set({ value: { oidc: { ...withoutSecret, name: " Authentik " } } })
+        .where(eq(settings.key, "auth"));
+      expect(await readAuthSettings(db)).toMatchObject({
+        oidc: null,
+        oidcClientSecretSet: false,
+      });
+      const written = await writeAuthSettings(db, admin.id, {
+        oidcClientSecret: " second ",
+      });
+      expect(written.oidc?.clientSecret).toBe("second");
+      expect(written.oidc?.name).toBe("Authentik");
+      expect(written.oidcClientSecretSet).toBe(true);
+      const replaced = await writeAuthSettings(db, admin.id, {
+        oidcClientSecret: "third",
+      });
+      expect(replaced.oidc?.clientSecret).toBe("third");
+      expect(replaced.oidc?.clientId).toBe("pendia");
+      for (const oidcClientSecret of ["", "   ", "x".repeat(4097)])
+        await expect(
+          writeAuthSettings(db, admin.id, { oidcClientSecret }),
+        ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect((await readAuthSettings(db)).oidc?.clientSecret).toBe("third");
     }));
 
   test("valid config normalizes issuer, trims values and dedupes scopes", () =>

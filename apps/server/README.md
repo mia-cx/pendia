@@ -105,7 +105,7 @@ Each transcoder runs at most `PENDIA_TRANSCODE_SLOTS` sessions that re-encode vi
 At startup a transcoder runs a 2 s trial encode per CPU codec, a tone map per transfer function, and a 2 s encode per codec on each hardware backend whose device exists. It records the passing ones on its node row and answers `/readyz` only after that. A CPU that encodes nothing stops startup. Planning uses the CPU entries every node shares; hardware backends are recorded, not used yet.
 `PENDIA_SCRATCH_DIR` chooses the scratch root, default `pendia-scratch` under the OS temp dir. Use local disk, never NFS. `PENDIA_TRANSCODER_PORT` defaults to 3001. `PENDIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
 The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `PENDIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
-Stored Versions are below and need no transcoder. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
+Stored Versions are below; they need a transcoder only for their WebVTT tracks. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
 
 ## Stored Versions
 
@@ -132,7 +132,7 @@ Every folder scan queues the wanted rungs of each Item's best aligned source and
 
 A `store` job writes `<source file>.pendia/<rung>/`: `rung.json` with the rung definition, `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Editing a rung's height or bitrate under the same name stores it again. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
 
-When a plan is not direct play, the complete stored rungs that pass the client become the variants of one master playlist. A remux plan takes them only when they include the source rung. The api serves `hls/<versionId>/media.m3u8`, `init.mp4` and `N.m4s` from the library share, so every api needs read access to the libraries. The live session answers only when no stored rung passes.
+When a plan is not direct play, the complete stored rungs that pass the client become the variants of one master playlist. A remux plan takes them only when they include the source rung. The api serves `hls/<versionId>/media.m3u8`, `init.mp4` and `N.m4s` from the library share, so every api needs read access to the libraries. The master lists the same WebVTT tracks a live session would, and a transcoder converts them. A plan that must burn a bitmap subtitle in skips stored rungs, which carry none. The live session answers only when no stored rung passes.
 
 ## Auth
 

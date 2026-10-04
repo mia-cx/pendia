@@ -8,8 +8,26 @@ import {
   parseHlsPath,
   parseVariantHlsPath,
 } from "../playback/hls.ts";
+import { loadPlaybackSource } from "../playback/planning.ts";
 import { serveStoredHls } from "../stored/playback.ts";
 import type { Transcoder } from "../transcoder/index.ts";
+import { sessionOutputs } from "../transcoder/outputs.ts";
+
+/** The WebVTT renditions a stored session's master lists: the same ones its live session would. */
+async function storedSubtitles(
+  db: Database,
+  userId: string,
+  itemId: string,
+  session: Awaited<ReturnType<typeof authorizeHlsRequest>>["session"],
+) {
+  const { source, subtitleDetails } = await loadPlaybackSource(
+    db,
+    userId,
+    itemId,
+    session.versionId,
+  );
+  return sessionOutputs(session.decision, source, subtitleDetails).subtitles;
+}
 
 function respond(
   body: unknown,
@@ -113,14 +131,21 @@ export function createHlsHandler(db: Database, local?: Transcoder) {
       const scope = { sessionId: hls.sessionId, itemId: hls.itemId };
       const { userId, session } = await authorizeHlsRequest(db, url, scope);
       // Stored rungs live on the library share, which the api reads itself.
+      // Their subtitles do not: those come from the transcoder like a live
+      // session's, so subtitle requests fall through to it.
       const variantIds = session.decision?.storedVariantIds ?? [];
-      if (variantIds.length > 0)
+      const subtitleRequest =
+        hls.name.kind === "subtitles" || hls.name.kind === "subtitle";
+      if (variantIds.length > 0 && (variant !== null || !subtitleRequest))
         return await serveStoredHls(
           db,
           { itemId: hls.itemId, variantIds },
           variant?.variantId ?? null,
           hls.name,
           url.search,
+          hls.name.kind === "master"
+            ? await storedSubtitles(db, userId, hls.itemId, session)
+            : [],
         );
       if (variant !== null)
         return respond(

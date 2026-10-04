@@ -34,6 +34,8 @@ const audioOutput = (audio: AudioDecision) =>
 /**
  * Derives a session's outputs from the decision persisted at plan time. A
  * session without a live decision copies the video and the first audio Stream.
+ * A session served from stored rungs only ever asks the transcoder for
+ * subtitles, so its video counts as a copy and takes no slot.
  * Subtitle Streams are counted in File order, details aligned with the source.
  */
 export function sessionOutputs(
@@ -44,7 +46,8 @@ export function sessionOutputs(
   // A stored-only plan carries no live decision.
   const decision =
     persisted != null && "video" in persisted ? persisted : undefined;
-  const video: VideoDecision = decision?.video ?? {
+  const stored = (persisted?.storedVariantIds?.length ?? 0) > 0;
+  const video: VideoDecision = (stored ? undefined : decision?.video) ?? {
     action: "copy",
     codec: source.video.codec,
     hdr: source.video.hdr,

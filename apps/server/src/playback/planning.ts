@@ -343,20 +343,25 @@ export async function planPlayback(
   } catch {
     decision = null;
   }
-  // Stored rungs that pass replace the live session; the api serves them from disk.
-  const storedVariantIds = await selectStoredVariants(
-    db,
-    {
-      itemId: item.id,
-      fileId: file.id,
-      segmentTimelineId: version.timelineAligned
-        ? version.segmentTimelineId
-        : null,
-      liveMethod: decision?.method ?? null,
-    },
-    input.profile,
-    caps,
-  );
+  // Stored rungs that pass replace the live session; the api serves them from
+  // disk. They carry no subtitle pixels, so a required burn-in stays live.
+  const burns =
+    decision?.video.action === "transcode" && decision.video.burnSubtitles;
+  const storedVariantIds = burns
+    ? []
+    : await selectStoredVariants(
+        db,
+        {
+          itemId: item.id,
+          fileId: file.id,
+          segmentTimelineId: version.timelineAligned
+            ? version.segmentTimelineId
+            : null,
+          liveMethod: decision?.method ?? null,
+        },
+        input.profile,
+        caps,
+      );
   const stored = storedVariantIds.length > 0;
   if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
   const method =

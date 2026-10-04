@@ -66,6 +66,8 @@ Plugin cron scheduling belongs to the plugin host, not this queue.
 
 The api, worker and all roles each run a plugin runtime. At startup it listens on `pendia_plugins` and installs every plugin in the lockfile into `PENDIA_PLUGIN_DIR`, default `pendia-plugins` under the OS temp dir, in the background. Use local disk. Each package lands in a folder named after its integrity, written to a staging folder and renamed, so two versions never share a folder and a half-written install is never imported. A fresh process with an empty folder refetches each source and refuses one whose bytes no longer match the lockfile.
 
+The official registry, `https://github.com/mia-cx/pendia`, reads `pendia-registry.json` at the repo root. It lists the first-party plugins in `plugins/`.
+
 A source is an absolute folder path, an http(s) tarball URL or an npm spec such as `pendia-plugin-prunarr@^1`. Npm specs resolve through `PENDIA_NPM_REGISTRY`, default `https://registry.npmjs.org`, and the lockfile records the exact version served. Integrity is SRI sha512 of the tarball, which matches npm's own, or of the sorted file listing for a folder. A folder skips `node_modules` and `.git`, so a plugin ships a bundled entry. Tarballs are capped at 64 MiB.
 
 The `plugin_lockfile` table holds name, pinned source, version and integrity. The `settings` row with key `plugins` holds the rest:
@@ -92,7 +94,7 @@ A plugin is imported on first use: a route request, a provider-fetch, a shelf, o
 
 Item, progress and playback writes enqueue one `plugin` job per event and per enabled plugin with `events`, inside the write's transaction. A schedule tick enqueues a `plugin` job whose id is derived from the plugin, schedule and minute, so every worker that fires the same tick enqueues it once. Workers need clocks within the same minute. `scan.completed` is declared but not emitted yet.
 
-Routes are served at `/plugins/<name>/<path>`, a scoped name taking two segments, for GET and POST. The handler gets the caller's user id when a session or API key authenticates, and null otherwise. POST passes the same origin check as API mutations. Plugin metadata providers join provider-fetch and take part in matching once their id is in the metadata `providerOrder`. Plugin home shelves appear on Home after the medium shelves; `GET /api/shelves/item/{id}` lists item shelves. Both show only items the caller may view.
+Routes are served at `/plugins/<name>/<path>`, a scoped name taking two segments, for GET and POST. The handler gets the caller's user id when a session or API key authenticates, and null otherwise. POST passes the same origin check as API mutations. Plugin metadata providers join provider-fetch and take part in matching once their id is in the metadata `providerOrder`. Plugin subtitle providers join every subtitle-fetch next to OpenSubtitles. Plugin home shelves appear on Home after the medium shelves; `GET /api/shelves/item/{id}` lists item shelves. Both show only items the caller may view.
 
 `plugins.*` and `registries.*` are the admin procedures, all behind `manage-server`: list, preview a source, install at the previewed integrity, enable and disable, files switches, config, and adding, listing and removing registries.
 
@@ -502,3 +504,11 @@ COMMIT;
 ```
 
 Provider order, the confidence threshold and per-Library overrides remain independently configurable in the `metadata` row with the documented default JSON.
+
+### Subtitles
+
+`subtitleLanguages` in the `metadata` row lists the languages to fetch, as OpenSubtitles writes them: `["en", "nl", "pt-br"]`. It defaults to `[]`, which fetches nothing. When a movie or episode matches, its provider-fetch queues one `subtitle-fetch` job. That job asks every subtitle provider for the languages the Item has no track for, keeps the best match per language, skips forced-only and machine-translated matches, and writes the file to `<Item folder>/.pendia/subtitles/<item id>.<language>.<format>`. The Item folder must be writable.
+
+OpenSubtitles joins when the `providers` row holds an `opensubtitles` key, an API consumer key from opensubtitles.com, set like the TMDB key. It searches by the OpenSubtitles hash of the Item's first video file, the title and year, or for an episode the Show title with season and episode numbers, plus IMDb and TMDB ids when the Item has them. Downloads without a user login count against OpenSubtitles' anonymous daily quota; a refused download fails the job, which retries.
+
+`playback.plan` returns the stored tracks as `subtitles: [{ language, format, url }]`. `GET /api/subtitles/{itemId}/{language}.{format}` serves one to a session or API key that may view the Item.

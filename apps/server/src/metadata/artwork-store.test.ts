@@ -530,7 +530,8 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
-        await withTempRoot(async (path) => {
+        await withTempRoot(async (parent) => {
+          const path = join(parent, "new", "artwork");
           const store = { backend: "configured-path", path } as const;
           const { item } = await fixture(db, root);
           const { request } = mockRequest(() => new Response(png));
@@ -578,7 +579,8 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       withDatabase(async (db) => {
         await migrateDatabase(db);
         await withTempRoot(async (root) => {
-          await withTempRoot(async (path) => {
+          await withTempRoot(async (parent) => {
+            const path = join(parent, "new", "fallback");
             const { item } = await fixture(db, root);
             const folder = join(root, item.canonicalFolder);
             const { request } = mockRequest(() => new Response(png));

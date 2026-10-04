@@ -5,9 +5,12 @@ import type { Database } from "../db/client.ts";
 import {
   contributors,
   credits,
+  episodes,
   items,
   libraries,
   providerIds,
+  seasons,
+  shows,
 } from "../db/schema/index.ts";
 import { providersForLibrary, readMetadataSettings } from "./settings.ts";
 
@@ -117,6 +120,7 @@ async function persistMatch(
         updatedAt: new Date(),
       })
       .where(eq(items.id, itemId));
+    await persistKindFields(tx, locked.kind, itemId, result);
     // Result ids replace only provider-derived rows; explicit scan-owned ids
     // keep their value and provenance.
     const returnedProviders = [...idEntries.keys()];
@@ -208,6 +212,75 @@ async function persistMatch(
     };
     return application;
   });
+}
+
+/** Writes the dates and status a result carries into the Item's kind table; absent fields stay. */
+async function persistKindFields(
+  tx: Connection,
+  kind: string,
+  itemId: string,
+  { releaseDate, lastAirDate, status }: MetadataResult,
+): Promise<void> {
+  if (kind === "show") {
+    const fields = { firstAirDate: releaseDate, lastAirDate, status };
+    if (Object.values(fields).every((value) => value === undefined)) return;
+    await tx.update(shows).set(fields).where(eq(shows.itemId, itemId));
+    return;
+  }
+  if (releaseDate === undefined) return;
+  if (kind === "season")
+    await tx
+      .update(seasons)
+      .set({ airDate: releaseDate })
+      .where(eq(seasons.itemId, itemId));
+  if (kind === "episode")
+    await tx
+      .update(episodes)
+      .set({ airDate: releaseDate })
+      .where(eq(episodes.itemId, itemId));
+}
+
+type SearchQuery = Parameters<MetadataProvider["search"]>[0];
+
+/** The parent Show's provider ids and the Item's numbers, which Season and Episode searches need. */
+async function showContext(
+  db: Database,
+  item: { id: string; kind: string },
+): Promise<SearchQuery["show"]> {
+  const showIds = async (showId: string) =>
+    Object.fromEntries(
+      (await itemProviderIdSnapshot(db, showId)).map((row) => [
+        row.provider,
+        row.value,
+      ]),
+    );
+  if (item.kind === "season") {
+    const [season] = await db
+      .select()
+      .from(seasons)
+      .where(eq(seasons.itemId, item.id));
+    if (!season) return undefined;
+    return {
+      providerIds: await showIds(season.showId),
+      seasonNumber: season.seasonNumber,
+    };
+  }
+  if (item.kind !== "episode") return undefined;
+  const [episode] = await db
+    .select({
+      showId: seasons.showId,
+      seasonNumber: seasons.seasonNumber,
+      episodeNumber: episodes.episodeNumber,
+    })
+    .from(episodes)
+    .innerJoin(seasons, eq(seasons.itemId, episodes.seasonId))
+    .where(eq(episodes.itemId, item.id));
+  if (!episode) return undefined;
+  return {
+    providerIds: await showIds(episode.showId),
+    seasonNumber: episode.seasonNumber,
+    episodeNumber: episode.episodeNumber,
+  };
 }
 
 type OwnedProviderId = {
@@ -308,6 +381,7 @@ export async function applyMetadata(
   const snapshotByProvider = new Map(
     idSnapshot.map((row) => [row.provider, row.value]),
   );
+  const show = await showContext(db, item);
   let consulted = false;
   for (const providerId of providersForLibrary(config, item.libraryId)) {
     const provider = providers.find((candidate) => candidate.id === providerId);
@@ -339,6 +413,7 @@ export async function applyMetadata(
       year: item.year ?? undefined,
       kind: item.kind,
       providerIds: Object.fromEntries(snapshotByProvider),
+      show,
     });
     const best = bestMatch(matches, config.confidenceThreshold);
     if (best === undefined) continue;

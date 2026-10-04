@@ -12,15 +12,20 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   contributors,
   credits,
+  episodes,
   items,
   libraries,
   providerIds,
+  seasons,
   settings,
+  shows,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { setItemProviderIds } from "../libraries/changes.ts";
 import { applyMetadata } from "./service.ts";
+import { createTvdbMetadataProvider } from "./tvdb.ts";
+import { tvdbResponse } from "./tvdb-fixtures.ts";
 
 type SearchQuery = Parameters<MetadataProvider["search"]>[0];
 type FetchQuery = Parameters<MetadataProvider["fetch"]>[0];
@@ -1101,5 +1106,88 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
       ).toMatchObject([
         { provider: "imdb", value: "tt1375666", metadataDerived: false },
       ]);
+    }));
+
+  test("Seasons and Episodes match by number under their Show and store air dates", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const [library] = await db
+        .insert(libraries)
+        .values({ name: "Shows", medium: "shows", rootPath: "/shows" })
+        .returning();
+      if (!library) throw new Error("Fixture library missing.");
+      const tree = { libraryId: library.id, canonicalFolder: "Breaking Bad" };
+      const show = await insertItem(db, {
+        ...tree,
+        kind: "show",
+        title: "Breaking Bad",
+        year: 2008,
+        extension: {},
+      });
+      await setItemProviderIds(db, show.id, { tvdb: "81189" });
+      const season = await insertItem(db, {
+        ...tree,
+        kind: "season",
+        parentId: show.id,
+        title: "Season 1",
+        extension: { seasonNumber: 1 },
+      });
+      const episode = await insertItem(db, {
+        ...tree,
+        kind: "episode",
+        parentId: season.id,
+        title: "Episode 1",
+        extension: { episodeNumber: 1, episodeEndNumber: null },
+      });
+      const unknownSeason = await insertItem(db, {
+        ...tree,
+        kind: "season",
+        parentId: show.id,
+        title: "Season 9",
+        extension: { seasonNumber: 9 },
+      });
+      const request = (async (input: RequestInfo | URL, init?: RequestInit) =>
+        tvdbResponse(new URL(String(input)), init)) as typeof fetch;
+      const providers = [createTvdbMetadataProvider("key", undefined, request)];
+
+      expect(await applyMetadata(db, show.id, providers)).toMatchObject({
+        state: "matched",
+        providerId: "81189",
+      });
+      expect(
+        await db.select().from(shows).where(eq(shows.itemId, show.id)),
+      ).toMatchObject([
+        {
+          firstAirDate: "2008-01-20",
+          lastAirDate: "2013-09-29",
+          status: "continuing",
+        },
+      ]);
+      expect(await applyMetadata(db, season.id, providers)).toMatchObject({
+        state: "matched",
+        providerId: "30272",
+      });
+      expect(
+        await db.select().from(seasons).where(eq(seasons.itemId, season.id)),
+      ).toMatchObject([{ airDate: "2008-01-20" }]);
+      expect(await itemProviderIds(db, season.id)).toEqual([
+        { provider: "tvdb", value: "30272" },
+      ]);
+      expect(await applyMetadata(db, episode.id, providers)).toMatchObject({
+        state: "matched",
+        providerId: "349232",
+      });
+      expect(await storedItem(db, episode.id)).toMatchObject({
+        title: "Pilot",
+        overview: "Walter White begins.",
+        metadataState: "matched",
+      });
+      expect(
+        await db.select().from(episodes).where(eq(episodes.itemId, episode.id)),
+      ).toMatchObject([{ airDate: "2008-01-20" }]);
+      expect(await applyMetadata(db, unknownSeason.id, providers)).toEqual({
+        state: "unmatched",
+        artwork: [],
+      });
     }));
 });

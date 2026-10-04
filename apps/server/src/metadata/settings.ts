@@ -49,7 +49,7 @@ export async function readMetadataSettings(
 
   const providerOrder =
     config.providerOrder === undefined
-      ? ["tmdb"]
+      ? ["tmdb", "tvdb"]
       : providerIds(config.providerOrder);
 
   const confidenceThreshold =

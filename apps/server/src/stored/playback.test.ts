@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
@@ -12,7 +13,14 @@ import type { JsonObject } from "../db/schema/common.ts";
 import { sessionRegistry, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
-import { drain, scanFolder, withStoredLibrary } from "./testing.ts";
+import { scanDirectory } from "../libraries/scan.ts";
+import {
+  drain,
+  fixtureFolder,
+  fixturePath,
+  scanFolder,
+  withStoredLibrary,
+} from "./testing.ts";
 
 HLS.setOptions({ strictMode: true });
 
@@ -47,7 +55,7 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
         await withStoredLibrary(
           db,
           threeRungs,
-          async ({ library, itemId, version }) => {
+          async ({ root, library, itemId, version }) => {
             await scanFolder(db, library.id);
             await drain(db);
             // An incomplete rung is never offered.
@@ -171,6 +179,27 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
                 videoCodecs: [{ codec: "h264", maxHeight: 300 }],
               });
               expect(starved).toMatchObject({ method: "transcode", url: null });
+
+              // Another Version on the same timeline never borrows these rungs:
+              // it may be another translation or release.
+              await Bun.write(
+                join(root, fixtureFolder, "Movie (2020).copy.mkv"),
+                Bun.file(join(root, fixturePath)),
+              );
+              const rescanned = await scanDirectory(
+                db,
+                library.id,
+                fixtureFolder,
+              );
+              const copyId = rescanned.versionIds.find(
+                (id) => id !== version.id,
+              );
+              const copy = await client.playback.plan({
+                itemId,
+                versionId: copyId ?? "",
+                profile: { ...remuxClient, maxBitrate: 1_500_000 },
+              });
+              expect(copy).toMatchObject({ method: "transcode", url: null });
 
               // Without the source rung, a remux keeps the source over lower rungs.
               await db.delete(versions).where(eq(versions.id, idOf("source")));

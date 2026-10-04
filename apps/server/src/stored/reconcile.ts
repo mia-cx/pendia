@@ -173,11 +173,24 @@ const exists = (path: string) =>
     },
   );
 
-/** Deletes every `<file>.pendia` folder under a library folder whose source file is gone from disk. */
+/** Deletes every `<file>.pendia` folder under a library folder whose source is gone from disk and has no File row. */
 export async function removeOrphanedStoreFolders(
+  db: Database,
   library: Library,
   folder = ".",
 ) {
+  // A source whose File row remains keeps its rungs, so a Version still
+  // marked complete never loses its folder before the scan drops the File.
+  const known = new Set(
+    (
+      await db
+        .select({ path: files.path })
+        .from(files)
+        .where(
+          and(eq(files.libraryId, library.id), inFolder(files.path, folder)),
+        )
+    ).map((row) => row.path),
+  );
   const visit = async (relative: string): Promise<void> => {
     const absolute = resolve(library.rootPath, relative);
     const entries = await readdir(absolute, { withFileTypes: true }).catch(
@@ -195,11 +208,11 @@ export async function removeOrphanedStoreFolders(
       }
       // A bare `.pendia` folder holds Item artwork, not a stored source.
       if (entry.name === storeSuffix) continue;
-      const source = resolve(
-        library.rootPath,
-        child.slice(0, -storeSuffix.length),
-      );
-      if (!(await exists(source)))
+      const source = child.slice(0, -storeSuffix.length);
+      if (
+        !known.has(source) &&
+        !(await exists(resolve(library.rootPath, source)))
+      )
         await rm(resolve(library.rootPath, child), {
           recursive: true,
           force: true,

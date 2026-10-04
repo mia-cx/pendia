@@ -12,7 +12,7 @@ import {
   rungFits,
 } from "./policy.ts";
 
-const when = { minHeight: 2160, codecs: ["hevc"], hdr: true };
+const when = { minHeight: 2160, codecs: ["hevc"], hdr: true as const };
 const policy: JsonObject = {
   rungs: [{ name: "source" }, { name: "1080p", height: 1080, bitrate: 8e6 }],
   when,
@@ -44,6 +44,8 @@ describe("readStoredVersionPolicy", () => {
       { rungs: [{ name: "../x", height: 720, bitrate: 3e6 }] },
     ],
     ["a missing bitrate", { rungs: [{ name: "720p", height: 720 }] }],
+    // hdr is a criterion that matches HDR; false would read as "SDR only".
+    ["hdr false", { rungs: [{ name: "source" }], when: { hdr: false } }],
   ])("rejects %s", (_name, value) => {
     expect(() => readStoredVersionPolicy({ storedVersions: value })).toThrow();
   });

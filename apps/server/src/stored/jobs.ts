@@ -287,6 +287,8 @@ export function registerStoreJobs(
         ? null
         : setTimeout(stop, place.endsAt.getTime() - now().getTime());
     signal?.addEventListener("abort", stop, { once: true });
+    // A shutdown during the upsert above fired before the listener existed.
+    if (signal?.aborted) stop();
     let outcome: Awaited<ReturnType<typeof runStore>>;
     try {
       outcome = await runStore(

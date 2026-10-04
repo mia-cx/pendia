@@ -78,7 +78,7 @@ export function registerLibraryJobs(
         });
       }
       await reconcileStoredVersions(db, library, payload.path);
-      await removeOrphanedStoreFolders(library, payload.path);
+      await removeOrphanedStoreFolders(db, library, payload.path);
       await publishEvent(db, {
         kind: "library.changed",
         libraryId: library.id,

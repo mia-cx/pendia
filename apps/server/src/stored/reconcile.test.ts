@@ -11,6 +11,7 @@ import { files, jobs, libraries, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { readStoreManifest } from "./encode.ts";
+import { removeOrphanedStoreFolders } from "./reconcile.ts";
 import { requestStoredVersion, setStoredVersionPolicy } from "./service.ts";
 import {
   drain,
@@ -76,6 +77,9 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
             expect(await readdir(pendia)).toEqual(["source"]);
 
             await rm(join(root, fixturePath));
+            // While its File row stands, the rungs of a complete Version stay.
+            await removeOrphanedStoreFolders(db, library, fixtureFolder);
+            expect(await readdir(pendia)).toEqual(["source"]);
             await scanFolder(db, library.id);
             await drain(db);
             expect(await stored(db)).toEqual([]);

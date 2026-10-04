@@ -45,7 +45,8 @@ export const StoredVersionPolicy = Schema.Struct({
       codecs: Schema.optional(
         Schema.Array(Schema.String.pipe(Schema.minLength(1))),
       ),
-      hdr: Schema.optional(Schema.Boolean),
+      // A criterion that matches HDR sources; there is no "SDR only" criterion.
+      hdr: Schema.optional(Schema.Literal(true)),
     }),
   ),
   // Excess keys fail, so an encoded rung named "source" cannot pass as the remux.

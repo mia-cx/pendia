@@ -105,11 +105,14 @@ export async function selectStoredVariants(
     source.segmentTimelineId === null
   )
     return [];
+  // Only rungs of the played File: another Version may be another
+  // translation or release on the same timeline. A trigger keeps their
+  // timeline equal to the source's.
   const stored = await loadStored(
     db,
     and(
       eq(versions.itemId, source.itemId),
-      eq(versions.segmentTimelineId, source.segmentTimelineId),
+      eq(versions.sourceFileId, source.fileId),
     ),
   );
   const [first] = stored;
@@ -139,8 +142,7 @@ export async function selectStoredVariants(
     const keepsSource = stored.some(
       (row) =>
         variants.includes(row.version.id) &&
-        row.version.rung === sourceRungName &&
-        row.version.sourceFileId === source.fileId,
+        row.version.rung === sourceRungName,
     );
     if (!keepsSource) return [];
   }

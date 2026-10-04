@@ -781,7 +781,11 @@ describe("live runs", () => {
             height: 180,
           }),
         });
-        expect(run.segments).toEqual([0, 1, 2, 3].slice(startIndex));
+        expect({ codec, startIndex, segments: run.segments }).toEqual({
+          codec,
+          startIndex,
+          segments: [0, 1, 2, 3].slice(startIndex),
+        });
         for (const index of run.segments) {
           const served = await run.served(index);
           const { pts = Number.NaN } = await firstVideoPts(served);

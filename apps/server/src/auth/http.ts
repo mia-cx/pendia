@@ -1,7 +1,11 @@
 import type { Database } from "../db/client.ts";
 import { setupAdmin } from "./accounts.ts";
 import { AuthError } from "./errors.ts";
-import { acceptLocalInvite, createInvite } from "./invites.ts";
+import {
+  acceptLocalInvite,
+  createInvite,
+  readInviteStatus,
+} from "./invites.ts";
 import { finishOidcLogin, startOidcLogin } from "./oidc.ts";
 import {
   authenticate,
@@ -26,6 +30,7 @@ const routes = {
   "/api/auth/me": "GET",
   "/api/auth/invites": "POST",
   "/api/auth/invites/accept": "POST",
+  "/api/auth/invites/status": "POST",
   "/api/auth/oidc/login": "GET",
   "/api/auth/oidc/callback": "GET",
 } as const;
@@ -344,6 +349,15 @@ export function createAuthHandler(db: Database) {
               result.session.expiresAt,
             ),
           });
+        }
+        case "/api/auth/invites/status": {
+          checkOrigin(request, identity.secure);
+          const body = await readJsonObject(request);
+          const status = await readInviteStatus(
+            db,
+            requiredString(body, "token"),
+          );
+          return respond({ status }, 200);
         }
         case "/api/auth/oidc/login": {
           try {

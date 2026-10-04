@@ -68,6 +68,23 @@ export async function createInvite(
   }
 }
 
+/** Reads whether an invite token is live, expired, accepted or unknown. */
+export async function readInviteStatus(db: Database, token: string) {
+  if (!tokenPattern.test(token)) return "unknown";
+  const [invite] = await db
+    .select({
+      accepted: sql<boolean>`${invites.acceptedAt} is not null`,
+      expired: sql<boolean>`${invites.expiresAt} <= statement_timestamp()`,
+    })
+    .from(invites)
+    .where(eq(invites.tokenHash, createHash("sha256").update(token).digest()))
+    .limit(1);
+  if (!invite) return "unknown";
+  if (invite.accepted) return "accepted";
+  if (invite.expired) return "expired";
+  return "live";
+}
+
 /** Claims one live invite inside the caller's database transaction. */
 export async function claimInvite(
   db: InviteTransaction,

@@ -159,6 +159,7 @@ Use a private bind address, firewall or restricted ingress during setup. Expose 
 | POST | `/api/auth/login` | `username`, `password`, `clientName`, `deviceId`, `deviceName` | `token`, `user`, `session` |
 | POST | `/api/auth/invites` | `email`, `expiresInSeconds` | 201 with one-time `token` and safe `invite` |
 | POST | `/api/auth/invites/accept` | `token`, `username`, `password`, optional `displayName`, `clientName`, `deviceId`, `deviceName` | 201 with `token`, `user`, `session` and session cookie |
+| POST | `/api/auth/invites/status` | `token` | `status`: `live`, `expired`, `accepted` or `unknown` |
 | GET | `/api/auth/oidc/login` | Query `clientName`, `deviceId`, `deviceName`, optional `invite` | 302 to the configured provider |
 | GET | `/api/auth/oidc/callback` | Provider callback | 303 to `/` with the session cookie |
 | GET | `/api/auth/me` | None | `user`, `credential` |

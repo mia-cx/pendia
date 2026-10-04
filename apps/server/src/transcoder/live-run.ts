@@ -5,7 +5,7 @@ import type { PlaybackDecision } from "../playback/decisions.ts";
 export type VideoDecision = PlaybackDecision["video"];
 
 /** What the engine decided for one audio Stream: copy, AAC stereo or EAC3 5.1. */
-export type AudioDecision = PlaybackDecision["audio"][number];
+export type AudioDecision = NonNullable<PlaybackDecision["audio"]>;
 
 /** Everything one live ffmpeg run needs: the input, the timeline, the outputs, where to start and where to write. */
 export type LiveRun = {

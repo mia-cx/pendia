@@ -3,6 +3,8 @@ import {
   type AudioStream,
   decidePlayback,
   type PlaybackSource,
+  requiresBurnIn,
+  type SubtitleDecision,
   type SubtitleStream,
   type VideoStream,
   videoPasses,
@@ -74,8 +76,7 @@ const losslessClient: ClientProfile = {
 
 type PlayResult = ReturnType<typeof decidePlayback>;
 type VideoTranscode = Extract<PlayResult["video"], { action: "transcode" }>;
-type AudioDecision = PlayResult["audio"][number];
-type SubtitleDecision = PlayResult["subtitles"][number];
+type AudioDecision = NonNullable<PlayResult["audio"]>;
 
 const hevcFull: VideoTranscode = {
   action: "transcode",
@@ -140,8 +141,9 @@ describe("decidePlayback methods", () => {
         hdr: "sdr",
         stripDolbyVision: false,
       },
-      audio: [{ action: "copy", codec: "aac", channels: 2 }],
-      subtitles: [{ action: "copy", format: "srt" }],
+      audio: { action: "copy", codec: "aac", channels: 2 },
+      subtitles: [{ stream: 0, action: "copy", format: "srt" }],
+      selection: { audio: 0 },
     });
   });
 
@@ -157,8 +159,11 @@ describe("decidePlayback methods", () => {
         hdr: "sdr",
         stripDolbyVision: false,
       },
-      audio: [{ action: "copy", codec: "aac", channels: 2 }],
-      subtitles: [{ action: "convert", format: "webvtt", delivery: "sidecar" }],
+      audio: { action: "copy", codec: "aac", channels: 2 },
+      subtitles: [
+        { stream: 0, action: "convert", format: "webvtt", delivery: "sidecar" },
+      ],
+      selection: { audio: 0 },
     });
   });
 
@@ -181,7 +186,7 @@ describe("decidePlayback methods", () => {
       );
       expect(result.method).toBe(method);
       expect(result.subtitles).toEqual([
-        { action: "convert", format: "webvtt", delivery: "sidecar" },
+        { stream: 0, action: "convert", format: "webvtt", delivery: "sidecar" },
       ]);
     },
   );
@@ -197,7 +202,9 @@ describe("decidePlayback methods", () => {
       { isLan: false },
     );
     expect(result.method).toBe("remux");
-    expect(result.subtitles).toEqual([{ action: "copy", format: "webvtt" }]);
+    expect(result.subtitles).toEqual([
+      { stream: 0, action: "copy", format: "webvtt" },
+    ]);
   });
 
   const textSubtitles: [
@@ -238,7 +245,7 @@ describe("decidePlayback methods", () => {
       const result = decidePlayback({ ...source, subtitles: [subtitle] }, c, {
         isLan: false,
       });
-      expect(result.subtitles).toEqual([expected]);
+      expect(result.subtitles).toEqual([{ stream: 0, ...expected }]);
       expect(result.method).toBe(method);
       expect(result.video.action).toBe("copy");
     },
@@ -263,7 +270,7 @@ describe("decidePlayback methods", () => {
         { isLan: false },
       );
       expect(result.method).toBe("direct-play");
-      expect(result.subtitles).toEqual([expected]);
+      expect(result.subtitles).toEqual([{ stream: 0, ...expected }]);
     },
   );
 
@@ -277,7 +284,7 @@ describe("decidePlayback methods", () => {
         { isLan: false },
       );
       expect(result.method).toBe("transcode");
-      expect(result.subtitles).toEqual([{ action: "burn", format }]);
+      expect(result.subtitles).toEqual([{ stream: 0, action: "burn", format }]);
       expect(result.video).toEqual({ ...hevcFull, burnSubtitles: true });
     },
   );
@@ -839,7 +846,7 @@ describe("decidePlayback audio", () => {
         isLan: false,
       });
       expect(result.method).toBe("transcode");
-      expect(result.audio).toEqual([expected]);
+      expect(result.audio).toEqual(expected);
     },
   );
 
@@ -856,9 +863,11 @@ describe("decidePlayback audio", () => {
       narrow,
       { isLan: false },
     );
-    expect(result.audio).toEqual([
-      { action: "transcode", codec: "aac", channels: 2 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "transcode",
+      codec: "aac",
+      channels: 2,
+    });
   });
 
   test("downmixes excessive aac on a stereo client", () => {
@@ -871,9 +880,11 @@ describe("decidePlayback audio", () => {
       stereo,
       { isLan: false },
     );
-    expect(result.audio).toEqual([
-      { action: "transcode", codec: "aac", channels: 2 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "transcode",
+      codec: "aac",
+      channels: 2,
+    });
   });
 
   test("copies an accepted multichannel codec", () => {
@@ -883,9 +894,11 @@ describe("decidePlayback audio", () => {
       { isLan: false },
     );
     expect(result.method).toBe("direct-play");
-    expect(result.audio).toEqual([
-      { action: "copy", codec: "eac3", channels: 6 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "copy",
+      codec: "eac3",
+      channels: 6,
+    });
   });
 
   test.each(["truehd", "dts-hd"])("%s copies on direct play", (codec) => {
@@ -895,7 +908,7 @@ describe("decidePlayback audio", () => {
       { isLan: false },
     );
     expect(result.method).toBe("direct-play");
-    expect(result.audio).toEqual([{ action: "copy", codec, channels: 8 }]);
+    expect(result.audio).toEqual({ action: "copy", codec, channels: 8 });
   });
 
   test.each(["truehd", "dts-hd"])("%s transcodes to eac3 over hls", (codec) => {
@@ -905,9 +918,11 @@ describe("decidePlayback audio", () => {
       { isLan: false },
     );
     expect(result.method).toBe("transcode");
-    expect(result.audio).toEqual([
-      { action: "transcode", codec: "eac3", channels: 6 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "transcode",
+      codec: "eac3",
+      channels: 6,
+    });
   });
 
   test.each(["truehd", "dts-hd"])(
@@ -925,9 +940,11 @@ describe("decidePlayback audio", () => {
         noEac3,
         { isLan: false },
       );
-      expect(result.audio).toEqual([
-        { action: "transcode", codec: "aac", channels: 2 },
-      ]);
+      expect(result.audio).toEqual({
+        action: "transcode",
+        codec: "aac",
+        channels: 2,
+      });
     },
   );
 
@@ -949,9 +966,11 @@ describe("decidePlayback audio", () => {
       { isLan: false },
     );
     expect(result.method).toBe("transcode");
-    expect(result.audio).toEqual([
-      { action: "transcode", codec: "aac", channels: 2 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "transcode",
+      codec: "aac",
+      channels: 2,
+    });
   });
 
   test("vorbis copies on direct play", () => {
@@ -968,9 +987,11 @@ describe("decidePlayback audio", () => {
       { isLan: false },
     );
     expect(result.method).toBe("direct-play");
-    expect(result.audio).toEqual([
-      { action: "copy", codec: "vorbis", channels: 2 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "copy",
+      codec: "vorbis",
+      channels: 2,
+    });
   });
 
   const vp8Video: VideoStream = {
@@ -1032,9 +1053,11 @@ describe("decidePlayback audio", () => {
         hdr: "hdr10",
         stripDolbyVision: true,
       });
-      expect(result.audio).toEqual([
-        { action: "transcode", codec: "eac3", channels: 6 },
-      ]);
+      expect(result.audio).toEqual({
+        action: "transcode",
+        codec: "eac3",
+        channels: 6,
+      });
     },
   );
 
@@ -1049,9 +1072,11 @@ describe("decidePlayback audio", () => {
       { isLan: false },
     );
     expect(result.method).toBe("transcode");
-    expect(result.audio).toEqual([
-      { action: "transcode", codec: "eac3", channels: 6 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "transcode",
+      codec: "eac3",
+      channels: 6,
+    });
   });
 
   test("a video transcode re-evaluates lossless audio for hls", () => {
@@ -1065,9 +1090,11 @@ describe("decidePlayback audio", () => {
       { isLan: false },
     );
     expect(result.method).toBe("transcode");
-    expect(result.audio).toEqual([
-      { action: "transcode", codec: "eac3", channels: 6 },
-    ]);
+    expect(result.audio).toEqual({
+      action: "transcode",
+      codec: "eac3",
+      channels: 6,
+    });
   });
 
   test("throws when the client lacks the aac stereo fallback", () => {
@@ -1082,6 +1109,135 @@ describe("decidePlayback audio", () => {
         { isLan: false },
       ),
     ).toThrow("The client does not support AAC stereo fallback.");
+  });
+});
+
+describe("decidePlayback stream selection", () => {
+  const dubbed: PlaybackSource = {
+    ...source,
+    audio: [
+      { codec: "aac", channels: 2 },
+      { codec: "dts", channels: 6 },
+    ],
+  };
+
+  test("decides the default-flagged audio Stream, else the first", () => {
+    expect(decidePlayback(dubbed, client, { isLan: false }).selection).toEqual({
+      audio: 0,
+    });
+    const flagged = decidePlayback(
+      {
+        ...dubbed,
+        audio: [
+          { codec: "aac", channels: 2 },
+          { codec: "eac3", channels: 6, default: true },
+        ],
+      },
+      client,
+      { isLan: false },
+    );
+    expect(flagged.method).toBe("direct-play");
+    expect(flagged.selection).toEqual({ audio: 1 });
+    expect(flagged.audio).toEqual({
+      action: "copy",
+      codec: "eac3",
+      channels: 6,
+    });
+  });
+
+  test("an unselected audio Stream does not change the method", () => {
+    const result = decidePlayback(dubbed, client, { isLan: false });
+    expect(result.method).toBe("direct-play");
+    expect(result.audio).toEqual({ action: "copy", codec: "aac", channels: 2 });
+  });
+
+  test("a chosen audio Stream other than the default plays over HLS", () => {
+    const result = decidePlayback(
+      {
+        ...dubbed,
+        audio: [
+          { codec: "aac", channels: 2 },
+          { codec: "aac", channels: 2 },
+        ],
+        selection: { audio: 1 },
+      },
+      client,
+      { isLan: false },
+    );
+    expect(result.method).toBe("remux");
+    expect(result.selection).toEqual({ audio: 1 });
+  });
+
+  test("a chosen audio Stream is decided on its own", () => {
+    const result = decidePlayback(
+      { ...dubbed, selection: { audio: 1 } },
+      client,
+      { isLan: false },
+    );
+    expect(result.method).toBe("transcode");
+    expect(result.audio).toEqual({
+      action: "transcode",
+      codec: "eac3",
+      channels: 6,
+    });
+  });
+
+  const signs: PlaybackSource = {
+    ...source,
+    subtitles: [
+      { format: "srt", kind: "text" },
+      { format: "pgs", kind: "bitmap" },
+    ],
+  };
+  const textOnly: ClientProfile = { ...client, subtitleFormats: ["srt"] };
+
+  test("subtitles off neither burns nor lists a subtitle", () => {
+    const result = decidePlayback(
+      { ...signs, selection: { subtitle: null } },
+      textOnly,
+      { isLan: false },
+    );
+    expect(result.method).toBe("direct-play");
+    expect(result.subtitles).toEqual([]);
+    expect(result.selection).toEqual({ audio: 0, subtitle: null });
+    expect(
+      requiresBurnIn({ ...signs, selection: { subtitle: null } }, textOnly),
+    ).toBe(false);
+  });
+
+  test("a chosen text subtitle leaves an unselected bitmap one unburned", () => {
+    const result = decidePlayback(
+      { ...signs, selection: { subtitle: 0 } },
+      textOnly,
+      { isLan: false },
+    );
+    expect(result.method).toBe("direct-play");
+    expect(result.subtitles).toEqual([
+      { stream: 0, action: "copy", format: "srt" },
+    ]);
+  });
+
+  test("a chosen bitmap subtitle the client cannot draw burns", () => {
+    const result = decidePlayback(
+      { ...signs, selection: { subtitle: 1 } },
+      textOnly,
+      { isLan: false },
+    );
+    expect(result.method).toBe("transcode");
+    expect(result.video).toMatchObject({ burnSubtitles: true });
+    expect(result.subtitles).toEqual([
+      { stream: 1, action: "burn", format: "pgs" },
+    ]);
+  });
+
+  test("no subtitle choice keeps every subtitle Stream", () => {
+    expect(requiresBurnIn(signs, textOnly)).toBe(true);
+    expect(decidePlayback(signs, textOnly, { isLan: false }).subtitles).toEqual(
+      [
+        { stream: 0, action: "convert", format: "webvtt", delivery: "sidecar" },
+        { stream: 1, action: "burn", format: "pgs" },
+      ],
+    );
   });
 });
 
@@ -1233,9 +1389,23 @@ describe("decidePlayback robustness", () => {
         hdr: "sdr",
         stripDolbyVision: false,
       },
-      audio: [],
+      audio: null,
       subtitles: [],
+      selection: { audio: null },
     });
+  });
+
+  test("rejects a selection the source lacks", () => {
+    expect(() =>
+      decidePlayback({ ...source, selection: { audio: 1 } }, client, {
+        isLan: false,
+      }),
+    ).toThrow(RangeError);
+    expect(() =>
+      decidePlayback({ ...source, selection: { subtitle: 1 } }, client, {
+        isLan: false,
+      }),
+    ).toThrow(RangeError);
   });
 
   test("leaves input objects unchanged", () => {

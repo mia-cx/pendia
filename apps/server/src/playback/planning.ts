@@ -29,6 +29,7 @@ import {
   type PlaybackDecision,
   type PlaybackSource,
   requiresBurnIn,
+  resolveSelection,
   type SubtitleStream,
 } from "./decisions.ts";
 import {
@@ -403,7 +404,13 @@ export async function planPlayback(
         playMethod: method,
         state: "starting",
         decision: stored
-          ? { ...(decision ?? { method: "stored" as const }), storedVariantIds }
+          ? {
+              ...(decision ?? {
+                method: "stored" as const,
+                selection: resolveSelection(source),
+              }),
+              storedVariantIds,
+            }
           : decision,
         ...client,
         credentialId: caller.credential.id,

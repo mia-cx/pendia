@@ -17,6 +17,7 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJobQueue, listJobs, watcherHeartbeatMs } from "../jobs/queue.ts";
+import { scanShowDirectory } from "../libraries/scan.ts";
 import { readLibraryFile } from "../libraries/walker.ts";
 import { createChangeDebouncer } from "../libraries/webhooks.ts";
 import {
@@ -203,6 +204,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         path: "Alien (1979)",
         medium: "movies",
         cached: [],
+        check: [],
       });
       expect(await queue.claim()).toBeUndefined();
       await db
@@ -419,6 +421,41 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         } finally {
           await debouncer.close();
         }
+      }),
+    ));
+
+  test("a claimed Show move lists the Show's other Files to check on disk", () =>
+    withVideoFixture((root) =>
+      withDatabase(async (db) => {
+        const { token, library } = await setup(db);
+        await db
+          .update(libraries)
+          .set({ medium: "shows", rootPath: root })
+          .where(eq(libraries.id, library.id));
+        const moved = "Old Show/Season 01/Show S01E01.mkv";
+        const sibling = "Old Show/Season 01/Show S01E02.mkv";
+        await mkdir(join(root, "Old Show", "Season 01"), { recursive: true });
+        await createVideoFixture(join(root, moved));
+        await createVideoFixture(join(root, sibling));
+        await scanShowDirectory(db, library.id, "Old Show");
+        const handler = createWatcherHandler(db, unusedDebouncer);
+        await createJobQueue(db).enqueue({
+          type: "scan",
+          libraryId: library.id,
+          path: "New Show",
+          changes: [
+            {
+              kind: "move",
+              path: "New Show/Season 01/Show S01E01.mkv",
+              previousPath: moved,
+              providerIds: {},
+            },
+          ],
+        });
+        const claimed: WatcherClaim = await (
+          await handler(post("claim", { libraryIds: [library.id] }, token))
+        )?.json();
+        expect(claimed.job?.check).toEqual([sibling]);
       }),
     ));
 

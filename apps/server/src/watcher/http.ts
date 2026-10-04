@@ -1,11 +1,19 @@
 import { extname, posix } from "node:path";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { Schema } from "effect";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { jobs, libraries, probeCache } from "../db/schema/index.ts";
+import {
+  files,
+  itemAncestors,
+  items,
+  jobs,
+  libraries,
+  probeCache,
+} from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { runScanJob } from "../libraries/jobs.ts";
 import { cacheProbe } from "../libraries/probe-cache.ts";
@@ -74,6 +82,10 @@ const ScanReport = Schema.Union(
         keyframesSeconds: Schema.NullOr(Schema.Array(Schema.Number)),
       }),
     ),
+    /** The claim's `check` paths that hold no file. */
+    missing: Schema.optionalWith(Schema.Array(RelativePath), {
+      default: () => [],
+    }),
   }),
   Schema.Struct({ attempts: Schema.Int, error: Schema.String }),
 );
@@ -88,6 +100,8 @@ export type WatcherClaim = {
     medium: (typeof libraries.$inferSelect)["medium"];
     /** Files whose cached probe is current at this size and mtime. */
     cached: (typeof ReportedFile.Encoded)[];
+    /** Stored File paths outside the scope whose existence the scan may need: the rest of a moved Show. */
+    check: string[];
   } | null;
 };
 
@@ -163,6 +177,9 @@ async function claim(
               sql`${probeCache.result} ? 'keyframesSeconds'`,
             ),
           );
+  const moved = (job.payload.changes ?? []).flatMap((change) =>
+    change.kind === "move" ? [change.previousPath] : [],
+  );
   return {
     job: {
       id: job.id,
@@ -171,8 +188,43 @@ async function claim(
       path,
       medium,
       cached: cached.map((file) => Schema.encodeSync(ReportedFile)(file)),
+      check:
+        medium === "shows" && moved.length > 0
+          ? await filesSharingShow(db, libraryId, moved)
+          : [],
     },
   };
+}
+
+/** Lists the other File paths of the Shows that own Files at these paths. */
+async function filesSharingShow(
+  db: Database,
+  libraryId: string,
+  paths: readonly string[],
+) {
+  const movedFiles = alias(files, "moved_files");
+  const movedAncestors = alias(itemAncestors, "moved_ancestors");
+  const rows = await db
+    .selectDistinct({ path: files.path })
+    .from(movedFiles)
+    .innerJoin(
+      movedAncestors,
+      eq(movedAncestors.descendantId, movedFiles.itemId),
+    )
+    .innerJoin(
+      items,
+      and(eq(items.id, movedAncestors.ancestorId), eq(items.kind, "show")),
+    )
+    .innerJoin(itemAncestors, eq(itemAncestors.ancestorId, items.id))
+    .innerJoin(files, eq(files.itemId, itemAncestors.descendantId))
+    .where(
+      and(
+        eq(movedFiles.libraryId, libraryId),
+        inArray(movedFiles.path, [...paths]),
+        notInArray(files.path, [...paths]),
+      ),
+    );
+  return rows.map((row) => row.path);
 }
 
 const inScope = (scope: string, recursive: boolean, path: string) =>
@@ -186,22 +238,23 @@ function reportedScanSource(
   libraryId: string,
   report: Extract<typeof ScanReport.Type, { files: unknown }>,
 ): ScanSource {
-  const files = new Map(
+  const reportedFiles = new Map(
     report.files.map((file) => [
       file.path,
       { ...file, modifiedAt: new Date(Number(file.modifiedNs / 1_000_000n)) },
     ]),
   );
   const probes = new Map(report.probes.map((probe) => [probe.path, probe]));
+  const missing = new Set(report.missing);
   return {
     async walk(path, recursive) {
-      const walked = [...files.values()];
+      const walked = [...reportedFiles.values()];
       if (walked.some((file) => !inScope(path, recursive, file.path)))
         throw new Error("Watcher reported a file outside the scan scope.");
       return walked;
     },
     async probe(path) {
-      const file = files.get(path);
+      const file = reportedFiles.get(path);
       if (file === undefined)
         throw new Error(`Watcher did not report ${path}.`);
       const reported = probes.get(path);
@@ -234,6 +287,8 @@ function reportedScanSource(
     // The watcher re-reads each file after its probe, and its walk is the whole scope.
     verify: async () => {},
     confirmEmpty: async () => {},
+    // An unchecked path counts as present, which keeps a Show where it is.
+    exists: async (path) => !missing.has(path),
   };
 }
 

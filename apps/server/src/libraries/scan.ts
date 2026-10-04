@@ -48,6 +48,8 @@ export type ScanSource = {
   verify(file: ProbedLibraryFile): Promise<void>;
   /** Fails when an empty scope gained files before the write. Runs under the write lock. */
   confirmEmpty(path: string, recursive: boolean): Promise<void>;
+  /** Whether a stored File's path outside the scope still holds a file. */
+  exists(path: string): Promise<boolean>;
 };
 
 /** Optional collaborators and queued changes for one directory scan. */
@@ -184,18 +186,29 @@ export function localScanSource(
     },
     confirmEmpty: (path, recursive) =>
       confirmScopeEmpty(library.rootPath, rules, path, recursive),
+    async exists(path) {
+      try {
+        await readLibraryFile(library.rootPath, path);
+        return true;
+      } catch (error) {
+        if (error instanceof MissingLibraryPathError) return false;
+        throw error;
+      }
+    },
   };
 }
 
 /**
- * Finds the Show whose Files all sit at these paths: a queued folder move
- * re-paths Files before the scan finds their Show. A Show with Files
- * elsewhere only lost some of them, so it stays put.
+ * Finds the Show whose live Files all sit at these paths: a queued folder
+ * move re-paths Files before the scan finds their Show. A Show with a
+ * File still on disk elsewhere only lost some of them, so it stays put.
+ * Rows of Files already gone from disk do not count.
  */
 async function findShowOwningFiles(
   tx: Transaction,
   libraryId: string,
   paths: readonly string[],
+  source: ScanSource,
 ) {
   if (paths.length === 0) return undefined;
   const [owner] = await tx
@@ -209,8 +222,8 @@ async function findShowOwningFiles(
     .where(and(eq(files.libraryId, libraryId), inArray(files.path, [...paths])))
     .limit(1);
   if (owner === undefined) return undefined;
-  const [elsewhere] = await tx
-    .select({ id: files.id })
+  const elsewhere = await tx
+    .select({ path: files.path })
     .from(files)
     .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
     .where(
@@ -218,9 +231,10 @@ async function findShowOwningFiles(
         eq(itemAncestors.ancestorId, owner.item.id),
         notInArray(files.path, [...paths]),
       ),
-    )
-    .limit(1);
-  return elsewhere === undefined ? owner.item : undefined;
+    );
+  for (const file of elsewhere)
+    if (await source.exists(file.path)) return undefined;
+  return owner.item;
 }
 
 /** Deletes leaf Items still holding no Versions after queued file deletes. */
@@ -581,7 +595,12 @@ export async function scanShowDirectory(
       (await findItemByProviderIds(tx, libraryId, mergedProviderIds)) ??
       (existingShow
         ? undefined
-        : await findShowOwningFiles(tx, libraryId, [...memberByPath.keys()]));
+        : await findShowOwningFiles(
+            tx,
+            libraryId,
+            [...memberByPath.keys()],
+            source,
+          ));
     if (existingShow && found && existingShow.id !== found.id)
       throw new AuthError("CONFLICT");
     let showId: string;

@@ -102,7 +102,16 @@ async function runScan(root: string, job: Job): Promise<WatcherReport> {
         throw new Error(`File changed during probe: ${file.path}`);
       probes.push({ path: file.path, ffprobe, keyframesSeconds });
     }
-    return { attempts, files: files.map(encodeFile), probes };
+    const missing: string[] = [];
+    for (const path of job.check) {
+      try {
+        await readLibraryFile(root, path);
+      } catch (error) {
+        if (!(error instanceof MissingLibraryPathError)) throw error;
+        missing.push(path);
+      }
+    }
+    return { attempts, files: files.map(encodeFile), probes, missing };
   } catch (error) {
     return {
       attempts,

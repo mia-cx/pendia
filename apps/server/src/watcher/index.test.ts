@@ -149,6 +149,7 @@ test("retries a scan report the api refused with 403", async () => {
                   path: ".",
                   medium: "movies",
                   cached: [],
+                  check: [],
                 }
               : null,
         });
@@ -173,8 +174,8 @@ test("retries a scan report the api refused with 403", async () => {
     const deadline = Date.now() + 1_000;
     while (reports.length < 2 && Date.now() < deadline) await Bun.sleep(10);
     expect(reports).toEqual([
-      { attempts: 1, files: [], probes: [] },
-      { attempts: 1, files: [], probes: [] },
+      { attempts: 1, files: [], probes: [], missing: [] },
+      { attempts: 1, files: [], probes: [], missing: [] },
     ]);
   } finally {
     await watcher.stop();

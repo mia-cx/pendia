@@ -1,11 +1,12 @@
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { libraries, type ScanChange } from "../db/schema/index.ts";
+import { files, libraries, type ScanChange } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
+import { leavesRoot } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { scanScope } from "./scan.ts";
 import { type ChangeEvent, radarrChanges, sonarrChanges } from "./servarr.ts";
@@ -195,6 +196,14 @@ export function createChangeDebouncer(
         throw new InvalidWebhookError("Webhook path must be absolute.");
     };
 
+    // The folder one scan covers: the Show folder or the Movie folder. A
+    // file directly in the library root has none, which is ".".
+    const scanFolder = (relativePath: string) => {
+      if (source === "radarr") return dirname(relativePath);
+      const slash = relativePath.indexOf("/");
+      return slash < 0 ? "." : relativePath.slice(0, slash);
+    };
+
     const resolved: ResolvedChange[] = [];
     for (const change of changes) {
       requireAbsolute(change.path);
@@ -206,6 +215,7 @@ export function createChangeDebouncer(
         );
 
       let directory: string;
+      let previousDirectory: string | undefined;
       let scan: ScanChange;
       if (change.kind === "delete" && change.target === "item") {
         const folder = found.relativePath === "" ? "." : found.relativePath;
@@ -217,20 +227,14 @@ export function createChangeDebouncer(
           providerIds: change.providerIds,
         };
       } else {
-        if (found.relativePath === "")
-          throw new InvalidWebhookError(
-            "Webhook file path names a library root.",
-          );
+        directory = scanFolder(found.relativePath);
         if (change.kind === "move") {
           const previous = locate(change.previousPath);
-          if (
-            previous === undefined ||
-            previous.libraryId !== found.libraryId ||
-            previous.relativePath === ""
-          )
+          if (previous === undefined || previous.libraryId !== found.libraryId)
             throw new InvalidWebhookError(
               "Webhook move crosses library roots.",
             );
+          previousDirectory = scanFolder(previous.relativePath);
           scan = {
             kind: "move",
             path: found.relativePath,
@@ -251,18 +255,39 @@ export function createChangeDebouncer(
             providerIds: change.providerIds,
           };
         }
-        if (source === "sonarr") {
-          const top = found.relativePath.split("/")[0];
-          if (top === undefined || top === "")
-            throw new InvalidWebhookError(
-              "Webhook path must name a show folder.",
-            );
-          directory = top;
-        } else {
-          directory = dirname(found.relativePath);
-        }
       }
+      // A scan job at the library root rejects changes on every attempt.
+      if (directory === "." || previousDirectory === ".")
+        throw new InvalidWebhookError(
+          "Webhook path must name a folder inside the library root.",
+        );
       resolved.push({ libraryId: found.libraryId, path: directory, scan });
+      // A move into another Show or Movie scans its source too. Servarr's
+      // provider ids name the destination, so the source scan goes without them.
+      if (
+        scan.kind === "move" &&
+        previousDirectory !== undefined &&
+        previousDirectory !== directory
+      ) {
+        const [file] = await db
+          .select({ itemId: files.itemId })
+          .from(files)
+          .where(
+            and(
+              eq(files.libraryId, found.libraryId),
+              eq(files.path, scan.previousPath),
+            ),
+          );
+        if (
+          file !== undefined &&
+          (await leavesRoot(db, found.libraryId, file.itemId, scan.path))
+        )
+          resolved.push({
+            libraryId: found.libraryId,
+            path: previousDirectory,
+            scan: { ...scan, providerIds: {} },
+          });
+      }
     }
     queueChanges(resolved);
   };

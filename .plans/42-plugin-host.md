@@ -20,7 +20,7 @@ Build the plugin host from `docs/spec/plugins.md`, `docs/spec/plugin-api.d.ts` a
   - `plugins/config.ts` validates config against the JSON Schema subset the settings form renders: type, properties, required, enum, items, default.
   - Sync `docs/spec/plugin-api.d.ts` and `packages/plugin-api/plugin-api.d.ts`: `Item.libraryId`, and files methods take a library id next to the library-relative path.
   - Validation: unit tests for each module; server check and build.
-- [ ] 2. Plugin settings, lockfile installer and registries.
+- [x] 2. Plugin settings, lockfile installer and registries.
   - One `plugins` settings row holds the global files switch, registry URLs (official registry by default) and per-plugin state keyed by name: approved capabilities, enabled, failure, files switch, config. Writes take the settings lock and notify `pendia_plugins`.
   - Resolve a source to package bytes: a folder, an http(s) tarball, an npm spec through the npm registry, or a registry entry's source. Integrity is SRI sha512 of the tarball, or of a canonical file listing for a folder. Install into `PENDIA_PLUGIN_DIR` atomically and verify the lockfile integrity on reinstall.
   - Registries: add and remove URLs, read `pendia-registry.json`; a GitHub repo URL maps to the file at its root.

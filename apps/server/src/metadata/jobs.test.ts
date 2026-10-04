@@ -24,6 +24,7 @@ import { registerLibraryJobs } from "../libraries/jobs.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { setProviderKey } from "../providers/keys.ts";
 import { registerMetadataJobs } from "./jobs.ts";
+import { tvdbResponse } from "./tvdb-fixtures.ts";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
@@ -81,6 +82,58 @@ async function fixture(db: Database, rootPath: string) {
   });
   await mkdir(join(rootPath, item.canonicalFolder), { recursive: true });
   return { library, item };
+}
+
+/** A tagged Show with one Season and Episode, and a stored TVDB key. */
+async function showFixture(db: Database, rootPath: string) {
+  const [library] = await db
+    .insert(libraries)
+    .values({ name: "Shows", medium: "shows", rootPath })
+    .returning();
+  if (!library) throw new Error("Fixture library missing.");
+  const show = await insertItem(db, {
+    libraryId: library.id,
+    kind: "show",
+    title: "Breaking Bad",
+    canonicalFolder: "Breaking Bad",
+    extension: {},
+  });
+  await db
+    .insert(providerIds)
+    .values({ provider: "tvdb", value: "81189", itemId: show.id });
+  const season = await insertItem(db, {
+    libraryId: library.id,
+    kind: "season",
+    parentId: show.id,
+    title: "Season 1",
+    canonicalFolder: "Breaking Bad/Season 01",
+    extension: { seasonNumber: 1 },
+  });
+  const episode = await insertItem(db, {
+    libraryId: library.id,
+    kind: "episode",
+    parentId: season.id,
+    title: "Episode 1",
+    canonicalFolder: "Breaking Bad/Season 01",
+    extension: { episodeNumber: 1, episodeEndNumber: null },
+  });
+  await mkdir(join(rootPath, "Breaking Bad", "Season 01"), { recursive: true });
+  await db
+    .insert(settings)
+    .values({ key: "providers", value: { keys: { tvdb: "tvdb-key" } } });
+  return { library, show, season, episode };
+}
+
+/** Serves the TVDB fixtures and their artwork; `artwork` decides each image response. */
+function tvdbRequest(
+  artwork: (url: URL) => Response = () => new Response(png),
+) {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.hostname === "api4.thetvdb.com") return tvdbResponse(url, init);
+    if (url.hostname === "artworks.thetvdb.com") return artwork(url);
+    throw new Error(`Unexpected request to ${url.hostname}.`);
+  }) as typeof fetch;
 }
 
 function mockRequest(responder: (url: URL) => Response) {
@@ -700,6 +753,161 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
           { kind: "library.changed" },
           { kind: "library.changed" },
         ]);
+      });
+    }));
+
+  test("a scanned Show gets Show, Season and Episode metadata and artwork in one fetch", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const folder = "Breaking Bad (2008) {tvdb-81189}";
+        await mkdir(join(root, folder, "Season 01"), { recursive: true });
+        for (const name of [
+          "Breaking Bad S01E01.mkv",
+          "Breaking Bad S01E02.mkv",
+        ])
+          await createVideoFixture(join(root, folder, "Season 01", name));
+        const [library] = await db
+          .insert(libraries)
+          .values({ name: "Shows", medium: "shows", rootPath: root })
+          .returning();
+        if (!library) throw new Error("Fixture library missing.");
+        await db
+          .insert(settings)
+          .values({ key: "providers", value: { keys: { tvdb: "tvdb-key" } } });
+        const calls: URL[] = [];
+        const request = (async (
+          input: RequestInfo | URL,
+          init?: RequestInit,
+        ) => {
+          const url = new URL(String(input));
+          calls.push(url);
+          if (url.hostname === "api4.thetvdb.com")
+            return tvdbResponse(url, init);
+          if (url.hostname === "artworks.thetvdb.com") return new Response(png);
+          throw new Error(`Unexpected request to ${url.hostname}.`);
+        }) as typeof fetch;
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        registerMetadataJobs(db, registry, request);
+        const scanJob = await queue.enqueue({
+          type: "scan",
+          libraryId: library.id,
+          path: folder,
+        });
+        const claimedScan = await queue.claim(["scan"]);
+        await registry.run(claimedScan ?? scanJob);
+        await queue.complete(claimedScan ?? scanJob);
+        const [show] = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "show"));
+        if (!show) throw new Error("Scanned Show missing.");
+        const claimedFetch = await queue.claim(["provider-fetch"]);
+        if (!claimedFetch) throw new Error("provider-fetch was not enqueued.");
+        expect(claimedFetch.payload).toEqual({
+          type: "provider-fetch",
+          itemId: show.id,
+        });
+        await registry.run(claimedFetch);
+        await queue.complete(claimedFetch);
+
+        const tree = await db
+          .select({
+            id: items.id,
+            kind: items.kind,
+            title: items.title,
+            metadataState: items.metadataState,
+          })
+          .from(items)
+          .orderBy(items.kind, items.title);
+        // The kind enum orders show, season, episode.
+        expect(tree).toMatchObject([
+          { kind: "show", title: "Breaking Bad", metadataState: "matched" },
+          { kind: "season", title: "Season 1", metadataState: "matched" },
+          {
+            kind: "episode",
+            title: "Cat's in the Bag...",
+            metadataState: "matched",
+          },
+          { kind: "episode", title: "Pilot", metadataState: "matched" },
+        ]);
+        const idOf = (title: string) =>
+          tree.find((item) => item.title === title)?.id;
+        const stored = await db
+          .select({
+            itemId: artwork.itemId,
+            type: artwork.type,
+            sourceUrl: artwork.sourceUrl,
+          })
+          .from(artwork);
+        expect(stored).toHaveLength(3);
+        expect(stored).toEqual(
+          expect.arrayContaining([
+            {
+              itemId: show.id,
+              type: "poster",
+              sourceUrl:
+                "https://artworks.thetvdb.com/banners/posters/81189-1.jpg",
+            },
+            {
+              itemId: idOf("Season 1"),
+              type: "poster",
+              sourceUrl:
+                "https://artworks.thetvdb.com/banners/seasons/81189-1.jpg",
+            },
+            {
+              itemId: idOf("Pilot"),
+              type: "thumb",
+              sourceUrl:
+                "https://artworks.thetvdb.com/banners/episodes/81189/349232.jpg",
+            },
+          ]),
+        );
+        // One login and one series load serve the whole tree.
+        expect(
+          calls
+            .filter((url) => url.hostname === "api4.thetvdb.com")
+            .map((url) => url.pathname),
+        ).toEqual([
+          "/v4/login",
+          "/v4/series/81189/extended",
+          "/v4/series/81189/episodes/official",
+          "/v4/series/81189/episodes/official",
+        ]);
+      });
+    }));
+
+  test("a failure inside the Show tree marks the Show pending for a retry", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { show, episode } = await showFixture(db, root);
+        const request = tvdbRequest((url) =>
+          url.pathname.includes("/episodes/")
+            ? new Response("oops", { status: 503 })
+            : new Response(png),
+        );
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request);
+        const job = await createJobQueue(db).enqueue({
+          type: "provider-fetch",
+          itemId: show.id,
+        });
+        await expect(registry.run(job)).rejects.toThrow(
+          "Artwork request failed with status 503.",
+        );
+        expect(await storedItem(db, show.id)).toMatchObject({
+          title: "Breaking Bad",
+          metadataState: "pending",
+        });
+        expect(await storedItem(db, episode.id)).toMatchObject({
+          title: "Pilot",
+          metadataState: "pending",
+        });
+        // The Show's own event, then one for the whole tree.
+        expect(await db.select().from(events)).toHaveLength(3);
       });
     }));
 

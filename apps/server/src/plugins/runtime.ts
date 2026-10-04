@@ -20,10 +20,14 @@ import {
 } from "./host.ts";
 import {
   ensureInstalled,
+  fetchPlugin,
+  installPlugin,
+  type LockedPlugin,
   pluginDirectory,
   type SourceOptions,
 } from "./install.ts";
 import { readPluginPackage } from "./manifest.ts";
+import { fetchRegistry } from "./registries.ts";
 import {
   isFilesOff,
   type PluginSettings,
@@ -67,7 +71,8 @@ type Loaded = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-type RuntimeOptions = {
+/** Where a runtime installs plugins and fetches sources, and whether it runs schedules. */
+export type PluginRuntimeOptions = {
   directory?: string;
   sourceOptions?: SourceOptions;
   /** Starts cron schedules; true in processes that run jobs. */
@@ -163,7 +168,7 @@ export function createPluginRuntime(
     sourceOptions,
     schedules = false,
     fetch: request = fetch,
-  }: RuntimeOptions = {},
+  }: PluginRuntimeOptions = {},
 ) {
   const loaded = new Map<string, Promise<Loaded | null>>();
   let subscription: { unlisten(): Promise<void> } | undefined;
@@ -495,6 +500,24 @@ export function createPluginRuntime(
       if (kind === "schedule" && scheduled !== undefined)
         await guard(plugin.name, () => scheduled.handler());
     },
+
+    /** Reads a source for the install screen without installing it. */
+    preview: (source: string) => fetchPlugin(source, sourceOptions),
+
+    /** Installs a previewed source at the previewed integrity. */
+    install: (source: string, integrity: string) =>
+      installPlugin(db, directory, source, integrity, sourceOptions),
+
+    /** Reads a locked plugin's manifest, installing it in this process first when missing. */
+    async manifest(locked: LockedPlugin) {
+      const root = await ensureInstalled(directory, locked, sourceOptions);
+      return readPluginPackage(
+        await Bun.file(join(root, "package.json")).json(),
+      ).manifest;
+    },
+
+    /** Fetches one registry's entries. */
+    registry: (url: string) => fetchRegistry(url, sourceOptions?.fetch),
 
     /** Loads a plugin now and reports whether it is loaded. */
     async load(name: string) {

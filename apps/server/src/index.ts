@@ -15,6 +15,12 @@ import {
 } from "./libraries/webhooks.ts";
 import { createArtworkHandler } from "./metadata/artwork-http.ts";
 import { registerMetadataJobs } from "./metadata/jobs.ts";
+import { createPluginRouteHandler } from "./plugins/http.ts";
+import {
+  createPluginRuntime,
+  type PluginRuntime,
+  type PluginRuntimeOptions,
+} from "./plugins/runtime.ts";
 import {
   startTranscoder,
   type Transcoder,
@@ -145,6 +151,7 @@ type StartOptions = {
   changeOptions?: ChangeDebouncerOptions;
   repairOptions?: RepairOptions;
   transcoderOptions?: TranscoderOptions;
+  pluginOptions?: Omit<PluginRuntimeOptions, "schedules">;
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
@@ -159,6 +166,7 @@ export async function startPendia(
     changeOptions,
     repairOptions,
     transcoderOptions,
+    pluginOptions,
   }: StartOptions = {},
 ) {
   const servesApi = role === "api" || role === "all";
@@ -174,8 +182,9 @@ export async function startPendia(
   let changeDebouncer: ReturnType<typeof createChangeDebouncer> | undefined;
   let repair: ReturnType<typeof createLibraryRepair> | undefined;
   let transcoder: Transcoder | undefined;
+  let plugins: PluginRuntime | undefined;
   let stopping: Promise<void> | undefined;
-  /** Stops accepting API work, then stops the transcoder, debouncer, repair, worker, broker, API drain and database pool once. */
+  /** Stops accepting API work, then stops the transcoder, debouncer, repair, worker, broker, API drain, plugins and database pool once. */
   function stop() {
     stopping ??= (async () => {
       const apiStopped = Promise.resolve(apiServer?.stop());
@@ -198,7 +207,11 @@ export async function startPendia(
                 try {
                   await apiStopped;
                 } finally {
-                  await database?.close();
+                  try {
+                    await plugins?.stop();
+                  } finally {
+                    await database?.close();
+                  }
                 }
               }
             }
@@ -242,6 +255,13 @@ export async function startPendia(
             )),
       });
     }
+    if ((servesApi || runsJobs) && database) {
+      plugins = createPluginRuntime(database.db, {
+        ...pluginOptions,
+        schedules: runsJobs,
+      });
+      await plugins.start();
+    }
     if (runsTranscoder && database) {
       transcoder = await startTranscoder(
         database.db,
@@ -255,18 +275,21 @@ export async function startPendia(
       database &&
       databaseUrl &&
       eventBroker &&
-      changeDebouncer
+      changeDebouncer &&
+      plugins
     ) {
       // Readiness opens its own short-lived connection: the pooled client's reconnect
       // path drops the response when the database host stops resolving.
       apiServer = startApiServer(() => probeDatabase(databaseUrl), port, {
         auth: createAuthHandler(database.db),
-        api: createApiHandler(database.db, eventBroker, transcoder),
+        api: createApiHandler(database.db, eventBroker, transcoder, plugins),
         webhooks: createServarrWebhookHandler(database.db, changeDebouncer),
         artwork: createArtworkHandler(database.db),
+        plugins: createPluginRouteHandler(database.db, plugins),
       });
     }
-    if (runsJobs && database) {
+    if (runsJobs && database && plugins) {
+      const runtime = plugins;
       const runtimeRegistry = createJobRegistry();
       for (const type of registry.types())
         runtimeRegistry.register(type, async (_payload, job) =>
@@ -275,7 +298,11 @@ export async function startPendia(
       if (!runtimeRegistry.types().includes("scan"))
         registerLibraryJobs(database.db, runtimeRegistry);
       if (!runtimeRegistry.types().includes("provider-fetch"))
-        registerMetadataJobs(database.db, runtimeRegistry);
+        registerMetadataJobs(database.db, runtimeRegistry, fetch, runtime);
+      if (!runtimeRegistry.types().includes("plugin"))
+        runtimeRegistry.register("plugin", (payload) =>
+          runtime.runJob(payload),
+        );
       worker = await startJobWorker(database.db, runtimeRegistry, {
         ...workerOptions,
         onError:

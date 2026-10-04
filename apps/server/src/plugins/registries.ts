@@ -1,6 +1,6 @@
 import type { Database } from "../db/client.ts";
 import { readBoundedBytes } from "../metadata/bounded-body.ts";
-import { PluginError } from "./install.ts";
+import { PluginError } from "./errors.ts";
 import { updatePluginSettings } from "./settings.ts";
 
 /** A plugin a registry lists, with the versions it offers and where each comes from. */

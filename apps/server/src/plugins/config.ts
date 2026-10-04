@@ -33,6 +33,11 @@ function isJson(value: unknown): value is JsonValue {
   return isRecord(value) && Object.values(value).every(isJson);
 }
 
+/** Reports whether `value` is an object of JSON values, such as a submitted config. */
+export function isJsonObject(value: unknown): value is JsonObject {
+  return isRecord(value) && Object.values(value).every(isJson);
+}
+
 /** Reads a JSON Schema in the supported subset, throwing on anything else. */
 export function readConfigSchema(
   value: unknown,

@@ -4,6 +4,7 @@ import type { createApiHandler } from "./api/handler.ts";
 import type { createAuthHandler } from "./auth/http.ts";
 import type { createServarrWebhookHandler } from "./libraries/webhooks.ts";
 import type { createArtworkHandler } from "./metadata/artwork-http.ts";
+import type { createPluginRouteHandler } from "./plugins/http.ts";
 
 const defaultWebRoot = fileURLToPath(
   new URL("../../web/build/", import.meta.url),
@@ -65,6 +66,7 @@ export function startApiServer(
     api?: ReturnType<typeof createApiHandler>;
     webhooks?: ReturnType<typeof createServarrWebhookHandler>;
     artwork?: ReturnType<typeof createArtworkHandler>;
+    plugins?: ReturnType<typeof createPluginRouteHandler>;
   } = {},
 ): Bun.Server<undefined> {
   const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
@@ -101,6 +103,14 @@ export function startApiServer(
 
       if (handlers.artwork) {
         const response = await handlers.artwork(request);
+        if (response !== undefined) return response;
+      }
+
+      if (handlers.plugins) {
+        const response = await handlers.plugins(
+          request,
+          server.requestIP(request)?.address ?? "",
+        );
         if (response !== undefined) return response;
       }
 

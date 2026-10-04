@@ -35,7 +35,7 @@ Build the plugin host from `docs/spec/plugins.md`, `docs/spec/plugin-api.d.ts` a
   - Jobs: `schedule` runs `Bun.cron` in worker processes, each tick enqueues a deduplicated `plugin` job, and the worker runs the handler.
   - Routes under `/plugins/<name>/` with the caller's user id; shelves through a `shelves.plugins` procedure.
   - Validation: Postgres tests for a provider in matching, event delivery, a cron-enqueued job, a route and a shelf.
-- [ ] 5. Admin API and server wiring.
+- [x] 5. Admin API and server wiring.
   - `plugins` and `registries` procedures behind manage-server: list, preview a source, install with the previewed integrity, enable and disable, files switches, config.
   - `startPendia` creates the runtime, installs from the lockfile in the background, listens for changes and routes `/plugins/`.
   - Validation: API tests for the acceptance criteria end to end, including the api answering after a plugin throws and a fresh process reinstalling.

@@ -5,19 +5,9 @@ import { isAbsolute, join, posix } from "node:path";
 import type { Database } from "../db/client.ts";
 import { pluginLockfile } from "../db/schema/index.ts";
 import { readBoundedBytes } from "../metadata/bounded-body.ts";
+import { PluginError } from "./errors.ts";
 import { type PluginPackage, readPluginPackage } from "./manifest.ts";
 import { updatePluginSettings } from "./settings.ts";
-
-/** A plugin failure the admin can act on, with the API code it answers with. */
-export class PluginError extends Error {
-  constructor(
-    readonly code: "BAD_REQUEST" | "CONFLICT" | "NOT_FOUND",
-    message: string,
-  ) {
-    super(message);
-    this.name = "PluginError";
-  }
-}
 
 /** A plugin package read from its source, not yet installed. */
 export type FetchedPlugin = {

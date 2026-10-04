@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
 import { settings, settingsLockClass } from "../db/schema/index.ts";
+import { PluginError } from "./errors.ts";
 import { capabilities } from "./manifest.ts";
 
 const pluginSettingsKey = "plugins";
@@ -148,6 +149,23 @@ export async function updatePluginSettings(
       });
     await tx.execute(sql`select pg_notify(${pluginChannel}, '')`);
     return next;
+  });
+}
+
+/** Rewrites one installed plugin's state. */
+export async function updatePluginState(
+  db: Database,
+  name: string,
+  change: (state: PluginState) => PluginState,
+): Promise<PluginSettings> {
+  return updatePluginSettings(db, (current) => {
+    const state = current.plugins[name];
+    if (state === undefined)
+      throw new PluginError("NOT_FOUND", `${name} is not installed.`);
+    return {
+      ...current,
+      plugins: { ...current.plugins, [name]: change(state) },
+    };
   });
 }
 

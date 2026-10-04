@@ -184,10 +184,18 @@ describe.skipIf(!databaseUrl)("jellyfin quick connect", () => {
       expect((await exchange(approved.Secret)).status).toBe(401);
       expect((await approve(`code=${pending.Code}`)).status).toBe(404);
 
-      // Expired rows are swept, then one address may hold ten pending requests.
-      for (let held = 0; held < 10; held++) await initiate();
-      const flooded = await call("POST", "/QuickConnect/Initiate", androidTv);
-      expect(flooded.status).toBe(429);
-      expect(flooded.headers.get("retry-after")).toBe("600");
+      // Expired rows are swept, then one address may hold ten pending
+      // requests, even when the last few arrive at once.
+      for (let held = 0; held < 9; held++) await initiate();
+      const racing = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          call("POST", "/QuickConnect/Initiate", androidTv),
+        ),
+      );
+      expect(racing.map((response) => response.status).sort()).toEqual([
+        200, 429, 429, 429, 429,
+      ]);
+      const flooded = racing.find((response) => response.status === 429);
+      expect(flooded?.headers.get("retry-after")).toBe("600");
     }));
 });

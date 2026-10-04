@@ -11,6 +11,8 @@ const quickConnectLifetimeSeconds = 600;
 
 // Pending requests one address may hold. A household rarely waits on more than one.
 const maxPendingPerAddress = 10;
+// The advisory lock class that serialises admission per address.
+const quickConnectLockClass = 0x70716363;
 const secretPattern = /^[A-Za-z0-9_-]{43}$/;
 const codeAttempts = 5;
 const maxVersionLength = 128;
@@ -51,29 +53,35 @@ export async function initiateQuickConnect(
   await db
     .delete(quickConnectRequests)
     .where(lt(quickConnectRequests.expiresAt, sql`statement_timestamp()`));
-  const [pending] = await db
-    .select({ count: count() })
-    .from(quickConnectRequests)
-    .where(eq(quickConnectRequests.address, address));
-  if ((pending?.count ?? 0) >= maxPendingPerAddress)
-    throw new AuthError("RATE_LIMITED", quickConnectLifetimeSeconds);
   // Six digits can collide with another pending code, so a clash draws again.
   for (let attempt = 1; ; attempt++) {
     const secret = randomBytes(32).toString("base64url");
     try {
-      const [request] = await db
-        .insert(quickConnectRequests)
-        .values({
-          ...device,
-          clientVersion: input.clientVersion,
-          address,
-          secretHash: hashSecret(secret),
-          code: String(randomInt(1_000_000)).padStart(6, "0"),
-          expiresAt: sql`clock_timestamp() + ${quickConnectLifetimeSeconds} * interval '1 second'`,
-        })
-        .returning(requestFields);
-      if (!request) throw new Error("Quick Connect insert returned no row.");
-      return { secret, request };
+      return await db.transaction(async (tx) => {
+        // One admission per address at a time, across every api process.
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${quickConnectLockClass}, hashtext(${address}))`,
+        );
+        const [pending] = await tx
+          .select({ count: count() })
+          .from(quickConnectRequests)
+          .where(and(eq(quickConnectRequests.address, address), live));
+        if ((pending?.count ?? 0) >= maxPendingPerAddress)
+          throw new AuthError("RATE_LIMITED", quickConnectLifetimeSeconds);
+        const [request] = await tx
+          .insert(quickConnectRequests)
+          .values({
+            ...device,
+            clientVersion: input.clientVersion,
+            address,
+            secretHash: hashSecret(secret),
+            code: String(randomInt(1_000_000)).padStart(6, "0"),
+            expiresAt: sql`clock_timestamp() + ${quickConnectLifetimeSeconds} * interval '1 second'`,
+          })
+          .returning(requestFields);
+        if (!request) throw new Error("Quick Connect insert returned no row.");
+        return { secret, request };
+      });
     } catch (error) {
       if (postgresCode(error) !== "23505" || attempt === codeAttempts)
         throw error;

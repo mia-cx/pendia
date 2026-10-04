@@ -103,7 +103,7 @@ export function artworkBackend(
     return store.backend !== "s3" && store.path !== undefined
       ? directoryBackend(store.path, openFile)
       : null;
-  return null;
+  return store.backend === "s3" ? s3Backend(store.client) : null;
 }
 
 /** Where a new original landed: the backend its row records and its key there. */
@@ -120,8 +120,10 @@ export async function writeArtworkOriginal(
   name: string,
   bytes: Uint8Array,
 ): Promise<WrittenOriginal> {
-  if (store.backend === "s3")
-    throw new Error("The S3 artwork store is not available yet.");
+  if (store.backend === "s3") {
+    await s3Backend(store.client).write(name, bytes);
+    return { backend: "s3", storageKey: name };
+  }
   if (store.backend === "configured-path") {
     await directoryBackend(store.path).write(name, bytes);
     return { backend: "configured-path", storageKey: name };
@@ -283,6 +285,32 @@ function directoryBackend(
       const { root, target } = resolveStoragePath(rootPath, key);
       if (!(await walkExisting(root, dirname(target)))) return;
       await rm(target, { force: true });
+    },
+  };
+}
+
+/** An S3-compatible bucket of originals; a single PUT makes each one visible whole. */
+function s3Backend(client: Bun.S3Client): ArtworkBackend {
+  return {
+    async write(key, bytes) {
+      await client.write(key, bytes);
+    },
+    async read(key) {
+      try {
+        return await client.file(key).bytes();
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "NoSuchKey"
+        )
+          return null;
+        throw error;
+      }
+    },
+    exists: (key) => client.exists(key),
+    async remove(key) {
+      await client.delete(key);
     },
   };
 }

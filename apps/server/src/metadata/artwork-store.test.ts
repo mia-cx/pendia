@@ -21,6 +21,7 @@ import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import type { ArtworkOpen } from "./artwork-backends.ts";
 import { readArtworkOriginal, storeArtworkOriginal } from "./artwork-store.ts";
+import { s3Url, testS3Store } from "./testing.ts";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
@@ -851,5 +852,39 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
           );
         }),
       );
+    }));
+});
+
+describe.skipIf(!databaseUrl || !s3Url)("S3 artwork store", () => {
+  test("round-trips a poster and removes the replaced object", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const store = testS3Store();
+        const { item } = await fixture(db, root);
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request, {
+          store,
+        });
+        expect(row.backend).toBe("s3");
+        expect(row.storageKey).toMatch(
+          new RegExp(`^${row.id}\\.[0-9a-f-]{36}$`),
+        );
+        const original = await readArtworkOriginal(db, row.id, store);
+        expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
+
+        const replaced = await storeArtworkOriginal(
+          db,
+          item.id,
+          { type: "poster", url: "https://image.example/new.png" },
+          request,
+          { store },
+        );
+        expect(replaced.id).toBe(row.id);
+        expect(await store.client.exists(row.storageKey)).toBe(false);
+        expect(await store.client.exists(replaced.storageKey)).toBe(true);
+        await store.client.delete(replaced.storageKey);
+        expect(await readArtworkOriginal(db, row.id, store)).toBeNull();
+      });
     }));
 });

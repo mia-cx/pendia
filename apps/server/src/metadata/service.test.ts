@@ -1146,6 +1146,16 @@ describe.skipIf(!databaseUrl)("applyMetadata", () => {
         title: "Season 9",
         extension: { seasonNumber: 9 },
       });
+      // TVDB numbers each entity kind separately: another Show may carry the
+      // same number as the Pilot Episode without blocking its match.
+      const otherShow = await insertItem(db, {
+        libraryId: library.id,
+        kind: "show",
+        title: "Another Show",
+        canonicalFolder: "Another Show",
+        extension: {},
+      });
+      await setItemProviderIds(db, otherShow.id, { tvdb: "349232" });
       const request = (async (input: RequestInfo | URL, init?: RequestInit) =>
         tvdbResponse(new URL(String(input)), init)) as typeof fetch;
       const providers = [createTvdbMetadataProvider("key", undefined, request)];

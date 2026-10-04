@@ -84,7 +84,9 @@ async function persistMatch(
       throw new AuthError("NOT_FOUND");
     await assertProviderIdsUnchanged(tx, itemId, expectedIds);
     if (searched) {
-      // Search matches may not collide with another Item's provider id.
+      // Search matches may not collide with another Item's provider id. TVDB
+      // numbers Shows, Seasons and Episodes separately, so only Items of the
+      // same kind can collide.
       for (const [name, value] of idEntries) {
         const [collision] = await tx
           .select({ itemId: providerIds.itemId })
@@ -93,6 +95,7 @@ async function persistMatch(
           .where(
             and(
               eq(items.libraryId, libraryId),
+              eq(items.kind, locked.kind),
               eq(providerIds.provider, name),
               eq(providerIds.value, value),
               ne(providerIds.itemId, itemId),

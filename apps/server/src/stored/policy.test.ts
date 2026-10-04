@@ -128,6 +128,23 @@ describe("idleWindowAt", () => {
     });
   });
 
+  test("a start in the hour a DST fall-back repeats is the one still ahead", () => {
+    const previous = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      // 06:15Z is the second 01:15 on 2026-11-01; the second 01:30 is 06:30Z.
+      expect(
+        idleWindowAt(
+          { start: "01:30", end: "07:00" },
+          new Date("2026-11-01T06:15:00Z"),
+        ),
+      ).toEqual({ inside: false, startsAt: new Date("2026-11-01T06:30:00Z") });
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  });
+
   test("equal ends are open all day", () => {
     expect(
       idleWindowAt({ start: "00:00", end: "00:00" }, local(1, 13)),

@@ -122,6 +122,16 @@ const at = (day: Date, offsetDays: number, clockMinutes: number) =>
     clockMinutes % 60,
   );
 
+// A wall-clock time that a DST fall-back repeats resolves to its first
+// occurrence; a start must be the one still ahead of now.
+const after = (now: Date, candidate: Date) =>
+  candidate > now
+    ? candidate
+    : new Date(
+        candidate.getTime() +
+          (now.getTimezoneOffset() - candidate.getTimezoneOffset()) * 60_000,
+      );
+
 /** Places a moment against the idle window: inside with its end (null all day), or outside with the next start. */
 export function idleWindowAt(window: IdleWindow, now: Date) {
   const start = minutes(window.start);
@@ -133,12 +143,12 @@ export function idleWindowAt(window: IdleWindow, now: Date) {
       return { inside: true as const, endsAt: at(now, 0, end) };
     return {
       inside: false as const,
-      startsAt: at(now, current < start ? 0 : 1, start),
+      startsAt: after(now, at(now, current < start ? 0 : 1, start)),
     };
   }
   // The window crosses midnight.
   if (current >= start)
     return { inside: true as const, endsAt: at(now, 1, end) };
   if (current < end) return { inside: true as const, endsAt: at(now, 0, end) };
-  return { inside: false as const, startsAt: at(now, 0, start) };
+  return { inside: false as const, startsAt: after(now, at(now, 0, start)) };
 }

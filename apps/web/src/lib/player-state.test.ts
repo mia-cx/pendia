@@ -286,6 +286,33 @@ describe("player state", () => {
     expect(requests[1]?.startAt).toBe(22);
   });
 
+  test("a switch clears a notice and opens the new choice", async () => {
+    const { requests, player, state, play, tracks } = setup();
+    play();
+    requests[0]?.onNotice({
+      title: "Stopped",
+      message: "It stalled.",
+      retry: false,
+    });
+    expect(state().notice).toBeDefined();
+
+    await player.chooseVersion("v2");
+    expect(state().notice).toBeUndefined();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.versionId).toBe("v2");
+    expect(state().versionId).toBe("v2");
+
+    requests[1]?.onNotice({
+      title: "Stopped",
+      message: "It stalled.",
+      retry: false,
+    });
+    requests[1]?.onTracks(tracks());
+    await player.chooseSubtitles(3);
+    expect(state().notice).toBeUndefined();
+    expect(requests[2]?.streams.subtitleStreamIndex).toBe(3);
+  });
+
   test("a switch clamps the position to the shorter Version", async () => {
     const { media, requests, player, state, play } = setup({
       versions: [

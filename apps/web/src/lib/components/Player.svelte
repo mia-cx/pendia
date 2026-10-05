@@ -81,6 +81,8 @@ const context = $derived(
     : null,
 );
 const shown = $derived(playerState?.controls ?? true);
+/** A notice replaced playback: only Settings and Full Screen stay usable. */
+const stopped = $derived(playerState?.notice !== undefined);
 
 $effect(() => {
   if (video === undefined || detail === undefined) return;
@@ -466,11 +468,11 @@ const VolumeIcon = $derived(
   <!-- svelte-ignore a11y_no_static_element_interactions: hover over the bar holds the controls up -->
   <div
     data-bar
-    inert={!shown || playerState?.notice !== undefined}
+    inert={!shown}
     bind:clientHeight={barHeight}
     class={cn(
       "absolute inset-x-0 bottom-0 bg-linear-to-t from-black/70 via-black/30 to-transparent pt-12 transition-opacity ease-smooth-out",
-      shown && playerState?.notice === undefined
+      shown
         ? "opacity-100 duration-(--duration-fast)"
         : "pointer-events-none opacity-0 duration-(--duration-medium)",
     )}
@@ -483,7 +485,7 @@ const VolumeIcon = $derived(
     onfocusout={barFocusOut}
   >
     <div class="flex flex-col gap-2">
-      <div class="flex items-center gap-3">
+      <div class={cn("flex items-center gap-3", stopped && "invisible")}>
         <span
           class="min-w-14 text-right text-footnote tabular-nums text-white/80"
           >{formatPosition(playerState?.position ?? 0)}</span
@@ -501,7 +503,7 @@ const VolumeIcon = $derived(
         >
       </div>
       <div class="grid grid-cols-[1fr_auto_1fr] items-center">
-        <div class="flex items-center gap-1">
+        <div class={cn("flex items-center gap-1", stopped && "invisible")}>
           <Button
             variant="ghost"
             size="icon"
@@ -528,7 +530,10 @@ const VolumeIcon = $derived(
           </div>
         </div>
         <div
-          class="flex items-center justify-center gap-2 sm:col-start-2 max-sm:pointer-events-none max-sm:fixed max-sm:inset-0"
+          class={cn(
+            "flex items-center justify-center gap-2 sm:col-start-2 max-sm:pointer-events-none max-sm:fixed max-sm:inset-0",
+            stopped && "invisible",
+          )}
         >
           <!-- A soft scrim behind the transport, instead of dimming the whole frame and its captions. -->
           <div
@@ -580,7 +585,7 @@ const VolumeIcon = $derived(
               variant="ghost"
               size="icon"
               aria-label={pip ? "Exit Picture in Picture" : "Picture in Picture"}
-              class="text-white hover:bg-white/12"
+              class={cn("text-white hover:bg-white/12", stopped && "invisible")}
               onclick={() => void togglePip()}
             >
               <PictureInPicture2Icon aria-hidden="true" />

@@ -50,11 +50,15 @@ onMount(() => {
 </div>
 
 <Dialog.Root bind:open>
-  <Dialog.Content>
+  <Dialog.Content
+    class="max-h-[calc(100svh-2rem)] grid-rows-[auto_minmax(0,1fr)]"
+  >
     <Dialog.Header>
       <Dialog.Title>{title}</Dialog.Title>
     </Dialog.Header>
-    <p class="text-callout text-label whitespace-pre-line">{text}</p>
+    <p class="overflow-y-auto text-callout text-label whitespace-pre-line">
+      {text}
+    </p>
   </Dialog.Content>
 </Dialog.Root>
 

@@ -8,13 +8,16 @@ export type ItemCard = Awaited<
   ReturnType<PendiaClient["items"]["list"]>
 >["items"][number];
 
-/** A card that also knows its Season, Episode numbers and Show. */
-export type BrowseCard = ItemDetail["children"][number];
-
 /** One Home shelf with its entries. */
 export type Shelf = Awaited<
   ReturnType<PendiaClient["shelves"]["home"]>
 >[number];
+
+/** A card that also knows its Season, Episode numbers and Show. */
+export type BrowseCard = Shelf["entries"][number]["item"];
+
+/** A detail's child, with its overview, runtime and the caller's progress. */
+export type DetailChild = ItemDetail["children"][number];
 
 /** The page for a card, or null when a Season or Episode lacks its Show. */
 export function itemHref(card: ItemCard | BrowseCard): string | null {
@@ -170,6 +173,19 @@ export function timeLeft(progress: {
   return `${formatDuration(progress.durationSeconds - progress.positionSeconds)} left`;
 }
 
+const hdrFormats = ["Dolby Vision", "HDR10+", "HDR10", "HLG"];
+
+/** The picture formats an Item's Versions offer, best first, such as ["4K", "Dolby Vision"]. */
+export function formatBadges(labels: readonly string[]): string[] {
+  const parts = labels.flatMap((label) => label.split(" · "));
+  const badges: string[] = [];
+  if (parts.includes("4K")) badges.push("4K");
+  else if (parts.some((part) => /^(720|1080)p$/.test(part))) badges.push("HD");
+  for (const format of hdrFormats)
+    if (parts.includes(format)) badges.push(format);
+  return badges;
+}
+
 const byteUnits = ["B", "KB", "MB", "GB", "TB"];
 
 /** A file size in decimal units, such as `4.7 GB`. */
@@ -182,4 +198,22 @@ export function formatBytes(bytes: number): string {
   }
   const digits = unit === 0 || value >= 100 ? 0 : 1;
   return `${value.toFixed(digits)} ${byteUnits[unit]}`;
+}
+
+/** The Episode to play next, in watch order: the last one touched if unfinished, else the first unfinished after it, else the first. */
+export function upNextEpisode(
+  episodes: readonly DetailChild[],
+): DetailChild | undefined {
+  if (episodes.length === 0) return undefined;
+  let last = -1;
+  episodes.forEach((episode, index) => {
+    if (episode.progress !== null) last = index;
+  });
+  if (last === -1) return episodes[0];
+  const current = episodes[last];
+  if (!current.progress?.completed) return current;
+  return (
+    episodes.slice(last + 1).find((episode) => !episode.progress?.completed) ??
+    episodes[0]
+  );
 }

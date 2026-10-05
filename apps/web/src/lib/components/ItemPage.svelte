@@ -1,173 +1,370 @@
 <script lang="ts">
-import type { Snippet } from "svelte";
+import ChevronsUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
+import PlayIcon from "@lucide/svelte/icons/play";
 import { client } from "$lib/api.ts";
 import {
-  artworkUrl,
   episodeCode,
+  fallbackHue,
   formatBytes,
   formatDuration,
   type ItemDetail,
-  itemHref,
+  landscapeArtwork,
+  upNextEpisode,
 } from "$lib/browse.ts";
-import Artwork from "$lib/components/Artwork.svelte";
+import AmbientBackdrop from "$lib/components/AmbientBackdrop.svelte";
+import CreditRow from "$lib/components/CreditRow.svelte";
+import DetailBar from "$lib/components/DetailBar.svelte";
+import EpisodeCard from "$lib/components/EpisodeCard.svelte";
 import Failure from "$lib/components/Failure.svelte";
-import PosterCard from "$lib/components/PosterCard.svelte";
+import FormatBadges from "$lib/components/FormatBadges.svelte";
+import Hero from "$lib/components/Hero.svelte";
+import ItemActions from "$lib/components/ItemActions.svelte";
+import Overview from "$lib/components/Overview.svelte";
+import Shelf from "$lib/components/Shelf.svelte";
 import StoreRequest from "$lib/components/StoreRequest.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.ts";
+import { Skeleton } from "$lib/components/ui/skeleton/index.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
-const {
-  id,
-  actions,
-}: {
-  id: string;
-  /** Controls such as Play, drawn under the title. */
-  actions?: Snippet<[ItemDetail]>;
-} = $props();
+const { id }: { id: string } = $props();
 
 const item = resource(() => client.items.get({ id }));
 
-const castPreview = 12;
-const backdropWidths = [960, 1440, 1920, 2560];
+// A Show's Season details load once the Show arrives, for the up next pill
+// and the episode shelf. An Episode's parent Season loads for the More shelf.
+const related = resource(async () => {
+  const detail = item.data;
+  if (detail?.kind === "show")
+    return Promise.all(
+      detail.children.map((season) => client.items.get({ id: season.id })),
+    );
+  if (detail?.kind === "episode" && detail.parentId !== null)
+    return [await client.items.get({ id: detail.parentId })];
+  return [] as ItemDetail[];
+});
 
-let wholeCast = $state(false);
+$effect(() => {
+  const detail = item.data;
+  if (detail && (detail.kind === "show" || detail.kind === "episode"))
+    void related.reload();
+});
+
+let hero = $state<HTMLElement | undefined>(undefined);
+
+// The Show page's chosen Season; the up next Episode picks the default.
+let chosen = $state<string | undefined>(undefined);
 
 const count = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
 
-function facts(detail: ItemDetail): string[] {
-  const runtime = detail.versions[0]?.durationSeconds;
-  return [
-    detail.kind === "episode" ? episodeCode(detail) : null,
-    detail.year === null ? null : String(detail.year),
-    detail.contentRating,
-    runtime == null ? null : formatDuration(runtime),
-    detail.kind === "show"
-      ? count(detail.children.length, "season", "seasons")
-      : null,
-    detail.kind === "season"
-      ? count(detail.children.length, "episode", "episodes")
-      : null,
-    detail.genres.length === 0 ? null : detail.genres.join(", "),
-  ].filter((fact) => fact !== null);
-}
-
 const seasonLabel = (seasonNumber: number | null) =>
   seasonNumber === 0 ? "Specials" : `Season ${seasonNumber}`;
 
-const titleCase = (role: string) =>
-  role.charAt(0).toUpperCase() + role.slice(1);
+/** A Show's Seasons in order, Specials last. */
+const orderedSeasons = (detail: ItemDetail) =>
+  detail.children.toSorted(
+    (a, b) => (a.seasonNumber === 0 ? 1 : 0) - (b.seasonNumber === 0 ? 1 : 0),
+  );
+
+/** The title's hue, feeding the art-free hero and the ambient wash. */
+const heroHue = (detail: ItemDetail) => fallbackHue(detail.title);
+
+/** The poster the hero washes with when the Item has no backdrop. */
+const heroPoster = (detail: ItemDetail) =>
+  detail.posterArtworkId ?? detail.show?.posterArtworkId ?? null;
+
+function metaLine(detail: ItemDetail): string[] {
+  const genres = detail.genres.slice(0, 2);
+  if (detail.kind === "movie") return ["Movie", ...genres];
+  if (detail.kind === "show") return ["TV show", ...genres];
+  if (detail.kind === "season")
+    return ["TV show", count(detail.children.length, "episode", "episodes")];
+  return [episodeCode(detail) ?? "Episode", ...genres];
+}
+
+/** Where Back lands for a cold-opened page. */
+function fallbackHref(detail: ItemDetail): string {
+  if (detail.kind === "movie") return "/movies";
+  if (detail.kind === "show") return "/shows";
+  if (detail.kind === "season")
+    return detail.show === null ? "/shows" : `/shows/${detail.show.id}`;
+  return detail.show !== null && detail.parentId !== null
+    ? `/shows/${detail.show.id}/seasons/${detail.parentId}`
+    : "/shows";
+}
+
+/** The hero aside: starring actors, then the director or creator. */
+function creditsAside(detail: ItemDetail) {
+  const actors = detail.credits
+    .filter((credit) => credit.role === "actor")
+    .slice(0, 3)
+    .map((credit) => credit.name);
+  const lead = detail.credits.find(
+    (credit) =>
+      credit.role === "director" ||
+      (detail.kind === "show" && credit.role === "creator"),
+  );
+  return {
+    actors,
+    lead:
+      lead === undefined
+        ? null
+        : {
+            label: lead.role === "creator" ? "Created by" : "Director",
+            name: lead.name,
+          },
+  };
+}
 </script>
 
 <svelte:head>
   <title>{item.data ? `${item.data.title} · Pendia` : "Pendia"}</title>
 </svelte:head>
 
-<div class="legacy">
-{#if item.failure}
-  <Failure failure={item.failure} />
-{:else if item.data}
+{#if item.data}
   {@const detail = item.data}
-  {@const cast = detail.credits.filter((credit) => credit.role === "actor")}
-  {@const crew = detail.credits.filter((credit) => credit.role !== "actor")}
-  <article>
-    {#if detail.backdropArtworkId}
-      <div class="backdrop">
-        <img
-          src={artworkUrl(detail.backdropArtworkId, 1440)}
-          srcset={backdropWidths
-            .map(
-              (width) =>
-                `${artworkUrl(detail.backdropArtworkId ?? "", width)} ${width}w`,
-            )
-            .join(", ")}
-          sizes="100vw"
-          alt=""
-        />
-      </div>
-    {/if}
+  {@const ambient = landscapeArtwork(detail) ?? heroPoster(detail)}
+  <AmbientBackdrop artworkId={ambient} hue={heroHue(detail)} />
+{/if}
 
-    <div class="head" class:over={detail.backdropArtworkId !== null}>
-      <div class="poster">
-        <Artwork
-          artworkId={detail.posterArtworkId ??
-            detail.show?.posterArtworkId ??
-            null}
-          title={detail.title}
-          kind={detail.kind}
-          caption={detail.year === null ? null : String(detail.year)}
-          sizes="(max-width: 640px) 120px, 220px"
-          loading="eager"
-        />
-      </div>
-      <div class="info">
-        {#if detail.show}
-          <nav aria-label="Breadcrumb">
-            <a href="/shows/{detail.show.id}">{detail.show.title}</a>
-            {#if detail.kind === "episode" && detail.parentId}
-              <span aria-hidden="true">›</span>
-              <a href="/shows/{detail.show.id}/seasons/{detail.parentId}"
-                >{seasonLabel(detail.seasonNumber)}</a
+<DetailBar
+  title={item.data?.title ?? ""}
+  fallbackHref={item.data ? fallbackHref(item.data) : "/"}
+  {hero}
+/>
+
+{#if item.failure}
+  <div class="pt-5"><Failure failure={item.failure} /></div>
+{:else if item.data === undefined}
+  <div class="bleed -mt-14" aria-hidden="true">
+    <Skeleton
+      class="h-[min(78svh,44rem)] w-full rounded-none lg:h-[min(82svh,max(30rem,56vw))]"
+    />
+  </div>
+{:else}
+  {@const detail = item.data}
+  {@const billing = creditsAside(detail)}
+  {@const runtime = detail.versions[0]?.durationSeconds ?? null}
+  {@const episodes =
+    detail.kind === "show"
+      ? (related.data ?? []).flatMap((season) => season.children)
+      : detail.children}
+  <div class="bleed -mt-14" bind:this={hero}>
+    <Hero
+      backdropId={landscapeArtwork(detail)}
+      posterId={heroPoster(detail)}
+      logoId={detail.kind === "movie" || detail.kind === "show"
+        ? detail.logoArtworkId
+        : null}
+      title={detail.title}
+      heading="h1"
+      eager
+      hue={heroHue(detail)}
+    >
+      {#snippet eyebrow()}
+        {#if detail.show && (detail.kind === "season" || detail.kind === "episode")}
+          <p class="text-title-3 text-white/90">
+            <a href="/shows/{detail.show.id}" class="hover:underline"
+              >{detail.show.title}</a
+            >
+            {#if detail.kind === "episode" && detail.parentId !== null}
+              <span aria-hidden="true"> · </span>
+              <a
+                href="/shows/{detail.show.id}/seasons/{detail.parentId}"
+                class="hover:underline">{seasonLabel(detail.seasonNumber)}</a
               >
             {/if}
-          </nav>
+          </p>
         {/if}
-        <h1>{detail.title}</h1>
-        {#if facts(detail).length > 0}
-          <p class="facts">{facts(detail).join(" · ")}</p>
+      {/snippet}
+      {#snippet aside()}
+        {#if billing.actors.length > 0 || billing.lead !== null}
+          <p class="text-white">
+            {#if billing.actors.length > 0}
+              <span class="text-white/60">Starring</span>
+              {billing.actors.join(", ")}
+            {/if}
+          </p>
+          {#if billing.lead !== null}
+            <p class="text-white">
+              <span class="text-white/60">{billing.lead.label}</span>
+              {billing.lead.name}
+            </p>
+          {/if}
         {/if}
-        {#if actions}
-          <div class="actions">{@render actions(detail)}</div>
+      {/snippet}
+      <p
+        class="flex flex-wrap items-center gap-x-2 gap-y-1 text-subheadline text-white/75"
+      >
+        {metaLine(detail).join(" · ")}
+        {#if detail.contentRating}
+          <span
+            class="rounded-[4px] border border-white/40 px-1 text-caption-1 font-semibold"
+            >{detail.contentRating}</span
+          >
         {/if}
-        {#if detail.overview}
-          <p class="overview">{detail.overview}</p>
+      </p>
+      {#if detail.overview}
+        <Overview text={detail.overview} title={detail.title} />
+      {/if}
+      <p
+        class="flex flex-wrap items-center gap-x-2 gap-y-1 text-subheadline text-white/75 tabular-nums"
+      >
+        {#if detail.year !== null}{detail.year}{/if}
+        {#if detail.kind === "show" && detail.children.length > 0}
+          {#if detail.year !== null}
+            <span aria-hidden="true">·</span>
+          {/if}
+          {count(detail.children.length, "season", "seasons")}
         {/if}
+        {#if runtime !== null}
+          {#if detail.year !== null || (detail.kind === "show" && detail.children.length > 0)}
+            <span aria-hidden="true">·</span>
+          {/if}
+          {formatDuration(runtime)}
+        {/if}
+        <FormatBadges versions={detail.versions} />
+      </p>
+      <div class="mt-2">
+        <ItemActions {detail} {episodes} reload={item.reload} />
       </div>
-    </div>
+    </Hero>
+  </div>
 
+  <div class="flex flex-col gap-10 pt-8 lg:gap-12 lg:pt-10">
     {#if detail.kind === "show" && detail.children.length > 0}
-      <section aria-labelledby="seasons">
-        <h2 id="seasons">Seasons</h2>
-        <ul class="poster-grid">
-          {#each detail.children as season (season.id)}
-            <li><PosterCard card={season} /></li>
+      {@const next = upNextEpisode(episodes)}
+      {@const seasons = orderedSeasons(detail)}
+      {@const selected =
+        (chosen !== undefined
+          ? seasons.find((season) => season.id === chosen)
+          : undefined) ??
+        seasons.find((season) => season.id === next?.parentId) ??
+        seasons[0]}
+      {@const chosenDetail = related.data?.find(
+        (season) => season.id === selected?.id,
+      )}
+      {#if selected !== undefined}
+        {#key selected.id}
+          <Shelf id="episodes" size="landscape">
+            {#snippet heading()}
+              {#if seasons.length > 1}
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger
+                    class="inline-flex items-center gap-1.5"
+                    aria-label="{selected.title}, choose season"
+                  >
+                    {selected.title}
+                    <ChevronsUpDownIcon class="size-5" />
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="start">
+                    <DropdownMenu.RadioGroup
+                      value={selected.id}
+                      onValueChange={(value) => (chosen = value)}
+                    >
+                      {#each seasons as season (season.id)}
+                        <DropdownMenu.RadioItem value={season.id}>
+                          {season.title}
+                        </DropdownMenu.RadioItem>
+                      {/each}
+                    </DropdownMenu.RadioGroup>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+              {:else}
+                {selected.title}
+              {/if}
+            {/snippet}
+            {#if related.loading || related.data === undefined}
+              {#each [0, 1, 2, 3] as n (n)}
+                <li class="flex flex-col gap-1" aria-hidden="true">
+                  <Skeleton class="aspect-video w-full rounded-poster" />
+                  <Skeleton class="mt-2 h-4 w-24" />
+                  <Skeleton class="h-5 w-40" />
+                  <Skeleton class="h-14 w-full" />
+                </li>
+              {/each}
+            {:else if related.failure}
+              <li class="col-span-full"><Failure failure={related.failure} /></li>
+            {:else if chosenDetail}
+              {#each chosenDetail.children as episode (episode.id)}
+                <li><EpisodeCard {episode} /></li>
+              {/each}
+            {/if}
+          </Shelf>
+        {/key}
+      {/if}
+    {/if}
+
+    {#if detail.kind === "season" && detail.children.length > 0}
+      <section aria-labelledby="episodes">
+        <h2 id="episodes" class="mb-3 text-title-2">Episodes</h2>
+        <ul
+          class="grid gap-x-4 gap-y-6 grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]"
+        >
+          {#each detail.children as episode (episode.id)}
+            <li><EpisodeCard {episode} /></li>
           {/each}
         </ul>
       </section>
     {/if}
 
-    {#if detail.kind === "season" && detail.children.length > 0}
-      <section aria-labelledby="episodes">
-        <h2 id="episodes">Episodes</h2>
-        <ol class="episodes">
-          {#each detail.children as episode (episode.id)}
-            <li>
-              <a href={itemHref(episode)}>
-                <span class="number">{episode.episodeNumber}</span>
-                <span>{episode.title}</span>
-              </a>
+    {#if detail.kind === "episode"}
+      {@const season = related.data?.[0]}
+      {#if season && season.children.length > 1}
+        <Shelf
+          id="more-in"
+          title="More in {season.title}"
+          size="landscape"
+        >
+          {#each season.children as episode (episode.id)}
+            <li><EpisodeCard {episode} current={episode.id === detail.id} /></li>
+          {/each}
+        </Shelf>
+      {:else if related.loading}
+        <Shelf
+          id="more-in"
+          title="More in {seasonLabel(detail.seasonNumber)}"
+          size="landscape"
+        >
+          {#each [0, 1, 2, 3] as n (n)}
+            <li aria-hidden="true">
+              <Skeleton class="aspect-video w-full rounded-poster" />
             </li>
           {/each}
-        </ol>
-      </section>
+        </Shelf>
+      {/if}
     {/if}
 
-    {#if detail.versions.length > 0}
+    {#if (detail.kind === "movie" || detail.kind === "episode") && detail.versions.length > 0}
       <section aria-labelledby="versions">
-        <h2 id="versions">Versions</h2>
-        <ul class="rows">
+        <h2 id="versions" class="mb-3 text-title-2">Versions</h2>
+        <ul class="max-w-3xl rounded-xl bg-elevated">
           {#each detail.versions as version (version.id)}
-            <li>
-              <span>{version.label}</span>
-              <span class="muted">
-                {[
-                  version.durationSeconds === null
-                    ? null
-                    : formatDuration(version.durationSeconds),
-                  formatBytes(version.bytes),
-                ]
-                  .filter((part) => part !== null)
-                  .join(" · ")}
-              </span>
+            <li
+              class="flex items-center gap-4 border-b border-separator px-4 py-3 last:border-0"
+            >
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-body">{version.label}</p>
+                <p class="text-footnote text-label-secondary tabular-nums">
+                  {[
+                    version.durationSeconds === null
+                      ? null
+                      : formatDuration(version.durationSeconds),
+                    formatBytes(version.bytes),
+                  ]
+                    .filter((part) => part !== null)
+                    .join(" · ")}
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                size="icon"
+                href="/play/{detail.id}?version={version.id}"
+                aria-label="Play {version.label}"
+              >
+                <PlayIcon />
+              </Button>
             </li>
           {/each}
         </ul>
@@ -175,197 +372,6 @@ const titleCase = (role: string) =>
       </section>
     {/if}
 
-    {#if cast.length > 0}
-      <section aria-labelledby="cast">
-        <h2 id="cast">Cast</h2>
-        <ul class="people">
-          {#each wholeCast ? cast : cast.slice(0, castPreview) as credit, index (`${credit.contributorId}-${index}`)}
-            <li>
-              <span>{credit.name}</span>
-              {#if credit.character}
-                <span class="muted">{credit.character}</span>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-        {#if cast.length > castPreview}
-          <button
-            type="button"
-            aria-expanded={wholeCast}
-            onclick={() => (wholeCast = !wholeCast)}
-            >{wholeCast ? "Show less" : `Show all ${cast.length}`}</button
-          >
-        {/if}
-      </section>
-    {/if}
-
-    {#if crew.length > 0}
-      <section aria-labelledby="crew">
-        <h2 id="crew">Crew</h2>
-        <ul class="people">
-          {#each crew as credit, index (`${credit.contributorId}-${index}`)}
-            <li>
-              <span>{credit.name}</span>
-              <span class="muted">{titleCase(credit.role)}</span>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
-  </article>
+    <CreditRow credits={detail.credits} />
+  </div>
 {/if}
-</div>
-
-<style>
-  .backdrop {
-    position: relative;
-    height: min(56svh, 42vw);
-    margin: -24px calc(-1 * var(--gutter)) 0;
-    overflow: hidden;
-  }
-
-  .backdrop img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .backdrop::after {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to bottom, transparent 40%, var(--canvas));
-    content: "";
-  }
-
-  .head {
-    position: relative;
-    display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-    align-items: end;
-    gap: 32px;
-  }
-
-  .head.over {
-    margin-top: -120px;
-  }
-
-  .info {
-    max-width: 72ch;
-  }
-
-  nav {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    color: var(--muted);
-  }
-
-  nav a {
-    color: var(--ink);
-    font-weight: 600;
-  }
-
-  h1 {
-    margin: 4px 0 8px;
-    font-size: clamp(28px, 4vw, 44px);
-    letter-spacing: -0.02em;
-    overflow-wrap: anywhere;
-  }
-
-  .facts {
-    margin: 0;
-    color: var(--muted);
-  }
-
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-top: 16px;
-  }
-
-  .overview {
-    margin: 16px 0 0;
-    text-wrap: pretty;
-  }
-
-  section {
-    margin-top: 40px;
-  }
-
-  h2 {
-    margin: 0 0 12px;
-  }
-
-  .episodes,
-  .rows,
-  .people {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .episodes,
-  .rows {
-    max-width: 720px;
-  }
-
-  .episodes a {
-    display: flex;
-    gap: 16px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--line);
-    color: var(--ink);
-    text-decoration: none;
-  }
-
-  .episodes a:hover {
-    color: var(--signal);
-  }
-
-  .number {
-    min-width: 3ch;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-  }
-
-  .rows li {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 4px 16px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .people {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    gap: 12px 24px;
-  }
-
-  .people li {
-    display: grid;
-  }
-
-  .people + button {
-    margin-top: 16px;
-  }
-
-  @media (max-width: 640px) {
-    .head {
-      grid-template-columns: 120px minmax(0, 1fr);
-      gap: 16px;
-    }
-
-    .head.over {
-      margin-top: -48px;
-    }
-
-    .info {
-      grid-column: 1 / -1;
-    }
-  }
-</style>

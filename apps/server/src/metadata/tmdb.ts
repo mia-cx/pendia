@@ -129,6 +129,8 @@ function readArtwork(
   const artwork: Artwork[] = [];
   const seen = new Set<string>();
   const add = (type: Artwork["type"], path: string) => {
+    // Vector files cannot be rasterized and stored, so they are not offered.
+    if (path.toLowerCase().endsWith(".svg")) return;
     const url = `${imageBaseUrl}${path}`;
     const key = `${type}|${url}`;
     if (seen.has(key)) return;
@@ -265,7 +267,11 @@ async function fetchMovie(
   // TMDB answers 404 for deleted or merged movies.
   const body = await get(
     `/movie/${match.providerId}`,
-    { append_to_response: "credits,release_dates,external_ids,images" },
+    {
+      append_to_response: "credits,release_dates,external_ids,images",
+      // English to match the title's language, plus language-neutral images.
+      include_image_language: "en,null",
+    },
     true,
   );
   if (body === undefined) return null;

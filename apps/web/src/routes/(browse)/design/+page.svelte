@@ -9,7 +9,12 @@ import SettingsIcon from "@lucide/svelte/icons/settings";
 import Trash2Icon from "@lucide/svelte/icons/trash-2";
 import { toast } from "svelte-sonner";
 import { client } from "$lib/api.ts";
+import type { BrowseCard } from "$lib/browse.ts";
 import { artworkUrl } from "$lib/browse.ts";
+import Artwork from "$lib/components/Artwork.svelte";
+import LandscapeCard from "$lib/components/LandscapeCard.svelte";
+import PosterCard from "$lib/components/PosterCard.svelte";
+import Shelf from "$lib/components/Shelf.svelte";
 import * as AlertDialog from "$lib/components/ui/alert-dialog/index.ts";
 import { Badge } from "$lib/components/ui/badge/index.ts";
 import { Button } from "$lib/components/ui/button/index.ts";
@@ -30,6 +35,46 @@ import * as Table from "$lib/components/ui/table/index.ts";
 import * as Tabs from "$lib/components/ui/tabs/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
 import { resource } from "$lib/resource.svelte.ts";
+
+function sampleCard(overrides: Partial<BrowseCard>): BrowseCard {
+  return {
+    id: "card-1",
+    kind: "movie",
+    libraryId: "library-1",
+    title: "Dune: Part Two",
+    year: 2024,
+    addedAt: "2026-10-01T00:00:00.000000Z",
+    posterArtworkId: null,
+    backdropArtworkId: null,
+    logoArtworkId: null,
+    thumbArtworkId: null,
+    parentId: null,
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeEndNumber: null,
+    show: null,
+    ...overrides,
+  };
+}
+
+const sampleShow = {
+  id: "show-1",
+  title: "Severance",
+  posterArtworkId: null,
+  backdropArtworkId: null,
+  logoArtworkId: null,
+};
+const mediaCards = [
+  sampleCard({}),
+  sampleCard({
+    id: "card-2",
+    kind: "episode",
+    title: "Half Loop",
+    seasonNumber: 1,
+    episodeNumber: 2,
+    show: sampleShow,
+  }),
+];
 
 const hero = resource(async () => {
   const list = await client.items.list({ kind: "movie" });
@@ -342,5 +387,64 @@ const rows = Array.from(
       <ScrollArea.Scrollbar orientation="vertical" />
     </ScrollArea.Root>
   </section>
+  <section class="flex flex-col gap-4">
+    <h2 class="text-title-2">Media</h2>
+    <div class="flex flex-wrap items-start gap-4">
+      <div class="w-36">
+        <Artwork
+          artworkId={null}
+          title="Dune: Part Two"
+          kind="movie"
+          caption="2024"
+          sizes="144px"
+        />
+      </div>
+      <div class="w-36">
+        <Artwork
+          artworkId={null}
+          title="Severance"
+          kind="show"
+          caption="2022"
+          sizes="144px"
+        />
+      </div>
+      <div class="w-72">
+        <Artwork
+          artworkId={null}
+          title="Severance"
+          kind="episode"
+          shape="landscape"
+          fallbackTitle={false}
+          sizes="288px"
+        />
+      </div>
+    </div>
+    <Shelf title="Poster shelf" id="design-poster-shelf">
+      {#each mediaCards as card (card.id)}
+        <li>
+          <PosterCard
+            {card}
+            progress={card.id === "card-1"
+              ? { positionSeconds: 2640, durationSeconds: 6600 }
+              : null}
+          />
+        </li>
+      {/each}
+    </Shelf>
+    <Shelf title="Landscape shelf" id="design-landscape-shelf" size="landscape">
+      {#each mediaCards as card (card.id)}
+        <li>
+          <LandscapeCard
+            {card}
+            progress={card.id === "card-2"
+              ? { positionSeconds: 1350, durationSeconds: 2700 }
+              : null}
+            fresh={card.id === "card-1"}
+          />
+        </li>
+      {/each}
+    </Shelf>
+  </section>
+
   <Separator class="my-2" />
 </div>

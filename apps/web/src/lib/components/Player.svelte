@@ -4,7 +4,7 @@ import { afterNavigate, goto } from "$app/navigation";
 import { client } from "$lib/api.ts";
 import { episodeCode, itemHref } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
-import { audioNames, subtitleNames } from "$lib/playback.ts";
+import { audioNames, pickVersion, subtitleNames } from "$lib/playback.ts";
 import {
   type PlannedTracks,
   type PlayerNotice,
@@ -25,7 +25,16 @@ const {
   startAt: number | null;
 } = $props();
 
-const item = resource(() => client.items.get({ id }));
+// The Version choice is part of the load: a link that names no Version plays
+// the one the viewer's progress is on, so the session waits for both reads.
+const item = resource(async () => {
+  const detail = await client.items.get({ id });
+  // A failed read still plays the first Version.
+  const progress = await client.playback
+    .getProgress({ itemId: detail.id })
+    .catch(() => null);
+  return { detail, progressVersionId: progress?.versionId ?? null };
+});
 
 let video = $state<HTMLVideoElement>();
 let notice = $state<PlayerNotice>();
@@ -39,10 +48,11 @@ let cameFrom: string | undefined;
 let destroyed = false;
 let hiddenAt: number | null = null;
 
-const detail = $derived(item.data);
+const detail = $derived(item.data?.detail);
 const version = $derived(
-  detail?.versions.find((candidate) => candidate.id === versionId) ??
-    detail?.versions[0],
+  detail === undefined
+    ? undefined
+    : pickVersion(detail.versions, versionId, item.data?.progressVersionId),
 );
 const back = $derived(detail === undefined ? "/" : (itemHref(detail) ?? "/"));
 const context = $derived(

@@ -56,6 +56,7 @@ const tmdbDetail = {
     ],
   },
   external_ids: { imdb_id: "tt0137523" },
+  images: { logos: [{ file_path: "/logo.png" }] },
 };
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
@@ -208,13 +209,17 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         await registry.run(claimedFetch);
         await queue.complete(claimedFetch);
 
-        expect(calls).toHaveLength(2);
+        expect(calls).toHaveLength(4);
         const tmdb = calls.find((url) => url.hostname === "api.themoviedb.org");
-        const image = calls.find((url) => url.hostname === "image.tmdb.org");
         expect(tmdb?.pathname).toBe("/3/movie/550");
         expect(tmdb?.searchParams.get("api_key")).toBe("test-key");
-        expect(image?.pathname).toBe("/t/p/original/poster.jpg");
-        expect(image?.searchParams.has("api_key")).toBe(false);
+        const images = calls.filter((url) => url.hostname === "image.tmdb.org");
+        expect(images.map((url) => url.pathname).sort()).toEqual([
+          "/t/p/original/backdrop.jpg",
+          "/t/p/original/logo.png",
+          "/t/p/original/poster.jpg",
+        ]);
+        expect(images[0]?.searchParams.has("api_key")).toBe(false);
 
         expect(await storedItem(db, item.id)).toMatchObject({
           title: "Fight Club",
@@ -244,8 +249,24 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
           { role: "actor", character: "Tyler Durden", order: 1 },
           { role: "director", order: 0 },
         ]);
-        const rows = await db.select().from(artwork);
+        const rows = await db.select().from(artwork).orderBy(artwork.type);
         expect(rows).toMatchObject([
+          {
+            itemId: item.id,
+            versionId: null,
+            type: "backdrop",
+            sourceUrl: "https://image.tmdb.org/t/p/original/backdrop.jpg",
+            backend: "colocated",
+            selected: true,
+          },
+          {
+            itemId: item.id,
+            versionId: null,
+            type: "logo",
+            sourceUrl: "https://image.tmdb.org/t/p/original/logo.png",
+            backend: "colocated",
+            selected: true,
+          },
           {
             itemId: item.id,
             versionId: null,
@@ -255,14 +276,14 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
             selected: true,
           },
         ]);
-        expect(rows[0]?.storageKey).toMatch(
-          new RegExp(
-            `^Alien \\(1979\\) \\{tmdb-550\\}/\\.pendia/artwork/${rows[0]?.id}\\.[0-9a-f-]{36}$`,
-          ),
-        );
-        expect(await readFile(join(root, rows[0]?.storageKey ?? ""))).toEqual(
-          png,
-        );
+        for (const row of rows) {
+          expect(row.storageKey).toMatch(
+            new RegExp(
+              `^Alien \\(1979\\) \\{tmdb-550\\}/\\.pendia/artwork/${row.id}\\.[0-9a-f-]{36}$`,
+            ),
+          );
+          expect(await readFile(join(root, row.storageKey))).toEqual(png);
+        }
         expect(await db.select().from(events)).toMatchObject([
           {
             kind: "library.changed",
@@ -687,8 +708,8 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         await queue.complete(retried ?? job);
         expect((await storedItem(db, item.id)).metadataState).toBe("matched");
         const rows = await db.select().from(artwork);
-        expect(rows).toHaveLength(1);
-        expect(rows[0]?.selected).toBe(true);
+        expect(rows).toHaveLength(3);
+        expect(rows.every((row) => row.selected)).toBe(true);
         expect(await db.select().from(events)).toMatchObject([
           { kind: "library.changed" },
           { kind: "library.changed" },
@@ -761,7 +782,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         expect(retried?.id).toBe(job.id);
         await registry.run(retried ?? job);
         await queue.complete(retried ?? job);
-        expect(await db.select().from(artwork)).toHaveLength(1);
+        expect(await db.select().from(artwork)).toHaveLength(3);
         expect(await db.select().from(events)).toHaveLength(4);
         expect((await storedItem(db, item.id)).metadataState).toBe("matched");
       });
@@ -798,7 +819,10 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         const claimedFirst = await queue.claim(["provider-fetch"]);
         await registry.run(claimedFirst ?? first);
         await queue.complete(claimedFirst ?? first);
-        const [stored] = await db.select().from(artwork);
+        const [stored] = await db
+          .select()
+          .from(artwork)
+          .where(eq(artwork.type, "poster"));
         if (!stored) throw new Error("Stored artwork missing.");
         const storedPath = join(root, stored.storageKey);
         expect(await readFile(storedPath)).toEqual(png);
@@ -812,13 +836,20 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         await registry.run(claimedSecond ?? second);
         await queue.complete(claimedSecond ?? second);
 
-        expect(await db.select().from(artwork)).toHaveLength(0);
+        // The poster goes; the still-offered backdrop and logo stay.
+        const remaining = await db
+          .select({ type: artwork.type })
+          .from(artwork)
+          .orderBy(artwork.type);
+        expect(remaining).toEqual([{ type: "backdrop" }, { type: "logo" }]);
         await expect(access(storedPath)).rejects.toThrow();
         expect(
           calls.filter((url) => url.hostname === "image.tmdb.org"),
-        ).toHaveLength(1);
-        expect(calls).toHaveLength(3);
+        ).toHaveLength(3);
+        expect(calls).toHaveLength(5);
+        // The poster's removal publishes its own change.
         expect(await db.select().from(events)).toMatchObject([
+          { kind: "library.changed" },
           { kind: "library.changed" },
           { kind: "library.changed" },
           { kind: "library.changed" },
@@ -914,7 +945,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
             sourceUrl: artwork.sourceUrl,
           })
           .from(artwork);
-        expect(stored).toHaveLength(3);
+        expect(stored).toHaveLength(5);
         expect(stored).toEqual(
           expect.arrayContaining([
             {
@@ -922,6 +953,17 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
               type: "poster",
               sourceUrl:
                 "https://artworks.thetvdb.com/banners/posters/81189-1.jpg",
+            },
+            {
+              itemId: show.id,
+              type: "backdrop",
+              sourceUrl:
+                "https://artworks.thetvdb.com/banners/fanart/original/81189-1.jpg",
+            },
+            {
+              itemId: show.id,
+              type: "logo",
+              sourceUrl: "https://artworks.thetvdb.com/banners/logos/81189.png",
             },
             {
               itemId: idOf("Season 1"),

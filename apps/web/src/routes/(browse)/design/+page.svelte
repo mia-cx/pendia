@@ -9,10 +9,14 @@ import SettingsIcon from "@lucide/svelte/icons/settings";
 import Trash2Icon from "@lucide/svelte/icons/trash-2";
 import { toast } from "svelte-sonner";
 import { client } from "$lib/api.ts";
-import type { BrowseCard } from "$lib/browse.ts";
+import type { BrowseCard, DetailChild, ItemDetail } from "$lib/browse.ts";
 import { artworkUrl } from "$lib/browse.ts";
 import Artwork from "$lib/components/Artwork.svelte";
+import CreditRow from "$lib/components/CreditRow.svelte";
+import EpisodeCard from "$lib/components/EpisodeCard.svelte";
+import FormatBadges from "$lib/components/FormatBadges.svelte";
 import LandscapeCard from "$lib/components/LandscapeCard.svelte";
+import Overview from "$lib/components/Overview.svelte";
 import PosterCard from "$lib/components/PosterCard.svelte";
 import Shelf from "$lib/components/Shelf.svelte";
 import * as AlertDialog from "$lib/components/ui/alert-dialog/index.ts";
@@ -74,12 +78,60 @@ const mediaCards = [
   }),
 ];
 
+function sampleEpisode(overrides: Partial<DetailChild>): DetailChild {
+  return {
+    ...sampleCard({
+      kind: "episode",
+      title: "Half Loop",
+      seasonNumber: 1,
+      episodeNumber: 2,
+      show: sampleShow,
+    }),
+    overview: null,
+    durationSeconds: null,
+    progress: null,
+    ...overrides,
+  };
+}
+
+const sampleCredits = [
+  {
+    contributorId: "credit-1",
+    name: "Adam Scott",
+    role: "actor",
+    character: "Mark Scout",
+  },
+  {
+    contributorId: "credit-2",
+    name: "Britt Lower",
+    role: "actor",
+    character: "Helena Eagan",
+  },
+  {
+    contributorId: "credit-3",
+    name: "Ben Stiller",
+    role: "director",
+    character: null,
+  },
+];
+
 const hero = resource(async () => {
   const list = await client.items.list({ kind: "movie" });
   for (const card of list.items.slice(0, 8)) {
     const item = await client.items.get({ id: card.id });
     const artwork = item.backdropArtworkId ?? item.posterArtworkId;
     if (artwork) return artworkUrl(artwork, 1280);
+  }
+  return null;
+});
+
+// The artwork id behind hero's URL, for components that take artwork ids.
+const artId = resource(async () => {
+  const list = await client.items.list({ kind: "movie" });
+  for (const card of list.items.slice(0, 8)) {
+    const item = await client.items.get({ id: card.id });
+    const artwork = item.backdropArtworkId ?? item.posterArtworkId;
+    if (artwork) return artwork;
   }
   return null;
 });
@@ -430,6 +482,67 @@ const rows = Array.from(
         </li>
       {/each}
     </Shelf>
+    <div class="dark [color-scheme:dark] flex max-w-xl flex-col gap-3 rounded-xl bg-black p-5">
+      <h3 class="text-headline text-white">Overview</h3>
+      <Overview text="Mark leads a team whose memories have been split between work and home." title="Severance" />
+      <Overview
+        text="Mark leads a team of office workers whose memories have been surgically divided between their work and personal lives. When a mysterious colleague appears outside of work, it begins a journey to discover the truth about their jobs. Each question raises another, and the closer Mark gets to the answers, the less his two halves agree about what the company is for."
+        title="Severance"
+      />
+      <h3 class="mt-2 text-headline text-white">Format badges</h3>
+      <p class="flex gap-2">
+        <FormatBadges
+          versions={[
+            {
+              id: "v-1",
+              label: "4K · Dolby Vision · HEVC",
+              format: "video",
+              durationSeconds: 3300,
+              bytes: 8_000_000_000,
+            },
+            {
+              id: "v-2",
+              label: "1080p · HDR10 · H.264",
+              format: "video",
+              durationSeconds: 3300,
+              bytes: 3_000_000_000,
+            },
+          ]}
+        />
+      </p>
+    </div>
+    <Shelf title="Episode cards" id="design-episode-shelf" size="landscape">
+      <li>
+        <EpisodeCard
+          episode={sampleEpisode({
+            id: "ep-1",
+            thumbArtworkId: artId.data ?? null,
+            overview:
+              "Mark's team questions the true nature of their work while tensions rise on the severed floor.",
+            durationSeconds: 3300,
+            progress: { positionSeconds: 1320, completed: false },
+          })}
+        />
+      </li>
+      <li>
+        <EpisodeCard
+          episode={sampleEpisode({
+            id: "ep-2",
+            title: "The We We Are",
+            overview:
+              "The innies make contact with their outies in a desperate bid for freedom.",
+            durationSeconds: 2400,
+            progress: { positionSeconds: 2400, completed: true },
+          })}
+        />
+      </li>
+      <li>
+        <EpisodeCard
+          episode={sampleEpisode({ id: "ep-3", title: "In Perpetuity" })}
+        />
+      </li>
+    </Shelf>
+    <CreditRow credits={sampleCredits} />
   </section>
 
   <Separator class="my-2" />

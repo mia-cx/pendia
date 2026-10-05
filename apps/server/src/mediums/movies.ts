@@ -1,11 +1,15 @@
 import { posix } from "node:path";
 import { movies as movieTable } from "../db/schema/movies.ts";
-import type { Medium } from "./medium.ts";
+import type { Medium, RootedName } from "./medium.ts";
 import { isVideoExtra, isVideoPath } from "./video-common/paths.ts";
+import { folderProviderIds } from "./video-common/provider-ids.ts";
 import {
-  folderProviderIds,
-  stripProviderTags,
-} from "./video-common/provider-ids.ts";
+  namesOneTitle,
+  parseRelease,
+  parseTitle,
+  sameTitle,
+  titleKey,
+} from "./video-common/titles.ts";
 
 /** The movies medium: a leaf Item per canonical folder with one Version per file. */
 export const moviesMedium = {
@@ -13,7 +17,7 @@ export const moviesMedium = {
   kinds: [
     { kind: "movie", parent: null, table: movieTable, hasVersions: true },
   ],
-  scan: { identify, parse, isExtra },
+  scan: { identify, parse, isExtra, itemFolder },
   providers: ["metadata", "subtitles", "artwork"],
   formats: ["video"],
   browse: {
@@ -26,6 +30,18 @@ export const moviesMedium = {
 
 const normalizeStem = (value: string) =>
   value.toLowerCase().replace(/[\s._-]+/g, "");
+
+const partFolderPattern = /^(?:disc|disk|dvd|cd|part|pt)[\s._-]*\d{1,2}$/i;
+
+/** The Item folder a file in this directory belongs to, or ".". */
+function itemFolder(directory: string): string {
+  const parts = directory.split("/");
+  let end = parts.length;
+  while (end > 0 && partFolderPattern.test(parts[end - 1] ?? "")) {
+    end -= 1;
+  }
+  return end === 0 ? "." : parts.slice(0, end).join("/");
+}
 
 function isExtra(path: string): boolean {
   if (!isVideoExtra(path)) {
@@ -54,9 +70,15 @@ function isExtra(path: string): boolean {
   );
 }
 
-function identify(
-  path: string,
-): { kind: string; canonicalFolder: string } | null {
+interface AcceptedPath {
+  canonicalFolder: string;
+  titleKey: string;
+  title: string;
+  year: number | null;
+  providerIds: Record<string, string>;
+}
+
+function analyze(rootName: string, path: string): AcceptedPath | null {
   if (
     posix.isAbsolute(path) ||
     path.split("/").includes("..") ||
@@ -65,56 +87,103 @@ function identify(
   ) {
     return null;
   }
-  const canonicalFolder = posix.dirname(path);
-  if (canonicalFolder === "." || parse(canonicalFolder).title === "") {
+  const anchor = itemFolder(posix.dirname(path));
+  const folderName = anchor === "." ? rootName : posix.basename(anchor);
+  const stem = posix.basename(path, posix.extname(path));
+  const fileTitle = parseRelease(stem);
+  const folderTitle = parseTitle(folderName);
+  let title: string;
+  let year: number | null;
+  let key: string;
+  let providerIds: Record<string, string>;
+  if (
+    namesOneTitle(folderName) ||
+    fileTitle.title === "" ||
+    sameTitle(fileTitle.title, folderTitle.title)
+  ) {
+    title = folderTitle.title;
+    year = folderTitle.year;
+    key = anchor === "." ? titleKey(title, year) : "";
+    providerIds = folderProviderIds(folderName);
+  } else {
+    title = fileTitle.title;
+    year = fileTitle.year;
+    key = titleKey(title, year);
+    providerIds = folderProviderIds(stem);
+  }
+  if (title === "") {
     return null;
   }
-  return { kind: "movie", canonicalFolder };
+  return { canonicalFolder: anchor, titleKey: key, title, year, providerIds };
+}
+
+function identify(
+  path: string,
+): { kind: string; canonicalFolder: string } | null {
+  const accepted = analyze("library", path);
+  if (accepted === null) {
+    return null;
+  }
+  return { kind: "movie", canonicalFolder: accepted.canonicalFolder };
 }
 
 function parse(canonicalFolder: string): {
   title: string;
   year: number | null;
 } {
-  const folder = stripProviderTags(posix.basename(canonicalFolder));
-  const match = /^(.*?)\s*\((\d{4})\)(?:\s.*)?$/.exec(folder);
-  const rawTitle = (match?.[1] ?? folder).trim();
-  const title = rawTitle.includes(" ")
-    ? rawTitle
-    : rawTitle.replace(/[._]/g, " ");
-  return { title, year: match?.[2] ? Number(match[2]) : null };
+  return parseTitle(posix.basename(canonicalFolder));
 }
 
-/** One canonical movie folder: parsed identity plus its accepted member paths. */
+/** One canonical movie: its Item folder, title key and accepted files per root. */
 export interface MoviePathGroup {
   canonicalFolder: string;
+  titleKey: string;
   title: string;
   year: number | null;
   providerIds: Record<string, string>;
-  paths: string[];
+  files: { rootId: string; path: string }[];
 }
 
-/** Group accepted library-relative paths by canonical folder, sorted and deduplicated. */
-export function groupMoviePaths(paths: Iterable<string>): MoviePathGroup[] {
-  const byFolder = new Map<string, Set<string>>();
-  for (const path of paths) {
-    const identified = identify(path);
-    if (!identified) {
+/** Group walked files into canonical Movies by Item folder and title key. */
+export function groupMoviePaths(files: Iterable<RootedName>): MoviePathGroup[] {
+  const groups = new Map<string, MoviePathGroup>();
+  const rootOrder: string[] = [];
+  const seen = new Set<string>();
+  for (const file of files) {
+    if (!rootOrder.includes(file.rootId)) rootOrder.push(file.rootId);
+    const key = `${file.rootId}:${file.path}`;
+    if (seen.has(key)) {
       continue;
     }
-    let members = byFolder.get(identified.canonicalFolder);
-    if (!members) {
-      members = new Set();
-      byFolder.set(identified.canonicalFolder, members);
+    seen.add(key);
+    const accepted = analyze(file.rootName, file.path);
+    if (accepted === null) {
+      continue;
     }
-    members.add(path);
+    const groupKey = `${accepted.canonicalFolder}\u0000${accepted.titleKey}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { ...accepted, files: [] };
+      groups.set(groupKey, group);
+    }
+    group.files.push({ rootId: file.rootId, path: file.path });
   }
-  return [...byFolder.entries()]
-    .map(([canonicalFolder, members]) => ({
-      canonicalFolder,
-      ...parse(canonicalFolder),
-      providerIds: folderProviderIds(canonicalFolder),
-      paths: [...members].sort(),
+  const rootRank = (rootId: string) => {
+    const rank = rootOrder.indexOf(rootId);
+    return rank === -1 ? rootOrder.length : rank;
+  };
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      files: group.files.sort(
+        (a, b) =>
+          a.path.localeCompare(b.path) ||
+          rootRank(a.rootId) - rootRank(b.rootId),
+      ),
     }))
-    .sort((a, b) => a.canonicalFolder.localeCompare(b.canonicalFolder));
+    .sort(
+      (a, b) =>
+        a.canonicalFolder.localeCompare(b.canonicalFolder) ||
+        a.titleKey.localeCompare(b.titleKey),
+    );
 }

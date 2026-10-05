@@ -10,14 +10,13 @@ import {
 } from "../db/schema/index.ts";
 import { createJobQueue, type Job } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
-import { groupMoviePaths } from "../mediums/movies.ts";
-import { groupShowPaths } from "../mediums/shows.ts";
 import { queueProviderFetch } from "../metadata/jobs.ts";
 import { reconcileStoredVersions } from "../stored/reconcile.ts";
 import {
   libraryScanSource,
   type ScanSource,
   scanDirectory,
+  scanScope,
   scanShowDirectory,
 } from "./scan.ts";
 
@@ -101,12 +100,14 @@ export async function runScanJob(
     });
     return;
   }
-  const walked = (await files.walk(".", true)).map((file) => file.path);
-  const groups =
-    library.medium === "movies"
-      ? groupMoviePaths(walked)
-      : groupShowPaths(walked);
-  const paths = new Set(groups.map((group) => group.canonicalFolder));
+  const walked = await files.walk(".", true);
+  const { rules } = scanScope(library.medium, ".");
+  const paths = new Set<string>();
+  for (const file of walked) {
+    const folder = rules.identify(file.path)?.canonicalFolder;
+    // A "." path is this Library scan, not a directory scan to enqueue.
+    if (folder !== undefined && folder !== ".") paths.add(folder);
+  }
   const existing = await db
     .select({ canonicalFolder: items.canonicalFolder })
     .from(items)
@@ -117,6 +118,7 @@ export async function runScanJob(
       ),
     );
   for (const item of existing) paths.add(item.canonicalFolder);
+  paths.delete(".");
   if (paths.size === 0) {
     await publishEvent(db, {
       kind: "library.changed",

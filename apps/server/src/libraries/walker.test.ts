@@ -66,6 +66,7 @@ describe("walkLibrary", () => {
         "Alien (1979)/Alien.1979.1080p.mkv",
         "Alien (1979)/Alien.1979.2160p.mkv",
         "Collection/Alien (1979)/copy.mkv",
+        "loose.mkv",
       ]);
       const file = files[0];
       expect(file?.bytes).toBe(5n);
@@ -99,7 +100,15 @@ describe("walkLibrary", () => {
       await writeFile(join(root, ".pendia", ".pendia.mkv"), "store");
       const files = await collect(root);
       expect(files.map((file) => file.path)).toEqual(["Shorts/Shorts.mkv"]);
-      expect(groupMoviePaths(files.map((file) => file.path))).toHaveLength(1);
+      expect(
+        groupMoviePaths(
+          files.map((file) => ({
+            rootId: "root",
+            rootName: "root",
+            path: file.path,
+          })),
+        ),
+      ).toHaveLength(1);
       expect(
         (await collect(root, { path: "Shorts" })).map((file) => file.path),
       ).toEqual(["Shorts/Shorts.mkv"]);
@@ -145,13 +154,22 @@ describe("walkLibrary", () => {
       expect(files.map((file) => file.path)).toEqual([
         "Collection/Shorts/Shorts.mkv",
       ]);
-      expect(groupMoviePaths(files.map((file) => file.path))).toEqual([
+      expect(
+        groupMoviePaths(
+          files.map((file) => ({
+            rootId: "root",
+            rootName: "root",
+            path: file.path,
+          })),
+        ),
+      ).toEqual([
         {
           canonicalFolder: "Collection/Shorts",
+          titleKey: "",
           title: "Shorts",
           year: null,
           providerIds: {},
-          paths: ["Collection/Shorts/Shorts.mkv"],
+          files: [{ rootId: "root", path: "Collection/Shorts/Shorts.mkv" }],
         },
       ]);
       expect(
@@ -348,7 +366,7 @@ describe("walkLibraryDirectories", () => {
       const byPath = new Map(
         directories.map((directory) => [directory.path, directory.files]),
       );
-      expect(byPath.get(".")).toEqual([]);
+      expect(byPath.get(".")).toEqual(["loose.mkv"]);
       expect(byPath.get("Alien (1979)")).toEqual([
         "Alien (1979)/Alien.1979.1080p.mkv",
         "Alien (1979)/Alien.1979.2160p.mkv",

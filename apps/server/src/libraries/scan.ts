@@ -24,7 +24,6 @@ import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
 import {
   groupShowPaths,
   mergeEpisodeRanges,
-  type ShowPathGroup,
   showsScan,
 } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
@@ -46,8 +45,8 @@ import {
   walkLibrary,
 } from "./walker.ts";
 
-/** A walked file in one root. */
-export type RootedFile = LibraryFile & { rootId: string };
+/** A walked file in one root, with the root's folder name. */
+export type RootedFile = LibraryFile & { rootId: string; rootName: string };
 
 /** A probed file in one root. */
 export type ProbedRootedFile = ProbedLibraryFile & { rootId: string };
@@ -96,36 +95,6 @@ export const inScope = (scope: string, recursive: boolean, path: string) =>
     : posix.dirname(path) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-
-/**
- * Splits each grouped Version of a Show into one Version per root holding
- * its paths: a Version's Files all sit in one root. Roots keep walk order.
- */
-function splitVersionsByRoot(
-  group: ShowPathGroup | undefined,
-  walked: readonly RootedFile[],
-) {
-  if (group === undefined) return undefined;
-  const rootIds = [...new Set(walked.map((file) => file.rootId))];
-  const held = new Set(walked.map(rootedKey));
-  return {
-    ...group,
-    seasons: group.seasons.map((season) => ({
-      ...season,
-      episodes: season.episodes.map((episode) => ({
-        ...episode,
-        versions: episode.versions.flatMap((version) =>
-          rootIds.flatMap((rootId) => {
-            const paths = version.paths.filter((path) =>
-              held.has(rootedKey({ rootId, path })),
-            );
-            return paths.length === 0 ? [] : [{ rootId, paths }];
-          }),
-        ),
-      })),
-    })),
-  };
-}
 
 /** Replace one File's Stream inventory from a probe, reusing (fileId, index) ids. */
 async function upsertFileStreams(
@@ -237,7 +206,11 @@ export function localScanSource(
             path,
             recursive,
           }))
-            walked.push({ ...file, rootId: root.id });
+            walked.push({
+              ...file,
+              rootId: root.id,
+              rootName: posix.basename(root.path),
+            });
         } catch (error) {
           if (
             !(error instanceof MissingLibraryPathError) ||
@@ -418,12 +391,14 @@ export async function scanDirectory(
   // Grouping reads root-relative paths, so the same folder in two roots is
   // one Item; each root's file at a member path is its own Version.
   const walked = await source.walk(path, false);
-  const [group] = groupMoviePaths(walked.map((file) => file.path));
+  const [group] = groupMoviePaths(walked);
 
   const members: ProbedRootedFile[] = [];
   let probed = 0;
-  for (const memberPath of group?.paths ?? []) {
-    for (const file of walked.filter((file) => file.path === memberPath)) {
+  for (const named of group?.files ?? []) {
+    for (const file of walked.filter(
+      (file) => file.path === named.path && file.rootId === named.rootId,
+    )) {
       const member = await source.probe(file);
       if (
         !member.probe.streams.some(
@@ -431,7 +406,7 @@ export async function scanDirectory(
             stream.kind === "video" && !stream.disposition.attached_pic,
         )
       ) {
-        throw new Error(`Recognized media has no video stream: ${memberPath}`);
+        throw new Error(`Recognized media has no video stream: ${named.path}`);
       }
       if (!member.cached) probed += 1;
       members.push(member);
@@ -674,11 +649,8 @@ export async function scanShowDirectory(
     options.source ?? (await libraryScanSource(db, library, options.probe));
 
   const walked = await source.walk(path, true);
-  const group = splitVersionsByRoot(
-    groupShowPaths(walked.map((file) => file.path)).find(
-      (candidate) => candidate.canonicalFolder === path,
-    ),
-    walked,
+  const group = groupShowPaths(walked).find(
+    (candidate) => candidate.canonicalFolder === path,
   );
 
   const memberByKey = new Map<string, ProbedRootedFile>();

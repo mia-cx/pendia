@@ -2,8 +2,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { items, jobs, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
-import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
-import { groupShowPaths, showsScan } from "../mediums/shows.ts";
+import { moviesMedium } from "../mediums/movies.ts";
+import { showsScan } from "../mediums/shows.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { rootedKey, rootsOf } from "./roots.ts";
 import {
@@ -67,12 +67,10 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
         library.medium === "movies"
           ? {
               rules: moviesMedium.scan,
-              group: groupMoviePaths,
               itemKind: "movie" as const,
             }
           : {
               rules: showsScan,
-              group: groupShowPaths,
               itemKind: "show" as const,
             };
       // Snapshots key each directory by its root; scans name root-relative folders.
@@ -160,9 +158,17 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
           next.set(key, directory.modifiedNs);
           continue;
         }
-        const folders = medium
-          .group(directory.files)
-          .map((group) => group.canonicalFolder);
+        // A "." Item folder is the Library scan's own scope, not a directory scan.
+        const folders = [
+          ...new Set(
+            directory.files
+              .map((file) => medium.rules.identify(file)?.canonicalFolder)
+              .filter(
+                (folder): folder is string =>
+                  folder !== undefined && folder !== ".",
+              ),
+          ),
+        ];
         for (const folder of folders) {
           addUpdate(folder, key, directory.modifiedNs);
         }

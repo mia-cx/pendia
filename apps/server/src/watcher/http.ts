@@ -301,15 +301,22 @@ async function filesSharingShow(
 /** Reads a scan's files from a watcher's report and its probes into the probe cache. */
 function reportedScanSource(
   db: Database,
-  rootIds: readonly string[],
+  roots: readonly { id: string; path: string }[],
   report: Extract<typeof ScanReport.Type, { files: unknown }>,
 ): ScanSource {
-  if (report.files.some((file) => !rootIds.includes(file.rootId)))
+  const names = new Map(
+    roots.map((root) => [root.id, posix.basename(root.path)]),
+  );
+  if (report.files.some((file) => !names.has(file.rootId)))
     throw new Error("Watcher reported a file outside the Library's roots.");
   const reportedFiles = new Map(
     report.files.map((file) => [
       rootedKey(file),
-      { ...file, modifiedAt: new Date(Number(file.modifiedNs / 1_000_000n)) },
+      {
+        ...file,
+        rootName: names.get(file.rootId) ?? "",
+        modifiedAt: new Date(Number(file.modifiedNs / 1_000_000n)),
+      },
     ]),
   );
   const probes = new Map(
@@ -394,11 +401,7 @@ async function finishJob(db: Database, request: Request, jobId: string) {
   try {
     // A report naming a root a removal deleted fails here; it still settles the job.
     const roots = await rootsOf(db, payload.libraryId);
-    const source = reportedScanSource(
-      db,
-      roots.map((root) => root.id),
-      report,
-    );
+    const source = reportedScanSource(db, roots, report);
     await queue.hold(held, () => runScanJob(db, payload, job, source));
   } catch (error) {
     const failed = await queue.fail(held, error);

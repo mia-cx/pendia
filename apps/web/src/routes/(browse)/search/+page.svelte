@@ -114,6 +114,8 @@ function submit(event: SubmitEvent) {
       1 result for “{shown.query}”
     {:else if shown && shown.cards.length > 1}
       {shown.cards.length} results for “{shown.query}”
+    {:else if shown && shown.cards.length === 0}
+      No titles match “{shown.query}”
     {/if}
   </p>
 

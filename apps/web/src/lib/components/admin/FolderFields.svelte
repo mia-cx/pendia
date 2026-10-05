@@ -39,9 +39,8 @@ const ids = $props.id();
 // "add" or the index being repointed; kept after close so the browser stays mounted.
 let browsing = $state<"add" | number>("add");
 let browserOpen = $state(false);
-let removing = $state<number | null>(null);
+let removing = $state<{ index: number; path: string } | null>(null);
 let removeOpen = $state(false);
-let copied = $state("");
 
 // The clipboard API exists only in a secure context, so plain HTTP selects instead.
 let canCopy = $state(
@@ -51,7 +50,6 @@ let canCopy = $state(
 async function copyId(rootId: string) {
   try {
     await navigator.clipboard.writeText(rootId);
-    copied = rootId;
     toast.success("ID copied");
   } catch {
     canCopy = false;
@@ -95,7 +93,7 @@ async function requestRemove(index: number) {
     await onremove(index);
     return;
   }
-  removing = index;
+  removing = { index, path: rows[index]?.path ?? "" };
   removeOpen = true;
 }
 </script>
@@ -110,11 +108,11 @@ async function requestRemove(index: number) {
       <div class="min-w-0 flex-1">
         <p
           id="{ids}-folder-path-{index}"
-          class="break-all text-subheadline text-label"
-          aria-invalid={refusal?.index === index ? "true" : undefined}
-          aria-describedby={refusal?.index === index ? errorId : undefined}
+          class="text-subheadline text-label [overflow-wrap:anywhere]"
         >
-          {row.path}
+          {#each row.path.split("/") as segment, at (at)}
+            {#if at > 0}/{/if}{segment}<wbr />
+          {/each}
         </p>
         {#if row.id}
           <p class="mt-0.5 flex items-center gap-2 text-footnote text-label-secondary">
@@ -124,8 +122,7 @@ async function requestRemove(index: number) {
                 variant="ghost"
                 size="sm"
                 class="h-6 px-2 text-footnote"
-                onclick={() => copyId(row.id ?? "")}
-                >{copied === row.id ? "Copied" : "Copy ID"}</Button
+                onclick={() => copyId(row.id ?? "")}>Copy ID</Button
               >
             {:else}
               <input
@@ -148,7 +145,7 @@ async function requestRemove(index: number) {
         variant="ghost"
         size="sm"
         class="shrink-0"
-        aria-describedby="{ids}-folder-path-{index}"
+        aria-describedby="{ids}-folder-path-{index}{refusal?.index === index ? ` ${errorId}` : ''}"
         onclick={() => browseChange(index)}>Change</Button
       >
       {#if rows.length > 1}
@@ -186,9 +183,9 @@ async function requestRemove(index: number) {
 <ConfirmDialog
   bind:open={removeOpen}
   title="Remove this folder?"
-  description="Items found only in {removing === null ? '' : rows[removing]?.path} leave this library, along with their watch history. The files stay on disk."
+  description="Items found only in {removing?.path} leave this library, along with their watch history. The files stay on disk."
   action="Remove folder"
   onconfirm={async () => {
-    if (removing !== null) await onremove(removing);
+    if (removing !== null) await onremove(removing.index);
   }}
 />

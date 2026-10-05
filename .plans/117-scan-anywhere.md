@@ -55,17 +55,21 @@ Reconciliation removes a File the walk missed when the File's Item folder is the
 
 ## TODOs
 
-- [ ] Plan, posted on #117.
-- [ ] Capture what the current scanner writes for today's layouts, as a fixture for the identity test.
-- [ ] Shows recognition at any depth, with table-driven tests of real names.
-- [ ] Movies recognition at any depth, with table-driven tests of real names.
-- [ ] `items.title_key` and its migration; directory scans by Item folder and title key; fan-out, repair, webhooks and the watcher by Item folder. Tests for the five identity invariants and the migration.
-- [ ] Read-only scan preview, with tests.
-- [ ] Docs: `CONTEXT.md`, the server README layouts, the medium spec, an ADR for the identity decision.
-- [ ] After match report, and rule fixes for real names still missed.
-- [ ] Full gate, recorded here.
+- [x] Plan, posted on #117.
+- [x] Capture what the current scanner writes for today's layouts, as a fixture for the identity test.
+- [x] Shows recognition at any depth, with table-driven tests of real names.
+- [x] Movies recognition at any depth, with table-driven tests of real names.
+- [x] `items.title_key` and its migration; directory scans by Item folder and title key; fan-out, repair, webhooks and the watcher by Item folder. Tests for the five identity invariants and the migration.
+- [x] Read-only scan preview, with tests.
+- [x] Docs: `CONTEXT.md`, the server README layouts, the medium spec, an ADR for the identity decision.
+- [x] After match report, and rule fixes for real names still missed.
+- [x] Full gate, recorded here.
 
 ## Notes
 
 - Before match report (`/home/mia/.cache/pendia-tmp/scan2/before.md`): Sonarr 0 of 7,593 video files recognised. Radarr 494 of 494, as 461 movies.
 - The preview is a server function. #113 adds the admin call that exposes it.
+- After match report (`/home/mia/.cache/pendia-tmp/scan2/match-report.md`): Sonarr 7,593 of 7,593 video files recognised, as 290 shows with 7,455 episodes. Radarr 494 of 494, as the same 461 movies; all 494 keep their Item. Nothing is left unrecognised, so no rule fixes were needed for real names.
+- Radarr per-file folders (`Movie (2018) [tmdbid-1]/Movie (2018) [tmdbid-1] - [Remux-2160p] - [GROUP]/file.mkv`) stay Items at the inner folder. Folding them into the outer folder would move existing Items, which invariant 1 forbids.
+- For shows, only a top-level `extras` folder is an extras folder. `Show/Featurettes/clip.mkv` counts as unrecognised, not as an extra. This predates #117.
+- Gate at `0cd60d7`, merged with `origin/main` (already up to date): `bun install --frozen-lockfile`, `bun run lint`, `bun run check` and `bun run build` pass. `bun test` with `DATABASE_URL`: 1,463 pass, 3 skip (S3), 0 fail. Without it: 869 pass, 615 skip, 0 fail.

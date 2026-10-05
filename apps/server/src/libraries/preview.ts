@@ -96,12 +96,11 @@ export async function previewScan(
   for await (const file of walkLibrary(folder, rules, {
     path: ".",
     recursive: true,
+    signal: options.signal,
     onSkipped: (path) => {
-      options.signal?.throwIfAborted();
       skipped.push(path);
     },
   })) {
-    options.signal?.throwIfAborted();
     walked.push({ rootId: "preview", rootName, path: file.path });
   }
   const unrecognised = skipped.filter(

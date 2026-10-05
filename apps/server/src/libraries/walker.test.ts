@@ -58,6 +58,21 @@ async function populate(root: string) {
 }
 
 describe("walkLibrary", () => {
+  test("an already-aborted signal rejects on a tree of nested empty directories", () =>
+    withVideoFixture(async (root) => {
+      await mkdir(join(root, "a", "b", "c"), { recursive: true });
+      await mkdir(join(root, "d", "e"), { recursive: true });
+      const files: string[] = [];
+      await expect(async () => {
+        for await (const file of walkLibrary(root, moviesMedium.scan, {
+          signal: AbortSignal.abort(),
+        })) {
+          files.push(file.path);
+        }
+      }).rejects.toThrow();
+      expect(files).toEqual([]);
+    }));
+
   test("yields canonical movie paths and prunes extras and stores", () =>
     withVideoFixture(async (root) => {
       await populate(root);

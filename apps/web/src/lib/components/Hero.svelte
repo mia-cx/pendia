@@ -14,6 +14,9 @@ const {
   title,
   heading = "h2",
   eager = false,
+  hue = undefined,
+  eyebrow = undefined,
+  aside = undefined,
   children,
 }: {
   backdropId: string | null;
@@ -22,14 +25,25 @@ const {
   title: string;
   heading?: "h1" | "h2";
   eager?: boolean;
+  /** The fallback hue for the no-art layer; unset keeps the neutral gradient. */
+  hue?: number;
+  /** Content above the title art, such as the owning Show's name. */
+  eyebrow?: Snippet;
+  /** Content bottom-right from lg, beside the actions row. */
+  aside?: Snippet;
   children: Snippet;
 } = $props();
 
 let loaded = $state(false);
+
+// A bare fallback earns a shorter hero so art-free pages reach content sooner.
+const compact = $derived(backdropId === null && posterId === null);
 </script>
 
 <div
-  class="dark [color-scheme:dark] relative isolate overflow-hidden bg-black h-[min(78svh,44rem)] lg:h-[min(82svh,max(30rem,56vw))]"
+  class="dark [color-scheme:dark] relative isolate flex flex-col justify-end overflow-hidden bg-black {compact
+    ? 'min-h-[min(60svh,30rem)] lg:min-h-[min(62svh,36rem)]'
+    : 'min-h-[min(78svh,44rem)] lg:min-h-[min(82svh,max(30rem,56vw))]'}"
 >
   {#if backdropId}
     <img
@@ -57,6 +71,12 @@ let loaded = $state(false);
         ? 'opacity-100'
         : 'opacity-0'}"
     />
+  {:else if hue !== undefined}
+    <div
+      class="absolute inset-0 artwork-fallback"
+      style:--fallback-hue={hue}
+      aria-hidden="true"
+    ></div>
   {:else}
     <div
       class="absolute inset-0"
@@ -78,24 +98,38 @@ let loaded = $state(false);
   ></div>
 
   <div
-    class="absolute inset-x-0 bottom-0 ps-(--shell-start) pe-(--gutter) pb-16 lg:pb-20"
+    class="relative ps-(--shell-start) pe-(--gutter) pt-20 pb-16 lg:pb-20"
   >
-    <div class="flex max-w-[36rem] flex-col gap-3">
-      <svelte:element this={heading}>
-        {#if logoId}
-          <span class="flex items-end h-[clamp(4rem,8vw,7rem)]">
-            <img
-              src={artworkUrl(logoId, 960)}
-              alt={title}
-              loading={eager ? "eager" : "lazy"}
-              class="max-h-full max-w-[min(85%,26rem)] w-auto object-contain object-left-bottom drop-shadow"
-            />
-          </span>
-        {:else}
-          <span class="block text-display text-white text-balance">{title}</span>
+    <div class="flex items-end gap-8">
+      <div class="flex w-full max-w-[36rem] flex-col gap-3">
+        {#if eyebrow}
+          {@render eyebrow()}
         {/if}
-      </svelte:element>
-      {@render children()}
+        <svelte:element this={heading}>
+          {#if logoId}
+            <span class="flex items-end h-[clamp(4rem,8vw,7rem)]">
+              <img
+                src={artworkUrl(logoId, 960)}
+                alt={title}
+                loading={eager ? "eager" : "lazy"}
+                class="max-h-full max-w-[min(85%,26rem)] w-auto object-contain object-left-bottom drop-shadow"
+              />
+            </span>
+          {:else}
+            <span class="block text-display text-white text-balance"
+              >{title}</span
+            >
+          {/if}
+        </svelte:element>
+        {@render children()}
+      </div>
+      {#if aside}
+        <div
+          class="ms-auto hidden max-w-[22rem] text-right text-subheadline lg:block"
+        >
+          {@render aside()}
+        </div>
+      {/if}
     </div>
   </div>
 </div>

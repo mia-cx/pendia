@@ -2,10 +2,8 @@
 import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
 import ChevronUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
 import { onNavigate } from "$app/navigation";
-import { page } from "$app/state";
 import { navDirection } from "$lib/admin.ts";
 import AccountMenu from "$lib/components/AccountMenu.svelte";
-import AdminBackLink from "$lib/components/admin/AdminBackLink.svelte";
 import AdminNav from "$lib/components/admin/AdminNav.svelte";
 import TabBar from "$lib/components/TabBar.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
@@ -13,14 +11,6 @@ import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
 import type { LayoutProps } from "./$types";
 
 const { data, children }: LayoutProps = $props();
-
-// Sections not yet redesigned keep the old element styles under .legacy.
-const legacy = $derived(
-  ["/admin/plugins", "/admin/activity"].some(
-    (path) =>
-      page.url.pathname === path || page.url.pathname.startsWith(`${path}/`),
-  ),
-);
 
 function skipToContent(event: MouseEvent) {
   event.preventDefault();
@@ -127,14 +117,7 @@ onNavigate((nav) => {
       tabindex="-1"
       class="min-h-svh ps-(--shell-start) pe-(--gutter) pb-[calc(5rem+env(safe-area-inset-bottom))] outline-none [view-transition-name:content] lg:pb-8"
     >
-      {#if legacy}
-        <AdminBackLink href="/admin" label="Settings" />
-        <div class="legacy">
-          {@render children()}
-        </div>
-      {:else}
-        {@render children()}
-      {/if}
+      {@render children()}
     </main>
   </div>
 </div>

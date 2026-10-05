@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { ORPCError } from "@orpc/client";
+import { eq } from "drizzle-orm";
 import { createPendiaClient } from "../../../web/src/lib/api.ts";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
+import { pluginLockfile } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { officialRegistry } from "../plugins/settings.ts";
@@ -215,6 +217,46 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
         } finally {
           await packages.stop(true);
         }
+      }),
+    ));
+
+  test("an admin removes an installed plugin; unknown names and viewers may not", () =>
+    withFolder((folder) =>
+      withDatabase(async (db, url) => {
+        await migrateDatabase(db);
+        const tokens = await seed(db);
+        const source = await writeFixture(join(folder, "greeter"), greeter);
+        await withServer(url, join(folder, "a"), async (_, client) => {
+          const admin = client(tokens.admin);
+          const { integrity } = await admin.plugins.preview({ source });
+          await admin.plugins.install({ source, integrity });
+
+          expect(
+            (await capture(admin.plugins.remove({ name: "unknown-plugin" })))
+              .code,
+          ).toBe("NOT_FOUND");
+          expect(
+            (
+              await capture(
+                client(tokens.viewer).plugins.remove({
+                  name: "pendia-plugin-greeter",
+                }),
+              )
+            ).code,
+          ).toBe("FORBIDDEN");
+
+          const removed = await admin.plugins.remove({
+            name: "pendia-plugin-greeter",
+          });
+          expect(removed.plugins).toEqual([]);
+          expect(
+            await db
+              .select({ name: pluginLockfile.name })
+              .from(pluginLockfile)
+              .where(eq(pluginLockfile.name, "pendia-plugin-greeter")),
+          ).toEqual([]);
+          expect((await admin.plugins.list()).plugins).toEqual([]);
+        });
       }),
     ));
 

@@ -315,6 +315,14 @@ export const PlaybackSession = Schema.Struct({
   clientName: Schema.NullOr(Schema.String),
   deviceName: Schema.NullOr(Schema.String),
   item: BrowseCard,
+  version: Schema.Struct({
+    id: Schema.UUID,
+    label: Schema.String,
+    durationSeconds: Schema.NullOr(Schema.Number),
+  }),
+  positionSeconds: Schema.NullOr(Schema.Number),
+  // What a transcode converts; empty for direct play, remux and stored Versions.
+  reasons: Schema.Array(Schema.Literal("video", "audio", "subtitles", "hdr")),
   // Stored rung names, the live transcode height such as "720p", or "source".
   rungs: Schema.Array(Schema.String),
   transcoder: Schema.NullOr(Schema.String),

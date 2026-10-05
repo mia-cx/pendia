@@ -1,8 +1,21 @@
 <script lang="ts">
+import LayersIcon from "@lucide/svelte/icons/layers";
+import MonitorPlayIcon from "@lucide/svelte/icons/monitor-play";
 import { onDestroy } from "svelte";
+import {
+  clientLabel,
+  clock,
+  deliveryLine,
+  transcodeLine,
+} from "$lib/activity.ts";
 import { client } from "$lib/api.ts";
-import { cardLabel, itemHref } from "$lib/browse.ts";
-import Failure from "$lib/components/Failure.svelte";
+import { cardLabel, itemHref, landscapeArtwork } from "$lib/browse.ts";
+import Artwork from "$lib/components/Artwork.svelte";
+import AdminPage from "$lib/components/admin/AdminPage.svelte";
+import EmptyState from "$lib/components/admin/EmptyState.svelte";
+import FormGroup from "$lib/components/admin/FormGroup.svelte";
+import { Badge } from "$lib/components/ui/badge/index.ts";
+import { Progress } from "$lib/components/ui/progress/index.ts";
 import { followEvents } from "$lib/events.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
@@ -44,19 +57,6 @@ const methodNames: Record<Session["playMethod"], string> = {
   transcode: "Transcode",
 };
 
-function clientLabel(session: Session) {
-  if (session.clientName === null) return "Unknown app";
-  if (session.deviceName === null) return session.clientName;
-  return `${session.clientName} on ${session.deviceName}`;
-}
-
-function deliveryLabel(session: Session) {
-  const delivery = `${methodNames[session.playMethod]} · ${session.rungs.join(", ")}`;
-  return session.transcoder === null
-    ? delivery
-    : `${delivery} · ${session.transcoder}`;
-}
-
 const startFormat = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
   hour: "2-digit",
@@ -71,150 +71,179 @@ function startLabel(runAfter: string) {
 }
 </script>
 
-<svelte:head>
-  <title>Activity · Pendia admin</title>
-</svelte:head>
+{#snippet bar(label: string, value: number, max: number, text: string)}
+  <Progress
+    {value}
+    {max}
+    aria-label={label}
+    aria-valuetext={text}
+    class="flex-1"
+  />
+{/snippet}
 
-<h2>Activity</h2>
-
-<section aria-labelledby="sessions-heading">
-  <h3 id="sessions-heading">Sessions</h3>
-  {#if sessions.failure}
-    <Failure failure={sessions.failure} />
-  {:else if !sessions.data}
-    <p class="muted">Loading.</p>
-  {:else if sessions.data.length === 0}
-    <p class="muted">Nothing is playing.</p>
-  {:else}
-    <ul class="rows">
-      {#each sessions.data as session (session.id)}
-        {@const href = itemHref(session.item)}
-        <li>
-          <div class="line">
-            {#if href === null}
-              <span class="title">{cardLabel(session.item)}</span>
-            {:else}
-              <a class="title" {href}>{cardLabel(session.item)}</a>
-            {/if}
-            <span class="state" data-state={session.state}
-              >{stateNames[session.state]}</span
-            >
-          </div>
-          <p class="muted">
-            {session.user.displayName} · {clientLabel(session)}
-          </p>
-          <p class="muted">{deliveryLabel(session)}</p>
-        </li>
-      {/each}
-    </ul>
-  {/if}
-</section>
-
-<section aria-labelledby="store-heading">
-  <h3 id="store-heading">Store jobs</h3>
-  {#if store.failure}
-    <Failure failure={store.failure} />
-  {:else if !store.data}
-    <p class="muted">Loading.</p>
-  {:else if store.data.running.length === 0 && store.data.queued.total === 0}
-    <p class="muted">No store jobs.</p>
-  {:else}
-    <ul class="rows">
-      {#each store.data.running as job (job.jobId)}
-        <li>
-          <div class="line">
-            <span class="title">{cardLabel(job.item)}</span>
-            <span class="state" data-state="playing">{job.rung}</span>
-          </div>
-          <div class="progress">
-            <progress
-              max={Math.max(job.segmentsTotal, 1)}
-              value={job.segmentsDone}
-              aria-label={`${cardLabel(job.item)}, ${job.rung}`}
-            ></progress>
-            <span class="muted"
-              >{job.segmentsDone} of {job.segmentsTotal} segments</span
-            >
-          </div>
-        </li>
-      {/each}
-      {#each store.data.queued.next as job (job.jobId)}
-        <li>
-          <div class="line">
-            <span class="title">{cardLabel(job.item)}</span>
-            <span class="state">{job.rung}</span>
-          </div>
-          <p class="muted">{startLabel(job.runAfter)}</p>
-        </li>
-      {/each}
-    </ul>
-    {#if store.data.queued.total > store.data.queued.next.length}
-      <p class="muted">
-        {store.data.queued.total - store.data.queued.next.length} more queued
-      </p>
+<AdminPage title="Activity">
+  <FormGroup
+    title="Now playing"
+    loading={sessions.data === undefined && !sessions.failure ? 2 : undefined}
+    failure={sessions.failure ?? undefined}
+  >
+    {#if sessions.data && sessions.data.length === 0}
+      <EmptyState icon={MonitorPlayIcon} title="Nothing playing" />
+    {:else}
+      <ul>
+        {#each sessions.data ?? [] as session (session.id)}
+          {@const href = itemHref(session.item)}
+          {@const title = cardLabel(session.item)}
+          {@const duration = session.version.durationSeconds}
+          <li
+            class="relative flex gap-4 px-4 py-3 before:absolute before:inset-x-4 before:top-0 before:h-px before:bg-separator first:before:hidden"
+          >
+            <div class="w-24 shrink-0 sm:w-32">
+              <Artwork
+                shape="landscape"
+                artworkId={landscapeArtwork(session.item)}
+                {title}
+                sizes="8rem"
+                kind={session.item.kind}
+                fallbackTitle={false}
+              />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-baseline justify-between gap-3">
+                {#if href === null}
+                  <span class="text-headline truncate">{title}</span>
+                {:else}
+                  <a {href} class="text-headline truncate">{title}</a>
+                {/if}
+                <span
+                  class="shrink-0 text-footnote {session.state === 'playing'
+                    ? 'text-tint'
+                    : 'text-label-secondary'}"
+                  >{stateNames[session.state]}</span
+                >
+              </div>
+              <p class="text-footnote text-label-secondary">
+                {session.user.displayName} · {clientLabel(session)}
+              </p>
+              <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <Badge
+                  variant={session.playMethod === "transcode"
+                    ? "tint"
+                    : "default"}>{methodNames[session.playMethod]}</Badge
+                >
+                <span class="text-footnote text-label-secondary"
+                  >{deliveryLine(session)}</span
+                >
+              </div>
+              {#if session.playMethod === "transcode" && session.reasons.length > 0}
+                <p class="mt-1 text-footnote text-label-secondary">
+                  {transcodeLine(session)}
+                </p>
+              {/if}
+              {#if duration !== null}
+                {@const position = session.positionSeconds ?? 0}
+                <div class="mt-2 flex items-center gap-3">
+                  {@render bar(
+                    `${title} progress`,
+                    position,
+                    duration,
+                    `${clock(position)} of ${clock(duration)}`,
+                  )}
+                  <span
+                    class="shrink-0 min-w-28 text-right text-footnote tabular-nums text-label-secondary"
+                    >{clock(position)} of {clock(duration)}</span
+                  >
+                </div>
+              {/if}
+            </div>
+          </li>
+        {/each}
+      </ul>
     {/if}
-  {/if}
-</section>
+  </FormGroup>
 
-<style>
-section {
-  max-width: 720px;
-  margin-bottom: 32px;
-}
-
-.rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.rows li {
-  display: grid;
-  gap: 2px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.rows p {
-  margin: 0;
-}
-
-.line {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.title {
-  overflow: hidden;
-  min-width: 0;
-  color: var(--ink);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.state {
-  flex: none;
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.state[data-state="playing"] {
-  color: var(--signal);
-}
-
-.progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-progress {
-  flex: 1 1 auto;
-  max-width: 320px;
-  height: 8px;
-  accent-color: var(--signal);
-}
-</style>
+  <FormGroup
+    title="Store jobs"
+    loading={store.data === undefined && !store.failure ? 1 : undefined}
+    failure={store.failure ?? undefined}
+    description={store.data &&
+    store.data.queued.total > store.data.queued.next.length
+      ? `${store.data.queued.total - store.data.queued.next.length} more queued`
+      : undefined}
+  >
+    {#if store.data && store.data.running.length === 0 && store.data.queued.total === 0}
+      <EmptyState icon={LayersIcon} title="No store jobs" />
+    {:else}
+      <ul>
+        {#each store.data?.running ?? [] as job (job.jobId)}
+          {@const title = cardLabel(job.item)}
+          <li
+            class="relative flex gap-4 px-4 py-3 before:absolute before:inset-x-4 before:top-0 before:h-px before:bg-separator first:before:hidden"
+          >
+            <div class="w-10 shrink-0">
+              <Artwork
+                artworkId={job.item.posterArtworkId}
+                {title}
+                sizes="2.5rem"
+                kind={job.item.kind}
+                fallbackTitle={false}
+              />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-baseline justify-between gap-3">
+                <span class="text-subheadline font-medium truncate"
+                  >{title}</span
+                >
+                <span
+                  class="shrink-0 text-footnote tabular-nums text-label-secondary"
+                  >{Math.round(
+                    (job.segmentsDone / Math.max(job.segmentsTotal, 1)) * 100,
+                  )}%</span
+                >
+              </div>
+              <p class="text-footnote text-label-secondary">
+                {job.rung} · {job.segmentsDone} of {job.segmentsTotal} segments
+              </p>
+              <div class="mt-2 flex">
+                {@render bar(
+                  `${title}, ${job.rung}`,
+                  job.segmentsDone,
+                  Math.max(job.segmentsTotal, 1),
+                  `${job.segmentsDone} of ${job.segmentsTotal} segments`,
+                )}
+              </div>
+            </div>
+          </li>
+        {/each}
+        {#each store.data?.queued.next ?? [] as job (job.jobId)}
+          <li
+            class="relative flex gap-4 px-4 py-3 before:absolute before:inset-x-4 before:top-0 before:h-px before:bg-separator first:before:hidden"
+          >
+            <div class="w-10 shrink-0">
+              <Artwork
+                artworkId={job.item.posterArtworkId}
+                title={cardLabel(job.item)}
+                sizes="2.5rem"
+                kind={job.item.kind}
+                fallbackTitle={false}
+              />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-baseline justify-between gap-3">
+                <span class="text-subheadline font-medium truncate"
+                  >{cardLabel(job.item)}</span
+                >
+                <span class="shrink-0 text-footnote text-label-secondary"
+                  >Queued</span
+                >
+              </div>
+              <p class="text-footnote text-label-secondary">
+                {job.rung} · {startLabel(job.runAfter)}
+              </p>
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </FormGroup>
+</AdminPage>

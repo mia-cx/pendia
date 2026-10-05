@@ -6,6 +6,7 @@ import type { Database } from "../db/client.ts";
 import { pluginLockfile } from "../db/schema/index.ts";
 import { configErrors, isJsonObject, withDefaults } from "../plugins/config.ts";
 import { PluginError } from "../plugins/errors.ts";
+import { removePlugin } from "../plugins/install.ts";
 import { capabilities } from "../plugins/manifest.ts";
 import { addRegistry, removeRegistry } from "../plugins/registries.ts";
 import type { PluginRuntime } from "../plugins/runtime.ts";
@@ -222,6 +223,15 @@ export const pluginProcedures = {
         await context.plugins.install(input.source, input.integrity);
         return listPlugins(context);
       }),
+    ),
+  remove: authenticatedMutation
+    .route({ method: "POST", path: "/plugins/remove" })
+    .input(Schema.standardSchemaV1(Schema.Struct({ name: Name })))
+    .output(pluginsOutput)
+    .handler(async ({ context, input }) =>
+      asAdmin(context, async () =>
+        listPlugins(context, await removePlugin(context.db, input.name)),
+      ),
     ),
   setEnabled: authenticatedMutation
     .route({ method: "POST", path: "/plugins/enabled" })

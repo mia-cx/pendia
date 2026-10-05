@@ -7,6 +7,7 @@ import { cn } from "$lib/utils.ts";
 const {
   title,
   caption,
+  tone = "secondary",
   href,
   onclick,
   current = false,
@@ -15,6 +16,8 @@ const {
 }: {
   title: string;
   caption?: string;
+  /** The caption's colour; destructive marks a failure such as an unreachable registry. */
+  tone?: "secondary" | "destructive";
   href?: string;
   onclick?: (event: MouseEvent) => void;
   current?: boolean;
@@ -35,8 +38,10 @@ const rowClass =
       >{title}</span
     >
     {#if caption}
-      <span class="block truncate text-footnote text-label-secondary"
-        >{caption}</span
+      <span
+        class="block text-footnote {tone === 'destructive'
+          ? 'break-words text-destructive'
+          : 'truncate text-label-secondary'}">{caption}</span
       >
     {/if}
   </span>

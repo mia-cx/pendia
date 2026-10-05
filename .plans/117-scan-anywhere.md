@@ -45,7 +45,7 @@ Both mediums share the release-name parser and the title key in `mediums/video-c
 
 **Movies.** The movie is the Item folder when its name carries a year or a provider tag, or when the file's title matches the folder's. Otherwise the file is its own movie, titled from its name with release tokens stripped. At the root, the folder name is the root's.
 
-**Deliberate changes to paths accepted today.** Two shapes the scanner accepts today are wrong today, and the issue asks to fix them. A disc folder under a movie folder, `Movie (2000)/CD1/file`, is a movie called `CD1` today and becomes part of `Movie (2000)`. A folder without a year holding several titles, `Movies/Dune.2021.mkv` beside `Movies/Arrival.2016.mkv`, is one movie called `Movies` today and becomes two. Every other accepted path keeps its Item. The match report measures how many real paths change Item.
+**Shapes the new rules read differently.** Two shapes the scanner accepts today are wrong today. A disc folder under a movie folder, `Movie (2000)/CD1/file`, is a movie called `CD1` today. A folder without a year holding several titles, `Movies/Dune.2021.mkv` beside `Movies/Arrival.2016.mkv`, is one movie called `Movies` today. New files in these shapes follow the new rules. An existing Item keeps the Files it already owns, with its folder, title, metadata and user state, so no rescan regroups it. Regrouping would have to move progress, favourites, ratings and Stored Versions between Items, and would rewrite metadata the user may have curated. To regroup such a movie, remove its files from the Library and add them back. The match report found no real paths in either shape.
 
 ## Scan jobs
 

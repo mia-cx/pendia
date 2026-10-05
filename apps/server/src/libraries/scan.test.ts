@@ -14,26 +14,32 @@ import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   episodes,
+  favourites,
   files,
   itemAncestors,
   items,
   movies,
   progress,
   providerIds,
+  ratings,
   seasons,
   shows,
   streams,
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { moviesMedium } from "../mediums/movies.ts";
 import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { locateFile } from "./roots.ts";
-import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import {
+  inScope,
+  scanDirectory,
+  scanScope,
+  scanShowDirectory,
+} from "./scan.ts";
 import { addRoot, insertLibraries } from "./testing.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
@@ -2160,7 +2166,7 @@ describe.skipIf(!databaseUrl)("scans at any depth", () => {
       }),
   );
 
-  test("an old multi-movie Item splits into titled Items", () =>
+  test("an old multi-movie Item keeps its Files, folder and marks", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withVideoFixture(async (root) => {
@@ -2184,12 +2190,34 @@ describe.skipIf(!databaseUrl)("scans at any depth", () => {
           .from(items)
           .where(eq(items.kind, "movie"));
         if (!original) throw new Error("Movie Item missing.");
-        expect(
-          await db
-            .select()
-            .from(versions)
-            .where(eq(versions.itemId, original.id)),
-        ).toHaveLength(2);
+        const oldVersions = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.itemId, original.id));
+        expect(oldVersions).toHaveLength(2);
+        const watched = oldVersions[0];
+        if (!watched) throw new Error("Version missing.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: original.id,
+          versionId: watched.id,
+          format: "video",
+          positionSeconds: 33,
+        });
+        await db
+          .insert(favourites)
+          .values({ userId: admin.id, itemId: original.id });
+        await db
+          .insert(ratings)
+          .values({ userId: admin.id, itemId: original.id, value: "8.5" });
+        await db
+          .update(items)
+          .set({ title: "Curated", metadataState: "matched" })
+          .where(eq(items.id, original.id));
 
         // The upgrade moved the folder: the stored rows follow it by hand.
         await rename(join(root, "Movies (2020)"), join(root, "Movies"));
@@ -2205,137 +2233,205 @@ describe.skipIf(!databaseUrl)("scans at any depth", () => {
           .update(files)
           .set({ path: "Movies/Dune.2021.mkv" })
           .where(eq(files.path, dune));
+        const oldFileIds = (await db.select({ id: files.id }).from(files))
+          .map((row) => row.id)
+          .sort();
 
         await scanDirectory(db, library.id, "Movies");
         await scanDirectory(db, library.id, "Movies");
-        const movieItems = await db
-          .select()
-          .from(items)
-          .where(eq(items.kind, "movie"))
-          .orderBy(asc(items.title));
-        expect(movieItems).toMatchObject([
-          {
-            id: original.id,
-            title: "Arrival",
-            year: 2016,
-            canonicalFolder: "Movies",
-            titleKey: "arrival (2016)",
-          },
-          {
-            title: "Dune",
-            year: 2021,
-            canonicalFolder: "Movies",
-            titleKey: "dune (2021)",
-          },
-        ]);
-        for (const item of movieItems) {
-          expect(
-            await db
-              .select()
-              .from(versions)
-              .where(eq(versions.itemId, item.id)),
-          ).toHaveLength(1);
-        }
-
-        const ids = async () => ({
-          itemIds: (await db.select({ id: items.id }).from(items))
-            .map((row) => row.id)
-            .sort(),
-          versionIds: (await db.select({ id: versions.id }).from(versions))
-            .map((row) => row.id)
-            .sort(),
-          fileIds: (await db.select({ id: files.id }).from(files))
-            .map((row) => row.id)
-            .sort(),
-        });
-        const before = await ids();
-        await scanDirectory(db, library.id, "Movies");
-        expect(await ids()).toEqual(before);
-      });
-    }));
-
-  test("old disc Items merge into the folder Item they fell under", () =>
-    withDatabase(async (db) => {
-      await migrateDatabase(db);
-      await withVideoFixture(async (root) => {
-        await populateRoots([
-          [root, "A (1979)/a.mkv"],
-          [root, "B (1980)/b.mkv"],
-        ]);
-        const [library] = await insertLibraries(db, {
-          name: "Movies",
-          medium: "movies",
-          rootPath: root,
-        });
-        if (!library) throw new Error("Fixture library missing.");
-        await scanDirectory(db, library.id, "A (1979)");
-        await scanDirectory(db, library.id, "B (1980)");
-        const oldItems = await db
-          .select()
-          .from(items)
-          .where(eq(items.kind, "movie"))
-          .orderBy(asc(items.canonicalFolder));
-        expect(oldItems).toHaveLength(2);
-
-        // Both files now name the disc folders of one movie folder.
-        const moves = [
-          ["A (1979)/a.mkv", "Alien (1979)/CD1/Alien.1979.CD1.mkv"],
-          ["B (1980)/b.mkv", "Alien (1979)/CD2/Alien.1979.CD2.mkv"],
-        ] as const;
-        for (const [, to] of moves) {
-          expect(moviesMedium.scan.identify(to)).toEqual({
-            kind: "movie",
-            canonicalFolder: "Alien (1979)",
-          });
-        }
-        for (const [index, [from, to]] of moves.entries()) {
-          await mkdir(join(root, dirname(to)), { recursive: true });
-          await rename(join(root, from), join(root, to));
-          const item = oldItems[index];
-          if (!item) throw new Error("Old Item missing.");
-          await db
-            .update(items)
-            .set({ canonicalFolder: dirname(to) })
-            .where(eq(items.id, item.id));
-          await db
-            .update(files)
-            .set({ path: to })
-            .where(eq(files.itemId, item.id));
-        }
-
-        await scanDirectory(db, library.id, "Alien (1979)", {
+        await scanDirectory(db, library.id, "Movies", {
           reconcileMissing: true,
         });
         const movieItems = await db
           .select()
           .from(items)
           .where(eq(items.kind, "movie"));
-        expect(movieItems).toHaveLength(1);
-        expect(movieItems[0]).toMatchObject({
-          canonicalFolder: "Alien (1979)",
-        });
-        const versionRows = await db
-          .select()
-          .from(versions)
-          .where(eq(versions.itemId, movieItems[0]?.id ?? ""));
-        expect(versionRows).toHaveLength(2);
+        expect(movieItems).toMatchObject([
+          {
+            id: original.id,
+            title: "Curated",
+            canonicalFolder: "Movies",
+            titleKey: "",
+            metadataState: "matched",
+          },
+        ]);
+        expect(
+          (await db.select({ id: versions.id }).from(versions))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual(oldVersions.map((version) => version.id).sort());
+        expect(
+          (await db.select({ id: files.id }).from(files))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual(oldFileIds);
+        expect(await db.select().from(progress)).toMatchObject([
+          {
+            itemId: original.id,
+            versionId: watched.id,
+            positionSeconds: 33,
+          },
+        ]);
+        expect(await db.select().from(favourites)).toMatchObject([
+          { itemId: original.id },
+        ]);
+        expect(await db.select().from(ratings)).toMatchObject([
+          { itemId: original.id, value: "8.5" },
+        ]);
 
-        const ids = async () => ({
-          itemIds: (await db.select({ id: items.id }).from(items))
-            .map((row) => row.id)
-            .sort(),
-          versionIds: (await db.select({ id: versions.id }).from(versions))
-            .map((row) => row.id)
-            .sort(),
-          fileIds: (await db.select({ id: files.id }).from(files))
-            .map((row) => row.id)
-            .sort(),
-        });
-        const before = await ids();
-        await scanDirectory(db, library.id, "Alien (1979)", {
-          reconcileMissing: true,
-        });
-        expect(await ids()).toEqual(before);
+        await createVideoFixture(join(root, "Movies", "Heat.1995.mkv"));
+        await scanDirectory(db, library.id, "Movies");
+        const renamed = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"))
+          .orderBy(asc(items.title));
+        expect(renamed).toMatchObject([
+          { id: original.id, title: "Curated", titleKey: "" },
+          {
+            title: "Heat",
+            year: 1995,
+            canonicalFolder: "Movies",
+            titleKey: "heat (1995)",
+          },
+        ]);
+        const heat = renamed[1];
+        if (!heat) throw new Error("Heat Item missing.");
+        expect(
+          await db.select().from(versions).where(eq(versions.itemId, heat.id)),
+        ).toHaveLength(1);
       });
     }));
+
+  test("old disc Items keep their Files, folders and marks", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const { library, discs } = await seedAlienDiscs(db, root);
+        const cd1 = discs[0];
+        const cd2 = discs[1];
+        if (!cd1 || !cd2) throw new Error("Seed discs missing.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: cd2.item.id,
+          versionId: cd2.versionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        await db
+          .insert(favourites)
+          .values({ userId: admin.id, itemId: cd2.item.id });
+        await db
+          .insert(ratings)
+          .values({ userId: admin.id, itemId: cd2.item.id, value: "8.5" });
+
+        for (const folder of [
+          "Alien (1979)",
+          "Alien (1979)/CD1",
+          "Alien (1979)/CD2",
+          "Alien (1979)",
+        ]) {
+          await scanDirectory(db, library.id, folder, {
+            reconcileMissing: true,
+          });
+        }
+
+        const movieItems = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"))
+          .orderBy(asc(items.canonicalFolder));
+        expect(movieItems).toMatchObject([
+          { id: cd1.item.id, canonicalFolder: "Alien (1979)/CD1" },
+          { id: cd2.item.id, canonicalFolder: "Alien (1979)/CD2" },
+        ]);
+        expect(
+          (await db.select({ id: versions.id }).from(versions))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual([cd1.versionId, cd2.versionId].sort());
+        expect(
+          (await db.select({ id: files.id }).from(files))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual([cd1.fileId, cd2.fileId].sort());
+        expect(await db.select().from(progress)).toMatchObject([
+          {
+            itemId: cd2.item.id,
+            versionId: cd2.versionId,
+            positionSeconds: 33,
+          },
+        ]);
+        expect(await db.select().from(favourites)).toMatchObject([
+          { itemId: cd2.item.id },
+        ]);
+        expect(await db.select().from(ratings)).toMatchObject([
+          { itemId: cd2.item.id, value: "8.5" },
+        ]);
+      });
+    }));
+
+  /** Seeds two scanned Items and moves their files under one movie's disc folders. */
+  const seedAlienDiscs = async (db: Database, root: string) => {
+    await populateRoots([
+      [root, "A (1979)/a.mkv"],
+      [root, "B (1980)/b.mkv"],
+    ]);
+    const [library] = await insertLibraries(db, {
+      name: "Movies",
+      medium: "movies",
+      rootPath: root,
+    });
+    if (!library) throw new Error("Fixture library missing.");
+    await scanDirectory(db, library.id, "A (1979)");
+    await scanDirectory(db, library.id, "B (1980)");
+    const oldItems = await db
+      .select()
+      .from(items)
+      .where(eq(items.kind, "movie"))
+      .orderBy(asc(items.canonicalFolder));
+    if (oldItems.length !== 2) throw new Error("Seed Items missing.");
+    const moves = [
+      ["A (1979)/a.mkv", "Alien (1979)/CD1/Alien.1979.CD1.mkv"],
+      ["B (1980)/b.mkv", "Alien (1979)/CD2/Alien.1979.CD2.mkv"],
+    ] as const;
+    const discs = [];
+    for (const [index, [from, to]] of moves.entries()) {
+      await mkdir(join(root, dirname(to)), { recursive: true });
+      await rename(join(root, from), join(root, to));
+      const item = oldItems[index];
+      if (!item) throw new Error("Old Item missing.");
+      await db
+        .update(items)
+        .set({ canonicalFolder: dirname(to) })
+        .where(eq(items.id, item.id));
+      await db.update(files).set({ path: to }).where(eq(files.itemId, item.id));
+      const [file] = await db
+        .select()
+        .from(files)
+        .where(eq(files.itemId, item.id));
+      if (!file) throw new Error("Seed File missing.");
+      discs.push({ item, fileId: file.id, versionId: file.versionId });
+    }
+    return { library, discs };
+  };
+});
+
+describe("inScope", () => {
+  const { rules } = scanScope("movies");
+
+  test("a non-recursive scope accepts a file directly in the scope folder", () => {
+    expect(
+      inScope(
+        rules,
+        "Alien (1979)/CD1",
+        false,
+        "Alien (1979)/CD1/Alien.1979.CD1.mkv",
+      ),
+    ).toBe(true);
+  });
 });

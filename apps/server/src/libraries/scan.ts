@@ -43,7 +43,6 @@ import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import {
   applyScanChanges,
   findItemByProviderIds,
-  removeFile,
   setItemProviderIds,
   updateItemCanonicalFolder,
 } from "./changes.ts";
@@ -126,7 +125,8 @@ export const inScope = (
 ) =>
   recursive
     ? scope === "." || path.startsWith(`${scope}/`)
-    : rules.itemFolder(posix.dirname(path)) === scope;
+    : posix.dirname(path) === scope ||
+      rules.itemFolder(posix.dirname(path)) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -364,7 +364,6 @@ async function findMovieOwningFiles(
   tx: Transaction,
   libraryId: string,
   paths: readonly RootedPath[],
-  claimed: ReadonlySet<string>,
 ) {
   if (paths.length === 0) return undefined;
   const owners = await tx
@@ -373,7 +372,7 @@ async function findMovieOwningFiles(
     .innerJoin(items, and(eq(items.id, files.itemId), eq(items.kind, "movie")))
     .where(and(eq(files.libraryId, libraryId), rootedPairs(paths)))
     .orderBy(asc(items.id));
-  return owners.find((owner) => !claimed.has(owner.item.id))?.item;
+  return owners[0]?.item;
 }
 
 /** One root Item of a kind and its explicit provider ids, for the title-key fallback. */
@@ -477,7 +476,9 @@ function fallbackCandidate(
  * plus the group's Files, when the group also names every imported File
  * the subtree still holds there. A partial cover moves nothing: the
  * other Files belong to sibling groups of the same scan. A File gone
- * from disk waits for reconciliation instead of blocking the move.
+ * from disk waits for reconciliation instead of blocking the move. A
+ * group File another Item already owns in the home root blocks the
+ * move too.
  */
 async function coversHomeRoot(
   tx: Transaction,
@@ -510,7 +511,24 @@ async function coversHomeRoot(
     if (file.rootId !== home || !(await source.exists(file))) continue;
     if (!keys.has(rootedKey(file))) return false;
   }
-  return true;
+  const [foreign] = await tx
+    .select({ id: files.id })
+    .from(files)
+    .leftJoin(
+      itemAncestors,
+      and(
+        eq(itemAncestors.descendantId, files.itemId),
+        eq(itemAncestors.ancestorId, itemId),
+      ),
+    )
+    .where(
+      and(
+        isNull(itemAncestors.ancestorId),
+        rootedPairs(groupFiles.filter((file) => file.rootId === home)),
+      ),
+    )
+    .limit(1);
+  return foreign === undefined;
 }
 
 /** The ids of queued add and move changes that name one of the group's Files. Delete ids apply only to the Files they name, even in a lone group: the group that survives a delete keeps its own identity. */
@@ -695,12 +713,7 @@ async function findGroupItem(
     located =
       kind === "show"
         ? await findShowOwningFiles(tx, libraryId, group.files, source)
-        : await findMovieOwningFiles(
-            tx,
-            libraryId,
-            group.files,
-            context.claimed,
-          );
+        : await findMovieOwningFiles(tx, libraryId, group.files);
   }
   if (located === undefined) {
     const candidate = fallbackCandidate(
@@ -731,24 +744,6 @@ async function findGroupItem(
         group.canonicalFolder,
         group.titleKey,
       );
-      // A folder-keyed Item taking a different titled key is a split,
-      // not a rename: it gets the group's title and a metadata re-fetch.
-      const parsed = parseTitle(posix.basename(located.canonicalFolder));
-      if (
-        located.titleKey === "" &&
-        group.titleKey !== "" &&
-        titleKey(parsed.title, parsed.year) !== group.titleKey
-      ) {
-        await tx
-          .update(items)
-          .set({
-            title: group.title,
-            year: group.year,
-            metadataState: "pending",
-            updatedAt: new Date(),
-          })
-          .where(eq(items.id, located.id));
-      }
     }
     return located;
   }
@@ -843,7 +838,6 @@ export async function scanDirectory(
       (await rootsOf(tx, libraryId)).map((root, index) => [root.id, index]),
     );
     const claimed = new Set<string>();
-    const staleOwnerIds: string[] = [];
     let candidates: Awaited<ReturnType<typeof rootItemCandidates>> | undefined;
     const singleGroup = groups.length === 1;
 
@@ -880,8 +874,8 @@ export async function scanDirectory(
 
         let versionId: string;
         let fileId: string;
-        // A File another movie Item of this Library owns is stale grouping:
-        // it leaves that Item and re-enters under the group's Item.
+        // A File another movie Item of this Library owns stays with its
+        // Item: it is refreshed in place, never regrouped.
         if (existingFile && existingFile.itemId !== itemId) {
           const [owner] = await tx
             .select({ libraryId: items.libraryId, kind: items.kind })
@@ -890,10 +884,8 @@ export async function scanDirectory(
           if (owner?.libraryId !== libraryId || owner.kind !== "movie") {
             throw new AuthError("CONFLICT");
           }
-          const emptied = await removeFile(tx, existingFile);
-          if (emptied !== undefined) staleOwnerIds.push(emptied);
         }
-        if (existingFile && existingFile.itemId === itemId) {
+        if (existingFile) {
           versionId = existingFile.versionId;
           fileId = existingFile.id;
           await tx
@@ -982,11 +974,7 @@ export async function scanDirectory(
       await persistScanTimelines(tx, itemId);
     }
 
-    await deleteEmptiedItems(
-      tx,
-      [...emptiedItemIds, ...staleOwnerIds],
-      deletedArtwork,
-    );
+    await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
 
     if (options.reconcileMissing === true) {
       if (walked.length === 0) await source.confirmEmpty(path, false);
@@ -1013,7 +1001,7 @@ export async function scanDirectory(
       await pruneEmptiedItems(tx, touched, deletedArtwork);
     }
 
-    return { itemIds, versionIds };
+    return { itemIds: [...new Set(itemIds)], versionIds };
   });
   await removeArtworkFiles(deletedArtwork);
   return { itemId: written.itemIds[0] ?? null, ...written, probed };
@@ -1548,7 +1536,7 @@ export async function scanShowDirectory(
       await pruneEmptiedItems(tx, touched, deletedArtwork);
     }
 
-    return { itemIds, versionIds };
+    return { itemIds: [...new Set(itemIds)], versionIds };
   });
   await removeArtworkFiles(deletedArtwork);
   return { itemId: written.itemIds[0] ?? null, ...written, probed };

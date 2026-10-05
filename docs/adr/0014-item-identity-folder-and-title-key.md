@@ -11,4 +11,6 @@ The folder stays the anchor for colocated `.pendia` assets, so it has to be a re
 
 ## Consequences
 
-The migration adds a column whose default is right for every existing row, so a rescan after the upgrade changes nothing. A show that is a root of its own and the same show as a folder in another root have different folders. A scan with no exact match merges into the one Item with the same title and year or provider tag, and finds it again later by the Files it already owns. Such an Item's folder is the one in its home root, and only a scan holding Files there moves it, so its two halves never flip its folder back and forth.
+The migration adds a column whose default is right for every existing row, so a rescan after the upgrade changes nothing. A show that is a root of its own and the same show as a folder in another root have different folders. A scan with no exact match merges into the one Item with the same title and year or provider tag, and finds it again later by the Files it already owns. Such an Item's folder is the one in its home root, and only a scan whose group holds every File the Item has there moves it, so its two halves never flip its folder back and forth.
+
+An Item keeps every File it already owns, even when the new rules would group that File elsewhere. A movie split across disc folders before this change, or several movies in one folder without a year, stay the Items they were. Regrouping them would have to move user state and Stored Versions between Items. New files follow the new rules.

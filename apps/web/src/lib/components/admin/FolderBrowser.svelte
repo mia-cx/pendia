@@ -102,12 +102,19 @@ $effect(() => {
     chooseFailure = undefined;
     navigate(start, true);
   } else if (!open && wasOpen) {
-    previewController?.abort();
-    clearTimeout(previewTimer);
-    previewWaiting = false;
+    cancelPreview();
   }
   wasOpen = open;
 });
+
+/** Stops the pending or in-flight preview and clears the region. */
+function cancelPreview() {
+  previewController?.abort();
+  clearTimeout(previewTimer);
+  preview = undefined;
+  previewFailure = undefined;
+  previewWaiting = false;
+}
 
 /** Moves to `folder`; `focusRow` lands keyboard users on the new list. */
 function navigate(folder: string, focusRow = false) {
@@ -115,6 +122,7 @@ function navigate(folder: string, focusRow = false) {
   pathDraft = current;
   chooseFailure = undefined;
   focusNextListing ||= focusRow;
+  cancelPreview();
   void loadListing();
   void tick().then(() => navEl?.scrollTo({ left: navEl.scrollWidth }));
 }
@@ -138,11 +146,7 @@ async function loadListing() {
         ? { code: failure.code, message: error.message }
         : failure;
     // The list names the problem; the preview region stays empty.
-    previewController?.abort();
-    clearTimeout(previewTimer);
-    preview = undefined;
-    previewFailure = undefined;
-    previewWaiting = false;
+    cancelPreview();
   } finally {
     if (ticket === loadTicket) {
       listingLoading = false;
@@ -158,12 +162,9 @@ async function loadListing() {
 
 /** Previews the settled folder 300 ms after the last move; every move aborts the pending walk. */
 function schedulePreview() {
-  previewController?.abort();
+  cancelPreview();
   const controller = new AbortController();
   previewController = controller;
-  clearTimeout(previewTimer);
-  preview = undefined;
-  previewFailure = undefined;
   previewWaiting = !overlapped;
   if (overlapped) return;
   const folder = current;

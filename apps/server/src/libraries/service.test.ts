@@ -259,9 +259,11 @@ describe.skipIf(!databaseUrl)("library service", () => {
         roots: [ghost],
       });
       expect(created.roots.map((root) => root.path)).toEqual([ghost]);
+      const [root] = created.roots;
+      if (root === undefined) throw new Error("Library has no root.");
       const updated = await updateLibrary(db, admin.id, created.id, {
         roots: [
-          { id: created.roots[0].id, path: ghost },
+          { id: root.id, path: ghost },
           { path: "/mnt/other-host/shows" },
         ],
       });

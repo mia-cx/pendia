@@ -69,7 +69,7 @@ const folderCount = (count: number) =>
       {#if list.data !== undefined}
         <div class="relative min-h-12 px-4 py-2.5">
           <span class="text-subheadline text-label-secondary"
-            >No libraries yet.</span
+            >No libraries yet</span
           >
         </div>
       {/if}

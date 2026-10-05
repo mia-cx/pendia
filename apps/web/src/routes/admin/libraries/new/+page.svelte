@@ -46,6 +46,14 @@ async function submit(event: SubmitEvent) {
   failure = undefined;
   refusal = undefined;
   const sent = $state.snapshot(rows);
+  if (sent.length === 0) {
+    busy = false;
+    failure = {
+      code: "BAD_REQUEST",
+      message: "Add a folder for this library.",
+    };
+    return;
+  }
   try {
     const created = await client.libraries.create({
       name,

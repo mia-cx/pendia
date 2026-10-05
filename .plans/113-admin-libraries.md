@@ -24,7 +24,7 @@ Libraries, library detail and the Stored Versions policy move into the admin she
 - [ ] `FolderFields` becomes the Folders panel: rows with Change and Remove, Add folder, removal alert, inline refusals
 - [ ] Libraries list, New library and library detail as `AdminPage`s; scan and delete move into the detail page; `ScanState` shared with Overview
 - [ ] `PolicyEditor` in form groups, behaviour unchanged
-- [ ] Drop libraries from the legacy wrapper; `DESIGN.md` documents the new components
+- [x] Drop libraries from the legacy wrapper; `DESIGN.md` documents the new components
 - [ ] Screenshots before and after, keyboard, screen reader, reduced motion and high contrast passes
 - [ ] Full gate
 

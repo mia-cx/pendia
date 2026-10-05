@@ -149,8 +149,6 @@ Admin is a settings app laid out like System Settings. From 1024 px the same flo
 
 Saves confirm with a toast and failures stay inline in their own group. Destructive actions go through `ConfirmDialog`, whose title names the loss ("Revoke this session?"). Write-only secrets use `SecretInput`, a password field with an eye toggle. `TabBar` is shared by the browse and admin shells.
 
-Later slices drop a screen in as an `AdminPage` of `FormGroup`s, then remove the path from the legacy list in `routes/admin/+layout.svelte`.
-
 ## Screens
 
 - **Page header**: `text-large-title`, with its controls at the end of the same row on desktop and below it on phone, where the title shares its row with the profile button.
@@ -172,18 +170,4 @@ Later slices drop a screen in as an `AdminPage` of `FormGroup`s, then remove the
   - The state lives in `src/lib/player-state.ts`, a store with no DOM that `bun test` covers. The components render it and forward events to it.
 - **Sign in, setup, invite and errors**: `FocusScreen`, a centred card on `bg-elevated` under a faint tint wash (plain `bg-background` full-bleed below 640 px, content starting a sixth of the way down). Optional Lucide icon over a large title. Single sign-on sits above the password form as a full-width secondary button with an `or` divider, a peer not a footnote. Sign in shakes the card once on a wrong password (a keyframed four-leg shake, gone under reduced motion). Setup walks Account, Library and Scan under a numbered stepper; Account collects fields only, and Add library creates the admin, the library and the scan, so Back exists only until the account is made. The Scan step shows an indeterminate or determinate `Progress`, the success check when done, `Scan again` on failure and an `Open Settings` link. The error page covers unreachable, not-found and generic failures, each with one action. A service worker caches the build, the fonts and `200.html`; with the server stopped the app still opens and the first failed request shows `Server unreachable` with `Try again`.
 
-## Temporary aliases
 
-`src/lib/legacy.css` keeps screens that are not yet redesigned readable. It scopes the old element styles under a `.legacy` class and aliases the old token names. Each redesign slice removes its screen's `legacy` class; the last one deletes the file.
-
-| Old name | Now |
-| --- | --- |
-| `--canvas` | `--background` |
-| `--ink` | `--label` |
-| `--muted` | `--label-secondary` |
-| `--signal` | `--tint` |
-| `--danger` | `--destructive` |
-| `--surface` | `--background-elevated` |
-| `--line` | `--separator` |
-
-No screen is on `legacy` any more.

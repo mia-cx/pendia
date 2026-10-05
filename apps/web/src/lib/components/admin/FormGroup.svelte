@@ -12,6 +12,7 @@ const {
   actions,
   onsubmit,
   loading,
+  bare = false,
   children,
 }: {
   title?: string;
@@ -20,6 +21,8 @@ const {
   actions?: Snippet;
   onsubmit?: (event: SubmitEvent) => void;
   loading?: number;
+  /** With bare the children draw their own cards; the panel chrome and row skeletons stay off. */
+  bare?: boolean;
   children?: Snippet;
 } = $props();
 
@@ -28,9 +31,11 @@ const headingId = $props.id();
 
 {#snippet panel()}
   <div
-    class="@container rounded-lg bg-elevated contrast-more:ring-1 contrast-more:ring-separator"
+    class={bare
+      ? "@container"
+      : "@container rounded-lg bg-elevated contrast-more:ring-1 contrast-more:ring-separator"}
   >
-    {#if loading}
+    {#if loading && !bare}
       {#each { length: loading } as _, i (i)}
         <div
           class="relative flex min-h-13 flex-col justify-center gap-1.5 px-4 py-2.5 before:absolute before:inset-x-4 before:top-0 before:h-px before:bg-separator first:before:hidden"

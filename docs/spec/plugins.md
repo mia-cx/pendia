@@ -23,7 +23,7 @@ Install from an npm name, a local folder, a tarball URL, or a registry entry. Th
 
 ## Lockfile
 
-Installing is a preview, then an install at the previewed integrity: SRI sha512 of the tarball, or of the sorted file listing for a folder. The lockfile in Postgres records each plugin's name, version, pinned source and integrity, and every process installs from it into its own local folder. A source whose bytes no longer match is refused. Approval is the install itself: the approved capabilities are the manifest's at the locked integrity.
+Installing is a preview, then an install at the previewed integrity: SRI sha512 of the tarball, or of the sorted file listing for a folder. The lockfile in Postgres records each plugin's name, version, pinned source and integrity, and every process installs from it into its own local folder. A source whose bytes no longer match is refused. Approval is the install itself: the approved capabilities are the manifest's at the locked integrity. Removing a plugin deletes its lockfile row and its settings, config and file access switch included.
 
 ## Registries
 

@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import {
+  progress,
   sessionRegistry,
   transcoderCapabilities,
   users,
@@ -33,6 +34,22 @@ function rungsOf(
   return ["source"];
 }
 
+/** What a session's transcode converts: burn-in and tone mapping each count, plain video only when neither applies, audio last; empty when nothing is re-encoded. */
+export function transcodeReasons(
+  decision: SessionDecision | null,
+): ("video" | "audio" | "subtitles" | "hdr")[] {
+  if (decision?.method !== "transcode") return [];
+  const reasons: ("video" | "subtitles" | "hdr")[] = [];
+  if (decision.video.action === "transcode") {
+    if (decision.video.burnSubtitles) reasons.push("subtitles");
+    if (decision.video.toneMap !== null) reasons.push("hdr");
+    if (reasons.length === 0) reasons.push("video");
+  }
+  return decision.audio?.action === "transcode"
+    ? [...reasons, "audio"]
+    : reasons;
+}
+
 /** Lists live and queued sessions, newest first, for a caller holding manage-server. */
 export async function listPlaybackSessions(db: Database, actorId: string) {
   await requirePermission(db, actorId, "manage-server");
@@ -47,12 +64,24 @@ export async function listPlaybackSessions(db: Database, actorId: string) {
       deviceName: sessionRegistry.deviceName,
       userId: users.id,
       displayName: users.displayName,
+      versionId: versions.id,
+      versionLabel: versions.label,
+      versionDurationSeconds: versions.durationSeconds,
+      positionSeconds: progress.positionSeconds,
       transcoder: transcoderCapabilities.name,
       createdAt: sessionRegistry.createdAt,
       lastSeenAt: sessionRegistry.lastSeenAt,
     })
     .from(sessionRegistry)
     .innerJoin(users, eq(users.id, sessionRegistry.userId))
+    .innerJoin(versions, eq(versions.id, sessionRegistry.versionId))
+    .leftJoin(
+      progress,
+      and(
+        eq(progress.userId, sessionRegistry.userId),
+        eq(progress.itemId, sessionRegistry.itemId),
+      ),
+    )
     .leftJoin(
       transcoderCapabilities,
       eq(transcoderCapabilities.id, sessionRegistry.transcoderNodeId),
@@ -85,18 +114,35 @@ export async function listPlaybackSessions(db: Database, actorId: string) {
             .where(inArray(versions.id, variantIds))
         ).flatMap((row) => (row.rung === null ? [] : [[row.id, row.rung]])),
   );
-  return rows.flatMap(({ itemId, userId, displayName, decision, ...row }) => {
-    const item = cards.get(itemId);
-    if (item === undefined) return [];
-    return {
-      ...row,
-      user: { id: userId, displayName },
-      item,
-      rungs: rungsOf(decision, storedRungs),
-      createdAt: row.createdAt.toISOString(),
-      lastSeenAt: row.lastSeenAt.toISOString(),
-    };
-  });
+  return rows.flatMap(
+    ({
+      itemId,
+      userId,
+      displayName,
+      decision,
+      versionId,
+      versionLabel,
+      versionDurationSeconds,
+      ...row
+    }) => {
+      const item = cards.get(itemId);
+      if (item === undefined) return [];
+      return {
+        ...row,
+        user: { id: userId, displayName },
+        item,
+        version: {
+          id: versionId,
+          label: versionLabel,
+          durationSeconds: versionDurationSeconds,
+        },
+        reasons: transcodeReasons(decision),
+        rungs: rungsOf(decision, storedRungs),
+        createdAt: row.createdAt.toISOString(),
+        lastSeenAt: row.lastSeenAt.toISOString(),
+      };
+    },
+  );
 }
 
 /** Lists live and queued playback sessions; mounted as `playback.sessions`. */

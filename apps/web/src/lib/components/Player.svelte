@@ -551,7 +551,7 @@ const VolumeIcon = $derived(
           <Button
             variant="ghost"
             aria-label={playerState?.playing ? "Pause" : "Play"}
-            class="size-12 text-white hover:bg-white/12 max-sm:pointer-events-auto max-sm:size-16"
+            class="relative size-12 text-white hover:bg-white/12 max-sm:pointer-events-auto max-sm:size-16"
             onclick={() => player?.togglePlay()}
           >
             {#if playerState?.playing}

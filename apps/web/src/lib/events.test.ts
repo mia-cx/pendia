@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { followEvents, type ServerEvent } from "./events.ts";
+import { followEvents, followLibrary, type ServerEvent } from "./events.ts";
 
 const sessionId = "11111111-1111-4111-8111-111111111111";
 
@@ -55,5 +55,36 @@ describe("followEvents", () => {
       1,
     );
     expect(opened).toBe(3);
+  });
+});
+
+describe("followLibrary", () => {
+  const libraryId = "22222222-2222-4222-8222-222222222222";
+  const otherLibrary = "33333333-3333-4333-8333-333333333333";
+  const changed = (id: string): ServerEvent => ({
+    kind: "library.changed",
+    libraryId: id,
+  });
+
+  test("calls onChange only for matching library.changed events", async () => {
+    const controller = new AbortController();
+    let called = 0;
+    await followLibrary(
+      async () =>
+        (async function* () {
+          yield changed(libraryId);
+          yield changed(otherLibrary);
+          yield starting;
+          yield changed(libraryId);
+          controller.abort();
+        })(),
+      libraryId,
+      () => {
+        called += 1;
+      },
+      controller.signal,
+      1,
+    );
+    expect(called).toBe(2);
   });
 });

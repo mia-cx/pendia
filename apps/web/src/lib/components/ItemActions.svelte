@@ -18,7 +18,7 @@ import { Button } from "$lib/components/ui/button/index.ts";
 import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.ts";
 import * as Popover from "$lib/components/ui/popover/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
-import { followEvents } from "$lib/events.ts";
+import { followLibrary } from "$lib/events.ts";
 import { pickVersion } from "$lib/playback.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
@@ -141,17 +141,13 @@ async function refreshMetadata() {
     toast.success("Refreshing metadata");
     refreshAbort?.abort();
     refreshAbort = new AbortController();
-    const controller = refreshAbort;
-    void followEvents(
+    // The job publishes a change per step: metadata, artwork and, for a
+    // Show, its children. Keep reloading on each until the next refresh.
+    void followLibrary(
       (signal) => client.events.stream(undefined, { signal }),
-      (event) => {
-        // The refresh job publishes library.changed when it settles.
-        if (event.kind !== "library.changed") return;
-        if (event.libraryId !== detail.libraryId) return;
-        controller.abort();
-        reload();
-      },
-      controller.signal,
+      detail.libraryId,
+      reload,
+      refreshAbort.signal,
     );
   } catch {
     toast.error("Couldn't refresh metadata");

@@ -6,6 +6,7 @@ import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
 import InfoIcon from "@lucide/svelte/icons/info";
 import TextCursorInputIcon from "@lucide/svelte/icons/text-cursor-input";
 import { tick } from "svelte";
+import { ORPCError } from "@orpc/client";
 import { MediaQuery } from "svelte/reactivity";
 import { client } from "$lib/api.ts";
 import ListRow from "$lib/components/admin/ListRow.svelte";
@@ -128,7 +129,12 @@ async function loadListing() {
   } catch (error) {
     if (ticket !== loadTicket) return;
     listing = undefined;
-    listingFailure = readFailure(error);
+    // Folder errors carry the helpful sentence; readFailure's generic 404 does not.
+    const failure = readFailure(error);
+    listingFailure =
+      error instanceof ORPCError
+        ? { code: failure.code, message: error.message }
+        : failure;
     // The list names the problem; the preview region stays empty.
     previewController?.abort();
     clearTimeout(previewTimer);

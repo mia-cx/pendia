@@ -40,6 +40,8 @@ onMount(() => {
     <button
       type="button"
       class="material absolute right-0 bottom-0 rounded-full px-2.5 py-1 text-caption-1 font-semibold tracking-wide uppercase text-white"
+      aria-label="More"
+      aria-haspopup="dialog"
       onclick={() => (open = true)}
     >
       More

@@ -2,12 +2,13 @@ import type { Dirent } from "node:fs";
 import { readdir, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, posix } from "node:path";
+import { eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { pluginLockfile } from "../db/schema/index.ts";
 import { readBoundedBytes } from "../metadata/bounded-body.ts";
 import { PluginError } from "./errors.ts";
 import { type PluginPackage, readPluginPackage } from "./manifest.ts";
-import { updatePluginSettings } from "./settings.ts";
+import { type PluginSettings, updatePluginSettings } from "./settings.ts";
 
 /** A plugin package read from its source, not yet installed. */
 export type FetchedPlugin = {
@@ -324,4 +325,19 @@ export async function installPlugin(
     };
   });
   return fetched;
+}
+
+/** Removes an installed plugin: its lockfile row and its settings entry go together; the folder stays for the content-addressed cache. */
+export async function removePlugin(
+  db: Database,
+  name: string,
+): Promise<PluginSettings> {
+  return updatePluginSettings(db, async (current, tx) => {
+    const state = current.plugins[name];
+    if (state === undefined)
+      throw new PluginError("NOT_FOUND", `${name} is not installed.`);
+    await tx.delete(pluginLockfile).where(eq(pluginLockfile.name, name));
+    const { [name]: _removed, ...plugins } = current.plugins;
+    return { ...current, plugins };
+  });
 }

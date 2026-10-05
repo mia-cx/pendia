@@ -37,6 +37,105 @@ if (databaseUrl && browser === undefined)
 
 const fixtureSeconds = 4;
 
+/** Opens `url` in headless Chromium and clicks the player's Play control. */
+async function clickPlay(browser: string, url: string) {
+  const profileDir = await mkdtemp(join(tmpdir(), "pendia-player-profile-"));
+  const proc = Bun.spawn(
+    [
+      browser,
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-dev-shm-usage",
+      "--no-first-run",
+      "--mute-audio",
+      "--remote-debugging-port=0",
+      "--autoplay-policy=document-user-activation-required",
+      `--user-data-dir=${profileDir}`,
+      "about:blank",
+    ],
+    { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+  );
+  const wsUrl = await new Promise<string>((resolve, reject) => {
+    let buffer = "";
+    const onData = (chunk: ReadableStreamDefaultReadResult<Uint8Array>) => {
+      buffer += new TextDecoder().decode(chunk.value);
+      const match = buffer.match(/ws:\/\/\S+/);
+      if (match) resolve(match[0]);
+    };
+    const reader = proc.stderr.getReader();
+    const pump = async () => {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        onData(chunk);
+      }
+    };
+    void pump();
+    setTimeout(
+      () => reject(new Error("Chromium printed no WebSocket url")),
+      10000,
+    );
+  });
+  const socket = new WebSocket(wsUrl);
+  await new Promise((resolve) => (socket.onopen = resolve));
+  let nextId = 0;
+  const pending = new Map<number, (result: unknown) => void>();
+  socket.onmessage = (event) => {
+    const message = JSON.parse(String(event.data));
+    if (message.id === undefined) return;
+    pending.get(message.id)?.(message);
+    pending.delete(message.id);
+  };
+  const send = (method: string, params: unknown, sessionId?: string) =>
+    new Promise<Record<string, unknown>>((resolve) => {
+      const id = ++nextId;
+      pending.set(id, (m) =>
+        resolve((m as { result?: Record<string, unknown> }).result ?? {}),
+      );
+      socket.send(JSON.stringify({ id, method, params, sessionId }));
+    });
+  const { targetId } = (await send("Target.createTarget", { url })) as {
+    targetId: string;
+  };
+  const { sessionId } = (await send("Target.attachToTarget", {
+    targetId,
+    flatten: true,
+  })) as { sessionId: string };
+  const evaluate = async (expression: string) => {
+    const { result } = await send(
+      "Runtime.evaluate",
+      { expression, returnByValue: true },
+      sessionId,
+    );
+    return (result as { value?: unknown } | undefined)?.value;
+  };
+  // Wait until the Play button exists and has a box, then click its centre so
+  // the trusted gesture lets Chromium start the paused video.
+  const deadline = Date.now() + 30_000;
+  let centre: { x: number; y: number } | undefined;
+  while (Date.now() < deadline) {
+    centre = (await evaluate(
+      `(()=>{const el=document.querySelector('button[aria-label="Play"]');if(!el)return null;const r=el.getBoundingClientRect();if(!r.width)return null;return {x:r.x+r.width/2,y:r.y+r.height/2};})()`,
+    )) as { x: number; y: number } | undefined;
+    if (centre) break;
+    await Bun.sleep(200);
+  }
+  if (centre === undefined) throw new Error("The Play control never appeared.");
+  for (const type of ["mousePressed", "mouseReleased"])
+    await send(
+      "Input.dispatchMouseEvent",
+      { type, ...centre, button: "left", clickCount: 1 },
+      sessionId,
+    );
+  return async () => {
+    socket.close();
+    proc.kill();
+    await proc.exited;
+    await rm(profileDir, { recursive: true, force: true });
+  };
+}
+
 async function run(command: string[]) {
   const proc = Bun.spawn(command, { stdout: "ignore", stderr: "pipe" });
   const [stderr, exitCode] = await Promise.all([
@@ -171,24 +270,10 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
             if (scanned.itemId === null || versionId === undefined)
               throw new Error(`Expected one Item and Version in ${folder}.`);
             const itemId = scanned.itemId;
-            const profileDir = await mkdtemp(
-              join(tmpdir(), "pendia-player-profile-"),
-            );
             const next = `/play/${itemId}?version=${versionId}`;
-            const proc = Bun.spawn(
-              [
-                browser,
-                "--headless=new",
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--no-first-run",
-                "--mute-audio",
-                "--autoplay-policy=no-user-gesture-required",
-                `--user-data-dir=${profileDir}`,
-                `http://127.0.0.1:${signIn.port}/?next=${encodeURIComponent(next)}`,
-              ],
-              { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+            const close = await clickPlay(
+              browser,
+              `http://127.0.0.1:${signIn.port}/?next=${encodeURIComponent(next)}`,
             );
             try {
               const row = await waitForProgress(db, admin.id, itemId, 40_000);
@@ -200,9 +285,7 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
                 .where(eq(sessionRegistry.itemId, itemId));
               expect(sessions).toEqual([{ method }]);
             } finally {
-              proc.kill();
-              await proc.exited;
-              await rm(profileDir, { recursive: true, force: true });
+              await close();
             }
           }
         } finally {

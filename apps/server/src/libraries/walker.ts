@@ -146,13 +146,20 @@ export const acceptsLibraryFile = (rules: ScanRules, path: string): boolean =>
 export async function* walkLibrary(
   rootPath: string,
   rules: ScanRules,
-  options: { path?: string; recursive?: boolean } = {},
+  options: {
+    path?: string;
+    recursive?: boolean;
+    /** Called with the library-relative path of each regular file the rules reject. */
+    onSkipped?: (path: string) => void;
+  } = {},
 ): AsyncGenerator<LibraryFile> {
   const recursive = options.recursive ?? true;
   const start = await resolveEntry(rootPath, options.path ?? ".", "requested");
   if (start.stat.isFile()) {
     if (rules.identify(start.relative) && !rules.isExtra(start.relative)) {
       yield toLibraryFile(start.relative, start.stat);
+    } else {
+      options.onSkipped?.(start.relative);
     }
     return;
   }
@@ -188,6 +195,7 @@ export async function* walkLibrary(
         continue;
       }
       if (!rules.identify(child) || rules.isExtra(child)) {
+        options.onSkipped?.(child);
         continue;
       }
       yield await readLibraryFile(rootPath, child);

@@ -317,6 +317,28 @@ describe("walkLibrary", () => {
       }
     }));
 
+  test("reports skipped files but not files inside pruned directories", () =>
+    withVideoFixture(async (root) => {
+      await mkdir(join(root, "Alien (1979)"));
+      await writeFile(
+        join(root, "Alien (1979)", "Alien.1979.1080p.mkv"),
+        "movie",
+      );
+      await writeFile(join(root, "Alien (1979)", "Alien-trailer.mkv"), "extra");
+      await writeFile(join(root, "notes.txt"), "notes");
+      await mkdir(join(root, ".pendia"));
+      await writeFile(join(root, ".pendia", "art.mp4"), "art");
+      const skipped: string[] = [];
+      const yielded: string[] = [];
+      for await (const file of walkLibrary(root, moviesMedium.scan, {
+        onSkipped: (path) => skipped.push(path),
+      })) {
+        yielded.push(file.path);
+      }
+      expect(yielded).toEqual(["Alien (1979)/Alien.1979.1080p.mkv"]);
+      expect(skipped).toEqual(["Alien (1979)/Alien-trailer.mkv", "notes.txt"]);
+    }));
+
   test("recursive false lists only direct files of the subtree", () =>
     withVideoFixture(async (root) => {
       await populate(root);

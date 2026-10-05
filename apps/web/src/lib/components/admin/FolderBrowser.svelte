@@ -371,7 +371,7 @@ async function choose() {
                 {described.detail}
               </p>
             {/if}
-            {#each described.examples as example (example.title)}
+            {#each described.examples as example, index (index)}
               <p class="mt-1 text-subheadline text-label">{example.title}</p>
               {#if example.caption}
                 <p class="text-footnote text-label-secondary">

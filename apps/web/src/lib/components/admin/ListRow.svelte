@@ -3,11 +3,12 @@ import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 import type { Snippet } from "svelte";
 import { cn } from "$lib/utils.ts";
 
-/** A list row inside a panel; with `href` the whole row is a link. */
+/** A list row inside a panel; with `href` the whole row is a link, with `onclick` a button. */
 const {
   title,
   caption,
   href,
+  onclick,
   current = false,
   leading,
   children,
@@ -15,6 +16,7 @@ const {
   title: string;
   caption?: string;
   href?: string;
+  onclick?: (event: MouseEvent) => void;
   current?: boolean;
   leading?: Snippet;
   children?: Snippet;
@@ -41,7 +43,7 @@ const rowClass =
   {#if children}
     {@render children()}
   {/if}
-  {#if href}
+  {#if href || onclick}
     <ChevronRightIcon class="size-4 shrink-0 text-label-tertiary" />
   {/if}
 {/snippet}
@@ -54,6 +56,15 @@ const rowClass =
   >
     {@render inner()}
   </a>
+{:else if onclick}
+  <button
+    type="button"
+    {onclick}
+    aria-current={current ? "page" : undefined}
+    class={cn(rowClass, "w-full text-start transition-colors hover:bg-fill")}
+  >
+    {@render inner()}
+  </button>
 {:else}
   <div class={rowClass} aria-current={current ? "page" : undefined}>
     {@render inner()}

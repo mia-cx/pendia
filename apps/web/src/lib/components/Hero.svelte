@@ -41,9 +41,9 @@ const compact = $derived(backdropId === null && posterId === null);
 </script>
 
 <div
-  class="dark [color-scheme:dark] relative isolate overflow-hidden bg-black {compact
-    ? 'h-[min(60svh,30rem)] lg:h-[min(62svh,36rem)]'
-    : 'h-[min(78svh,44rem)] lg:h-[min(82svh,max(30rem,56vw))]'}"
+  class="dark [color-scheme:dark] relative isolate flex flex-col justify-end overflow-hidden bg-black {compact
+    ? 'min-h-[min(60svh,30rem)] lg:min-h-[min(62svh,36rem)]'
+    : 'min-h-[min(78svh,44rem)] lg:min-h-[min(82svh,max(30rem,56vw))]'}"
 >
   {#if backdropId}
     <img
@@ -98,7 +98,7 @@ const compact = $derived(backdropId === null && posterId === null);
   ></div>
 
   <div
-    class="absolute inset-x-0 bottom-0 ps-(--shell-start) pe-(--gutter) pb-16 lg:pb-20"
+    class="relative ps-(--shell-start) pe-(--gutter) pt-20 pb-16 lg:pb-20"
   >
     <div class="flex items-end gap-8">
       <div class="flex w-full max-w-[36rem] flex-col gap-3">

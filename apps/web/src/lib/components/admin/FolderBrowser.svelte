@@ -6,7 +6,7 @@ import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
 import InfoIcon from "@lucide/svelte/icons/info";
 import TextCursorInputIcon from "@lucide/svelte/icons/text-cursor-input";
 import { ORPCError } from "@orpc/client";
-import { tick } from "svelte";
+import { onDestroy, tick } from "svelte";
 import { MediaQuery } from "svelte/reactivity";
 import { client } from "$lib/api.ts";
 import ListRow from "$lib/components/admin/ListRow.svelte";
@@ -102,10 +102,18 @@ $effect(() => {
     chooseFailure = undefined;
     navigate(start, true);
   } else if (!open && wasOpen) {
-    cancelPreview();
+    retire();
   }
   wasOpen = open;
 });
+
+onDestroy(retire);
+
+/** Retires every pending listing and preview so a late answer can't schedule a walk or move focus after close. */
+function retire() {
+  loadTicket += 1;
+  cancelPreview();
+}
 
 /** Stops the pending or in-flight preview and clears the region. */
 function cancelPreview() {
@@ -297,7 +305,7 @@ async function choose() {
       {/if}
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-3">
+    <div class="min-h-24 flex-1 overflow-y-auto px-3">
       <div bind:this={listEl} class="rounded-lg bg-fill p-1">
         {#if listingLoading}
           {#each { length: 6 } as _, i (i)}
@@ -343,7 +351,7 @@ async function choose() {
 
     <div
       aria-live="polite"
-      class="mt-3 min-h-24 shrink-0 border-t border-separator px-6 py-4"
+      class="mt-3 max-h-[40%] min-h-24 shrink overflow-y-auto border-t border-separator px-6 py-4"
     >
       {#if overlapped}
         <Failure

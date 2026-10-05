@@ -36,10 +36,12 @@ let {
 
 const ids = $props.id();
 
-// "add" or the index being repointed; kept after close so the browser stays mounted.
-let browsing = $state<"add" | number>("add");
+// "add" or the row being repointed: the row's identity, not its index, so a
+// write settling mid-flow can't repoint whatever moved into its place. Kept
+// after close so the browser stays mounted.
+let browsing = $state<"add" | RootDraft>("add");
 let browserOpen = $state(false);
-let removing = $state<{ index: number; path: string } | null>(null);
+let removing = $state<{ row: RootDraft; path: string } | null>(null);
 let removeOpen = $state(false);
 
 // The clipboard API exists only in a secure context, so plain HTTP selects instead.
@@ -68,23 +70,36 @@ const browser = $derived.by(() => {
       taken: rows.map((row) => row.path),
       onchoose: (path: string) => onadd(path),
     };
-  const index = browsing;
+  const target = browsing;
+  const index = indexOf(target);
   return {
     title: "Change folder",
     action: "Use folder",
-    start: rows[index]?.path ?? "/",
+    start: rows[index]?.path ?? target.path,
     taken: rows.filter((_, at) => at !== index).map((row) => row.path),
-    onchoose: (path: string) => onrepoint(index, path),
+    onchoose: async (path: string) => {
+      const at = indexOf(target);
+      if (at === -1)
+        throw new Error("That folder is no longer in this library.");
+      await onrepoint(at, path);
+    },
   };
 });
+
+/** Where `target` sits now: saved roots match on id, unsaved rows on identity. */
+function indexOf(target: RootDraft) {
+  return rows.findIndex((row) =>
+    target.id === undefined ? row === target : row.id === target.id,
+  );
+}
 
 function browseAdd() {
   browsing = "add";
   browserOpen = true;
 }
 
-function browseChange(index: number) {
-  browsing = index;
+function browseChange(row: RootDraft) {
+  browsing = row;
   browserOpen = true;
 }
 
@@ -93,7 +108,7 @@ async function requestRemove(index: number) {
     await onremove(index);
     return;
   }
-  removing = { index, path: rows[index]?.path ?? "" };
+  removing = { row: rows[index] as RootDraft, path: rows[index]?.path ?? "" };
   removeOpen = true;
 }
 </script>
@@ -146,7 +161,7 @@ async function requestRemove(index: number) {
         size="sm"
         class="shrink-0"
         aria-describedby="{ids}-folder-path-{index}{refusal?.index === index ? ` ${errorId}` : ''}"
-        onclick={() => browseChange(index)}>Change</Button
+        onclick={() => browseChange(row)}>Change</Button
       >
       {#if rows.length > 1}
         <Button
@@ -186,6 +201,8 @@ async function requestRemove(index: number) {
   description="Items found only in {removing?.path} leave this library, along with their watch history. The files stay on disk."
   action="Remove folder"
   onconfirm={async () => {
-    if (removing !== null) await onremove(removing.index);
+    if (removing === null) return;
+    const index = indexOf(removing.row);
+    if (index !== -1) await onremove(index);
   }}
 />

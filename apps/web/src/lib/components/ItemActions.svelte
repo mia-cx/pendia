@@ -126,7 +126,7 @@ function moveStars(event: KeyboardEvent) {
         : 0;
   if (step === 0) return;
   event.preventDefault();
-  const next = Math.min(5, Math.max(1, preview + step));
+  const next = Math.min(5, Math.max(1, tabStop + step));
   hovered = next;
   focusStar = next;
   const star = document.querySelector<HTMLElement>(`[data-star="${next}"]`);

@@ -3,7 +3,7 @@ import CheckIcon from "@lucide/svelte/icons/check";
 import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
 import CircleXIcon from "@lucide/svelte/icons/circle-x";
 import { onDestroy, tick } from "svelte";
-import { usernameRule } from "$lib/auth.ts";
+import { accountFailure } from "$lib/auth.ts";
 import Failure from "$lib/components/Failure.svelte";
 import FocusScreen from "$lib/components/FocusScreen.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
@@ -89,9 +89,7 @@ async function submitLibrary(event: SubmitEvent) {
       displayName: displayName.trim() === "" ? undefined : displayName,
     });
   } catch (error) {
-    failure = readFailure(error);
-    if (failure.code === "BAD_REQUEST")
-      failure = { ...failure, message: usernameRule };
+    failure = accountFailure(readFailure(error), username);
     busy = false;
     await goTo(0);
     return;
@@ -228,6 +226,7 @@ const title = $derived(
               id="username"
               name="username"
               autocomplete="username"
+              maxlength={64}
               required
               bind:value={username}
             />
@@ -239,6 +238,7 @@ const title = $derived(
               name="password"
               type="password"
               autocomplete="new-password"
+              maxlength={1024}
               required
               bind:value={password}
             />
@@ -253,6 +253,7 @@ const title = $derived(
               id="displayName"
               name="displayName"
               autocomplete="name"
+              maxlength={128}
               bind:value={displayName}
             />
           </div>

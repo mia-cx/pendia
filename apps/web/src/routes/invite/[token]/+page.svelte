@@ -5,9 +5,9 @@ import UnlinkIcon from "@lucide/svelte/icons/unlink";
 import { goto } from "$app/navigation";
 import {
   acceptInvite,
+  accountFailure,
   type InviteStatus,
   readInviteStatus,
-  usernameRule,
 } from "$lib/auth.ts";
 import Failure from "$lib/components/Failure.svelte";
 import FocusScreen from "$lib/components/FocusScreen.svelte";
@@ -37,12 +37,7 @@ function acceptFailure(error: unknown) {
       ...read,
       message: "An account already uses that username or this invite's email.",
     };
-  if (read.code === "BAD_REQUEST")
-    return {
-      ...read,
-      message: usernameRule,
-    };
-  return read;
+  return accountFailure(read, username);
 }
 
 async function submit(event: SubmitEvent) {

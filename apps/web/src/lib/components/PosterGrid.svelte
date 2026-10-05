@@ -7,7 +7,7 @@ const { children, ...rest }: { children: Snippet } & Record<string, unknown> =
 
 <ul
   {...rest}
-  class="grid grid-cols-[repeat(auto-fill,minmax(min(9.5rem,28vw),1fr))] gap-x-3 gap-y-7 lg:gap-x-5 lg:gap-y-8"
+  class="grid grid-cols-[repeat(auto-fill,minmax(min(9.5rem,28vw),1fr))] gap-x-3 gap-y-4 lg:gap-x-5 lg:gap-y-6"
 >
   {@render children()}
 </ul>

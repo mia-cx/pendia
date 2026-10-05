@@ -11,6 +11,7 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { publishEvent } from "../api/events.ts";
 import type { Database } from "../db/client.ts";
 import {
   type JobPayload,
@@ -146,6 +147,11 @@ export function createJobQueue(
           })
           .returning();
         if (!job) throw new Error("Job insertion returned no row.");
+        await publishEvent(tx, {
+          kind: "job.progress",
+          jobId: job.id,
+          state: "queued",
+        });
         await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
         return job;
       });
@@ -215,24 +221,38 @@ export function createJobQueue(
           })
           .where(eq(jobs.id, job.id))
           .returning();
+        if (claimed)
+          await publishEvent(tx, {
+            kind: "job.progress",
+            jobId: claimed.id,
+            state: "running",
+          });
         return claimed;
       });
     },
 
     /** Completes the job only for the claim that holds it. */
     async complete(job: Claim) {
-      const [completed] = await db
-        .update(jobs)
-        .set({ state: "completed" })
-        .where(
-          and(
-            eq(jobs.id, job.id),
-            eq(jobs.claimToken, job.claimToken),
-            eq(jobs.state, "running"),
-          ),
-        )
-        .returning();
-      return completed;
+      return db.transaction(async (tx) => {
+        const [completed] = await tx
+          .update(jobs)
+          .set({ state: "completed" })
+          .where(
+            and(
+              eq(jobs.id, job.id),
+              eq(jobs.claimToken, job.claimToken),
+              eq(jobs.state, "running"),
+            ),
+          )
+          .returning();
+        if (completed)
+          await publishEvent(tx, {
+            kind: "job.progress",
+            jobId: completed.id,
+            state: "completed",
+          });
+        return completed;
+      });
     },
 
     /**
@@ -244,22 +264,30 @@ export function createJobQueue(
         maxRetryDelayMs,
         retryDelayMs * 2 ** (job.attempts - 1),
       );
-      const [failed] = await db
-        .update(jobs)
-        .set({
-          state: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then 'queued'::job_state else 'failed'::job_state end`,
-          error: error instanceof Error ? error.message : String(error),
-          runAfter: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then clock_timestamp() + ${delay} * interval '1 millisecond' else ${jobs.runAfter} end`,
-        })
-        .where(
-          and(
-            eq(jobs.id, job.id),
-            eq(jobs.claimToken, job.claimToken),
-            eq(jobs.state, "running"),
-          ),
-        )
-        .returning();
-      return failed ? { ...failed, retryDelayMs: delay } : undefined;
+      return db.transaction(async (tx) => {
+        const [failed] = await tx
+          .update(jobs)
+          .set({
+            state: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then 'queued'::job_state else 'failed'::job_state end`,
+            error: error instanceof Error ? error.message : String(error),
+            runAfter: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then clock_timestamp() + ${delay} * interval '1 millisecond' else ${jobs.runAfter} end`,
+          })
+          .where(
+            and(
+              eq(jobs.id, job.id),
+              eq(jobs.claimToken, job.claimToken),
+              eq(jobs.state, "running"),
+            ),
+          )
+          .returning();
+        if (failed)
+          await publishEvent(tx, {
+            kind: "job.progress",
+            jobId: failed.id,
+            state: failed.state,
+          });
+        return failed ? { ...failed, retryDelayMs: delay } : undefined;
+      });
     },
   };
 }

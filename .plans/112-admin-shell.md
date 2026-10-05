@@ -39,7 +39,7 @@ Admin becomes a settings app laid out like System Settings. On desktop a floatin
 - Vite's string proxy shorthand sets `changeOrigin: true`, so the server's origin check refused every cookie-auth write from the dev server. The proxy entries now keep the Host header.
 - The base replaced `Poster` with `Artwork` while this slice was in flight. Overview's thumbnails use `Artwork` with `fallbackTitle={false}`.
 - Accounts have no email until OIDC fills it, because the API has no email write. The fixture users show none.
-- Gate at `fa15e80` (after merging `origin/feat/107-design-system` at `3e21c00`):
+- Gate at `db8d830`, after merging `origin/feat/107-design-system` at `3e21c00`. Lint was re-run at `fa15e80`, which only sorts one import:
   - `bun install --frozen-lockfile`: no changes.
   - `bun run lint`: clean, apart from 9 warnings in `app.css` that the base already has.
   - `bun run check`: 0 errors, 0 warnings.
@@ -49,4 +49,4 @@ Admin becomes a settings app laid out like System Settings. On desktop a floatin
 - Accessibility, on the rendered app:
   - Keyboard: tab order runs skip link, Home, search, sections, account, then content. Selects open with the arrow keys. Escape closes dialogs and Selects and returns focus to the trigger.
   - Screen reader, from the CDP accessibility tree: the switches announce role, name and checked state. The search field is named "Search settings". The section links carry `aria-current`, and the reveal toggle carries `aria-pressed`.
-  - High contrast and reduced motion: shots taken. Under reduced motion, phone navigation cross-fades instead of sliding.
+  - High contrast and reduced motion: shots taken. The push and pop slide only under `prefers-reduced-motion: no-preference`, so reduced motion gets the cross-fade.

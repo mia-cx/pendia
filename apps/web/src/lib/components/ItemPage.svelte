@@ -212,8 +212,14 @@ function creditsAside(detail: ItemDetail) {
         class="flex flex-wrap items-center gap-x-2 gap-y-1 text-subheadline text-white/75 tabular-nums"
       >
         {#if detail.year !== null}{detail.year}{/if}
-        {#if runtime !== null}
+        {#if detail.kind === "show" && detail.children.length > 0}
           {#if detail.year !== null}
+            <span aria-hidden="true">·</span>
+          {/if}
+          {count(detail.children.length, "season", "seasons")}
+        {/if}
+        {#if runtime !== null}
+          {#if detail.year !== null || (detail.kind === "show" && detail.children.length > 0)}
             <span aria-hidden="true">·</span>
           {/if}
           {formatDuration(runtime)}

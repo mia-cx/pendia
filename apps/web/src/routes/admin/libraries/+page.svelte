@@ -63,7 +63,7 @@ const folderCount = (count: number) =>
             <MediumIcon class="size-4 text-label-secondary" />
           </span>
         {/snippet}
-        <ScanState status={statuses[row.id]} withTime />
+        <ScanState status={statuses[row.id]} withTime timeClass="max-sm:hidden" />
       </ListRow>
     {:else}
       {#if list.data !== undefined}

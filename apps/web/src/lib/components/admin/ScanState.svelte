@@ -2,14 +2,16 @@
 import { type ScanStatus, scanStartedAt, scanState } from "$lib/scan.ts";
 import { cn } from "$lib/utils.ts";
 
-/** A library's scan state as a dot and label; `withTime` adds a "Last scan" line. */
+/** A library's scan state as a dot and label; `withTime` adds a "Last scan" line, styled by `timeClass`. */
 const {
   status,
   withTime = false,
+  timeClass,
   class: className,
 }: {
   status: ScanStatus | undefined | null;
   withTime?: boolean;
+  timeClass?: string;
   class?: string;
 } = $props();
 
@@ -41,7 +43,7 @@ const lastScan = $derived(
     <span class="text-footnote text-label-secondary">{state.label}</span>
   </span>
   {#if lastScan}
-    <span class="text-footnote text-label-secondary"
+    <span class={cn("text-footnote text-label-secondary", timeClass)}
       >Last scan {instant.format(lastScan)}</span
     >
   {/if}

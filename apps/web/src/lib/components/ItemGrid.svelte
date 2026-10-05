@@ -90,7 +90,7 @@ function showMore() {
 
 // The sentinel loads the next page well before it scrolls into view.
 $effect(() => {
-  if (!more) return;
+  if (!more || loading || cursor === null || failure) return;
   const observer = new IntersectionObserver(
     (entries) => {
       if (entries.some((entry) => entry.isIntersecting)) showMore();

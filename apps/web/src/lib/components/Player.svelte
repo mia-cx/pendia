@@ -475,6 +475,7 @@ const VolumeIcon = $derived(
       shown
         ? "opacity-100 duration-(--duration-fast)"
         : "pointer-events-none opacity-0 duration-(--duration-medium)",
+      stopped && "pointer-events-none",
     )}
     style="padding-left: max(var(--gutter), env(safe-area-inset-left)); padding-right: max(var(--gutter), env(safe-area-inset-right)); padding-bottom: max(1rem, env(safe-area-inset-bottom));"
     onpointerenter={(event) =>
@@ -579,7 +580,12 @@ const VolumeIcon = $derived(
             >
           </Button>
         </div>
-        <div class="col-start-3 flex items-center justify-end gap-1">
+        <div
+          class={cn(
+            "col-start-3 flex items-center justify-end gap-1",
+            stopped && "pointer-events-auto",
+          )}
+        >
           {#if typeof document !== "undefined" && document.pictureInPictureEnabled}
             <Button
               variant="ghost"

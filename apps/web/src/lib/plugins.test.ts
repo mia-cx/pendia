@@ -1,13 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type ConfigField,
   describeCapabilities,
   entryAction,
   filesChoice,
   filesOffFor,
   type InstalledPlugin,
+  notSet,
   officialRegistry,
   pluginOrigin,
   type Registry,
+  readPluginConfig,
   registryLabel,
 } from "./plugins.ts";
 
@@ -107,5 +110,94 @@ describe("registry helpers", () => {
         installed,
       ),
     ).toBe("install");
+  });
+});
+
+const field = (
+  partial: Partial<ConfigField> & { key: string },
+): ConfigField => ({
+  type: null,
+  title: null,
+  description: null,
+  required: false,
+  options: null,
+  ...partial,
+});
+
+describe("readPluginConfig", () => {
+  const read = (
+    fields: ConfigField[],
+    texts: Record<string, unknown>,
+    checks: Record<string, boolean> = {},
+  ) => readPluginConfig(fields, texts, checks);
+
+  test("number and integer drafts read as numbers", () => {
+    const fields = [
+      field({ key: "count", type: "number", required: true }),
+      field({ key: "tries", type: "integer" }),
+    ];
+    expect(read(fields, { count: "6", tries: "2" })).toEqual({
+      count: 6,
+      tries: 2,
+    });
+  });
+
+  test("an empty optional field is left out", () => {
+    expect(read([field({ key: "count", type: "number" })], {})).toEqual({});
+  });
+
+  test("a numeric draft from a number input reads as a number", () => {
+    expect(
+      read([field({ key: "count", type: "number" })], { count: 6 }),
+    ).toEqual({ count: 6 });
+  });
+
+  test("a cleared optional number draft is left out", () => {
+    const fields = [field({ key: "count", type: "number" })];
+    expect(read(fields, { count: null })).toEqual({});
+    expect(read(fields, { count: undefined })).toEqual({});
+  });
+
+  test("a cleared required number names its label", () => {
+    const fields = [
+      field({ key: "count", type: "number", required: true, title: "Count" }),
+    ];
+    expect(read(fields, { count: null })).toBe("Count is required.");
+  });
+
+  test("booleans come from the switches, not the texts", () => {
+    const fields = [
+      field({ key: "on", type: "boolean" }),
+      field({ key: "off", type: "boolean" }),
+    ];
+    expect(read(fields, {}, { on: true })).toEqual({ on: true, off: false });
+  });
+
+  test("an optional enum left Not set is left out", () => {
+    const fields = [field({ key: "mode", options: ["a", "b"] })];
+    expect(read(fields, { mode: notSet })).toEqual({});
+  });
+
+  test("an empty required enum names its label", () => {
+    const fields = [
+      field({ key: "mode", title: "Mode", required: true, options: ["a"] }),
+    ];
+    expect(read(fields, {})).toBe("Mode is required.");
+  });
+
+  test("a set enum parses its JSON draft", () => {
+    const fields = [
+      field({ key: "mode", required: true, options: ["a", "b"] }),
+    ];
+    expect(read(fields, { mode: '"b"' })).toEqual({ mode: "b" });
+  });
+
+  test("a JSON field that is not JSON names its label", () => {
+    const fields = [
+      field({ key: "headers", title: "Headers", required: true }),
+    ];
+    expect(read(fields, { headers: "{oops" })).toBe(
+      "Headers is not valid JSON.",
+    );
   });
 });

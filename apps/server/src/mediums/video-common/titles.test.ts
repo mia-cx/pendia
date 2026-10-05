@@ -87,6 +87,11 @@ describe("titleKey", () => {
   ])("keys %s", (title, year, expected) => {
     expect(titleKey(title, year)).toBe(expected);
   });
+
+  test("keeps non-Latin titles distinct", () => {
+    expect(titleKey("進撃の巨人", null)).not.toBe("");
+    expect(titleKey("君の名は", 2016)).not.toBe(titleKey("天気の子", 2016));
+  });
 });
 
 describe("sameTitle", () => {

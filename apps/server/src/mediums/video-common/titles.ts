@@ -129,7 +129,7 @@ export function normalizeTitle(title: string): string {
     .replace(/\p{M}/gu, "")
     .toLowerCase()
     .replace(/['’]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
 

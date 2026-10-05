@@ -259,6 +259,16 @@ describe("isExtra", () => {
 });
 
 describe("groupMoviePaths", () => {
+  test("groups loose CJK-named movies separately", () => {
+    const groups = groupMoviePaths(
+      rooted(["映画/君の名は.2016.mkv", "映画/天気の子.2019.mkv"]),
+    );
+    expect(groups.map((group) => group.title)).toEqual([
+      "君の名は",
+      "天気の子",
+    ]);
+  });
+
   test("groups resolution variants of one film into a single group", () => {
     const groups = groupMoviePaths(
       rooted([

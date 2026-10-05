@@ -28,6 +28,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { moviesMedium } from "../mediums/movies.ts";
 import {
   createVideoFixture,
   withVideoFixture,
@@ -2372,6 +2373,118 @@ describe.skipIf(!databaseUrl)("scans at any depth", () => {
         expect(await db.select().from(ratings)).toMatchObject([
           { itemId: cd2.item.id, value: "8.5" },
         ]);
+      });
+    }));
+
+  test("a foreign owner's Version timelines refresh in place", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const { library, discs } = await seedAlienDiscs(db, root);
+        const cd2 = discs[1];
+        if (!cd2) throw new Error("Seed disc missing.");
+        const [before] = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.id, cd2.versionId));
+        expect(before?.timelineAligned).toBe(true);
+
+        // A fresh stamp makes the probe run again instead of hitting cache.
+        await utimes(
+          join(root, "Alien (1979)/CD2/Alien.1979.CD2.mkv"),
+          new Date(),
+          new Date(),
+        );
+        const scanned = await scanDirectory(db, library.id, "Alien (1979)", {
+          probe: async (file) => {
+            const result = await probeVideo(file);
+            return file.endsWith("CD2.mkv")
+              ? { ...result, keyframesSeconds: null }
+              : result;
+          },
+        });
+        expect(scanned.itemIds).toContain(cd2.item.id);
+        const [after] = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.id, cd2.versionId));
+        expect(after).toMatchObject({
+          keyframesSeconds: null,
+          timelineAligned: false,
+        });
+      });
+    }));
+
+  test("a shared legacy Item keeps its provider ids and match", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const arrival = "Movies (2020)/Arrival.2016.{tmdb-329865}.mkv";
+        const dune = "Movies (2020)/Dune.2021.{tmdb-438631}.mkv";
+        for (const path of [
+          "Movies/Arrival.2016.{tmdb-329865}.mkv",
+          "Movies/Dune.2021.{tmdb-438631}.mkv",
+        ]) {
+          expect(moviesMedium.scan.identify(path)).toMatchObject({
+            kind: "movie",
+            canonicalFolder: "Movies",
+          });
+        }
+        await populateRoots([
+          [root, arrival],
+          [root, dune],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const scanned = await scanDirectory(db, library.id, "Movies (2020)");
+        expect(scanned.itemIds).toHaveLength(1);
+        const [original] = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"));
+        if (!original) throw new Error("Movie Item missing.");
+        await db
+          .update(items)
+          .set({ title: "Curated", metadataState: "matched" })
+          .where(eq(items.id, original.id));
+
+        // The upgrade moved the folder: the stored rows follow it by hand.
+        await rename(join(root, "Movies (2020)"), join(root, "Movies"));
+        await db
+          .update(items)
+          .set({ canonicalFolder: "Movies" })
+          .where(eq(items.id, original.id));
+        await db
+          .update(files)
+          .set({ path: "Movies/Arrival.2016.{tmdb-329865}.mkv" })
+          .where(eq(files.path, arrival));
+        await db
+          .update(files)
+          .set({ path: "Movies/Dune.2021.{tmdb-438631}.mkv" })
+          .where(eq(files.path, dune));
+        await db.delete(providerIds).where(eq(providerIds.itemId, original.id));
+
+        await scanDirectory(db, library.id, "Movies");
+        await scanDirectory(db, library.id, "Movies");
+        const [kept] = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"));
+        expect(kept).toMatchObject({
+          id: original.id,
+          title: "Curated",
+          metadataState: "matched",
+        });
+        expect(
+          await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, original.id)),
+        ).toEqual([]);
       });
     }));
 

@@ -833,6 +833,7 @@ export async function scanDirectory(
     for (const member of memberByKey.values()) await source.verify(member);
 
     const itemIds: string[] = [];
+    const foreignItemIds: string[] = [];
     const versionIds: string[] = [];
     const positions = new Map(
       (await rootsOf(tx, libraryId)).map((root, index) => [root.id, index]),
@@ -841,6 +842,7 @@ export async function scanDirectory(
     let candidates: Awaited<ReturnType<typeof rootItemCandidates>> | undefined;
     const singleGroup = groups.length === 1;
 
+    const resolved = [];
     for (const group of groups) {
       // Only webhook ids may find an Item elsewhere in the Library. Folder
       // tags are stored but never relocate: two folders can carry the same tag.
@@ -858,9 +860,17 @@ export async function scanDirectory(
           (candidates ??= await rootItemCandidates(tx, libraryId, "movie")),
         claimed,
       });
-      const itemId = item.id;
-      itemIds.push(itemId);
+      itemIds.push(item.id);
+      resolved.push({ group, itemId: item.id, webhookProviderIds });
+    }
+    // An Item more than one group resolved to is shared by legacy
+    // subgroups: no subgroup's ids rewrite the whole Item's match.
+    const shared = new Set(
+      itemIds.filter((id, index) => itemIds.indexOf(id) !== index),
+    );
+    const timelineOwners = new Set<string>();
 
+    for (const { group, itemId, webhookProviderIds } of resolved) {
       for (const named of group.files) {
         const member = memberByKey.get(rootedKey(named));
         if (!member) throw new Error(`Unprobed member: ${named.path}`);
@@ -884,6 +894,8 @@ export async function scanDirectory(
           if (owner?.libraryId !== libraryId || owner.kind !== "movie") {
             throw new AuthError("CONFLICT");
           }
+          foreignItemIds.push(existingFile.itemId);
+          timelineOwners.add(existingFile.itemId);
         }
         if (existingFile) {
           versionId = existingFile.versionId;
@@ -954,25 +966,29 @@ export async function scanDirectory(
 
       // A changed provider id invalidates the match, so metadata re-fetches.
       // Webhook ids assert; folder tags only fill ids nothing asserted yet.
-      const assertedChanged = await setItemProviderIds(
-        tx,
-        itemId,
-        webhookProviderIds,
-      );
-      const filledChanged = await setItemProviderIds(
-        tx,
-        itemId,
-        group.providerIds,
-        { fillOnly: true },
-      );
-      if (assertedChanged || filledChanged) {
-        await tx
-          .update(items)
-          .set({ metadataState: "pending", updatedAt: new Date() })
-          .where(eq(items.id, itemId));
+      // A shared legacy Item keeps its ids and match state untouched.
+      if (!shared.has(itemId)) {
+        const assertedChanged = await setItemProviderIds(
+          tx,
+          itemId,
+          webhookProviderIds,
+        );
+        const filledChanged = await setItemProviderIds(
+          tx,
+          itemId,
+          group.providerIds,
+          { fillOnly: true },
+        );
+        if (assertedChanged || filledChanged) {
+          await tx
+            .update(items)
+            .set({ metadataState: "pending", updatedAt: new Date() })
+            .where(eq(items.id, itemId));
+        }
       }
-      await persistScanTimelines(tx, itemId);
+      timelineOwners.add(itemId);
     }
+    for (const owner of timelineOwners) await persistScanTimelines(tx, owner);
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
 
@@ -1001,7 +1017,10 @@ export async function scanDirectory(
       await pruneEmptiedItems(tx, touched, deletedArtwork);
     }
 
-    return { itemIds: [...new Set(itemIds)], versionIds };
+    return {
+      itemIds: [...new Set([...itemIds, ...foreignItemIds])],
+      versionIds,
+    };
   });
   await removeArtworkFiles(deletedArtwork);
   return { itemId: written.itemIds[0] ?? null, ...written, probed };

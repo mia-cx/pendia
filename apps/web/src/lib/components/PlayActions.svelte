@@ -1,7 +1,7 @@
 <script lang="ts">
 import { client } from "$lib/api.ts";
 import type { ItemDetail } from "$lib/browse.ts";
-import { formatPosition } from "$lib/playback.ts";
+import { formatPosition, pickVersion } from "$lib/playback.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
 const { detail }: { detail: ItemDetail } = $props();
@@ -10,9 +10,7 @@ const { detail }: { detail: ItemDetail } = $props();
 // that Version picks up.
 const start = resource(async () => {
   const progress = await client.playback.getProgress({ itemId: detail.id });
-  const version =
-    detail.versions.find(({ id }) => id === progress?.versionId) ??
-    detail.versions[0];
+  const version = pickVersion(detail.versions, null, progress?.versionId);
   if (version === undefined) return null;
   if (progress === null || progress.completed)
     return { versionId: version.id, positionSeconds: 0 };

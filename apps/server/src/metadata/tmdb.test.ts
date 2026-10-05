@@ -378,6 +378,7 @@ describe("TMDB metadata provider", () => {
     expect(url.searchParams.get("append_to_response")).toBe(
       "credits,release_dates,external_ids,images",
     );
+    expect(url.searchParams.get("include_image_language")).toBe("en,null");
     expect(calls[0]?.init?.headers).toEqual({ accept: "application/json" });
     expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
   });
@@ -547,7 +548,7 @@ describe("TMDB metadata provider", () => {
       images: {
         posters: [{ file_path: "/poster.jpg" }, { file_path: "/poster2.jpg" }],
         backdrops: [{ file_path: "/backdrop2.jpg" }],
-        logos: [{ file_path: "/logo.png" }],
+        logos: [{ file_path: "/logo.svg" }, { file_path: "/logo.png" }],
       },
     });
     const provider = createTmdbMetadataProvider(apiKey, request);

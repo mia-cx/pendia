@@ -1,4 +1,8 @@
-import type { MetadataProvider } from "@pendia/plugin-api";
+import type {
+  ItemKind,
+  MetadataProvider,
+  MetadataResult,
+} from "@pendia/plugin-api";
 import { and, eq, lte, sql } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
@@ -140,8 +144,21 @@ async function metadataProviders(
   return providers;
 }
 
+type ArtworkType = MetadataResult["artwork"][number]["type"];
+
+/** The artwork a fetch stores per kind: the primary image first, then the hero images Home and the detail pages draw. */
+const storedArtwork = {
+  movie: ["poster", "backdrop", "logo"],
+  show: ["poster", "backdrop", "logo"],
+  season: ["poster"],
+  episode: ["thumb"],
+} as const satisfies Record<ItemKind, readonly ArtworkType[]>;
+
 /** A Show's Seasons, then its Episodes, in number order. */
-async function showChildren(db: Database, showId: string) {
+async function showChildren(
+  db: Database,
+  showId: string,
+): Promise<{ id: string; kind: ItemKind }[]> {
   const seasonRows = await db
     .select({ id: seasons.itemId })
     .from(seasons)
@@ -154,8 +171,8 @@ async function showChildren(db: Database, showId: string) {
     .where(eq(seasons.showId, showId))
     .orderBy(seasons.seasonNumber, episodes.episodeNumber);
   return [
-    ...seasonRows.map(({ id }) => ({ id, kind: "season" })),
-    ...episodeRows.map(({ id }) => ({ id, kind: "episode" })),
+    ...seasonRows.map(({ id }) => ({ id, kind: "season" as const })),
+    ...episodeRows.map(({ id }) => ({ id, kind: "episode" as const })),
   ];
 }
 
@@ -172,9 +189,9 @@ export function registerMetadataJobs(
       .set({ metadataState: "pending", updatedAt: new Date() })
       .where(eq(items.id, itemId));
 
-  /** Matches one Item and stores its primary artwork; resolves whether it matched. */
+  /** Matches one Item and stores its artwork; resolves whether it matched. */
   const fetchItem = async (
-    item: { id: string; kind: string },
+    item: { id: string; kind: ItemKind },
     providers: readonly MetadataProvider[],
     publish: () => Promise<unknown>,
   ) => {
@@ -183,22 +200,23 @@ export function registerMetadataJobs(
     if (application.state !== "matched") return false;
     await emitItemUpdated(db, item.id);
     await queueSubtitleFetch(db, item);
-    const type = item.kind === "episode" ? "thumb" : "poster";
-    const primary = application.artwork.find(
-      (candidate) => candidate.type === type,
-    );
-    if (primary === undefined) {
-      if (await removeSelectedArtwork(db, item.id, type)) await publish();
-      return true;
-    }
-    try {
-      await storeArtworkOriginal(db, item.id, primary, request);
-    } catch (error) {
-      // Metadata already committed as matched; pending lets the next scan
-      // retry the artwork after this job's own attempts run out.
-      await markPending(item.id);
-      await publish();
-      throw error;
+    for (const type of storedArtwork[item.kind]) {
+      const candidate = application.artwork.find(
+        (artwork) => artwork.type === type,
+      );
+      if (candidate === undefined) {
+        if (await removeSelectedArtwork(db, item.id, type)) await publish();
+        continue;
+      }
+      try {
+        await storeArtworkOriginal(db, item.id, candidate, request);
+      } catch (error) {
+        // Metadata already committed as matched; pending lets the next scan
+        // retry the artwork after this job's own attempts run out.
+        await markPending(item.id);
+        await publish();
+        throw error;
+      }
     }
     await publish();
     return true;

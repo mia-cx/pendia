@@ -6,7 +6,7 @@ import AdminPage from "$lib/components/admin/AdminPage.svelte";
 import FormGroup from "$lib/components/admin/FormGroup.svelte";
 import FormRow from "$lib/components/admin/FormRow.svelte";
 import ListRow from "$lib/components/admin/ListRow.svelte";
-import Poster from "$lib/components/Poster.svelte";
+import Artwork from "$lib/components/Artwork.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import { followEvents } from "$lib/events.ts";
 import { resource } from "$lib/resource.svelte.ts";
@@ -195,12 +195,12 @@ onDestroy(() => {
       >
         {#snippet leading()}
           <span class="block w-8 shrink-0">
-            <Poster
+            <Artwork
               artworkId={session.item.posterArtworkId}
               title={cardLabel(session.item)}
               sizes="2rem"
               kind={session.item.kind}
-              compact
+              fallbackTitle={false}
             />
           </span>
         {/snippet}

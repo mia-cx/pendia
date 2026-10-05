@@ -66,6 +66,9 @@ function onPointerLeave(event: PointerEvent) {
       if (pointerDown) dragging = next;
     }}
     onValueCommit={(next) => {
+      // Bits UI commits on a document-level pointerup; releasing outside the
+      // wrapper never runs our handlers, so clear the flag here too.
+      pointerDown = false;
       dragging = null;
       onseek(next);
     }}

@@ -218,6 +218,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         rootsRevision: 0,
         path: "Alien (1979)",
         medium: "movies",
+        library: false,
         cached: [],
         check: [],
       });
@@ -229,6 +230,79 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         })
         .where(eq(libraries.id, library.id));
       expect((await queue.claim())?.id).toBe(second.id);
+    }));
+
+  test("a claimed root directory scan is not a library scan and carries the roots' cached probes", () =>
+    withDatabase(async (db) => {
+      const { token, library } = await setup(db);
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      const queue = createJobQueue(db);
+      await db.insert(probeCache).values({
+        rootId: library.rootId,
+        path: "Season 1/Breaking Bad - S01E01.mkv",
+        bytes: 10n,
+        modifiedNs: 1n,
+        result: {
+          container: "mkv",
+          durationSeconds: 1,
+          keyframesSeconds: [0, 2],
+          chapters: [],
+          streams: [],
+        },
+      });
+      await queue.enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: ".",
+        reconcileMissing: true,
+      });
+      const claimed: WatcherClaim = await (
+        await handler(post("claim", { rootIds: [library.rootId] }, token))
+      )?.json();
+      expect(claimed.job).toMatchObject({
+        path: ".",
+        library: false,
+        cached: [
+          {
+            rootId: library.rootId,
+            path: "Season 1/Breaking Bad - S01E01.mkv",
+            bytes: "10",
+            modifiedNs: "1",
+          },
+        ],
+      });
+    }));
+
+  test("a claimed library scan lists files only", () =>
+    withDatabase(async (db) => {
+      const { token, library } = await setup(db);
+      const handler = createWatcherHandler(db, unusedDebouncer);
+      await db.insert(probeCache).values({
+        rootId: library.rootId,
+        path: "Alien (1979)/Alien (1979).mkv",
+        bytes: 10n,
+        modifiedNs: 1n,
+        result: {
+          container: "mkv",
+          durationSeconds: 1,
+          keyframesSeconds: [0],
+          chapters: [],
+          streams: [],
+        },
+      });
+      await createJobQueue(db).enqueue({
+        type: "scan",
+        libraryId: library.id,
+        path: ".",
+      });
+      const claimed: WatcherClaim = await (
+        await handler(post("claim", { rootIds: [library.rootId] }, token))
+      )?.json();
+      expect(claimed.job).toMatchObject({
+        path: ".",
+        library: true,
+        cached: [],
+      });
     }));
 
   test("a watcher claims a Library's scans only when it watches every root", () =>

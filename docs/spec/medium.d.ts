@@ -36,6 +36,15 @@ export interface ScanRules {
   parse(canonicalFolder: string): Record<string, unknown>;
   /** Paths inside a canonical folder that are not Versions: extras, trailers, samples. */
   isExtra(path: string): boolean;
+  /** The Item folder a file in this directory belongs to: the directory without its trailing structural folders, or ".". */
+  itemFolder(directory: string): string;
+}
+
+/** A walked file: its root's id and folder name, and its path relative to that root. */
+export interface RootedName {
+  rootId: string;
+  rootName: string;
+  path: string;
 }
 
 export interface BrowseContribution {

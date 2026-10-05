@@ -55,9 +55,25 @@ const label = $derived(
     >
       {#if fraction !== null && posterId !== null}
         <span
-          class="absolute inset-x-0 bottom-0 h-[30%] bg-linear-to-t from-black/60 to-transparent"
+          class="absolute inset-x-0 bottom-0 h-[30%] bg-linear-to-t from-black/60 to-transparent transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-0 group-focus-visible:opacity-0"
           aria-hidden="true"
         ></span>
+      {/if}
+      {#if posterId !== null}
+        <span
+          aria-hidden="true"
+          class="absolute inset-x-0 bottom-0 flex h-[45%] flex-col justify-end gap-0.5 bg-linear-to-t from-black/75 via-black/40 to-transparent p-2.5 {fraction !==
+          null
+            ? 'pb-5'
+            : ''} opacity-0 transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-100 group-focus-visible:opacity-100"
+        >
+          <span class="truncate text-subheadline font-semibold text-white"
+            >{posterTitle}</span
+          >
+          {#if caption !== null}
+            <span class="text-caption-1 text-white/70">{caption}</span>
+          {/if}
+        </span>
       {/if}
       {#if fraction !== null}
         <span

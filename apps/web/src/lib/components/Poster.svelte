@@ -10,6 +10,7 @@ const {
   sizes,
   kind = "movie",
   loading = "lazy",
+  compact = false,
   children,
 }: {
   artworkId: string | null;
@@ -17,6 +18,8 @@ const {
   sizes: string;
   kind?: "movie" | "show" | "season" | "episode";
   loading?: "lazy" | "eager";
+  /** Only the medium icon fills the no-artwork fallback; the title is skipped. */
+  compact?: boolean;
   children?: Snippet;
 } = $props();
 
@@ -47,11 +50,17 @@ const Icon = $derived(kind === "movie" ? ClapperboardIcon : TvIcon);
       class="absolute inset-0 bg-linear-to-b from-fill to-fill-strong"
       aria-hidden="true"
     >
-      <Icon class="absolute top-3 left-3 size-5 text-label-tertiary" />
-      <span
-        class="absolute right-0 bottom-0 left-0 p-3.5 text-headline font-semibold text-label line-clamp-4"
-        >{title}</span
-      >
+      {#if compact}
+        <Icon
+          class="absolute top-1/2 left-1/2 size-4 -translate-x-1/2 -translate-y-1/2 text-label-tertiary"
+        />
+      {:else}
+        <Icon class="absolute top-3 left-3 size-5 text-label-tertiary" />
+        <span
+          class="absolute right-0 bottom-0 left-0 p-3.5 text-headline font-semibold text-label line-clamp-4"
+          >{title}</span
+        >
+      {/if}
     </span>
   {/if}
   {@render children?.()}

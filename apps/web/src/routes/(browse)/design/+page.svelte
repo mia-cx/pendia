@@ -9,7 +9,12 @@ import SettingsIcon from "@lucide/svelte/icons/settings";
 import Trash2Icon from "@lucide/svelte/icons/trash-2";
 import { toast } from "svelte-sonner";
 import { client } from "$lib/api.ts";
+import type { BrowseCard } from "$lib/browse.ts";
 import { artworkUrl } from "$lib/browse.ts";
+import Artwork from "$lib/components/Artwork.svelte";
+import LandscapeCard from "$lib/components/LandscapeCard.svelte";
+import PosterCard from "$lib/components/PosterCard.svelte";
+import Shelf from "$lib/components/Shelf.svelte";
 import * as AlertDialog from "$lib/components/ui/alert-dialog/index.ts";
 import { Badge } from "$lib/components/ui/badge/index.ts";
 import { Button } from "$lib/components/ui/button/index.ts";
@@ -27,11 +32,6 @@ import * as Switch from "$lib/components/ui/switch/index.ts";
 import * as Table from "$lib/components/ui/table/index.ts";
 import * as Tabs from "$lib/components/ui/tabs/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
-import type { BrowseCard } from "$lib/browse.ts";
-import Artwork from "$lib/components/Artwork.svelte";
-import LandscapeCard from "$lib/components/LandscapeCard.svelte";
-import PosterCard from "$lib/components/PosterCard.svelte";
-import Shelf from "$lib/components/Shelf.svelte";
 import { resource } from "$lib/resource.svelte.ts";
 
 function sampleCard(overrides: Partial<BrowseCard>): BrowseCard {

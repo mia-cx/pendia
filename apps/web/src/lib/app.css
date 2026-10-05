@@ -293,11 +293,7 @@
       light-dark(oklch(100% 0 0deg / 70%), oklch(100% 0 0deg / 8%)) 0%,
       transparent 60%
     ),
-    linear-gradient(
-      160deg,
-      var(--fill) 0%,
-      var(--fill-strong) 100%
-    );
+    linear-gradient(160deg, var(--fill) 0%, var(--fill-strong) 100%);
 }
 
 /* The denser material for menus, toasts and tooltips. */

@@ -9,8 +9,8 @@ import {
   type ItemDetail,
   itemHref,
 } from "$lib/browse.ts";
-import Failure from "$lib/components/Failure.svelte";
 import Artwork from "$lib/components/Artwork.svelte";
+import Failure from "$lib/components/Failure.svelte";
 import PosterCard from "$lib/components/PosterCard.svelte";
 import StoreRequest from "$lib/components/StoreRequest.svelte";
 import { resource } from "$lib/resource.svelte.ts";

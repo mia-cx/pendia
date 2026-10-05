@@ -100,10 +100,12 @@ describe("browse helpers", () => {
   });
 
   test("timeLeft names the remaining time, or nothing without a duration", () => {
+    expect(timeLeft({ positionSeconds: 2640, durationSeconds: 6600 })).toBe(
+      "1h 6m left",
+    );
     expect(
-      timeLeft({ positionSeconds: 2640, durationSeconds: 6600 }),
-    ).toBe("1h 6m left");
-    expect(timeLeft({ positionSeconds: 2640, durationSeconds: null })).toBeNull();
+      timeLeft({ positionSeconds: 2640, durationSeconds: null }),
+    ).toBeNull();
   });
 
   test("artworkSrcset lists each width once", () => {
@@ -122,9 +124,9 @@ describe("browse helpers", () => {
     expect(landscapeArtwork({ ...episode, thumbArtworkId: null })).toBe(
       "show-back",
     );
-    expect(
-      landscapeArtwork(card({ kind: "season", show: episode.show })),
-    ).toBe("show-back");
+    expect(landscapeArtwork(card({ kind: "season", show: episode.show }))).toBe(
+      "show-back",
+    );
     expect(landscapeArtwork(card({ backdropArtworkId: "back-1" }))).toBe(
       "back-1",
     );
@@ -139,9 +141,9 @@ describe("browse helpers", () => {
         }),
       ),
     ).toEqual({ logoId: "logo-1", title: "Severance" });
-    expect(titleArt(card({ title: "Arrival", logoArtworkId: "logo-2" }))).toEqual(
-      { logoId: "logo-2", title: "Arrival" },
-    );
+    expect(
+      titleArt(card({ title: "Arrival", logoArtworkId: "logo-2" })),
+    ).toEqual({ logoId: "logo-2", title: "Arrival" });
     expect(titleArt(card({ kind: "episode", title: "Pilot" }))).toEqual({
       logoId: null,
       title: "Pilot",
@@ -150,12 +152,8 @@ describe("browse helpers", () => {
 
   test("a card added in the last week is fresh", () => {
     const now = new Date("2026-10-05T12:00:00Z");
-    expect(
-      isFresh(card({ addedAt: "2026-10-03T00:00:00Z" }), now),
-    ).toBe(true);
-    expect(
-      isFresh(card({ addedAt: "2026-09-20T00:00:00Z" }), now),
-    ).toBe(false);
+    expect(isFresh(card({ addedAt: "2026-10-03T00:00:00Z" }), now)).toBe(true);
+    expect(isFresh(card({ addedAt: "2026-09-20T00:00:00Z" }), now)).toBe(false);
   });
 
   test("hero slides dedupe, lead with artwork and keep progress", () => {

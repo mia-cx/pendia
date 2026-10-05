@@ -38,9 +38,7 @@ const name = $derived(
       : `${card.title} (${card.year})`,
 );
 const label = $derived(
-  fraction === null
-    ? name
-    : `${name}, ${Math.round(fraction * 100)}% watched`,
+  fraction === null ? name : `${name}, ${Math.round(fraction * 100)}% watched`,
 );
 </script>
 

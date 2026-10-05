@@ -1,11 +1,7 @@
 <script lang="ts">
 import EllipsisIcon from "@lucide/svelte/icons/ellipsis";
 import { goto } from "$app/navigation";
-import {
-  type BrowseCard,
-  cardLabel,
-  itemHref,
-} from "$lib/browse.ts";
+import { type BrowseCard, cardLabel, itemHref } from "$lib/browse.ts";
 import { Button } from "$lib/components/ui/button/index.ts";
 import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.ts";
 

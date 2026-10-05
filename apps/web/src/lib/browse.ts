@@ -33,10 +33,7 @@ export function artworkUrl(id: string, width: number): string {
 }
 
 /** A `srcset` over the given widths. */
-export function artworkSrcset(
-  id: string,
-  widths: readonly number[],
-): string {
+export function artworkSrcset(id: string, widths: readonly number[]): string {
   return widths.map((width) => `${artworkUrl(id, width)} ${width}w`).join(", ");
 }
 

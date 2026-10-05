@@ -5,8 +5,8 @@ import InfoIcon from "@lucide/svelte/icons/info";
 import PlayIcon from "@lucide/svelte/icons/play";
 import { client } from "$lib/api.ts";
 import {
-  type heroSlides,
   episodeCode,
+  type heroSlides,
   type ItemDetail,
   itemHref,
   landscapeArtwork,

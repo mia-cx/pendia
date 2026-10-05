@@ -16,6 +16,7 @@ import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 import { queuesScan, type RootDraft } from "$lib/roots.ts";
 import { type ScanStatus, waitForScan } from "$lib/scan.ts";
+import { serialQueue } from "$lib/serial.ts";
 import PolicyEditor from "./PolicyEditor.svelte";
 
 // The route keys this component on the id, so it never outlives its library.
@@ -39,6 +40,9 @@ $effect(() => {
   }
 });
 
+// Library writes run through one queue so a slow rename can't overwrite newer roots.
+const writeQueue = serialQueue();
+
 let nameBusy = $state(false);
 let nameFailure = $state<FailureShape | undefined>(undefined);
 
@@ -48,7 +52,9 @@ async function saveName(event: SubmitEvent) {
   nameBusy = true;
   nameFailure = undefined;
   try {
-    const answer = await client.libraries.update({ id, name });
+    const answer = await writeQueue(() =>
+      client.libraries.update({ id, name }),
+    );
     library.set(answer);
     name = answer.name;
     toast.success("Name saved");
@@ -61,21 +67,25 @@ async function saveName(event: SubmitEvent) {
 
 let folderFailure = $state<FailureShape | undefined>(undefined);
 
-/** Saves one folder change at once; throws so the folder browser stays open on failure. */
-async function sendRoots(sent: RootDraft[]) {
-  const saved = library.data?.roots;
-  if (!saved) return;
-  const answer = await client.libraries.update({ id, roots: sent });
-  folderFailure = undefined;
-  library.set(answer);
-  return { answer, queued: queuesScan(saved, sent) };
+/**
+ * Queues one folder change; the root list is built inside the job from the
+ * roots current when it runs, so an earlier write can't clobber a later one.
+ * Throws so the folder browser stays open on failure.
+ */
+async function sendRoots(plan: (roots: LibraryData["roots"]) => RootDraft[]) {
+  return writeQueue(async () => {
+    const saved = library.data?.roots;
+    if (!saved) return;
+    const sent = plan(saved);
+    const answer = await client.libraries.update({ id, roots: sent });
+    folderFailure = undefined;
+    library.set(answer);
+    return { answer, queued: queuesScan(saved, sent) };
+  });
 }
 
 async function addFolder(path: string) {
-  const roots = library.data?.roots;
-  if (!roots) return;
-  const sent = [...roots, { path }];
-  const result = await sendRoots(sent);
+  const result = await sendRoots((roots) => [...roots, { path }]);
   if (!result) return;
   toast.success(
     result.queued
@@ -84,13 +94,21 @@ async function addFolder(path: string) {
   );
 }
 
+/** The index from click time, resolved to a root id the job can still find. */
+function rootIdAt(index: number) {
+  return library.data?.roots[index]?.id;
+}
+
 async function repointFolder(index: number, path: string) {
-  const roots = library.data?.roots;
-  if (!roots) return;
-  const sent = roots.map((root, at) =>
-    at === index ? { ...root, path } : { id: root.id, path: root.path },
-  );
-  const result = await sendRoots(sent);
+  const rootId = rootIdAt(index);
+  if (rootId === undefined) return;
+  const result = await sendRoots((roots) => {
+    const at = roots.findIndex((root) => root.id === rootId);
+    if (at === -1) throw new Error("That folder is no longer in this library.");
+    return roots.map((root, i) =>
+      i === at ? { ...root, path } : { id: root.id, path: root.path },
+    );
+  });
   if (!result) return;
   toast.success(
     result.queued
@@ -100,10 +118,15 @@ async function repointFolder(index: number, path: string) {
 }
 
 async function removeFolder(index: number) {
-  const roots = library.data?.roots;
-  if (!roots) return;
+  const rootId = rootIdAt(index);
+  if (rootId === undefined) return;
   try {
-    const result = await sendRoots(roots.filter((_, at) => at !== index));
+    const result = await sendRoots((roots) => {
+      const at = roots.findIndex((root) => root.id === rootId);
+      if (at === -1)
+        throw new Error("That folder is no longer in this library.");
+      return roots.filter((_, i) => i !== at);
+    });
     if (result) toast.success("Folder removed");
   } catch (error) {
     folderFailure = readFailure(error);

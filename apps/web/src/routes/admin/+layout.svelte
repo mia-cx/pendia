@@ -15,7 +15,7 @@ const { data, children }: LayoutProps = $props();
 
 // Sections not yet redesigned keep the old element styles under .legacy.
 const legacy = $derived(
-  ["/admin/libraries", "/admin/plugins", "/admin/activity"].some(
+  ["/admin/libraries"].some(
     (path) =>
       page.url.pathname === path || page.url.pathname.startsWith(`${path}/`),
   ),

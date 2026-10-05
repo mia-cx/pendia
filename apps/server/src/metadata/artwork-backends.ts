@@ -161,7 +161,7 @@ export async function writeArtworkOriginal(
     await directoryBackend(store.path, open, true).write(name, bytes);
     return { backend: "configured-path", storageKey: name };
   }
-  const storageKey = `${itemFolder}/.pendia/artwork/${name}`;
+  const storageKey = posix.join(itemFolder, ".pendia/artwork", name);
   const { root } = resolveStoragePath(libraryRoot, storageKey);
   // The Item folder must exist already; only .pendia/artwork is created.
   await walkStorageDirectory(root, join(root, itemFolder), false);

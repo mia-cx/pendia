@@ -9,7 +9,6 @@ const startAt = $derived.by(() => {
 });
 </script>
 
-<!-- A new Version or start point is a new session. -->
-{#key `${page.params.id}:${versionId}:${startAt}`}
+{#key page.params.id}
   <Player id={page.params.id ?? ""} {versionId} {startAt} />
 {/key}

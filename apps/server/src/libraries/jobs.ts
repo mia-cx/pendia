@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
@@ -10,14 +10,14 @@ import {
 } from "../db/schema/index.ts";
 import { createJobQueue, type Job } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
-import { groupMoviePaths } from "../mediums/movies.ts";
-import { groupShowPaths } from "../mediums/shows.ts";
 import { queueProviderFetch } from "../metadata/jobs.ts";
 import { reconcileStoredVersions } from "../stored/reconcile.ts";
 import {
+  isLibraryScan,
   libraryScanSource,
   type ScanSource,
   scanDirectory,
+  scanScope,
   scanShowDirectory,
 } from "./scan.ts";
 
@@ -47,52 +47,33 @@ export async function runScanJob(
     .where(eq(libraries.id, payload.libraryId));
   if (!library) throw new AuthError("NOT_FOUND");
   const files = source ?? (await libraryScanSource(db, library));
-  if (
-    payload.path === "." &&
-    payload.changes !== undefined &&
-    payload.changes.length > 0
-  )
-    throw new AuthError("INVALID_INPUT");
-  if (payload.path !== ".") {
+  if (!isLibraryScan(payload)) {
     const options = {
       source: files,
       changes: payload.changes,
       reconcileMissing: payload.reconcileMissing,
     };
-    if (library.medium === "movies") {
-      const result = await scanDirectory(db, library.id, payload.path, options);
-      if (result.itemId !== null) {
-        const [item] = await db
-          .select({ metadataState: items.metadataState })
-          .from(items)
-          .where(eq(items.id, result.itemId));
-        if (!item) throw new AuthError("NOT_FOUND");
-        if (item.metadataState === "pending")
-          await queueProviderFetch(db, result.itemId);
-      }
-    } else {
-      const result = await scanShowDirectory(
-        db,
-        library.id,
-        payload.path,
-        options,
-      );
+    // Every Item the directory scan wrote may need its own metadata fetch.
+    const itemIds =
+      library.medium === "movies"
+        ? (await scanDirectory(db, library.id, payload.path, options)).itemIds
+        : (await scanShowDirectory(db, library.id, payload.path, options))
+            .itemIds;
+    for (const itemId of itemIds) {
       // One fetch covers the whole Show, so a new pending Episode under a
       // matched Show queues it too.
-      if (result.itemId !== null) {
-        const [pending] = await db
-          .select({ id: items.id })
-          .from(items)
-          .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
-          .where(
-            and(
-              eq(itemAncestors.ancestorId, result.itemId),
-              eq(items.metadataState, "pending"),
-            ),
-          )
-          .limit(1);
-        if (pending !== undefined) await queueProviderFetch(db, result.itemId);
-      }
+      const [pending] = await db
+        .select({ id: items.id })
+        .from(items)
+        .innerJoin(itemAncestors, eq(itemAncestors.descendantId, items.id))
+        .where(
+          and(
+            eq(itemAncestors.ancestorId, itemId),
+            eq(items.metadataState, "pending"),
+          ),
+        )
+        .limit(1);
+      if (pending !== undefined) await queueProviderFetch(db, itemId);
     }
     await reconcileStoredVersions(db, library, payload.path);
     await publishEvent(db, {
@@ -101,12 +82,13 @@ export async function runScanJob(
     });
     return;
   }
-  const walked = (await files.walk(".", true)).map((file) => file.path);
-  const groups =
-    library.medium === "movies"
-      ? groupMoviePaths(walked)
-      : groupShowPaths(walked);
-  const paths = new Set(groups.map((group) => group.canonicalFolder));
+  const walked = await files.walk(".", true);
+  const { rules } = scanScope(library.medium);
+  const paths = new Set<string>();
+  for (const file of walked) {
+    const folder = rules.identify(file.path)?.canonicalFolder;
+    if (folder !== undefined) paths.add(folder);
+  }
   const existing = await db
     .select({ canonicalFolder: items.canonicalFolder })
     .from(items)
@@ -114,6 +96,7 @@ export async function runScanJob(
       and(
         eq(items.libraryId, library.id),
         eq(items.kind, library.medium === "movies" ? "movie" : "show"),
+        isNull(items.parentId),
       ),
     );
   for (const item of existing) paths.add(item.canonicalFolder);

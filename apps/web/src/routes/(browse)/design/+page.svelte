@@ -141,6 +141,7 @@ const artId = resource(async () => {
 let quality = $state("");
 let watched = $state(true);
 let volume = $state(65);
+let position = $state(84);
 let tab = $state("details");
 
 const versions = [
@@ -220,6 +221,23 @@ const rows = Array.from(
       <Switch.Root checked={true} disabled aria-label="Disabled toggle" />
     </div>
     <Slider.Root type="single" bind:value={volume} min={0} max={100} step={1} class="w-64" aria-label="Volume" />
+    <div class="dark scheme-dark w-96 max-w-full rounded-lg bg-black p-4">
+      <Slider.Root
+        variant="media"
+        type="single"
+        bind:value={position}
+        min={0}
+        max={180}
+        step={1}
+        aria-label="Position"
+        valueText={`${position} of 180`}
+      >
+        {#snippet track()}
+          <span class="absolute inset-y-0 bg-white/35" style="left: 10%; width: 35%"></span>
+          <span class="absolute inset-y-0 bg-white/35" style="left: 60%; width: 15%"></span>
+        {/snippet}
+      </Slider.Root>
+    </div>
     <Tabs.Root bind:value={tab} class="w-full max-w-md">
       <Tabs.List>
         <Tabs.Trigger value="details">Details</Tabs.Trigger>

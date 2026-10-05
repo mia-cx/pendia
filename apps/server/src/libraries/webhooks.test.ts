@@ -610,10 +610,10 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       }
     }));
 
-  test("changes whose scan folder is the library root reject without jobs", () =>
+  test("changes whose scan folder is the library root queue a root scan", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      await insertLibrary(db, "Movies", "/media/movies");
+      const library = await insertLibrary(db, "Movies", "/media/movies");
       const debouncer = createChangeDebouncer(db, { delayMs: 10 });
       try {
         for (const change of [
@@ -625,14 +625,16 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           },
           { kind: "add", path: "/media/movies/Alien.mkv", providerIds: {} },
         ] satisfies ChangeEvent[])
-          await expect(debouncer.submit("radarr", [change])).rejects.toThrow(
-            "Webhook path must name a folder inside the library root.",
-          );
-        await Bun.sleep(30);
-        expect(await listJobs(db, { type: "scan" })).toEqual([]);
+          await debouncer.submit("radarr", [change]);
       } finally {
         await debouncer.close();
       }
+      const jobs = await listJobs(db, { type: "scan" });
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.payload).toMatchObject({
+        libraryId: library.id,
+        path: ".",
+      });
     }));
 
   test("only a move into another Show queues its source folder", () =>
@@ -938,6 +940,97 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           ["imdb", "tt0804484", show?.id ?? null],
           ["tmdb", "106379", show?.id ?? null],
           ["tvdb", "366972", show?.id ?? null],
+        ]);
+      });
+    }));
+
+  test("a watcher change in a root-anchored Show queues a root scan that succeeds", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const root = join(dir, "Breaking Bad (2008)");
+        await mkdir(join(root, "Season 1"), { recursive: true });
+        const episode = "Season 1/Breaking Bad - S01E01.mkv";
+        await createVideoFixture(join(root, episode));
+        const library = await insertLibrary(db, "Shows", root, "shows");
+        const debouncer = createChangeDebouncer(db, { delayMs: 10 });
+        try {
+          await debouncer.submitWatched(library.rootId, [
+            { kind: "add", path: episode },
+          ]);
+        } finally {
+          await debouncer.close();
+        }
+        const jobs = await listJobs(db, { type: "scan" });
+        expect(jobs.map((job) => job.payload)).toEqual([
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: ".",
+            changes: [
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: episode,
+                providerIds: {},
+              },
+            ],
+          },
+        ]);
+
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        const claimed = await queue.claim(["scan"]);
+        if (!claimed) throw new Error("Root scan was not claimed.");
+        await registry.run(claimed);
+        const show = (await db.select().from(items)).find(
+          (row) => row.kind === "show",
+        );
+        expect(show).toMatchObject({
+          title: "Breaking Bad",
+          canonicalFolder: ".",
+          titleKey: "breaking bad (2008)",
+        });
+      });
+    }));
+
+  test("a Sonarr webhook inside a root-anchored show queues a root scan", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const root = join(dir, "Breaking Bad (2008)");
+        await mkdir(join(root, "Season 1"), { recursive: true });
+        const episode = "Season 1/Breaking Bad - S01E02.mkv";
+        await createVideoFixture(join(root, episode));
+        const library = await insertLibrary(db, "Shows", root, "shows");
+        const debouncer = createChangeDebouncer(db, { delayMs: 10 });
+        try {
+          await debouncer.submit("sonarr", [
+            {
+              kind: "add",
+              path: join(root, episode),
+              providerIds: { tvdb: "81189" },
+            },
+          ]);
+        } finally {
+          await debouncer.close();
+        }
+        const jobs = await listJobs(db, { type: "scan" });
+        expect(jobs.map((job) => job.payload)).toEqual([
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: ".",
+            changes: [
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: episode,
+                providerIds: { tvdb: "81189" },
+              },
+            ],
+          },
         ]);
       });
     }));

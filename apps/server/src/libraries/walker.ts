@@ -138,17 +138,28 @@ export const acceptsLibraryFile = (rules: ScanRules, path: string): boolean =>
   !rules.isExtra(path) &&
   !prunesDirectory(rules, posix.dirname(path));
 
-/** Walk a library subtree, yielding the files the medium's scan rules accept. */
+/**
+ * Walk a library subtree, yielding the files the medium's scan rules
+ * accept. A non-recursive walk covers the Item scope: the start folder
+ * plus every descendant directory whose Item folder is the start.
+ */
 export async function* walkLibrary(
   rootPath: string,
   rules: ScanRules,
-  options: { path?: string; recursive?: boolean } = {},
+  options: {
+    path?: string;
+    recursive?: boolean;
+    /** Called with the library-relative path of each regular file the rules reject. */
+    onSkipped?: (path: string) => void;
+  } = {},
 ): AsyncGenerator<LibraryFile> {
   const recursive = options.recursive ?? true;
   const start = await resolveEntry(rootPath, options.path ?? ".", "requested");
   if (start.stat.isFile()) {
     if (rules.identify(start.relative) && !rules.isExtra(start.relative)) {
       yield toLibraryFile(start.relative, start.stat);
+    } else {
+      options.onSkipped?.(start.relative);
     }
     return;
   }
@@ -170,7 +181,9 @@ export async function* walkLibrary(
         continue;
       }
       if (entry.isDirectory()) {
-        if (recursive && !prunesDirectory(rules, child)) {
+        const inItemScope =
+          recursive || rules.itemFolder(child) === start.relative;
+        if (inItemScope && !prunesDirectory(rules, child)) {
           const validated = await resolveEntry(rootPath, child, "entry");
           if (validated.stat.isDirectory()) {
             yield* visit(validated.absolute, validated.relative);
@@ -182,6 +195,7 @@ export async function* walkLibrary(
         continue;
       }
       if (!rules.identify(child) || rules.isExtra(child)) {
+        options.onSkipped?.(child);
         continue;
       }
       yield await readLibraryFile(rootPath, child);

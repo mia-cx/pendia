@@ -58,17 +58,14 @@ async function clickPlay(browser: string, url: string) {
   );
   const wsUrl = await new Promise<string>((resolve, reject) => {
     let buffer = "";
-    const onData = (chunk: ReadableStreamDefaultReadResult<Uint8Array>) => {
-      buffer += new TextDecoder().decode(chunk.value);
-      const match = buffer.match(/ws:\/\/\S+/);
-      if (match) resolve(match[0]);
-    };
     const reader = proc.stderr.getReader();
     const pump = async () => {
       while (true) {
         const chunk = await reader.read();
         if (chunk.done) break;
-        onData(chunk);
+        buffer += new TextDecoder().decode(chunk.value);
+        const match = buffer.match(/ws:\/\/\S+/);
+        if (match) resolve(match[0]);
       }
     };
     void pump();

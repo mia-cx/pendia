@@ -1,6 +1,6 @@
 <script lang="ts">
-import { cn } from "$lib/utils.ts";
 import { type ScanStatus, scanStartedAt, scanState } from "$lib/scan.ts";
+import { cn } from "$lib/utils.ts";
 
 /** A library's scan state as a dot and label; `withTime` adds a "Last scan" line. */
 const {

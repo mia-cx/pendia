@@ -65,15 +65,10 @@ let folderFailure = $state<FailureShape | undefined>(undefined);
 async function sendRoots(sent: RootDraft[]) {
   const saved = library.data?.roots;
   if (!saved) return;
-  try {
-    const answer = await client.libraries.update({ id, roots: sent });
-    folderFailure = undefined;
-    library.set(answer);
-    return { answer, queued: queuesScan(saved, sent) };
-  } catch (error) {
-    // A refusal shows inside the open browser; the rows stay clean.
-    throw error;
-  }
+  const answer = await client.libraries.update({ id, roots: sent });
+  folderFailure = undefined;
+  library.set(answer);
+  return { answer, queued: queuesScan(saved, sent) };
 }
 
 async function addFolder(path: string) {

@@ -53,40 +53,43 @@ const label = $derived(
       {caption}
       sizes="(max-width: 640px) 33vw, 180px"
     >
-      {#if fraction !== null && posterId !== null}
-        <span
-          class="absolute inset-x-0 bottom-0 h-[30%] bg-linear-to-t from-black/60 to-transparent transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-0 group-focus-visible:opacity-0"
-          aria-hidden="true"
-        ></span>
-      {/if}
-      {#if posterId !== null}
-        <span
-          aria-hidden="true"
-          class="absolute inset-x-0 bottom-0 flex h-[45%] flex-col justify-end gap-0.5 bg-linear-to-t from-black/75 via-black/40 to-transparent p-2.5 {fraction !==
-          null
-            ? 'pb-5'
-            : ''} opacity-0 transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-100 group-focus-visible:opacity-100"
-        >
-          <span class="truncate text-subheadline font-semibold text-white"
-            >{posterTitle}</span
-          >
-          {#if caption !== null}
-            <span class="text-caption-1 text-white/70">{caption}</span>
-          {/if}
-        </span>
-      {/if}
-      {#if fraction !== null}
-        <span
-          class="absolute inset-x-2 bottom-2 h-1 overflow-hidden rounded-full {posterId !==
-          null
-            ? 'bg-white/35'
-            : 'bg-fill-strong'}"
-          aria-hidden="true"
-        >
-          <span class="block h-full bg-tint" style:width={`${fraction * 100}%`}
+      {#snippet children(showsImage: boolean)}
+        {#if fraction !== null && showsImage}
+          <span
+            class="absolute inset-x-0 bottom-0 h-[30%] bg-linear-to-t from-black/60 to-transparent transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-0 group-focus-visible:opacity-0"
+            aria-hidden="true"
           ></span>
-        </span>
-      {/if}
+        {/if}
+        {#if showsImage}
+          <span
+            aria-hidden="true"
+            class="absolute inset-x-0 bottom-0 flex h-[45%] flex-col justify-end gap-0.5 bg-linear-to-t from-black/75 via-black/40 to-transparent p-2.5 {fraction !==
+            null
+              ? 'pb-5'
+              : ''} opacity-0 transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-100 group-focus-visible:opacity-100"
+          >
+            <span class="truncate text-subheadline font-semibold text-white"
+              >{posterTitle}</span
+            >
+            {#if caption !== null}
+              <span class="text-caption-1 text-white/70">{caption}</span>
+            {/if}
+          </span>
+        {/if}
+        {#if fraction !== null}
+          <span
+            class="absolute inset-x-2 bottom-2 h-1 overflow-hidden rounded-full {showsImage
+              ? 'bg-white/35'
+              : 'bg-fill-strong'}"
+            aria-hidden="true"
+          >
+            <span
+              class="block h-full bg-tint"
+              style:width={`${fraction * 100}%`}
+            ></span>
+          </span>
+        {/if}
+      {/snippet}
     </Artwork>
   </span>
   {#if card.kind === "season"}

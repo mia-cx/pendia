@@ -9,7 +9,9 @@ import { setupAdmin } from "../auth/accounts.ts";
 import { sessionCookieName } from "../auth/http.ts";
 import { login } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
+import { artwork } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertItem } from "../db/tree.ts";
 import { startPendia } from "../index.ts";
 import { addRoot, insertLibraries } from "../libraries/testing.ts";
 import { withFolder } from "../plugins/testing.ts";
@@ -470,6 +472,107 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             }
           }),
         ),
+      60_000,
+    );
+
+    test(
+      "a failed poster image falls back to the printed title without the hover overlay",
+      () =>
+        withDatabase(async (db, url) => {
+          if (browser === undefined) throw new Error("Expected a browser.");
+          await migrateDatabase(db);
+          await setupAdmin(db, {
+            username: "admin",
+            password: "admin-pass",
+          });
+          const { token } = await login(
+            db,
+            {
+              username: "admin",
+              password: "admin-pass",
+              clientName: "Pendia Web",
+              deviceId: "libraries-browser-3",
+              deviceName: "Chromium",
+            },
+            "127.0.0.1",
+          );
+          const [library] = await insertLibraries(db, {
+            name: "Movies",
+            medium: "movies",
+            rootPath: "/srv/movies",
+          });
+          if (library === undefined) throw new Error("Fixture missing.");
+          const item = await insertItem(db, {
+            libraryId: library.id,
+            kind: "movie",
+            title: "Poster Fails",
+            year: 2001,
+            canonicalFolder: "Poster Fails",
+            extension: {},
+          });
+          await db.insert(artwork).values({
+            itemId: item.id,
+            type: "poster",
+            backend: "colocated",
+            storageKey: "Poster Fails/poster.jpg",
+            selected: true,
+          });
+          const server = await startPendia("api", {
+            databaseUrl: url,
+            port: 0,
+          });
+          const base = `http://127.0.0.1:${server.apiServer?.port}`;
+          const page = await openPage();
+          try {
+            // Every artwork image fails, so the card must render its fallback.
+            await page.send("Fetch.enable", {
+              patterns: [
+                { urlPattern: "*/api/artwork/*", requestStage: "Request" },
+              ],
+            });
+            page.on("Fetch.requestPaused", (p: { requestId: string }) =>
+              page.send("Fetch.failRequest", {
+                requestId: p.requestId,
+                errorReason: "ConnectionFailed",
+              }),
+            );
+            await signIn(page, base, token, "/movies");
+            const card = `document.querySelector('a[aria-label^="Poster Fails"]')`;
+            await page.waitFor(
+              `${card}?.querySelector('.artwork-fallback .text-title-3')?.textContent.includes('Poster Fails')`,
+            );
+
+            // Keyboard-focus the card; the overlay must not exist at all.
+            for (let i = 0; i < 50; i++) {
+              await page.send("Input.dispatchKeyEvent", {
+                type: "keyDown",
+                key: "Tab",
+                code: "Tab",
+                windowsVirtualKeyCode: 9,
+              });
+              await page.send("Input.dispatchKeyEvent", {
+                type: "keyUp",
+                key: "Tab",
+                code: "Tab",
+                windowsVirtualKeyCode: 9,
+              });
+              if (await page.eval(`document.activeElement === ${card}`)) break;
+              await Bun.sleep(60);
+            }
+            expect(
+              await page.eval<boolean>(`document.activeElement === ${card}`),
+            ).toBe(true);
+            await Bun.sleep(600);
+            expect(
+              await page.eval<boolean>(
+                `[...${card}.querySelectorAll('span')].some(s => s.className.includes('h-[45%]'))`,
+              ),
+            ).toBe(false);
+          } finally {
+            await page.close();
+            await server.stop();
+          }
+        }),
       60_000,
     );
   },

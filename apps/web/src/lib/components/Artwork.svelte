@@ -31,7 +31,8 @@ const {
   caption?: string | null;
   /** Whether the fallback prints the title; landscape cards draw their own. */
   fallbackTitle?: boolean;
-  children?: Snippet;
+  /** Called with whether the image is actually showing (it exists and hasn't failed). */
+  children?: Snippet<[boolean]>;
 } = $props();
 
 let loaded = $state(false);
@@ -39,6 +40,7 @@ let failed = $state(false);
 const Icon = $derived(kind === "movie" ? ClapperboardIcon : TvIcon);
 const widths = $derived(shape === "poster" ? posterWidths : landscapeWidths);
 const showsTitle = $derived(shape === "poster" && fallbackTitle);
+const showsImage = $derived(artworkId !== null && !failed);
 </script>
 
 <span
@@ -47,7 +49,7 @@ const showsTitle = $derived(shape === "poster" && fallbackTitle);
     ? 'aspect-[2/3]'
     : 'aspect-video'}"
 >
-  {#if artworkId && !failed}
+  {#if artworkId !== null && !failed}
     <img
       src={artworkUrl(artworkId, widths[0] ?? 320)}
       srcset={artworkSrcset(artworkId, widths)}
@@ -83,5 +85,5 @@ const showsTitle = $derived(shape === "poster" && fallbackTitle);
       {/if}
     </span>
   {/if}
-  {@render children?.()}
+  {@render children?.(showsImage)}
 </span>

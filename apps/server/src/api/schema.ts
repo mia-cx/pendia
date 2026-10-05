@@ -19,9 +19,12 @@ export const ItemCard = Schema.Struct({
   posterArtworkId: Schema.NullOr(Schema.UUID),
 });
 
-/** A card that also places a Season or Episode: its numbers and owning Show. */
+/** A card that also places a Season or Episode, with its owning Show and the artwork heroes and landscape cards draw. */
 export const BrowseCard = Schema.Struct({
   ...ItemCard.fields,
+  backdropArtworkId: Schema.NullOr(Schema.UUID),
+  logoArtworkId: Schema.NullOr(Schema.UUID),
+  thumbArtworkId: Schema.NullOr(Schema.UUID),
   parentId: Schema.NullOr(Schema.UUID),
   seasonNumber: Schema.NullOr(Schema.Int),
   episodeNumber: Schema.NullOr(Schema.Int),
@@ -31,6 +34,8 @@ export const BrowseCard = Schema.Struct({
       id: Schema.UUID,
       title: Schema.String,
       posterArtworkId: Schema.NullOr(Schema.UUID),
+      backdropArtworkId: Schema.NullOr(Schema.UUID),
+      logoArtworkId: Schema.NullOr(Schema.UUID),
     }),
   ),
 });
@@ -61,7 +66,6 @@ export const ItemDetail = Schema.Struct({
   tags: Schema.Array(Schema.String),
   metadataState: Schema.Literal("pending", "matched", "unmatched"),
   updatedAt: Schema.String,
-  backdropArtworkId: Schema.NullOr(Schema.UUID),
   credits: Schema.Array(
     Schema.Struct({
       contributorId: Schema.UUID,

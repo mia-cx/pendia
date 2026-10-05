@@ -67,6 +67,14 @@ const cardFields = {
   posterArtworkId: selectedArtwork("items", "poster"),
 };
 
+// Hero and landscape artwork sit on browse cards: detail composes a card, so
+// the fields live here rather than in detailFields.
+const heroFields = {
+  backdropArtworkId: selectedArtwork("items", "backdrop"),
+  logoArtworkId: selectedArtwork("items", "logo"),
+  thumbArtworkId: selectedArtwork("items", "thumb"),
+};
+
 // A Season names its Show directly; an Episode reaches it through its Season.
 const ownSeason = alias(seasons, "own_season");
 const episodeSeason = alias(seasons, "episode_season");
@@ -74,6 +82,7 @@ const showItem = alias(items, "show_item");
 
 const browseFields = {
   ...cardFields,
+  ...heroFields,
   parentId: items.parentId,
   seasonNumber: sql<
     number | null
@@ -83,6 +92,8 @@ const browseFields = {
   showId: showItem.id,
   showTitle: showItem.title,
   showPosterArtworkId: selectedArtwork("show_item", "poster"),
+  showBackdropArtworkId: selectedArtwork("show_item", "backdrop"),
+  showLogoArtworkId: selectedArtwork("show_item", "logo"),
 };
 
 /** Reads browse cards: item cards with their numbers and owning Show. */
@@ -108,17 +119,28 @@ export async function browseCards(
     .where(where)
     .orderBy(...orderBy);
   const rows = await (limit === undefined ? query : query.limit(limit));
-  return rows.map(({ showId, showTitle, showPosterArtworkId, ...card }) => ({
-    ...card,
-    show:
-      showId === null || showTitle === null
-        ? null
-        : {
-            id: showId,
-            title: showTitle,
-            posterArtworkId: showPosterArtworkId,
-          },
-  }));
+  return rows.map(
+    ({
+      showId,
+      showTitle,
+      showPosterArtworkId,
+      showBackdropArtworkId,
+      showLogoArtworkId,
+      ...card
+    }) => ({
+      ...card,
+      show:
+        showId === null || showTitle === null
+          ? null
+          : {
+              id: showId,
+              title: showTitle,
+              posterArtworkId: showPosterArtworkId,
+              backdropArtworkId: showBackdropArtworkId,
+              logoArtworkId: showLogoArtworkId,
+            },
+    }),
+  );
 }
 
 /** Reads browse cards for ids the caller may already view, in the order given. */
@@ -136,7 +158,6 @@ const detailFields = {
   tags: items.tags,
   metadataState: items.metadataState,
   updatedAt: instantText(items.updatedAt),
-  backdropArtworkId: selectedArtwork("items", "backdrop"),
 };
 
 // Each sort owns its order, its keyset predicate and its cursor encoding.

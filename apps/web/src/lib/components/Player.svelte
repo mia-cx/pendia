@@ -20,7 +20,7 @@ import PlayerSettings from "$lib/components/PlayerSettings.svelte";
 import Scrubber from "$lib/components/Scrubber.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import * as Slider from "$lib/components/ui/slider/index.ts";
-import { formatPosition } from "$lib/playback.ts";
+import { formatPosition, pickVersion } from "$lib/playback.ts";
 import { play } from "$lib/player.ts";
 import { createPlayer, type PlayerState } from "$lib/player-state.ts";
 import { resource } from "$lib/resource.svelte.ts";
@@ -41,7 +41,16 @@ let {
   player?: ReturnType<typeof createPlayer>;
 } = $props();
 
-const item = resource(() => client.items.get({ id }));
+// The Version choice is part of the load: a link that names no Version plays
+// the one the viewer's progress is on, so the session waits for both reads.
+const item = resource(async () => {
+  const detail = await client.items.get({ id });
+  // A failed read still plays the first Version.
+  const progress = await client.playback
+    .getProgress({ itemId: detail.id })
+    .catch(() => null);
+  return { detail, progressVersionId: progress?.versionId ?? null };
+});
 
 let video = $state<HTMLVideoElement>();
 let root = $state<HTMLElement>();
@@ -58,7 +67,12 @@ let tapTimer: ReturnType<typeof setTimeout> | undefined;
 let cameFrom: string | undefined;
 let destroyed = false;
 
-const detail = $derived(item.data);
+const detail = $derived(item.data?.detail);
+const version = $derived(
+  detail === undefined
+    ? undefined
+    : pickVersion(detail.versions, versionId, item.data?.progressVersionId),
+);
 const back = $derived(detail === undefined ? "/" : (itemHref(detail) ?? "/"));
 const context = $derived(
   detail?.kind === "episode" && detail.show !== null
@@ -74,9 +88,7 @@ $effect(() => {
   if (detail.versions.length === 0) return;
   // Constructed once; URL Version changes never remount the player.
   if (player !== undefined) return;
-  const initial =
-    detail.versions.find((version) => version.id === versionId) ??
-    detail.versions[0];
+  const initial = version;
   if (initial === undefined) return;
   const media = video;
   const detailNow = detail;

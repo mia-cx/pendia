@@ -4,7 +4,7 @@ import { onDestroy, onMount } from "svelte";
 import { afterNavigate, beforeNavigate, goto } from "$app/navigation";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
-import type { ItemCard } from "$lib/browse.ts";
+import { groupByKind, type ItemCard } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
 import PosterCard from "$lib/components/PosterCard.svelte";
 import PosterGrid from "$lib/components/PosterGrid.svelte";
@@ -16,8 +16,9 @@ const query = $derived((page.url.searchParams.get("q") ?? "").trim());
 let results = $state<{ query: string; cards: ItemCard[] } | undefined>(
   undefined,
 );
-// Results for an older query stay hidden until the current one answers.
-const shown = $derived(results?.query === query ? results : undefined);
+// The last answered results stay visible while the next query loads.
+const shown = $derived(query === "" ? undefined : results);
+const busy = $derived(shown !== undefined && shown.query !== query);
 let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
 let generation = 0;
 
@@ -39,7 +40,7 @@ $effect(() => {
   );
 });
 
-const searchDelayMs = 250;
+const searchDelayMs = 150;
 let field = $state("");
 let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -108,17 +109,41 @@ function submit(event: SubmitEvent) {
     />
   </form>
 
+  <p role="status" class="sr-only">
+    {#if shown && shown.cards.length === 1}
+      1 result for “{shown.query}”
+    {:else if shown && shown.cards.length > 1}
+      {shown.cards.length} results for “{shown.query}”
+    {:else if shown && shown.cards.length === 0}
+      No titles match “{shown.query}”
+    {/if}
+  </p>
+
   {#if failure}
     <Failure {failure} />
   {:else if shown?.cards.length === 0}
-    <p class="text-subheadline text-label-secondary" role="status">
+    <p class="text-subheadline text-label-secondary">
       No titles match “{shown.query}”.
     </p>
   {:else if shown}
-    <PosterGrid>
-      {#each shown.cards as card (card.id)}
-        <li><PosterCard {card} /></li>
+    <div
+      class="flex flex-col gap-10 transition-opacity duration-(--duration-fast) {busy
+        ? 'opacity-60'
+        : ''}"
+      aria-busy={busy}
+    >
+      {#each groupByKind(shown.cards) as group (group.kind)}
+        <section aria-labelledby="search-{group.kind}">
+          <h2 id="search-{group.kind}" class="mb-3 text-title-2">
+            {group.heading}
+          </h2>
+          <PosterGrid>
+            {#each group.cards as card (card.id)}
+              <li><PosterCard {card} /></li>
+            {/each}
+          </PosterGrid>
+        </section>
       {/each}
-    </PosterGrid>
+    </div>
   {/if}
 </div>

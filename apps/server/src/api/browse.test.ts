@@ -226,19 +226,33 @@ async function seedShow(db: Database, libraryId: string) {
       extension: { episodeNumber },
     });
   }
-  const [poster] = await db
+  const [poster, backdrop, logo] = await db
+    .insert(artwork)
+    .values(
+      ["poster", "backdrop", "logo"].map((type) => ({
+        itemId: show.id,
+        type,
+        backend: "colocated" as const,
+        storageKey: `Severance/${type}.jpg`,
+        selected: true,
+      })),
+    )
+    .returning();
+  const first = episodes[1];
+  if (!first || !poster || !backdrop || !logo)
+    throw new Error("Seeding returned no row.");
+  const [thumb] = await db
     .insert(artwork)
     .values({
-      itemId: show.id,
-      type: "poster",
+      itemId: first.id,
+      type: "thumb",
       backend: "colocated",
-      storageKey: "Severance/poster.jpg",
+      storageKey: "Severance/thumb.jpg",
       selected: true,
     })
     .returning();
-  const first = episodes[1];
-  if (!first || !poster) throw new Error("Seeding returned no row.");
-  return { show, seasonOne, seasonTwo, first, poster };
+  if (!thumb) throw new Error("Seeding returned no row.");
+  return { show, seasonOne, seasonTwo, first, poster, backdrop, logo, thumb };
 }
 
 describe.skipIf(!databaseUrl)("browse details", () => {
@@ -316,10 +330,13 @@ describe.skipIf(!databaseUrl)("browse details", () => {
       expect(season.children[0]).toMatchObject({
         parentId: seeded.seasonOne.id,
         seasonNumber: 1,
+        thumbArtworkId: seeded.thumb.id,
         show: {
           id: seeded.show.id,
           title: "Severance",
           posterArtworkId: seeded.poster.id,
+          backdropArtworkId: seeded.backdrop.id,
+          logoArtworkId: seeded.logo.id,
         },
       });
 
@@ -329,7 +346,12 @@ describe.skipIf(!databaseUrl)("browse details", () => {
         seasonNumber: 1,
         episodeNumber: 1,
         episodeEndNumber: null,
-        show: { id: seeded.show.id },
+        thumbArtworkId: seeded.thumb.id,
+        show: {
+          id: seeded.show.id,
+          backdropArtworkId: seeded.backdrop.id,
+          logoArtworkId: seeded.logo.id,
+        },
         children: [],
       });
       expect(episode.credits).toEqual([
@@ -420,6 +442,20 @@ describe.skipIf(!databaseUrl)("browse home", () => {
         })
         .returning();
       if (!version) throw new Error("Version insert returned no row.");
+      const [arrivalBackdrop, arrivalLogo] = await db
+        .insert(artwork)
+        .values(
+          ["backdrop", "logo"].map((type) => ({
+            itemId: arrival.id,
+            type,
+            backend: "colocated" as const,
+            storageKey: `Arrival/${type}.jpg`,
+            selected: true,
+          })),
+        )
+        .returning();
+      if (!arrivalBackdrop || !arrivalLogo)
+        throw new Error("Artwork insert returned no row.");
       await db.insert(progress).values([
         {
           userId: viewer.id,
@@ -451,7 +487,12 @@ describe.skipIf(!databaseUrl)("browse home", () => {
       expect(resume?.title).toBe("Continue watching");
       expect(resume?.entries).toEqual([
         {
-          item: expect.objectContaining({ id: arrival.id, title: "Arrival" }),
+          item: expect.objectContaining({
+            id: arrival.id,
+            title: "Arrival",
+            backdropArtworkId: arrivalBackdrop.id,
+            logoArtworkId: arrivalLogo.id,
+          }),
           progress: { positionSeconds: 600, durationSeconds: 7000 },
         },
       ]);

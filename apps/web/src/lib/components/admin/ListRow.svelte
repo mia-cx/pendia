@@ -37,9 +37,9 @@ const rowClass =
     >
     {#if caption}
       <span
-        class="block truncate text-footnote {tone === 'destructive'
-          ? 'text-destructive'
-          : 'text-label-secondary'}">{caption}</span
+        class="block text-footnote {tone === 'destructive'
+          ? 'break-words text-destructive'
+          : 'truncate text-label-secondary'}">{caption}</span
       >
     {/if}
   </span>

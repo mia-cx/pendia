@@ -66,6 +66,7 @@ export const DetailChild = Schema.Struct({
     Schema.Struct({
       positionSeconds: Schema.Number,
       completed: Schema.Boolean,
+      updatedAt: Schema.String,
     }),
   ),
 });

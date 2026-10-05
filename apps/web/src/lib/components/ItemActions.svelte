@@ -20,6 +20,7 @@ import * as Popover from "$lib/components/ui/popover/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
 import { followLibrary } from "$lib/events.ts";
 import { pickVersion } from "$lib/playback.ts";
+import { createRatingWrites } from "$lib/rating.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
 const {
@@ -70,10 +71,12 @@ const upNext = $derived.by<DetailChild | undefined>(() => {
 
 const marks = resource(() => client.marks.get({ itemId: detail.id }));
 let favourite = $state<boolean | undefined>(undefined);
-let rating = $state<number | null | undefined>(undefined);
+const ratingWrites = createRatingWrites((next) =>
+  client.marks.setRating({ itemId: detail.id, rating: next }),
+);
 const favoured = $derived(favourite ?? marks.data?.favourite ?? false);
 const current = $derived(
-  rating === undefined ? (marks.data?.rating ?? 0) : (rating ?? 0),
+  ($ratingWrites === undefined ? marks.data?.rating : $ratingWrites) ?? 0,
 );
 const stars = $derived(Math.round(current / 2));
 const rated = $derived(stars > 0);
@@ -96,25 +99,15 @@ const preview = $derived(hovered > 0 ? hovered : stars);
 const tabStop = $derived(focusStar > 0 ? focusStar : Math.max(1, stars));
 
 async function pick(n: number) {
-  rating = n * 2;
   ratingOpen = false;
-  try {
-    await client.marks.setRating({ itemId: detail.id, rating: n * 2 });
-  } catch {
-    rating = undefined;
+  if (!(await ratingWrites.write(n * 2)))
     toast.error("Couldn't save the rating");
-  }
 }
 
 async function clearRating() {
-  rating = null;
   ratingOpen = false;
-  try {
-    await client.marks.setRating({ itemId: detail.id, rating: null });
-  } catch {
-    rating = undefined;
+  if (!(await ratingWrites.write(null)))
     toast.error("Couldn't clear the rating");
-  }
 }
 
 function moveStars(event: KeyboardEvent) {

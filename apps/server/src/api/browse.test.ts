@@ -445,6 +445,7 @@ describe.skipIf(!databaseUrl)("browse details", () => {
         itemId: seeded.first.id,
         format: "video" as const,
         positionSeconds: 900,
+        updatedAt: new Date("2026-01-02T03:04:05.678Z"),
       });
       const caller = await authenticate(db, token);
 
@@ -455,7 +456,11 @@ describe.skipIf(!databaseUrl)("browse details", () => {
       expect(first).toMatchObject({
         overview: "The first episode.",
         durationSeconds: 2700,
-        progress: { positionSeconds: 900, completed: false },
+        progress: {
+          positionSeconds: 900,
+          completed: false,
+          updatedAt: "2026-01-02T03:04:05.678000Z",
+        },
       });
       expect(secondChild).toMatchObject({
         overview: null,

@@ -200,20 +200,26 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${byteUnits[unit]}`;
 }
 
-/** The Episode to play next, in watch order: the last one touched if unfinished, else the first unfinished after it, else the first. */
+/** The Episode to play next, in watch order: the most recently played one if unfinished, else the first unfinished after it, else the first unfinished, else the first. */
 export function upNextEpisode(
   episodes: readonly DetailChild[],
 ): DetailChild | undefined {
   if (episodes.length === 0) return undefined;
   let last = -1;
+  let latest = "";
   episodes.forEach((episode, index) => {
-    if (episode.progress !== null) last = index;
+    const played = episode.progress?.updatedAt;
+    if (played !== undefined && played >= latest) {
+      latest = played;
+      last = index;
+    }
   });
   if (last === -1) return episodes[0];
   const current = episodes[last];
   if (!current.progress?.completed) return current;
   return (
     episodes.slice(last + 1).find((episode) => !episode.progress?.completed) ??
+    episodes.find((episode) => !episode.progress?.completed) ??
     episodes[0]
   );
 }

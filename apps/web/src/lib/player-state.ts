@@ -43,7 +43,7 @@ export type Hold = "menu" | "focus" | "pointer";
 
 export type PlayerState = {
   versionId: string;
-  /** Not paused: the viewer wants it playing. */
+  /** The media is playing. */
   playing: boolean;
   ended: boolean;
   /** Waiting for data, or a session starting or restarting. */
@@ -117,6 +117,11 @@ export function createPlayer(options: {
   let closed = false;
   let suspended = false;
   let suspendedAt: number | null = null;
+  let suspendedPlaying = false;
+  /** The viewer's play intent, set only by real play/pause/ended events; teardown resets media.paused silently. */
+  let wantsPlaying = false;
+  /** Bumped per session; a superseded session's callbacks no-op. */
+  let generation = 0;
   /** During a restart the media unloads; position reports pin to `at`. */
   let positionHold: number | null = null;
   let hideCancel: (() => void) | undefined;
@@ -184,16 +189,26 @@ export function createPlayer(options: {
     nextStreams: StreamChoice,
     paused: boolean,
   ) {
+    const mine = ++generation;
     session = open({
       versionId,
       startAt,
       streams: nextStreams,
       paused,
       onNotice: (notice) => {
-        patch({ notice, buffering: false });
+        if (mine !== generation) return;
+        patch({
+          notice,
+          buffering: false,
+          switching: false,
+          playing: !media.paused,
+        });
         settleControls();
       },
-      onTracks: (tracks) => patch({ tracks }),
+      onTracks: (tracks) => {
+        if (mine !== generation) return;
+        patch({ tracks, switching: false });
+      },
     });
   }
 
@@ -208,10 +223,17 @@ export function createPlayer(options: {
   }
 
   const listeners: [string, () => void][] = [
-    ["play", () => patch({ playing: true, ended: false })],
+    [
+      "play",
+      () => {
+        wantsPlaying = true;
+        patch({ playing: true, ended: false });
+      },
+    ],
     [
       "pause",
       () => {
+        wantsPlaying = false;
         patch({ playing: false, buffering: false });
         settleControls();
       },
@@ -219,6 +241,7 @@ export function createPlayer(options: {
     [
       "ended",
       () => {
+        wantsPlaying = false;
         // The media may end short of the metadata duration; release the hold.
         positionHold = null;
         patch({
@@ -260,12 +283,13 @@ export function createPlayer(options: {
     nextStreams: StreamChoice,
   ): Promise<void> {
     if (current.switching || closed || suspended) return;
+    const changingVersion = versionId !== current.versionId;
     const target =
       options.versions.find((version) => version.id === versionId)
         ?.durationSeconds ?? 0;
     const now = positionHold ?? media.currentTime;
     const at = target > 0 ? Math.min(now, target) : now;
-    const paused = media.paused;
+    const paused = !wantsPlaying;
     positionHold = at;
     patch({
       switching: true,
@@ -273,12 +297,14 @@ export function createPlayer(options: {
       notice: undefined,
       versionId,
       position: at,
+      // A different Version brings different Streams; the old ones are invalid.
+      tracks: changingVersion ? undefined : current.tracks,
     });
     settleControls();
     await session?.close();
     if (closed) return;
     openSession(versionId, at, nextStreams, paused);
-    patch({ switching: false, duration: versionDuration() });
+    patch({ duration: versionDuration() });
     settleControls();
   }
 
@@ -397,15 +423,23 @@ export function createPlayer(options: {
       if (suspended || closed) return;
       suspended = true;
       suspendedAt = positionHold ?? media.currentTime;
+      // Teardown may queue a `pause`; the intent is read before it.
+      suspendedPlaying = wantsPlaying;
       const closing = session;
       session = undefined;
+      generation += 1;
       await closing?.close();
+      // Closing unloads the media without a `pause` event; reconcile the store.
+      if (!closed) {
+        patch({ playing: !media.paused, buffering: false });
+        settleControls();
+      }
     },
     /** pageshow from the back/forward cache: reopens where it stopped. */
     resume() {
       if (!suspended || closed) return;
       suspended = false;
-      openSession(current.versionId, suspendedAt, streams, media.paused);
+      openSession(current.versionId, suspendedAt, streams, !suspendedPlaying);
       settleControls();
     },
     /** Stops the session, media listeners and the timer. Safe to call twice. */
@@ -417,6 +451,7 @@ export function createPlayer(options: {
         media.removeEventListener(type, listener);
       const closing = session;
       session = undefined;
+      generation += 1;
       await closing?.close();
     },
   };

@@ -295,12 +295,12 @@
     linear-gradient(
       160deg,
       light-dark(
-        oklch(93% 0.035 var(--fallback-hue, 0deg)),
-        oklch(36% 0.06 var(--fallback-hue, 0deg))
+        oklch(93% 0.035 var(--fallback-hue, 0)),
+        oklch(36% 0.06 var(--fallback-hue, 0))
       ),
       light-dark(
-        oklch(85% 0.05 calc(var(--fallback-hue, 0deg) + 35)),
-        oklch(22% 0.045 calc(var(--fallback-hue, 0deg) + 35))
+        oklch(85% 0.05 calc(var(--fallback-hue, 0) + 35)),
+        oklch(22% 0.045 calc(var(--fallback-hue, 0) + 35))
       )
     );
 
@@ -314,12 +314,12 @@
       linear-gradient(
         160deg,
         light-dark(
-          oklch(93% 0 var(--fallback-hue, 0deg)),
-          oklch(36% 0 var(--fallback-hue, 0deg))
+          oklch(93% 0 var(--fallback-hue, 0)),
+          oklch(36% 0 var(--fallback-hue, 0))
         ),
         light-dark(
-          oklch(85% 0 var(--fallback-hue, 0deg)),
-          oklch(22% 0 var(--fallback-hue, 0deg))
+          oklch(85% 0 var(--fallback-hue, 0)),
+          oklch(22% 0 var(--fallback-hue, 0))
         )
       );
   }

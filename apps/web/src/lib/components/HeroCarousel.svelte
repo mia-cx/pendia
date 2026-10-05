@@ -143,7 +143,7 @@ const multiple = $derived(slides.length > 1);
       type="button"
       aria-label="Previous"
       onclick={() => goTo(current - 1)}
-      class="absolute top-1/2 left-[calc(var(--shell-start)-var(--gutter)+0.5rem)] hidden size-11 -translate-y-1/2 items-center justify-center text-white/75 transition-colors duration-(--duration-quick) hover:text-white pointer-fine:flex"
+      class="absolute top-1/2 left-[calc(var(--shell-start)-var(--gutter)+0.5rem)] hidden size-11 -translate-y-1/2 items-center justify-center text-white/75 transition-colors duration-(--duration-quick) hover:text-white lg:pointer-fine:flex"
     >
       <ChevronLeftIcon class="size-9" stroke-width="1.25" />
     </button>
@@ -151,7 +151,7 @@ const multiple = $derived(slides.length > 1);
       type="button"
       aria-label="Next"
       onclick={() => goTo(current + 1)}
-      class="absolute top-1/2 right-3 hidden size-11 -translate-y-1/2 items-center justify-center text-white/75 transition-colors duration-(--duration-quick) hover:text-white pointer-fine:flex"
+      class="absolute top-1/2 right-3 hidden size-11 -translate-y-1/2 items-center justify-center text-white/75 transition-colors duration-(--duration-quick) hover:text-white lg:pointer-fine:flex"
     >
       <ChevronRightIcon class="size-9" stroke-width="1.25" />
     </button>

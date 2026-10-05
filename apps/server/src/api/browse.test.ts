@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createORPCClient, ORPCError } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { authenticate, createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
@@ -11,6 +11,7 @@ import {
   artwork,
   contributors,
   credits,
+  episodes,
   items,
   libraryAccess,
   progress,
@@ -388,6 +389,88 @@ describe.skipIf(!databaseUrl)("browse details", () => {
         format: "video",
         durationSeconds: 3300,
         bytes: 5_000_000_000,
+      });
+    }));
+
+  test("a season's children carry overview, runtime and the caller's progress", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { viewer, token } = await seedViewer(db);
+      const library = await addLibrary(db, "Shows", "shows");
+      const seeded = await seedShow(db, library.id);
+      const episodeRows = await db
+        .select({ id: episodes.itemId, number: episodes.episodeNumber })
+        .from(episodes)
+        .orderBy(episodes.episodeNumber);
+      const second = episodeRows[1];
+      const third = episodeRows[2];
+      if (episodeRows.length !== 3 || !second || !third)
+        throw new Error("Expected three episodes.");
+      await db
+        .update(items)
+        .set({ overview: "The first episode." })
+        .where(eq(items.id, seeded.first.id));
+      await db.insert(versions).values([
+        // The later label sorts second; only the first wins the runtime.
+        {
+          itemId: seeded.first.id,
+          itemKind: "episode" as const,
+          libraryId: library.id,
+          label: "B Extended",
+          format: "video" as const,
+          bytes: 9_000_000_000n,
+          durationSeconds: 4000,
+        },
+        {
+          itemId: seeded.first.id,
+          itemKind: "episode" as const,
+          libraryId: library.id,
+          label: "A Broadcast",
+          format: "video" as const,
+          bytes: 5_000_000_000n,
+          durationSeconds: 2700,
+        },
+        {
+          itemId: second.id,
+          itemKind: "episode" as const,
+          libraryId: library.id,
+          label: "Broadcast",
+          format: "video" as const,
+          bytes: 5_000_000_000n,
+          durationSeconds: 2400,
+        },
+      ]);
+      await db.insert(progress).values({
+        userId: viewer.id,
+        itemId: seeded.first.id,
+        format: "video" as const,
+        positionSeconds: 900,
+        updatedAt: new Date("2026-01-02T03:04:05.678Z"),
+      });
+      const caller = await authenticate(db, token);
+
+      const season = await runApi(
+        getItemDetail(db, caller, seeded.seasonOne.id),
+      );
+      const [first, secondChild, thirdChild] = season.children;
+      expect(first).toMatchObject({
+        overview: "The first episode.",
+        durationSeconds: 2700,
+        progress: {
+          positionSeconds: 900,
+          completed: false,
+          updatedAt: "2026-01-02T03:04:05.678000Z",
+        },
+      });
+      expect(secondChild).toMatchObject({
+        overview: null,
+        durationSeconds: 2400,
+        progress: null,
+      });
+      expect(thirdChild).toMatchObject({
+        overview: null,
+        durationSeconds: null,
+        progress: null,
       });
     }));
 

@@ -2,6 +2,8 @@
 import { client } from "$lib/api.ts";
 import type { ItemDetail } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import * as Select from "$lib/components/ui/select/index.ts";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 import { rungLabel } from "$lib/stored.ts";
@@ -28,8 +30,7 @@ $effect(() => {
   if (rung === "" && first) rung = first.name;
 });
 
-async function request(event: SubmitEvent) {
-  event.preventDefault();
+async function request() {
   busy = true;
   result = "";
   failure = undefined;
@@ -61,48 +62,45 @@ async function request(event: SubmitEvent) {
   <Failure failure={policy.failure} />
 {:else if policy.data}
   {@const rungs = policy.data.policy?.rungs ?? []}
-  <form class="store" onsubmit={request}>
-    {#if rungs.length === 0}
-      <p class="muted">
-        This library stores no Versions.
-        <a href="/admin/libraries/{detail.libraryId}"
-          >Choose its stored Versions</a
-        >
-      </p>
-    {:else}
-      <label for="storeRung">Store a Version</label>
-      <div class="row">
-        <select id="storeRung" bind:value={rung}>
+  {#if rungs.length === 0}
+    <p class="text-subheadline text-label-secondary">
+      This library stores no Versions.
+      <a
+        href="/admin/libraries/{detail.libraryId}"
+        class="text-label underline underline-offset-2"
+        >Choose its stored Versions</a
+      >
+    </p>
+  {:else}
+    <div class="mt-3 flex max-w-[30rem] items-center gap-3">
+      <span class="shrink-0 text-subheadline">Store a Version</span>
+      <Select.Root
+        type="single"
+        value={rung}
+        onValueChange={(value) => (rung = value)}
+      >
+        <Select.Trigger class="min-w-0 flex-1" aria-label="Version to store">
+          <Select.Value />
+        </Select.Trigger>
+        <Select.Content>
           {#each rungs as option (option.name)}
-            <option value={option.name}>{rungLabel(option)}</option>
+            <Select.Item value={option.name}>{rungLabel(option)}</Select.Item>
           {/each}
-        </select>
-        <button type="submit" disabled={busy}>Queue</button>
-      </div>
-      {#if failure}
-        <Failure {failure} />
-      {/if}
-      <p class="muted" role="status">{result}</p>
+        </Select.Content>
+      </Select.Root>
+      <Button
+        variant="secondary"
+        disabled={busy || rung === ""}
+        onclick={() => void request()}
+      >
+        Queue
+      </Button>
+    </div>
+    {#if failure}
+      <Failure {failure} />
     {/if}
-  </form>
+    <p role="status" class="min-h-[1lh] text-subheadline text-label-secondary">
+      {result}
+    </p>
+  {/if}
 {/if}
-
-<style>
-  .store {
-    display: grid;
-    max-width: 480px;
-    gap: 8px;
-    margin-top: 16px;
-  }
-
-  .row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  p {
-    min-height: 1.5em;
-    margin: 0;
-  }
-</style>

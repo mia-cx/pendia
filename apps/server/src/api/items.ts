@@ -1,4 +1,13 @@
-import { and, asc, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  type SQL,
+  type SQLWrapper,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Schema } from "effect";
 import { Effect } from "effect";
@@ -12,6 +21,7 @@ import {
   credits,
   episodes,
   items,
+  progress,
   seasons,
   versions,
 } from "../db/schema/index.ts";
@@ -42,7 +52,7 @@ export type ListItemsInput = {
 
 // Instants cross the API as the database's own UTC text at microsecond
 // precision, so a cursor never rounds a timestamp the driver truncated.
-const instantText = (column: typeof items.addedAt) =>
+const instantText = (column: SQLWrapper) =>
   sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 // A single-table select renders columns unqualified, which would bind to
@@ -67,6 +77,14 @@ const cardFields = {
   posterArtworkId: selectedArtwork("items", "poster"),
 };
 
+// Hero and landscape artwork sit on browse cards: detail composes a card, so
+// the fields live here rather than in detailFields.
+const heroFields = {
+  backdropArtworkId: selectedArtwork("items", "backdrop"),
+  logoArtworkId: selectedArtwork("items", "logo"),
+  thumbArtworkId: selectedArtwork("items", "thumb"),
+};
+
 // A Season names its Show directly; an Episode reaches it through its Season.
 const ownSeason = alias(seasons, "own_season");
 const episodeSeason = alias(seasons, "episode_season");
@@ -74,6 +92,7 @@ const showItem = alias(items, "show_item");
 
 const browseFields = {
   ...cardFields,
+  ...heroFields,
   parentId: items.parentId,
   seasonNumber: sql<
     number | null
@@ -83,6 +102,8 @@ const browseFields = {
   showId: showItem.id,
   showTitle: showItem.title,
   showPosterArtworkId: selectedArtwork("show_item", "poster"),
+  showBackdropArtworkId: selectedArtwork("show_item", "backdrop"),
+  showLogoArtworkId: selectedArtwork("show_item", "logo"),
 };
 
 /** Reads browse cards: item cards with their numbers and owning Show. */
@@ -108,17 +129,28 @@ export async function browseCards(
     .where(where)
     .orderBy(...orderBy);
   const rows = await (limit === undefined ? query : query.limit(limit));
-  return rows.map(({ showId, showTitle, showPosterArtworkId, ...card }) => ({
-    ...card,
-    show:
-      showId === null || showTitle === null
-        ? null
-        : {
-            id: showId,
-            title: showTitle,
-            posterArtworkId: showPosterArtworkId,
-          },
-  }));
+  return rows.map(
+    ({
+      showId,
+      showTitle,
+      showPosterArtworkId,
+      showBackdropArtworkId,
+      showLogoArtworkId,
+      ...card
+    }) => ({
+      ...card,
+      show:
+        showId === null || showTitle === null
+          ? null
+          : {
+              id: showId,
+              title: showTitle,
+              posterArtworkId: showPosterArtworkId,
+              backdropArtworkId: showBackdropArtworkId,
+              logoArtworkId: showLogoArtworkId,
+            },
+    }),
+  );
 }
 
 /** Reads browse cards for ids the caller may already view, in the order given. */
@@ -136,7 +168,6 @@ const detailFields = {
   tags: items.tags,
   metadataState: items.metadataState,
   updatedAt: instantText(items.updatedAt),
-  backdropArtworkId: selectedArtwork("items", "backdrop"),
 };
 
 // Each sort owns its order, its keyset predicate and its cursor encoding.
@@ -250,6 +281,60 @@ export function getItemDetail(db: Database, caller: Caller, id: string) {
         ]),
     );
     if (!detail) return yield* new ApiError({ code: "NOT_FOUND" });
+    const enriched = yield* fromHost(async () => {
+      if (children.length === 0) return [];
+      const ids = children.map((child) => child.id);
+      const [overviews, runtimes, marks] = await Promise.all([
+        db
+          .select({ id: items.id, overview: items.overview })
+          .from(items)
+          .where(inArray(items.id, ids)),
+        // The detail orders Versions the same way; the first row per item wins.
+        db
+          .selectDistinctOn([versions.itemId], {
+            itemId: versions.itemId,
+            durationSeconds: versions.durationSeconds,
+          })
+          .from(versions)
+          .where(
+            and(inArray(versions.itemId, ids), eq(versions.origin, "imported")),
+          )
+          .orderBy(versions.itemId, asc(versions.label), asc(versions.id)),
+        db
+          .select({
+            itemId: progress.itemId,
+            positionSeconds: progress.positionSeconds,
+            completed: progress.completed,
+            updatedAt: instantText(progress.updatedAt),
+          })
+          .from(progress)
+          .where(
+            and(
+              inArray(progress.itemId, ids),
+              eq(progress.userId, caller.user.id),
+            ),
+          ),
+      ]);
+      const overviewOf = new Map(overviews.map((row) => [row.id, row]));
+      const runtimeOf = new Map(runtimes.map((row) => [row.itemId, row]));
+      const markOf = new Map(marks.map((row) => [row.itemId, row]));
+      return children.map((child) => {
+        const mark = markOf.get(child.id);
+        return {
+          ...child,
+          overview: overviewOf.get(child.id)?.overview ?? null,
+          durationSeconds: runtimeOf.get(child.id)?.durationSeconds ?? null,
+          progress:
+            mark === undefined
+              ? null
+              : {
+                  positionSeconds: mark.positionSeconds,
+                  completed: mark.completed,
+                  updatedAt: mark.updatedAt,
+                },
+        };
+      });
+    });
     return {
       ...card,
       ...detail,
@@ -259,7 +344,7 @@ export function getItemDetail(db: Database, caller: Caller, id: string) {
         ...version,
         bytes: Number(version.bytes),
       })),
-      children,
+      children: enriched,
     };
   });
 }

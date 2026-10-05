@@ -1,48 +1,76 @@
 <script lang="ts">
+import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+import LoaderCircleIcon from "@lucide/svelte/icons/loader-circle";
+import MaximizeIcon from "@lucide/svelte/icons/maximize";
+import MinimizeIcon from "@lucide/svelte/icons/minimize";
+import PauseIcon from "@lucide/svelte/icons/pause";
+import PictureInPicture2Icon from "@lucide/svelte/icons/picture-in-picture-2";
+import PlayIcon from "@lucide/svelte/icons/play";
+import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
+import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
+import Volume1Icon from "@lucide/svelte/icons/volume-1";
+import Volume2Icon from "@lucide/svelte/icons/volume-2";
+import VolumeXIcon from "@lucide/svelte/icons/volume-x";
 import { onDestroy, untrack } from "svelte";
-import { afterNavigate, goto } from "$app/navigation";
+import { afterNavigate, replaceState } from "$app/navigation";
+import { page } from "$app/state";
 import { client } from "$lib/api.ts";
 import { episodeCode, itemHref } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
-import { audioNames, subtitleNames } from "$lib/playback.ts";
-import {
-  type PlannedTracks,
-  type PlayerNotice,
-  play,
-  type StreamChoice,
-} from "$lib/player.ts";
+import PlayerSettings from "$lib/components/PlayerSettings.svelte";
+import Scrubber from "$lib/components/Scrubber.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import * as Slider from "$lib/components/ui/slider/index.ts";
+import { formatPosition, pickVersion } from "$lib/playback.ts";
+import { play } from "$lib/player.ts";
+import { createPlayer, type PlayerState } from "$lib/player-state.ts";
 import { resource } from "$lib/resource.svelte.ts";
+import { cn } from "$lib/utils.ts";
 
-const {
+let {
   id,
   versionId,
   startAt,
 }: {
   id: string;
-  /** The Version to play; null or unknown plays the first. */
+  /** The Version to play first; null or unknown plays the first. */
   versionId: string | null;
   /** Where to start, in seconds; null resumes. */
   startAt: number | null;
 } = $props();
 
-const item = resource(() => client.items.get({ id }));
+// The Version choice is part of the load: a link that names no Version plays
+// the one the viewer's progress is on, so the session waits for both reads.
+const item = resource(async () => {
+  const detail = await client.items.get({ id });
+  // A failed read still plays the first Version.
+  const progress = await client.playback
+    .getProgress({ itemId: detail.id })
+    .catch(() => null);
+  return { detail, progressVersionId: progress?.versionId ?? null };
+});
 
 let video = $state<HTMLVideoElement>();
-let notice = $state<PlayerNotice>();
-// True while a restart or Version switch waits for the old session to stop.
-let busy = $state(false);
-let tracks = $state<PlannedTracks>();
-// What the viewer picked from the menus; a retry keeps it.
-let streams: StreamChoice = {};
-let session: ReturnType<typeof play> | undefined;
+let root = $state<HTMLElement>();
+let barHeight = $state(0);
+let player = $state<ReturnType<typeof createPlayer>>();
+let playerState = $state<PlayerState>();
+let fullscreen = $state(false);
+let pip = $state(false);
+/** The double-tap skip wash: which side and a remount key. */
+let skipFlash = $state<{ side: "left" | "right"; key: number }>();
+let flashKey = 0;
+
+let lastPointerType: string | undefined;
+let tapTimer: ReturnType<typeof setTimeout> | undefined;
 let cameFrom: string | undefined;
 let destroyed = false;
-let hiddenAt: number | null = null;
 
-const detail = $derived(item.data);
+const detail = $derived(item.data?.detail);
 const version = $derived(
-  detail?.versions.find((candidate) => candidate.id === versionId) ??
-    detail?.versions[0],
+  detail === undefined
+    ? undefined
+    : pickVersion(detail.versions, versionId, item.data?.progressVersionId),
 );
 const back = $derived(detail === undefined ? "/" : (itemHref(detail) ?? "/"));
 const context = $derived(
@@ -52,31 +80,79 @@ const context = $derived(
         .join(" · ")
     : null,
 );
-
-function start(at: number | null) {
-  if (video === undefined || detail === undefined || version === undefined)
-    return;
-  notice = undefined;
-  session = play({
-    video,
-    itemId: detail.id,
-    versionId: version.id,
-    durationSeconds: version.durationSeconds,
-    startAt: at,
-    streams,
-    onNotice: (next) => (notice = next),
-    onTracks: (next) => (tracks = next),
-  });
-}
+const shown = $derived(playerState?.controls ?? true);
+/** A notice replaced playback: only Settings and Full Screen stay usable. */
+const stopped = $derived(playerState?.notice !== undefined);
 
 $effect(() => {
-  if (video !== undefined && detail !== undefined && version !== undefined)
-    untrack(() => start(startAt));
+  if (video === undefined || detail === undefined) return;
+  if (detail.versions.length === 0) return;
+  // Constructed once; URL Version changes never remount the player.
+  if (player !== undefined) return;
+  const initial = version;
+  if (initial === undefined) return;
+  const media = video;
+  const detailNow = detail;
+  player = untrack(() =>
+    createPlayer({
+      media,
+      versions: detailNow.versions,
+      versionId: initial.id,
+      startAt,
+      open: (request) =>
+        play({
+          video: media,
+          itemId: detailNow.id,
+          versionId: request.versionId,
+          durationSeconds:
+            detailNow.versions.find(
+              (version) => version.id === request.versionId,
+            )?.durationSeconds ?? null,
+          startAt: request.startAt,
+          streams: request.streams,
+          paused: request.paused,
+          onNotice: request.onNotice,
+          onTracks: request.onTracks,
+        }),
+    }),
+  );
+});
+
+$effect(() => {
+  const store = player?.state;
+  if (store === undefined) return;
+  return store.subscribe((next) => (playerState = next));
+});
+
+// A Version switch updates the URL instead of remounting the player.
+$effect(() => {
+  const current = playerState?.versionId;
+  if (current === undefined) return;
+  if (page.url.searchParams.get("version") === current) return;
+  const url = new URL(page.url);
+  url.searchParams.set("version", current);
+  url.searchParams.delete("t");
+  replaceState(url, page.state);
+});
+
+// PiP events are not in TypeScript's element attributes.
+$effect(() => {
+  const media = video;
+  if (media === undefined) return;
+  const enter = () => (pip = true);
+  const leavePip = () => (pip = false);
+  media.addEventListener("enterpictureinpicture", enter);
+  media.addEventListener("leavepictureinpicture", leavePip);
+  return () => {
+    media.removeEventListener("enterpictureinpicture", enter);
+    media.removeEventListener("leavepictureinpicture", leavePip);
+  };
 });
 
 onDestroy(() => {
   destroyed = true;
-  void session?.close();
+  clearTimeout(tapTimer);
+  void player?.close();
 });
 
 afterNavigate(({ from }) => {
@@ -92,295 +168,519 @@ function leave(event: MouseEvent) {
   history.back();
 }
 
-// A retry or a new audio or subtitle Stream starts a new session here.
-async function restart() {
-  if (busy) return;
-  busy = true;
-  const at = video?.currentTime ?? 0;
-  await session?.close();
-  busy = false;
-  if (!destroyed) start(at);
-}
-
-function chooseAudio(value: string) {
-  streams = { ...streams, audioStreamIndex: Number(value) };
-  void restart();
-}
-
-function chooseSubtitles(value: string) {
-  streams = {
-    ...streams,
-    subtitleStreamIndex: value === "off" ? null : Number(value),
-  };
-  void restart();
-}
-
-// Stop first, so the next session resumes from the position stop recorded.
-async function switchVersion(next: string) {
-  busy = true;
-  await session?.close();
-  if (!destroyed)
-    await goto(`/play/${id}?version=${next}`, { replaceState: true });
-}
-
-// The back/forward cache keeps this page alive with its session stopped, so
-// a restored page starts a new session where the old one left off.
 function hide() {
-  hiddenAt = video?.currentTime ?? null;
-  void session?.close();
+  void player?.suspend();
 }
 
 function show(event: PageTransitionEvent) {
-  if (event.persisted) start(hiddenAt);
+  if (event.persisted) player?.resume();
 }
+
+function onPointerMove(event: PointerEvent) {
+  if (event.pointerType === "mouse") player?.activity();
+}
+
+function onStagePointerDown(event: PointerEvent) {
+  lastPointerType = event.pointerType;
+}
+
+function flashSkip(side: "left" | "right") {
+  flashKey += 1;
+  skipFlash = { side, key: flashKey };
+}
+
+function onStageClick(event: MouseEvent) {
+  if (player === undefined) return;
+  // Overlay controls inside the stage act on themselves, not the stage.
+  if ((event.target as HTMLElement | null)?.closest("button, a") !== null)
+    return;
+  if (lastPointerType === "touch") {
+    // The second tap of a double tap lands while a single tap waits.
+    if (tapTimer !== undefined) {
+      const width = root?.clientWidth ?? 1;
+      const third = event.clientX / width;
+      if (third < 1 / 3 || third > 2 / 3) {
+        clearTimeout(tapTimer);
+        tapTimer = undefined;
+        player.skip(third < 1 / 3 ? -10 : 10);
+        flashSkip(third < 1 / 3 ? "left" : "right");
+      }
+      return;
+    }
+    tapTimer = setTimeout(() => {
+      tapTimer = undefined;
+      if (!destroyed) player?.toggleControls();
+    }, 250);
+    return;
+  }
+  player.togglePlay();
+}
+
+function onStageDoubleClick() {
+  if (lastPointerType === "touch") return;
+  void toggleFullscreen();
+}
+
+const canFullscreen = () =>
+  document.fullscreenEnabled || video?.webkitEnterFullscreen !== undefined;
+
+async function toggleFullscreen() {
+  player?.activity();
+  if (document.fullscreenElement !== null) {
+    await document.exitFullscreen().catch(() => {});
+    return;
+  }
+  if (document.fullscreenEnabled && root !== undefined) {
+    await root.requestFullscreen().catch(() => {
+      video?.webkitEnterFullscreen?.();
+    });
+    return;
+  }
+  video?.webkitEnterFullscreen?.();
+}
+
+async function togglePip() {
+  player?.activity();
+  if (video === undefined) return;
+  if (document.pictureInPictureElement !== null) {
+    await document.exitPictureInPicture().catch(() => {});
+    return;
+  }
+  await video.requestPictureInPicture().catch(() => {});
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented)
+    return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest("[role='menu']") !== null) return;
+  player?.activity();
+  const onSlider = target?.closest("[role='slider']") !== null;
+  const onAction = target?.closest("button, a, [role='slider']") !== null;
+  // event.key, not code: non-QWERTY layouts get the letters they press.
+  switch (event.key.toLowerCase()) {
+    case " ":
+    case "k":
+      if (onAction) return;
+      event.preventDefault();
+      player?.togglePlay();
+      return;
+    case "arrowleft":
+      if (onSlider) return;
+      event.preventDefault();
+      player?.skip(-10);
+      return;
+    case "arrowright":
+      if (onSlider) return;
+      event.preventDefault();
+      player?.skip(10);
+      return;
+    case "arrowup":
+      if (onSlider) return;
+      event.preventDefault();
+      player?.setVolume((playerState?.volume ?? 0) + 0.1);
+      return;
+    case "arrowdown":
+      if (onSlider) return;
+      event.preventDefault();
+      player?.setVolume((playerState?.volume ?? 1) - 0.1);
+      return;
+    case "f":
+      event.preventDefault();
+      void toggleFullscreen();
+      return;
+    case "m":
+      event.preventDefault();
+      player?.toggleMute();
+      return;
+    case "c":
+      event.preventDefault();
+      void player?.toggleSubtitles();
+      return;
+  }
+}
+
+function barFocusIn(event: FocusEvent) {
+  if ((event.target as HTMLElement | null)?.matches(":focus-visible"))
+    player?.hold("focus", true);
+}
+
+function barFocusOut(event: FocusEvent) {
+  const next = event.relatedTarget as HTMLElement | null;
+  if (
+    next === null ||
+    (next.closest("[data-bar]") === null &&
+      next.closest("[role='menu']") === null)
+  )
+    player?.hold("focus", false);
+}
+
+const VolumeIcon = $derived(
+  playerState === undefined || playerState.muted || playerState.volume === 0
+    ? VolumeXIcon
+    : playerState.volume < 0.5
+      ? Volume1Icon
+      : Volume2Icon,
+);
 </script>
 
 <svelte:head>
   <title>{detail ? `${detail.title} · Pendia` : "Pendia"}</title>
 </svelte:head>
 
-<svelte:window onpagehide={hide} onpageshow={show} />
+<svelte:window
+  onkeydown={onKeydown}
+  onpagehide={hide}
+  onpageshow={show}
+  onfullscreenchange={() =>
+    (fullscreen = document.fullscreenElement !== null)}
+/>
 
-<div class="player">
-  <div class="bar">
-    <a class="back" href={back} onclick={leave}
-      ><span aria-hidden="true">‹</span> Back</a
-    >
-    {#if detail}
-      <div class="title">
-        <h1>{detail.title}</h1>
-        {#if context}
-          <p>{context}</p>
-        {/if}
-      </div>
-      <div class="menus">
-        {#if version && detail.versions.length > 1}
-          <label class="menu">
-            <span>Version</span>
-            <select
-              value={version.id}
-              disabled={busy}
-              onchange={(event) => switchVersion(event.currentTarget.value)}
-            >
-              {#each detail.versions as option (option.id)}
-                <option value={option.id}>{option.label}</option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-        {#if tracks && tracks.audioStreams.length > 1}
-          {@const names = audioNames(tracks.audioStreams)}
-          <label class="menu">
-            <span>Audio</span>
-            <select
-              value={String(tracks.audioStreamIndex)}
-              disabled={busy}
-              onchange={(event) => chooseAudio(event.currentTarget.value)}
-            >
-              {#each tracks.audioStreams as stream, position (stream.index)}
-                <option value={String(stream.index)}>{names[position]}</option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-        {#if tracks && tracks.subtitleStreams.length > 0}
-          {@const names = subtitleNames(tracks.subtitleStreams)}
-          <label class="menu">
-            <span>Subtitles</span>
-            <select
-              value={tracks.subtitleStreamIndex === null
-                ? "off"
-                : String(tracks.subtitleStreamIndex)}
-              disabled={busy}
-              onchange={(event) => chooseSubtitles(event.currentTarget.value)}
-            >
-              <option value="off">Off</option>
-              {#each tracks.subtitleStreams as stream, position (stream.index)}
-                <option value={String(stream.index)}>{names[position]}</option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-      </div>
-    {/if}
-  </div>
-
-  <div class="stage">
+<!-- svelte-ignore a11y_no_static_element_interactions: the player surface watches mouse movement -->
+<div
+  bind:this={root}
+  class="player fixed inset-0 overflow-hidden bg-black text-white select-none dark"
+  class:cursor-none={!shown}
+  data-controls={shown ? "shown" : "hidden"}
+  style:--controls-height="{barHeight}px"
+  onpointermove={onPointerMove}
+>
+  <!-- svelte-ignore a11y_no_static_element_interactions: the stage is the tap and click surface -->
+  <!-- svelte-ignore a11y_click_events_have_key_events: keyboard shortcuts live on window -->
+  <div
+    class="absolute inset-0"
+    onclick={onStageClick}
+    ondblclick={onStageDoubleClick}
+    onpointerdown={onStagePointerDown}
+  >
     <!-- svelte-ignore a11y_media_has_caption: captions arrive as HLS text tracks -->
     <video
       bind:this={video}
-      controls
+      class="absolute inset-0 size-full object-contain"
       playsinline
       preload="auto"
       aria-label={detail?.title ?? "Video"}
     ></video>
+
     {#if item.failure}
-      <div class="notice"><Failure failure={item.failure} /></div>
-    {:else if detail && !version}
-      <div class="notice" role="status">
-        <h2>Nothing to play</h2>
-        <p>This has no Versions yet.</p>
+      <div class="absolute inset-0 grid place-items-center p-6">
+        <div class="material-thick w-full max-w-sm rounded-xl px-6 py-5 shadow-float">
+          <Failure failure={item.failure} />
+        </div>
       </div>
-    {:else if notice}
-      <div class="notice" role="alert">
-        <h2>{notice.title}</h2>
-        <p>{notice.message}</p>
-        {#if notice.retry}
-          <button type="button" disabled={busy} onclick={restart}
-            >Try again</button
+    {:else if detail && detail.versions.length === 0}
+      <div
+        role="status"
+        class="material-thick absolute inset-0 m-auto h-fit w-full max-w-sm rounded-xl px-6 py-5 text-center shadow-float"
+      >
+        <h2 class="text-headline">Nothing to play</h2>
+        <p class="mt-1 text-subheadline text-label-secondary">
+          This has no Versions yet.
+        </p>
+      </div>
+    {:else if playerState?.notice}
+      <div
+        role="alert"
+        class="material-thick absolute inset-0 m-auto h-fit w-full max-w-sm rounded-xl px-6 py-5 text-center shadow-float"
+      >
+        <h2 class="text-headline">{playerState.notice.title}</h2>
+        <p class="mt-1 text-subheadline text-label-secondary">
+          {playerState.notice.message}
+        </p>
+        {#if playerState.notice.retry}
+          <Button
+            variant="secondary"
+            class="mt-4"
+            disabled={playerState.switching}
+            onclick={() => player?.retry()}>Try again</Button
           >
         {/if}
       </div>
     {/if}
+
+    {#if playerState?.buffering && playerState.notice === undefined}
+      <div
+        role="status"
+        class="player-buffer absolute inset-0 grid place-items-center"
+      >
+        <LoaderCircleIcon
+          class="size-10 text-white/80 motion-safe:animate-spin"
+          aria-hidden="true"
+        />
+        <span class="sr-only">Loading</span>
+      </div>
+    {/if}
+
+    {#if skipFlash !== undefined}
+      {#key skipFlash.key}
+        <div
+          aria-hidden="true"
+          class={cn(
+            "player-skip-flash pointer-events-none absolute top-1/2 flex size-20 -translate-y-1/2 flex-col items-center justify-center gap-1 rounded-full bg-white/14",
+            skipFlash.side === "left" ? "left-[16%]" : "right-[16%]",
+          )}
+          onanimationend={() => (skipFlash = undefined)}
+        >
+          {#if skipFlash.side === "left"}
+            <RotateCcwIcon class="size-6" aria-hidden="true" />
+          {:else}
+            <RotateCwIcon class="size-6" aria-hidden="true" />
+          {/if}
+          <span class="text-caption-2 font-semibold">10 seconds</span>
+        </div>
+      {/key}
+    {/if}
+  </div>
+
+  <div
+    data-bar
+    inert={!shown}
+    class={cn(
+      "absolute inset-x-0 top-0 flex items-center gap-3 bg-linear-to-b from-black/60 to-transparent pb-10 transition-opacity ease-smooth-out",
+      shown
+        ? "opacity-100 duration-(--duration-fast)"
+        : "pointer-events-none opacity-0 duration-(--duration-medium)",
+    )}
+    style="padding-top: max(0.75rem, env(safe-area-inset-top)); padding-left: max(var(--gutter), env(safe-area-inset-left)); padding-right: max(var(--gutter), env(safe-area-inset-right));"
+    onfocusin={barFocusIn}
+    onfocusout={barFocusOut}
+  >
+    <Button
+      variant="glass"
+      size="icon"
+      href={back}
+      onclick={leave}
+      aria-label="Back"
+      class="shrink-0"
+    >
+      <ChevronLeftIcon aria-hidden="true" />
+    </Button>
+    {#if detail}
+      <div class="min-w-0">
+        <h1 class="truncate text-headline">{detail.title}</h1>
+        {#if context}
+          <p class="truncate text-footnote text-white/70">{context}</p>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <!-- svelte-ignore a11y_no_static_element_interactions: hover over the bar holds the controls up -->
+  <div
+    data-bar
+    inert={!shown}
+    bind:clientHeight={barHeight}
+    class={cn(
+      "absolute inset-x-0 bottom-0 bg-linear-to-t from-black/70 via-black/30 to-transparent pt-12 transition-opacity ease-smooth-out",
+      shown
+        ? "opacity-100 duration-(--duration-fast)"
+        : "pointer-events-none opacity-0 duration-(--duration-medium)",
+      stopped && "pointer-events-none",
+    )}
+    style="padding-left: max(var(--gutter), env(safe-area-inset-left)); padding-right: max(var(--gutter), env(safe-area-inset-right)); padding-bottom: max(1rem, env(safe-area-inset-bottom));"
+    onpointerenter={(event) =>
+      event.pointerType === "mouse" && player?.hold("pointer", true)}
+    onpointerleave={(event) =>
+      event.pointerType === "mouse" && player?.hold("pointer", false)}
+    onfocusin={barFocusIn}
+    onfocusout={barFocusOut}
+  >
+    <div class="flex flex-col gap-2">
+      <div class={cn("flex items-center gap-3", stopped && "invisible")}>
+        <span
+          class="min-w-14 text-right text-footnote tabular-nums text-white/80"
+          >{formatPosition(playerState?.position ?? 0)}</span
+        >
+        <Scrubber
+          position={playerState?.position ?? 0}
+          duration={playerState?.duration ?? 0}
+          buffered={playerState?.buffered ?? []}
+          onseek={(seconds) => player?.seek(seconds)}
+        />
+        <span class="min-w-14 text-footnote tabular-nums text-white/80"
+          >−{formatPosition(
+            Math.max(0, (playerState?.duration ?? 0) - (playerState?.position ?? 0)),
+          )}</span
+        >
+      </div>
+      <div class="grid grid-cols-[1fr_auto_1fr] items-center">
+        <div class={cn("flex items-center gap-1", stopped && "invisible")}>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={playerState?.muted ? "Unmute" : "Mute"}
+            class="text-white hover:bg-white/12"
+            onclick={() => player?.toggleMute()}
+          >
+            <VolumeIcon aria-hidden="true" />
+          </Button>
+          <div class="w-24 pointer-coarse:hidden">
+            {#if playerState}
+              <Slider.Root
+                variant="media"
+                type="single"
+                value={playerState.muted ? 0 : playerState.volume * 100}
+                onValueChange={(next) => player?.setVolume(next / 100)}
+                min={0}
+                max={100}
+                step={1}
+                aria-label="Volume"
+                valueText={`${Math.round(playerState.volume * 100)}%`}
+              />
+            {/if}
+          </div>
+        </div>
+        <div
+          class={cn(
+            "flex items-center justify-center gap-2 sm:col-start-2 max-sm:pointer-events-none max-sm:fixed max-sm:inset-0",
+            stopped && "invisible",
+          )}
+        >
+          <!-- A soft scrim behind the transport, instead of dimming the whole frame and its captions. -->
+          <div
+            aria-hidden="true"
+            class="pointer-events-none absolute top-1/2 left-1/2 h-44 w-80 -translate-x-1/2 -translate-y-1/2 bg-radial from-black/40 to-transparent to-70% sm:hidden"
+          ></div>
+          <Button
+            variant="ghost"
+            aria-label="Back 10 seconds"
+            class="relative size-11 text-white hover:bg-white/12 max-sm:pointer-events-auto max-sm:size-12"
+            onclick={() => player?.skip(-10)}
+          >
+            <RotateCcwIcon class="size-7 max-sm:size-9" aria-hidden="true" />
+            <span
+              aria-hidden="true"
+              class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pt-0.5 text-caption-2 font-semibold max-sm:text-caption-1"
+              >10</span
+            >
+          </Button>
+          <Button
+            variant="ghost"
+            aria-label={playerState?.playing ? "Pause" : "Play"}
+            class="relative size-12 text-white hover:bg-white/12 max-sm:pointer-events-auto max-sm:size-16"
+            onclick={() => player?.togglePlay()}
+          >
+            {#if playerState?.playing}
+              <PauseIcon class="size-7" fill="currentColor" aria-hidden="true" />
+            {:else}
+              <PlayIcon class="size-7" fill="currentColor" aria-hidden="true" />
+            {/if}
+          </Button>
+          <Button
+            variant="ghost"
+            aria-label="Forward 10 seconds"
+            class="relative size-11 text-white hover:bg-white/12 max-sm:pointer-events-auto max-sm:size-12"
+            onclick={() => player?.skip(10)}
+          >
+            <RotateCwIcon class="size-7 max-sm:size-9" aria-hidden="true" />
+            <span
+              aria-hidden="true"
+              class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pt-0.5 text-caption-2 font-semibold max-sm:text-caption-1"
+              >10</span
+            >
+          </Button>
+        </div>
+        <div
+          class={cn(
+            "col-start-3 flex items-center justify-end gap-1",
+            stopped && "pointer-events-auto",
+          )}
+        >
+          {#if typeof document !== "undefined" && document.pictureInPictureEnabled}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={pip ? "Exit Picture in Picture" : "Picture in Picture"}
+              class={cn("text-white hover:bg-white/12", stopped && "invisible")}
+              onclick={() => void togglePip()}
+            >
+              <PictureInPicture2Icon aria-hidden="true" />
+            </Button>
+          {/if}
+          {#if player !== undefined && playerState !== undefined && detail !== undefined}
+            <PlayerSettings {player} state={playerState} versions={detail.versions} portal={root} />
+          {/if}
+          {#if canFullscreen()}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={fullscreen ? "Exit Full Screen" : "Full Screen"}
+              class="text-white hover:bg-white/12"
+              onclick={() => void toggleFullscreen()}
+            >
+              {#if fullscreen}
+                <MinimizeIcon aria-hidden="true" />
+              {:else}
+                <MaximizeIcon aria-hidden="true" />
+              {/if}
+            </Button>
+          {/if}
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
 <style>
-  /* The stage is dark in both colour schemes, so the picture sets the light. */
-  .player {
-    --canvas: oklch(0% 0 0deg);
-    --ink: oklch(94% 0.012 250deg);
-    --muted: oklch(72% 0.025 250deg);
-    --signal: oklch(66% 0.17 255deg);
-    --danger: oklch(70% 0.16 25deg);
-    --line: color-mix(in oklch, var(--ink) 16%, transparent);
-
-    position: fixed;
-    inset: 0;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    background: var(--canvas);
-    color: var(--ink);
-    color-scheme: dark;
+  /* Short waits never flash the spinner. */
+  .player-buffer {
+    pointer-events: none;
+    animation: player-fade-in var(--duration-fast) ease-out 400ms backwards;
   }
 
-  .bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 20px;
-    padding: 8px var(--gutter);
+  .player-skip-flash {
+    animation: player-skip-flash 600ms ease-out forwards;
   }
 
-  .back {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 44px;
-    color: var(--ink);
-    font-weight: 600;
-    text-decoration: none;
-  }
-
-  .back span {
-    font-size: 24px;
-    line-height: 1;
-  }
-
-  .back:hover {
-    color: var(--signal);
-  }
-
-  .title {
-    flex: 1 1 0;
-    min-width: 0;
-  }
-
-  h1 {
-    margin: 0;
-    overflow: hidden;
-    font-size: 16px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .title p {
-    margin: 0;
-    overflow: hidden;
-    color: var(--muted);
-    font-size: 13px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .menus {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 20px;
-  }
-
-  .menu {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 400;
-  }
-
-  .menu span {
-    color: var(--muted);
-  }
-
-  select {
-    max-width: 30vw;
-    min-height: 36px;
-  }
-
-  .stage {
-    position: relative;
-    display: grid;
-    min-height: 0;
-  }
-
-  video {
-    width: 100%;
-    height: 100%;
-    background: var(--canvas);
-    object-fit: contain;
-  }
-
-  .notice {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    align-content: center;
-    justify-items: center;
-    gap: 12px;
-    padding: 24px;
-    background: color-mix(in oklch, var(--canvas) 80%, transparent);
-    text-align: center;
-  }
-
-  .notice h2 {
-    margin: 0;
-  }
-
-  .notice p {
-    max-width: 44ch;
-    margin: 0;
-    color: var(--muted);
-  }
-
-  @media (max-width: 640px) {
-    .title {
-      flex-basis: calc(100% - 96px);
+  @keyframes player-fade-in {
+    from {
+      opacity: 0;
     }
-
-    .menus {
-      flex-basis: 100%;
+    to {
+      opacity: 1;
     }
+  }
 
-    .menu {
-      flex: 1 1 100%;
+  @keyframes player-skip-flash {
+    from {
+      opacity: 1;
+      transform: translateY(-50%) scale(1);
     }
+    to {
+      opacity: 0;
+      transform: translateY(-50%) scale(1.12);
+    }
+  }
 
-    .menu span {
-      min-width: 9ch;
+  @media (prefers-reduced-motion: reduce) {
+    .player-skip-flash {
+      animation-name: player-skip-flash-still;
     }
+  }
 
-    select {
-      flex: 1;
-      min-width: 0;
-      max-width: none;
+  @keyframes player-skip-flash-still {
+    from {
+      opacity: 1;
+      transform: translateY(-50%);
     }
+    to {
+      opacity: 0;
+      transform: translateY(-50%);
+    }
+  }
+
+  .player :global(video::cue) {
+    background-color: oklch(0% 0 0deg / 72%);
+    color: white;
+    font-family: var(--font-sans);
+    font-weight: 500;
+    font-size: clamp(1rem, calc(0.5rem + 2.6vmin), 2.25rem);
+    line-height: 1.3;
+  }
+
+  .player[data-controls="shown"]
+    :global(video::-webkit-media-text-track-container) {
+    transform: translateY(calc(-1 * var(--controls-height, 0px)));
+    transition: transform var(--duration-fast) ease-out;
   }
 </style>

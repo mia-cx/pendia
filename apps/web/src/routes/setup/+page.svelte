@@ -1,8 +1,23 @@
 <script lang="ts">
-import { onDestroy } from "svelte";
+import CheckIcon from "@lucide/svelte/icons/check";
+import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
+import CircleXIcon from "@lucide/svelte/icons/circle-x";
+import { onDestroy, tick } from "svelte";
+import { accountFailure } from "$lib/auth.ts";
 import Failure from "$lib/components/Failure.svelte";
+import FocusScreen from "$lib/components/FocusScreen.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import { Input } from "$lib/components/ui/input/index.ts";
+import { Label } from "$lib/components/ui/label/index.ts";
+import { Progress } from "$lib/components/ui/progress/index.ts";
+import * as Select from "$lib/components/ui/select/index.ts";
 import { readFailure } from "$lib/errors.ts";
-import { type ScanStatus, waitForScan } from "$lib/scan.ts";
+import {
+  type ScanStatus,
+  scanPhase,
+  scanProgress,
+  waitForScan,
+} from "$lib/scan.ts";
 import {
   createAdmin,
   createFirstLibrary,
@@ -11,9 +26,11 @@ import {
   type WizardSession,
 } from "$lib/wizard.ts";
 
-const stepTitles = ["Create the admin", "Add the first library", "Scan"];
+const stepTitles = ["Account", "Library", "Scan"];
 
 let step = $state(0);
+let direction = $state(1);
+let heading = $state<HTMLHeadingElement | undefined>(undefined);
 let session = $state<WizardSession | undefined>(undefined);
 let libraryId = $state("");
 let runId = $state<string | undefined>(undefined);
@@ -28,40 +45,26 @@ let libraryName = $state("");
 let rootPath = $state("");
 let medium = $state<LibraryMedium>("movies");
 
-const scanSettled = $derived(
-  status !== undefined &&
-    status.counts.queued === 0 &&
-    status.counts.running === 0,
-);
-const scanFailed = $derived(
-  scanSettled && status !== undefined && status.counts.failed > 0,
-);
-const scanDone = $derived(
-  scanSettled &&
-    status !== undefined &&
-    status.counts.failed === 0 &&
-    status.counts.completed > 0,
+const progress = $derived(scanProgress(status));
+const phase = $derived(
+  scanPhase(progress, { failed: failure !== undefined, runId }),
 );
 
 const controller = new AbortController();
 onDestroy(() => controller.abort());
 
-async function submitAdmin(event: SubmitEvent) {
+/** Moves to a step, animating the body in the direction of travel. */
+async function goTo(next: number) {
+  direction = next > step ? 1 : -1;
+  step = next;
+  await tick();
+  heading?.focus();
+}
+
+function submitAccount(event: SubmitEvent) {
   event.preventDefault();
-  busy = true;
   failure = undefined;
-  try {
-    session = await createAdmin({
-      username,
-      password,
-      displayName: displayName.trim() === "" ? undefined : displayName,
-    });
-    step = 1;
-  } catch (error) {
-    failure = readFailure(error);
-  } finally {
-    busy = false;
-  }
+  void goTo(1);
 }
 
 async function watchScan() {
@@ -77,9 +80,20 @@ async function watchScan() {
 
 async function submitLibrary(event: SubmitEvent) {
   event.preventDefault();
-  if (!session) return;
   busy = true;
   failure = undefined;
+  try {
+    session ??= await createAdmin({
+      username,
+      password,
+      displayName: displayName.trim() === "" ? undefined : displayName,
+    });
+  } catch (error) {
+    failure = accountFailure(readFailure(error), username);
+    busy = false;
+    await goTo(0);
+    return;
+  }
   try {
     const library = await createFirstLibrary(session, {
       name: libraryName,
@@ -87,7 +101,7 @@ async function submitLibrary(event: SubmitEvent) {
       medium,
     });
     libraryId = library.id;
-    step = 2;
+    await goTo(2);
     const { jobId } = await startScan(session, libraryId);
     runId = jobId;
     await watchScan();
@@ -102,6 +116,8 @@ async function rescan() {
   if (!session) return;
   busy = true;
   failure = undefined;
+  runId = undefined;
+  status = undefined;
   try {
     const { jobId } = await startScan(session, libraryId);
     runId = jobId;
@@ -125,239 +141,326 @@ async function resumeWatch() {
   }
 }
 
-/** Follows the run that was started, or starts one when no run id came back. */
-async function retryScan() {
-  if (runId === undefined) {
-    await rescan();
-    return;
-  }
-  await resumeWatch();
-}
+const scanTitle = $derived(
+  phase === "done"
+    ? "Your library is ready"
+    : phase === "failed"
+      ? "The scan failed"
+      : phase === "unstarted"
+        ? "The scan did not start"
+        : "Scanning your library",
+);
+const title = $derived(
+  step === 0
+    ? "Create your account"
+    : step === 1
+      ? "Add your first library"
+      : scanTitle,
+);
 </script>
 
 <svelte:head>
   <title>Set up Pendia</title>
 </svelte:head>
 
-<main>
-  <h1>Set up Pendia</h1>
+<FocusScreen {title} bind:heading>
+  {#snippet header()}
+    <ol aria-label="Setup progress" class="flex items-center gap-2">
+      {#each stepTitles as stepTitle, index (stepTitle)}
+        {@const stepDone =
+          index < step || (index === 2 && phase === "done")}
+        <li
+          class="flex items-center gap-2"
+          aria-current={index === step && !stepDone ? "step" : undefined}
+        >
+          <span
+            class="grid size-5 place-items-center rounded-full text-caption-2 {stepDone
+              ? 'bg-tint-fill'
+              : index === step
+                ? 'bg-tint text-tint-foreground'
+                : 'bg-fill text-label-secondary'}"
+          >
+            {#if stepDone}
+              <CheckIcon class="size-3 text-tint" />
+            {:else}
+              {index + 1}
+            {/if}
+          </span>
+          <span
+            class="text-footnote {index === step && !stepDone
+              ? 'font-semibold text-label'
+              : 'text-label-secondary'}"
+            >{stepTitle}{#if stepDone}<span class="sr-only">, done</span
+              >{/if}</span
+          >
+          {#if index < stepTitles.length - 1}
+            <span class="h-px w-4 bg-separator"></span>
+          {/if}
+        </li>
+      {/each}
+    </ol>
+  {/snippet}
 
-  <ol class="steps">
-    {#each stepTitles as title, index (title)}
-      <li aria-current={index === step ? "step" : undefined}>
-        <span class="marker">{index < step ? "Done" : `Step ${index + 1}`}</span>
-        {title}
-      </li>
-    {/each}
-  </ol>
-
-  <section class="panel">
-    {#if step === 0}
-      <form onsubmit={submitAdmin}>
-        <h2>Create the admin</h2>
-        {#if failure?.code === "CONFLICT"}
-          <p class="muted">
-            Setup is already complete, so the admin needs to
-            <a class="open" href="/login">sign in</a>.
-          </p>
-        {:else if failure}
-          <Failure {failure} />
-        {/if}
-        <label for="username">Username</label>
-        <input
-          id="username"
-          name="username"
-          autocomplete="username"
-          required
-          bind:value={username}
-        />
-        <label for="password">Password</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autocomplete="new-password"
-          required
-          bind:value={password}
-        />
-        <label for="displayName">Display name</label>
-        <input
-          id="displayName"
-          name="displayName"
-          bind:value={displayName}
-        />
-        <button type="submit" disabled={busy}>Create admin</button>
-      </form>
-    {:else if step === 1}
-      <form onsubmit={submitLibrary}>
-        <h2>Add the first library</h2>
-        {#if failure}
-          <Failure {failure} />
-        {/if}
-        <label for="libraryName">Name</label>
-        <input
-          id="libraryName"
-          name="libraryName"
-          required
-          bind:value={libraryName}
-        />
-        <label for="rootPath">Root path</label>
-        <input
-          id="rootPath"
-          name="rootPath"
-          required
-          bind:value={rootPath}
-        />
-        <p class="muted">
-          Enter an absolute path on the server, like /srv/movies.
+  {#key step}
+    <div
+      class="w-full {direction === 1 ? 'step-forward' : 'step-back'}"
+    >
+      {#if step === 0}
+        <p class="text-center text-callout text-label-secondary">
+          This account runs the server.
         </p>
-        <label for="medium">Medium</label>
-        <select id="medium" name="medium" bind:value={medium}>
-          <option value="movies">Movies</option>
-          <option value="shows">Shows</option>
-        </select>
-        <button type="submit" disabled={busy}>Add library and scan</button>
-      </form>
-    {:else}
-      <h2>Scan</h2>
-      {#if failure}
-        <Failure {failure} />
-      {/if}
-      {#if status}
-        <dl class="counts">
-          <div><dt>Queued</dt><dd>{status.counts.queued}</dd></div>
-          <div><dt>Running</dt><dd>{status.counts.running}</dd></div>
-          <div><dt>Completed</dt><dd>{status.counts.completed}</dd></div>
-          <div><dt>Failed</dt><dd>{status.counts.failed}</dd></div>
-        </dl>
-        {#if scanFailed}
-          <div class="failure" role="alert">
-            <h3>The scan failed</h3>
-            <p>
-              {status?.counts.failed} scan {status?.counts.failed === 1
-                ? "job"
-                : "jobs"} failed.{#if status?.latest?.state === "failed"}
-                {status.latest.error}{/if}
+        <form class="mt-6 flex w-full flex-col gap-4" onsubmit={submitAccount}>
+          {#if failure?.code === "CONFLICT"}
+            <p class="text-center text-subheadline text-label-secondary">
+              Setup is already complete.
+              <Button variant="link" href="/login" class="h-auto p-0"
+                >Sign in</Button
+              >
+            </p>
+          {:else if failure}
+            <Failure {failure} inline />
+          {/if}
+          <div class="flex flex-col gap-1.5">
+            <Label for="username">Username</Label>
+            <Input
+              id="username"
+              name="username"
+              autocomplete="username"
+              maxlength={64}
+              required
+              bind:value={username}
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label for="password">Password</Label>
+            <Input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              maxlength={1024}
+              required
+              bind:value={password}
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label for="displayName"
+              >Display name<span
+                class="ml-1 font-normal text-label-secondary">Optional</span
+              ></Label
+            >
+            <Input
+              id="displayName"
+              name="displayName"
+              autocomplete="name"
+              maxlength={128}
+              bind:value={displayName}
+            />
+          </div>
+          <Button type="submit" size="lg" class="mt-2 w-full" disabled={busy}>
+            Continue
+          </Button>
+        </form>
+      {:else if step === 1}
+        <form
+          class="flex w-full flex-col gap-4"
+          onsubmit={submitLibrary}
+        >
+          {#if failure}
+            <Failure {failure} inline />
+          {/if}
+          <div class="flex flex-col gap-1.5">
+            <Label for="libraryName">Name</Label>
+            <Input
+              id="libraryName"
+              name="libraryName"
+              placeholder="Movies"
+              required
+              bind:value={libraryName}
+            />
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label id="medium-label">Type</Label>
+            <Select.Root
+              type="single"
+              bind:value={medium}
+              items={[
+                { value: "movies", label: "Movies" },
+                { value: "shows", label: "Shows" },
+              ]}
+            >
+              <Select.Trigger class="w-full" aria-labelledby="medium-label"
+                ><Select.Value /></Select.Trigger
+              >
+              <Select.Content>
+                <Select.Item value="movies" label="Movies">Movies</Select.Item>
+                <Select.Item value="shows" label="Shows">Shows</Select.Item>
+              </Select.Content>
+            </Select.Root>
+          </div>
+          <div class="flex flex-col gap-1.5">
+            <Label for="rootPath">Folder</Label>
+            <Input
+              id="rootPath"
+              name="rootPath"
+              placeholder="/srv/movies"
+              aria-describedby="rootPath-hint"
+              required
+              bind:value={rootPath}
+            />
+            <p id="rootPath-hint" class="text-footnote text-label-secondary">
+              The full path on the server.
             </p>
           </div>
-          <button type="button" onclick={rescan} disabled={busy}>
-            Scan again
-          </button>
-        {/if}
-        {#if scanDone}
-          <p>The first scan is done.</p>
-        {:else if failure && !scanSettled}
-          <p class="muted">
-            This page stopped following the scan. The scan itself keeps running.
-          </p>
-          <button type="button" onclick={resumeWatch} disabled={busy}>
-            Check again
-          </button>
-        {:else if !scanSettled}
-          <p class="muted">Scanning the library.</p>
-        {/if}
-      {:else if failure}
-        <button type="button" onclick={retryScan} disabled={busy}>
-          {runId === undefined ? "Scan again" : "Check again"}
-        </button>
+          <div class="mt-2 flex w-full gap-3">
+            {#if !session}
+              <Button
+                variant="secondary"
+                size="lg"
+                onclick={() => goTo(0)}
+                disabled={busy}>Back</Button
+              >
+            {/if}
+            <Button type="submit" size="lg" class="flex-1" disabled={busy}>
+              Add library
+            </Button>
+          </div>
+        </form>
       {:else}
-        <p class="muted">Starting the scan.</p>
+        <p class="text-center text-callout text-label-secondary">
+          {libraryName}
+        </p>
+        <div class="mt-4 flex h-8 w-full items-center">
+          {#if phase === "done"}
+            <span class="check-pop mx-auto">
+              <CircleCheckIcon class="size-8 text-success" />
+            </span>
+          {:else if phase === "failed" || phase === "unstarted"}
+            <span class="check-pop mx-auto">
+              <CircleXIcon class="size-8 text-destructive" />
+            </span>
+          {:else if progress.state === "running"}
+            <Progress
+              value={progress.fraction}
+              max={1}
+              aria-label="Scan progress"
+              class="w-full"
+            />
+          {:else}
+            <Progress value={null} aria-label="Scan progress" class="w-full" />
+          {/if}
+        </div>
+        <div class="mt-4 flex w-full flex-col items-center gap-4">
+          {#if phase === "failed" && progress.state === "failed"}
+            <Failure
+              inline
+              failure={{
+                code: "UNKNOWN",
+                message: `${progress.failed === 1 ? "1 scan job failed." : `${progress.failed} scan jobs failed.`}${progress.error ? ` ${progress.error}` : ""}`,
+              }}
+            />
+            <Button
+              size="lg"
+              class="w-full"
+              onclick={rescan}
+              disabled={busy}>Scan again</Button
+            >
+            <Button variant="ghost" href="/">Start watching</Button>
+          {:else if phase === "unstarted" && failure}
+            <Failure {failure} inline />
+            <Button
+              size="lg"
+              class="w-full"
+              onclick={rescan}
+              disabled={busy}>Try again</Button
+            >
+            <Button variant="ghost" href="/">Start watching</Button>
+          {:else if phase === "unfollowed" && failure}
+            <Failure {failure} inline />
+            <Button
+              size="lg"
+              class="w-full"
+              onclick={resumeWatch}
+              disabled={busy}>Check again</Button
+            >
+          {:else}
+            <Button href="/" size="lg" class="w-full">Start watching</Button>
+          {/if}
+          <Button
+            variant="link"
+            href="/admin"
+            class="h-auto p-0 text-footnote">Open Settings</Button
+          >
+        </div>
       {/if}
-      <p class="muted">
-        The scan keeps running in the background and its progress is on the
-        libraries screen.
-      </p>
-      <a class="open" href="/admin">Open the admin</a>
-    {/if}
-  </section>
-</main>
+    </div>
+  {/key}
+</FocusScreen>
 
 <style>
-main {
-  display: grid;
-  min-height: 100svh;
-  align-content: center;
-  justify-items: center;
-  padding: 32px;
-}
-
-h1 {
-  margin: 0 0 24px;
-}
-
-.steps {
-  display: flex;
-  gap: 24px;
-  margin: 0 0 24px;
-  padding: 0;
-  list-style: none;
-}
-
-.steps li {
-  display: grid;
-  gap: 2px;
-  color: var(--muted);
-}
-
-.steps li[aria-current="step"] {
-  color: var(--ink);
-}
-
-.steps .marker {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.panel {
-  width: 100%;
-  max-width: 360px;
-  min-height: 320px;
-}
-
-.panel form {
-  display: grid;
-  gap: 8px;
-}
-
-.panel h2 {
-  margin: 0 0 12px;
-}
-
-.panel .failure {
-  margin-bottom: 12px;
-}
-
-.panel form button {
-  margin-top: 8px;
-}
-
-.counts {
-  display: flex;
-  gap: 24px;
-  margin: 0 0 16px;
-}
-
-.counts div {
-  display: grid;
-  gap: 2px;
-}
-
-.counts dt {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.counts dd {
-  margin: 0;
-  font-size: 20px;
-}
-
-.open {
-  color: var(--signal);
-}
+  /* Step bodies enter from the direction of travel: distance-base slide
+     with a medium blur, after transitions-dev 08-page-side-by-side. */
+  .step-forward {
+    animation: step-in-forward var(--duration-fast) var(--ease-smooth-out) both;
+  }
+  .step-back {
+    animation: step-in-back var(--duration-fast) var(--ease-smooth-out) both;
+  }
+  @keyframes step-in-forward {
+    from {
+      opacity: 0;
+      transform: translateX(var(--distance-base));
+      filter: blur(var(--blur-medium));
+    }
+    to {
+      opacity: 1;
+      transform: none;
+      filter: none;
+    }
+  }
+  @keyframes step-in-back {
+    from {
+      opacity: 0;
+      transform: translateX(calc(var(--distance-base) * -1));
+      filter: blur(var(--blur-medium));
+    }
+    to {
+      opacity: 1;
+      transform: none;
+      filter: none;
+    }
+  }
+  /* The done check pops in once, after transitions-dev 10-success-check. */
+  .check-pop {
+    animation: check-pop var(--duration-very-slow) var(--ease-spring) both;
+  }
+  @keyframes check-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.5);
+      filter: blur(var(--blur-large));
+    }
+    to {
+      opacity: 1;
+      transform: none;
+      filter: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .step-forward,
+    .step-back {
+      animation-name: step-fade;
+    }
+    .check-pop {
+      animation-name: step-fade;
+    }
+  }
+  @keyframes step-fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
 </style>

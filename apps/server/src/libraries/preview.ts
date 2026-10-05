@@ -69,11 +69,15 @@ const byTitleThenFolder = (
 const found = (items: number, unrecognised: number): ScanPreview["reason"] =>
   items > 0 ? null : unrecognised > 0 ? "unrecognised" : "empty";
 
-/** Reports what a scan of this absolute folder would find, as a root of its own, without writing anything. */
+/**
+ * Reports what a scan of this absolute folder would find, as a root of its
+ * own, without writing anything. Passing `signal` stops the walk as soon as
+ * the caller aborts.
+ */
 export async function previewScan(
   folder: string,
   medium: Medium,
-  options: { examples?: number } = {},
+  options: { examples?: number; signal?: AbortSignal } = {},
 ): Promise<ScanPreview> {
   if (!isAbsolute(folder)) {
     throw new Error("Preview folder must be an absolute path.");
@@ -92,7 +96,10 @@ export async function previewScan(
   for await (const file of walkLibrary(folder, rules, {
     path: ".",
     recursive: true,
-    onSkipped: (path) => skipped.push(path),
+    signal: options.signal,
+    onSkipped: (path) => {
+      skipped.push(path);
+    },
   })) {
     walked.push({ rootId: "preview", rootName, path: file.path });
   }

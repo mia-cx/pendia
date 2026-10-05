@@ -1,5 +1,5 @@
 import { reachServer } from "./api.ts";
-import { AuthRouteError } from "./errors.ts";
+import { AuthRouteError, type FailureCode } from "./errors.ts";
 
 /** The extra arguments every auth wrapper accepts for tests. */
 export type AuthOptions = {
@@ -136,6 +136,26 @@ export function signIn(
 /** Revokes the current session and clears its cookie. */
 export function signOut(options: AuthOptions = {}) {
   return postJson<{ ok: true }>("/api/auth/logout", undefined, options);
+}
+
+/** The screen-ready sentence explaining the username rules. */
+export const usernameRule =
+  "A username uses letters, digits, dots, underscores and hyphens, and starts with a letter or digit.";
+
+const usernamePattern = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+
+/** Whether a username passes the server's rule after trimming and lowercasing. */
+export function isValidUsername(value: string) {
+  return usernamePattern.test(value.trim().toLowerCase());
+}
+
+type Failure = { code: FailureCode; message: string };
+
+/** Swaps a bad-request failure for the username rule only when the username breaks it. */
+export function accountFailure(failure: Failure, username: string): Failure {
+  return failure.code === "BAD_REQUEST" && !isValidUsername(username)
+    ? { ...failure, message: usernameRule }
+    : failure;
 }
 
 /** An invite token's state, as the status route reads it. */

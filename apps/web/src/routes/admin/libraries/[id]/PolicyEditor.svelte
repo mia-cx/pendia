@@ -1,6 +1,14 @@
 <script lang="ts">
+import MinusIcon from "@lucide/svelte/icons/minus";
+import { toast } from "svelte-sonner";
+import { goto } from "$app/navigation";
 import { client } from "$lib/api.ts";
-import Failure from "$lib/components/Failure.svelte";
+import FormGroup from "$lib/components/admin/FormGroup.svelte";
+import FormRow from "$lib/components/admin/FormRow.svelte";
+import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import { Input } from "$lib/components/ui/input/index.ts";
+import { Switch } from "$lib/components/ui/switch/index.ts";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 import {
@@ -21,8 +29,8 @@ const maxRungs = 8;
 let draft = $state<PolicyDraft | null>(null);
 let busy = $state(false);
 let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
-let saved = $state(false);
 let confirming = $state<string[] | null>(null);
+let confirmOpen = $state(false);
 
 $effect(() => {
   if (draft === null && policy.data) draft = toDraft(policy.data.policy);
@@ -34,12 +42,10 @@ const rungCount = $derived(
 
 function addRung() {
   draft?.rungs.push({ name: "", height: "", bitrateMbps: "" });
-  saved = false;
 }
 
 function removeRung(index: number) {
   draft?.rungs.splice(index, 1);
-  saved = false;
 }
 
 function submit(event: SubmitEvent) {
@@ -48,6 +54,7 @@ function submit(event: SubmitEvent) {
   const deleted = deletedRungs(policy.data.policy, fromDraft(draft));
   if (deleted.length > 0) {
     confirming = deleted;
+    confirmOpen = true;
     return;
   }
   void save();
@@ -55,10 +62,8 @@ function submit(event: SubmitEvent) {
 
 async function save() {
   if (draft === null) return;
-  confirming = null;
   busy = true;
   failure = undefined;
-  saved = false;
   const next: StoredPolicy = fromDraft(draft);
   try {
     const answer = await client.libraries.setStoredVersions({
@@ -67,7 +72,12 @@ async function save() {
     });
     policy.set(answer);
     draft = toDraft(answer.policy);
-    saved = true;
+    toast.success("Stored versions saved", {
+      action: {
+        label: "Show in Activity",
+        onClick: () => goto("/admin/activity"),
+      },
+    });
   } catch (error) {
     failure = readFailure(error);
   } finally {
@@ -76,224 +86,140 @@ async function save() {
 }
 </script>
 
-<section aria-labelledby="stored-heading">
-  <h3 id="stored-heading">Stored Versions</h3>
-  {#if policy.failure}
-    <Failure failure={policy.failure} />
-  {:else if draft === null}
-    <p class="muted">Loading.</p>
-  {:else}
-    <!-- Any edit hides the last save's notice. Number fields keep their text,
-         because bind:value would hand the draft numbers. -->
-    <form onsubmit={submit} oninput={() => (saved = false)}>
-      <fieldset>
-        <legend>Rungs</legend>
-        <div class="check">
-          <input
-            id="keepSource"
-            type="checkbox"
-            bind:checked={draft.keepSource}
-          />
-          <label for="keepSource">Store the source, remuxed</label>
-        </div>
-        {#if draft.rungs.length > 0}
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Height</th>
-                <th>Mbit/s</th>
-                <th><span class="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each draft.rungs as rung, index (index)}
-                <tr>
-                  <td>
-                    <input
-                      aria-label="Rung {index + 1} name"
-                      placeholder={rung.height === "" ? "" : `${rung.height}p`}
-                      maxlength="32"
-                      bind:value={rung.name}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      aria-label="Rung {index + 1} height in pixels"
-                      type="number"
-                      inputmode="numeric"
-                      required
-                      min="144"
-                      max="4320"
-                      step="2"
-                      value={rung.height}
-                      oninput={(event) =>
-                        (rung.height = event.currentTarget.value)}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      aria-label="Rung {index + 1} bitrate in Mbit/s"
-                      type="number"
-                      inputmode="decimal"
-                      required
-                      min="0.1"
-                      max="200"
-                      step="any"
-                      value={rung.bitrateMbps}
-                      oninput={(event) =>
-                        (rung.bitrateMbps = event.currentTarget.value)}
-                    />
-                  </td>
-                  <td class="actions">
-                    <button type="button" onclick={() => removeRung(index)}
-                      >Remove</button
-                    >
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        {/if}
-        <button
-          type="button"
-          onclick={addRung}
-          disabled={rungCount >= maxRungs}>Add rung</button
+{#if draft !== null}
+  <!-- Number fields keep their text: bind:value would hand the draft numbers. -->
+  <form onsubmit={submit} class="flex flex-col gap-8">
+    <FormGroup title="Stored versions">
+      <FormRow label="Store the source, remuxed" for="keepSource" inline>
+        <Switch id="keepSource" bind:checked={draft.keepSource} />
+      </FormRow>
+      {#if draft.rungs.length > 0}
+        <div
+          class="relative hidden grid-cols-[1fr_6.5rem_7.5rem_2rem] items-end gap-2 px-4 pb-1 pt-2.5 text-footnote text-label-secondary @lg:grid"
         >
-      </fieldset>
-
-      <fieldset>
-        <legend>Sources</legend>
-        <p class="muted">
-          A source is stored when it matches any field. Leave all empty to
-          store every source.
-        </p>
-        <label for="minHeight">At least this tall, in pixels</label>
-        <input
-          id="minHeight"
-          type="number"
-          inputmode="numeric"
-          min="1"
-          step="1"
-          value={draft.minHeight}
-          oninput={(event) => {
-            if (draft) draft.minHeight = event.currentTarget.value;
-          }}
-        />
-        <label for="codecs">Video codecs</label>
-        <input id="codecs" placeholder="hevc, av1" bind:value={draft.codecs} />
-        <div class="check">
-          <input id="hdr" type="checkbox" bind:checked={draft.hdr} />
-          <label for="hdr">HDR</label>
+          <span>Name</span>
+          <span>Height</span>
+          <span>Bitrate</span>
+          <span class="sr-only">Remove</span>
         </div>
-      </fieldset>
-
-      {#if failure}
-        <Failure {failure} />
-      {/if}
-      {#if confirming}
-        <div class="confirm" role="alert">
-          <p>
-            Saving deletes the stored {confirming.join(", ")}
-            {confirming.length === 1 ? "rung" : "rungs"} of every Item in this
-            library.
-          </p>
-          <button type="button" onclick={save} disabled={busy}
-            >Save and delete</button
+        {#each draft.rungs as rung, index (index)}
+          <div
+            class="relative flex flex-col gap-2 px-4 py-2.5 before:absolute before:inset-x-4 before:top-0 before:h-px before:bg-separator @lg:grid @lg:grid-cols-[1fr_6.5rem_7.5rem_2rem] @lg:items-center @lg:gap-2"
           >
-          <button type="button" onclick={() => (confirming = null)}
-            >Cancel</button
-          >
-        </div>
-      {:else}
-        <div class="submit">
-          <button type="submit" disabled={busy}>Save</button>
-          {#if saved}
-            <p role="status">
-              Saved. <a href="/admin/activity">Follow store jobs in Activity</a>
-            </p>
-          {/if}
-        </div>
+            <Input
+              aria-label="Rung {index + 1} name"
+              placeholder={rung.height === "" ? "" : `${rung.height}p`}
+              maxlength={32}
+              bind:value={rung.name}
+            />
+            <div class="flex items-center gap-2">
+              <Input
+                aria-label="Rung {index + 1} height in pixels"
+                type="number"
+                inputmode="numeric"
+                required
+                min="144"
+                max="4320"
+                step="2"
+                value={rung.height}
+                oninput={(event) =>
+                  (rung.height = event.currentTarget.value)}
+              />
+              <span class="text-footnote text-label-secondary">px</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <Input
+                aria-label="Rung {index + 1} bitrate in Mbit/s"
+                type="number"
+                inputmode="decimal"
+                required
+                min="0.1"
+                max="200"
+                step="any"
+                value={rung.bitrateMbps}
+                oninput={(event) =>
+                  (rung.bitrateMbps = event.currentTarget.value)}
+              />
+              <span class="text-footnote text-label-secondary">Mbit/s</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Remove rung {index + 1}"
+              onclick={() => removeRung(index)}
+            >
+              <MinusIcon />
+            </Button>
+          </div>
+        {/each}
       {/if}
-    </form>
-  {/if}
-</section>
+      {#snippet actions()}
+        <Button
+          variant="secondary"
+          onclick={addRung}
+          disabled={rungCount >= maxRungs}>Add rung</Button
+        >
+      {/snippet}
+    </FormGroup>
 
-<style>
-section {
-  max-width: 720px;
-}
+    <FormGroup
+      title="Sources"
+      description="A source is stored when it matches any field. Leave all empty to store every source."
+      failure={failure ?? undefined}
+    >
+      <FormRow label="Minimum height" for="minHeight">
+        <div class="flex items-center gap-2">
+          <Input
+            id="minHeight"
+            type="number"
+            inputmode="numeric"
+            min="1"
+            step="1"
+            value={draft.minHeight}
+            oninput={(event) => {
+              if (draft) draft.minHeight = event.currentTarget.value;
+            }}
+          />
+          <span class="text-footnote text-label-secondary">px</span>
+        </div>
+      </FormRow>
+      <FormRow label="Video codecs" for="codecs">
+        <Input id="codecs" placeholder="hevc, av1" bind:value={draft.codecs} />
+      </FormRow>
+      <FormRow label="HDR" for="hdr" inline>
+        <Switch id="hdr" bind:checked={draft.hdr} />
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={busy}>Save</Button>
+      {/snippet}
+    </FormGroup>
+  </form>
 
-form {
-  display: grid;
-  gap: 24px;
-}
-
-fieldset {
-  display: grid;
-  max-width: 480px;
-  gap: 8px;
-  justify-items: start;
-}
-
-fieldset > input {
-  width: 100%;
-}
-
-legend {
-  margin-bottom: 8px;
-  padding: 0;
-  font-weight: 600;
-}
-
-fieldset p {
-  margin: 0;
-}
-
-table {
-  table-layout: fixed;
-}
-
-th,
-td {
-  padding: 6px 8px 6px 0;
-}
-
-td input {
-  width: 100%;
-}
-
-th:last-child,
-td.actions {
-  width: 96px;
-}
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-}
-
-.check label {
-  font-weight: 400;
-}
-
-.submit,
-.confirm {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-}
-
-.submit p,
-.confirm p {
-  flex-basis: 100%;
-  margin: 0;
-}
-
-.submit p {
-  flex-basis: auto;
-}
-</style>
+  <ConfirmDialog
+    bind:open={confirmOpen}
+    title="Delete the stored {confirming?.join(', ')} rung{confirming !== null &&
+    confirming.length > 1
+      ? 's'
+      : ''}?"
+    description="Every Item in this library loses these stored versions."
+    action="Save and delete"
+    onconfirm={save}
+    onclosed={() => (confirming = null)}
+  />
+{:else}
+  <FormGroup
+    title="Stored versions"
+    loading={policy.data === undefined && !policy.failure ? 2 : undefined}
+    failure={policy.failure ?? undefined}
+  >
+    {#snippet actions()}
+      {#if policy.failure}
+        <Button
+          variant="secondary"
+          onclick={() => policy.reload()}
+          disabled={policy.loading}>Try again</Button
+        >
+      {/if}
+    {/snippet}
+  </FormGroup>
+{/if}

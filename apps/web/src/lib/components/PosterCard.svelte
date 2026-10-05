@@ -1,11 +1,11 @@
 <script lang="ts">
 import {
   type BrowseCard,
-  episodeCode,
+  cardLabel,
   type ItemCard,
   itemHref,
 } from "$lib/browse.ts";
-import Poster from "$lib/components/Poster.svelte";
+import Artwork from "$lib/components/Artwork.svelte";
 
 const {
   card,
@@ -21,95 +21,83 @@ const href = $derived(itemHref(card));
 const posterId = $derived(
   card.posterArtworkId ?? context?.show?.posterArtworkId ?? null,
 );
-const caption = $derived.by(() => {
-  if (context?.kind === "episode") {
-    const code = episodeCode(context);
-    const show = context.show?.title;
-    return [show, code].filter(Boolean).join(" · ");
-  }
-  if (card.kind === "season") return null;
-  return card.year === null ? null : String(card.year);
-});
+// Its fallback names the Show, which reads in a frame; an Episode's own
+// title is "Episode 1".
+const posterTitle = $derived(context?.show?.title ?? card.title);
+const caption = $derived(card.year === null ? null : String(card.year));
 const fraction = $derived(
   progress === null || !progress.durationSeconds
     ? null
     : Math.min(1, progress.positionSeconds / progress.durationSeconds),
 );
+const label = $derived(
+  fraction === null
+    ? cardLabel(card)
+    : `${cardLabel(card)}, ${Math.round(fraction * 100)}% watched`,
+);
 </script>
 
-<svelte:element this={href === null ? "div" : "a"} {href} class="card">
-  <Poster
-    artworkId={posterId}
-    title={card.title}
-    sizes="(max-width: 640px) 33vw, 180px"
+<svelte:element
+  this={href === null ? "div" : "a"}
+  {href}
+  aria-label={href === null ? undefined : label}
+  class="group block min-w-0 text-label no-underline outline-none"
+>
+  <span
+    class="relative block transition-[transform,box-shadow] duration-(--duration-fast) ease-smooth-out group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-tint group-focus-visible:outline-offset-2 motion-safe:group-hover:-translate-y-1 motion-safe:group-hover:scale-[1.03] motion-safe:group-hover:shadow-lift motion-safe:group-hover:duration-(--duration-fast) motion-safe:group-hover:ease-spring motion-safe:group-focus-visible:-translate-y-1 motion-safe:group-focus-visible:scale-[1.03] motion-safe:group-focus-visible:shadow-lift rounded-poster"
   >
-    {#if fraction !== null}
-      <span class="progress" aria-hidden="true">
-        <span style:width={`${fraction * 100}%`}></span>
-      </span>
-    {/if}
-  </Poster>
-  <span class="title">{card.title}</span>
-  {#if fraction !== null}
-    <span class="sr-only">{Math.round(fraction * 100)}% watched</span>
+    <Artwork
+      artworkId={posterId}
+      title={posterTitle}
+      kind={card.kind}
+      {caption}
+      sizes="(max-width: 640px) 33vw, 180px"
+    >
+      {#snippet children(showsImage: boolean)}
+        {#if fraction !== null && showsImage}
+          <span
+            class="absolute inset-x-0 bottom-0 h-[30%] bg-linear-to-t from-black/60 to-transparent transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-0 group-focus-visible:opacity-0"
+            aria-hidden="true"
+          ></span>
+        {/if}
+        {#if showsImage}
+          <span
+            aria-hidden="true"
+            class="absolute inset-x-0 bottom-0 flex h-[45%] flex-col justify-end gap-0.5 bg-linear-to-t from-black/75 via-black/40 to-transparent p-2.5 {fraction !==
+            null
+              ? 'pb-5'
+              : ''} opacity-0 transition-opacity duration-(--duration-fast) ease-smooth-out group-hover:opacity-100 group-focus-visible:opacity-100"
+          >
+            <span class="truncate text-subheadline font-semibold text-white"
+              >{posterTitle}</span
+            >
+            {#if caption !== null}
+              <span class="text-caption-1 text-white/70">{caption}</span>
+            {/if}
+          </span>
+        {/if}
+        {#if fraction !== null}
+          <span
+            class="absolute inset-x-2 bottom-2 h-1 overflow-hidden rounded-full {showsImage
+              ? 'bg-white/35'
+              : 'bg-fill-strong'}"
+            aria-hidden="true"
+          >
+            <span
+              class="block h-full bg-tint"
+              style:width={`${fraction * 100}%`}
+            ></span>
+          </span>
+        {/if}
+      {/snippet}
+    </Artwork>
+  </span>
+  {#if card.kind === "season"}
+    <span class="mt-2 block truncate text-subheadline text-label"
+      >{card.title}</span
+    >
   {/if}
-  {#if caption}
-    <span class="caption">{caption}</span>
+  {#if href === null}
+    <span class="sr-only">{label}</span>
   {/if}
 </svelte:element>
-
-<style>
-  .card {
-    display: grid;
-    align-content: start;
-    gap: 2px;
-    min-width: 0;
-    color: var(--ink);
-    text-decoration: none;
-  }
-
-  .card > :global(.frame) {
-    margin-bottom: 6px;
-  }
-
-  a.card:hover > :global(.frame) {
-    outline: 2px solid var(--signal);
-    outline-offset: 2px;
-  }
-
-  .progress {
-    position: absolute;
-    right: 8px;
-    bottom: 8px;
-    left: 8px;
-    height: 4px;
-    overflow: hidden;
-    border-radius: 2px;
-    background: oklch(100% 0 0deg / 35%);
-  }
-
-  .progress span {
-    display: block;
-    height: 100%;
-    background: var(--signal);
-  }
-
-  .title {
-    display: -webkit-box;
-    overflow: hidden;
-    font-size: 14px;
-    font-weight: 600;
-    line-height: 1.3;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-  }
-
-  .caption {
-    overflow: hidden;
-    color: var(--muted);
-    font-size: 13px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-</style>

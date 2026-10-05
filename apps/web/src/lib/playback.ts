@@ -153,6 +153,22 @@ export function subtitleNames(streams: readonly SubtitleStream[]): string[] {
   );
 }
 
+/**
+ * The Version to open: the one a link asked for, else the one progress was
+ * made on, else the first.
+ */
+export function pickVersion<V extends { id: string }>(
+  versions: readonly V[],
+  askedId: string | null,
+  progressId: string | null | undefined,
+): V | undefined {
+  return (
+    versions.find((version) => version.id === askedId) ??
+    versions.find((version) => version.id === progressId) ??
+    versions[0]
+  );
+}
+
 /** A playback position as `12:34` or `1:02:03`. */
 export function formatPosition(seconds: number): string {
   const total = Math.floor(seconds);

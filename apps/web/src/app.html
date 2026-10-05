@@ -2,7 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c0c0e" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <style>
+      /* Paint the page colour before the stylesheet arrives, so a dark-mode reload never flashes white. */
+      html { background: #ffffff; }
+      @media (prefers-color-scheme: dark) { html { background: #0c0c0e; } }
+    </style>
+    <script>
+      // Restore the collapsed sidebar before first paint so its width never jumps.
+      // localStorage can be blocked; the sidebar then simply starts expanded.
+      try {
+        if (localStorage.getItem("pendia.sidebar") === "collapsed")
+          document.documentElement.dataset.sidebar = "collapsed";
+      } catch {}
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

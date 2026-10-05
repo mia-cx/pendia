@@ -1,44 +1,172 @@
 # Pendia web design
 
-The browse client is where someone picks what to watch. Posters carry the colour; the chrome stays quiet so the artwork reads first.
+Pendia should feel like Apple built a self-hosted media player. Artwork leads, the chrome is translucent and quiet, titles are large and confident, and one accent marks what matters. This file is the system's source of truth. Each redesign slice extends it rather than repeating it.
 
-## Layout
+## Principles
 
-- One header on every browse screen: the Pendia mark, Home, Movies and Shows, a search field, then Admin for built-in admins and Sign out. Below 720 px it folds into three rows: mark and account, sections, then a full-width search field.
-- Content sits in one column with a fluid side gutter, `--gutter`, from 16 px to 40 px.
-- Home stacks its shelves. Each shelf is one horizontal row that scrolls and snaps to cards, so a long shelf never pushes the next one off screen.
-- Movies, Shows and search results share one poster grid, `.poster-grid`: columns at least 140 px wide, or a quarter of the viewport on a phone, which keeps three posters across.
-- The Movies and Shows grids load 24 cards at a time. Show more loads the next page and also fires as it scrolls into view, so scrolling just continues.
-- A detail page leads with the backdrop when one exists, then the poster beside the title, facts, an actions row and the overview. Seasons, Episodes, Versions and credits follow as their own sections. The actions row is where the web player adds Play.
+- Artwork carries the colour. Chrome is neutral, so a poster is the loudest thing on screen.
+- One accent, the tint. It marks the current section, progress, focus, switches and sliders. The primary button is the label colour, near-black on light and white on dark, as in the Apple TV app.
+- Materials sit over content, never beside it. A sidebar, tab bar or menu blurs what scrolls beneath it.
+- Motion is short and physical: things lift, rise and settle. Reduced motion keeps every fade and drops every movement.
+- Geometry is reserved before content loads, so nothing jumps.
 
-## Cards
+## Tokens
 
-- A poster card reserves a 2:3 frame before its image loads, so nothing shifts.
-- A missing poster shows the title inside the frame on `--surface`. A Season or Episode without its own poster borrows its Show's.
-- Under the frame: the title, clamped to two lines, and one caption line. Movies and Shows caption their year. Episodes caption their Show and code, such as `Severance · S1 E2`.
-- Continue watching cards draw a progress bar across the bottom of the frame and announce the percentage to screen readers.
+All tokens live in `src/lib/app.css`. Each colour is defined once with `light-dark()`, in a block declared on both `:root` and `.dark`. Lightning CSS resolves `light-dark()` where a token is declared, so declaring the block on `.dark` too is what lets a `.dark` subtree (the player, heroes, landscape cards) recompute every token with dark values. Light and dark follow the system setting; there is no theme switch.
 
-## Type
+Tailwind's default palette, type scale and radii are reset. Only these tokens exist, so an ad hoc colour or size fails to compile into anything.
 
-The system UI stack, as in the admin screens. Titles at 600 weight, captions in `--muted` at 13 px. Headings follow `app.css`: 28 px pages, 20 px sections.
+### Colour
 
-## Colour
+| Token | Utility | Role |
+| --- | --- | --- |
+| `--background` | `bg-background` | The window. White on light, near-black on dark. |
+| `--background-elevated` | `bg-elevated`, `bg-card` | Grouped surfaces and empty poster frames. |
+| `--background-raised` | `bg-raised`, `bg-popover` | Dialogs and the selected segment. |
+| `--label` | `text-label`, `bg-primary` | Primary text, and the primary button. |
+| `--label-secondary` | `text-label-secondary` | Captions, metadata, placeholders. |
+| `--label-tertiary` | `text-label-tertiary` | Decorative glyphs and shortcuts. Never body text. |
+| `--fill`, `--fill-strong` | `bg-fill`, `bg-fill-strong` | Control fills, hover and pressed states. |
+| `--separator` | `border-separator`, `bg-separator` | Hairlines between groups. |
+| `--border-control` | `border-input` | Field borders where a fill alone is not enough. |
+| `--tint`, `--tint-fill` | `text-tint`, `bg-tint`, `bg-tint-fill` | The accent, Pendia indigo, and its translucent wash. |
+| `--destructive` | `text-destructive`, `bg-destructive` | Destructive actions and errors. |
+| `--success` | `text-success` | Confirmations. |
+| `--scrim` | `bg-scrim` | Behind dialogs and sheets. |
 
-The admin tokens in `app.css` with two additions: `--surface` fills empty poster frames and `--line` draws rules. Light and dark follow the system setting, and high-contrast mode keeps its stronger ink. `--signal` marks the current section, hover and focus, and progress.
+High contrast (`prefers-contrast: more`) swaps in pure black and white labels, stronger fills and separators, a deeper tint, nearly opaque materials and a 3 px focus ring.
 
-## Player
+### Materials
 
-- Movie and Episode pages put Play in the actions row. With unfinished Progress the row shows Resume from the saved position, as the primary button, and Play from start beside it. The row keeps a 44 px height while it loads.
-- `/play/{id}` fills the window. One bar on top holds Back, the title (an Episode adds its Show and code underneath), and a Version select when the Item has more than one Version. Below 640 px the select takes its own row. The video fills the rest with `object-fit: contain`.
-- The stage is dark in both colour schemes: the player sets the dark tokens on its own root, so its controls and select render dark too.
-- The video element keeps the browser's own controls: play, seek, volume, fullscreen and the captions menu that lists the WebVTT tracks. They are keyboard operable and familiar on every platform.
-- Notices sit over the stage, centred, without moving anything: Cannot play this Version, Server unreachable and Playback stopped. Only the last two offer Try again, which restarts at the current position.
-- Back returns through history when the detail page opened the player, so the browser's own Back does not land on the player again.
+`material` and `material-thick` are utilities: a translucent fill, a 28 px backdrop blur at 180% saturation, and a 0.5 px inner edge. `material` is for bars and the sidebar; `material-thick` is for menus, popovers, tooltips, toasts and sheets. When the browser cannot blur, or the user asks for reduced transparency, both resolve to `--material-solid`.
 
-## Offline
+### Type
 
-A service worker caches the build and `200.html`. With the server stopped, the app still opens, and the first failed request shows Server unreachable with Try again. API calls and media never pass through the worker.
+The stack is `-apple-system, BlinkMacSystemFont, InterVariable, sans-serif`. Apple devices render SF Pro and never download Inter. Everywhere else renders Inter 4.1 variable, served by Pendia from `static/fonts` under the SIL Open Font License (`static/fonts/LICENSE.txt`), so it works offline. Inter's optical sizes switch to its display cut at large sizes on their own.
 
-## Shape
+One scale, Apple's platform sizes. Weight and tracking travel with the size, so `text-title-2` alone sets all three.
 
-Posters round at `--radius-poster`, 8 px. Hovering a poster draws a 2 px `--signal` outline, the same as keyboard focus.
+| Utility | Size / line | Weight | Tracking | Use |
+| --- | --- | --- | --- | --- |
+| `text-display` | 36 to 56 / 1.07 | 700 | -0.03em | Hero titles without logo art |
+| `text-large-title` | 34 / 41 | 700 | -0.025em | Page titles |
+| `text-title-1` | 28 / 34 | 700 | -0.022em | Hero titles |
+| `text-title-2` | 22 / 28 | 700 | -0.019em | Shelf and section headings |
+| `text-title-3` | 20 / 25 | 600 | -0.017em | Dialog titles, the wordmark |
+| `text-headline` | 17 / 22 | 600 | -0.011em | Emphasised rows, alert titles |
+| `text-body` | 17 / 22 | 400 | -0.011em | Body text, phone fields |
+| `text-callout` | 16 / 21 | 400 | -0.01em | Supporting paragraphs |
+| `text-subheadline` | 15 / 20 | 400 | -0.009em | Sidebar rows, menus, buttons, card titles |
+| `text-footnote` | 13 / 18 | 400 | -0.003em | Captions, table headers, tooltips |
+| `text-caption-1` | 12 / 16 | 400 | 0 | Badges |
+| `text-caption-2` | 11 / 13 | 400 | 0.006em | Tab bar labels |
+
+### Shape, space and depth
+
+- Radii: `rounded-xs` 4, `rounded-sm` 6, `rounded-md` 10 (buttons, fields), `rounded-lg` 14 (menus, popovers), `rounded-xl` 20 (dialogs, sheets), `rounded-2xl` 28 (the sidebar), `rounded-poster` 10, `rounded-full` for icon buttons, badges and the tab bar.
+- Spacing is Tailwind's 4 px scale. The page gutter is `--gutter`, from 16 px to 48 px.
+- `bleed` pulls a block out to the window's edges: under the sidebar on the left and through the gutter on the right. Heroes, the carousel and shelf tracks use it.
+- `artwork-fallback` is the surface behind missing artwork: a two-stop gradient in a muted hue picked from the title (`fallbackHue` in `browse.ts`), under a soft sheen from the top-left. The hue stays quiet, so chrome remains neutral and a sparse library still looks designed. High contrast drops the hue to grey.
+- `shadow-float` lifts menus, the sidebar and the tab bar off the page. `shadow-lift` is the shadow under a lifted poster.
+
+### Motion
+
+After the transitions.dev scale: `--duration-micro` 80 ms for shake segments, `--duration-quick` 150 ms for closes and tooltips, `--duration-fast` 250 ms for opens, hovers and page fades, `--duration-medium` 350 ms for sheets, `--duration-slow` 400 ms for image fades, toasts and progress bars, `--duration-very-slow` 500 ms for emphasis moments. Distances `--distance-micro` 4, `--distance-small` 6, `--distance-base` 8, `--distance-medium` 12 and `--distance-large` 30 px, scales `--scale-tiny` to `--scale-large` and blurs `--blur-small` to `--blur-large` complete the scale. `ease-smooth-out` settles everything; `ease-spring` carries a small overshoot for lifts and the switch thumb. Opens are slower than closes. Under reduced motion, a global rule zeroes tw-animate's translate, scale and rotate, so every sheet, menu and dialog fades instead of moving, and lifts become a shadow change.
+
+### Focus
+
+One ring for every control: a 2 px tint outline, 2 px out, from `:focus-visible` in `app.css`. Components never draw their own.
+
+## Components
+
+The shadcn-svelte set lives in `src/lib/components/ui`, on bits-ui for keyboard and ARIA behaviour, restyled to these tokens. Screens use only these and the media components below; no screen styles a raw control. The dev-only `/design` page renders every component in every state and is the reference to check against; production builds answer it with 404.
+
+- **Button**: `default` (label colour), `secondary` (fill), `ghost`, `outline`, `tinted`, `glass` (material, for buttons over artwork), `destructive` and `link`. Sizes `sm` 32, `default` 40 (44 on touch), `lg` 48, `pill` 44 (the round-ended Play button on heroes), and round `icon-sm`, `icon`, `icon-lg`. Buttons press down to 97%.
+- **Input**: a filled field with no border, 17 px on phones so iOS does not zoom, 15 px from 1024 px.
+- **Label**: a subheadline-medium caption 6 px above its field. An optional field reads `Display name Optional`, the marker in secondary label colour.
+- **Progress**: a 6 px capsule; the tint indicator eases to its width. Indeterminate slides a tint segment on a loop, or pulses a static segment under reduced motion.
+- **Select**: an Apple pop-up button with up-down chevrons; the chosen item shows a leading check.
+- **Dropdown menu, popover, tooltip**: `material-thick`, growing from their trigger. Tooltips wait 500 ms and close at once. Radio items lead with a check on the chosen one, like Select.
+- **Dialog, alert dialog, sheet**: over the scrim. Alerts are compact and centred, with two full-width buttons that name the action. Side sheets float inset from the edge; bottom sheets carry a grabber. Dialogs and alerts stop 1rem short of the dynamic viewport and scroll inside, so their buttons stay reachable in phone landscape.
+- **Slider, switch, tabs**: the tint fills the range and the on switch. Tabs are a segmented control. The slider's `media` variant is the player's: a 4 px track in translucent white that thickens to 6 px under the pointer, a white range, a `track` layer for buffered ranges, and a thumb that shows only on hover, focus or drag. `valueText` gives the thumb words to announce.
+- **Table**: hairline rows, footnote headers, tabular numbers.
+- **Failure**: a destructive-tinted callout for screen-level errors. Its `inline` mode is a single destructive row with an alert icon, for failures inside a form.
+- **Textarea**: the same filled field as Input, `min-h-24` and vertically resizable.
+- **Toast**: svelte-sonner, bottom centre and above the tab bar on phones, following the system scheme.
+- **Badge, skeleton, scroll area**: capsules, pulsing fills, and overlay scrollbars that show on hover.
+
+## Media components
+
+Artwork leads every one of these. Titles come from the art itself where it has them: TMDB posters carry the title, and logos stand in for it on heroes and landscape cards. Text only appears where the art has none.
+
+- **Artwork** is the one frame for every image: 2:3 (`poster`) or 16:9 (`landscape`), reserved before the image loads, with a hairline so light art does not bleed into a light page, and a fade-in. A missing or failed image shows `artwork-fallback`. A poster fallback carries the medium's icon at the top-left and the title in `text-title-3` with the year under it at the bottom-left, so the title prints once. A landscape fallback is the bare surface, because its card draws the title. A Season or Episode without its own poster borrows its Show's, and its fallback names the Show.
+- **Poster card** is the frame alone, like the posters in the Apple TV app's shelves: nothing under it. The link's accessible name is the title and year, or the Show and code for an Episode. Hover and keyboard focus lift the frame 4 px and scale it to 103% on a spring, with `shadow-lift`, and the focus ring sits on the frame. A card with progress draws a tint bar, over a soft scrim when there is artwork, and adds the percentage watched to its name.
+- **Landscape card** is for Continue Watching and Next Up. It is always dark inside, like a hero. The art is an Episode's still, else its Show's backdrop, else a Movie's backdrop. Over a bottom scrim sit the logo (the Show's for an Episode) or the title in `text-headline`, then one line: `38m left` for a Movie, `S1, E2 · 22m left` for an Episode, or `S1, E3 · Episode title` in Next Up. Progress is a tint bar under it. A Next Up Episode added in the last week wears a `New` badge. Clicking plays: Resume with progress, Play without. The lift matches the poster card's at 102%, and carries the menu button with it.
+- **Card menu** is the `…` glass button at a landscape card's bottom-right. It holds only actions Pendia has: Go to movie, Go to episode, Go to season or Go to show, and Play from start when there is progress. Mark as watched, the watchlist and Share join it with #106.
+- **Shelf** is one row that scrolls sideways and snaps to cards, in three sizes: posters (176 px wide from 1024 px), landscape cards (240 to 304 px) and small person tiles. The track bleeds under the sidebar, so cards slide beneath its material. On pointer devices, when the row overflows, glass paddles sit at both edges, centred on the cards; they show while the pointer is over the row or when focused, and hide at the ends. The title carries a `›` only when the shelf has a page to open, so a chevron always leads somewhere.
+- **Hero** is a full-bleed image at least the height of most of the window (78% on phones, up to 82% from 1024 px), always dark inside. Taller content grows it, so a short window never clips the title. The backdrop fills it under a bottom scrim, a left scrim from 1024 px and a thin top scrim for the phone's profile button. Without a backdrop, the poster fills it as a blurred, darkened wash; without either, a dark gradient or, when a page passes a hue, the title's `artwork-fallback`. A hero with no art at all renders shorter, so art-free pages reach their content sooner. At the bottom-left, in the content column: the logo, bottom-aligned in a reserved box, or the title in `text-display`; then the content the page gives it. Detail pages add an eyebrow line above the title (the owning Show's name, as links) and may place an aside at the bottom-right from 1024 px. Home's carousel uses it, and the detail pages share it.
+- **Ambient backdrop** is the page's fixed underlay on detail screens: the hero's art stretched, blurred and saturated under a scheme wash, or the title's `artwork-fallback` hue when there is none. Reduced transparency swaps it for the plain background.
+- **Detail bar** is the sticky top bar on detail screens: a round glass Back button, and the Item's title. Over the hero it has no background and the title is hidden; once the hero is half scrolled away the bar turns to `material` with a hairline and the title fades in. Back returns to the previous in-app page, else a per-kind fallback.
+- **Overview** clamps the Item's overview to three lines in the hero. When it truly overflows, a `More` pill sits at the last line's end over a masked fade, and opens a Dialog titled with the Item's title showing the full text.
+- **Format badges** are outlined capsules beside the facts row, one per picture format the Versions offer, best first, such as `4K` or `Dolby Vision`, never more than one resolution badge.
+- **Detail actions** sit under the facts row: the white pill (Resume or Play for Movies and Episodes, or the up-next Episode on Shows and Seasons as `Resume S1, E2` or `Play S1, E3`), a round glass Play from start when a position exists, and on every page a round glass favourite toggle, a round glass rating button and, for admins, a round glass menu with Refresh metadata. The rating button opens a popover of five radio stars with hover preview and arrow keys; the saved rating shows as `Rated n of 5`. The row keeps its 44 px height while it loads.
+- **Episode card** is one play link for an Episode, like the landscape card: clicking plays, and its menu leads to the episode page. It shows the still (else its Show's backdrop) with a progress bar at the frame's edge, then `EPISODE 3`, the title, a three-line overview and a footer of `41m`, `22m left` or `Watched`, with the card menu floating at its corner. The current episode gets a tint ring and `aria-current`. It lifts like the landscape card on hover and focus.
+- **Season picker** heads the Show page's episode shelf: when there is more than one Season, the heading is a menu trigger offering the Seasons as a radio list, Specials last; switching swaps the shelf in place.
+- **Versions** lists an Item's Versions as a grouped inset list: the format label, runtime and size, and a round play button per Version.
+- **Store request** offers an Item's unstored qualities as a Select with a Queue button, one row under the Versions list.
+- **Credit row** is the `Cast & crew` shelf of person tiles: a circle of initials on the person's fallback hue, then the name and the character or role.
+- **Hero carousel** opens Home with up to five heroes: Continue Watching first, then Recently added, with art-led Items before any without a backdrop. Each slide shows `Movie · Romance · Drama · 2013` (an Episode shows its code and title), a two-line overview whose space is reserved before it loads, the white pill (`Resume`, `Play`, or `Go to show` for a Show) and a round glass details button. Slides scroll and snap, so touch swipes them natively. Thin chevrons at both edges (pointer devices) wrap around, and dots centred under the content jump to a slide. It never advances on its own: a carousel that moves by itself needs a pause control, and Home is about what you were watching. It is a region named Featured; each slide is a group named `2 of 5`, and slides out of view are inert.
+- **Poster grid** fills the width with columns at least 152 px wide, or three across on a phone.
+- **Scrubber** is the player's timeline, on the media slider. Buffered ranges show in a lighter white. While a mouse hovers it or a drag runs, a capsule above the pointer shows the time there; that capsule is the slot scrubber thumbnails join later. A drag shows its time and seeks once, on release. Screen readers hear `12:34 of 1:45:00`.
+- **Player settings** is the gear menu at the player's bottom right. It holds Version, Audio and Subtitles, in that order, as grouped sections with a leading check on the current choice. Each section appears only when it offers a choice, and the gear hides when none does. Version rows add the File's size. A section with more than five options folds into one row that shows the current choice and opens a submenu, so the menu stays short. Choices disable while a switch runs. The menu renders inside the player, so it stays dark and shows in fullscreen.
+- **Skeletons** copy the loaded geometry exactly: the hero's height, the shelf header row and the card frames, using the shelf's own column sizes, so nothing moves when content arrives.
+
+## Shell
+
+- **From 1024 px**: a floating sidebar, inset 8 px from the window, in `material` with `rounded-2xl`. It holds the wordmark and the collapse button, then Search, Home, Movies and Shows; under a medium with more than one library, each library, linking to its filtered grid (`/movies?library=<id>`). Settings, for admins, and the account sit at its foot. The account opens a menu with Sign out. Collapsed, it becomes an icon rail with tooltips, and remembers that across visits without a width jump on load. The current section gets the tint wash.
+- **Below 1024 px**: a floating tab bar capsule in `material` above the home indicator carries Home, Movies, Shows, Search and, for admins, Settings. The current tab gets the tint and a tint-wash pill. A glass profile button at the top of the page, showing the account's initials, opens the account menu.
+- Content starts at `--shell-start`, past the sidebar and the gutter. Full-bleed content may extend under the sidebar with a negative margin of the same size.
+- A skip link leads to the content. Page changes cross-fade through view transitions, with the sidebar and tab bar held still; typing in search, sorting and filtering do not fade.
+- Viewers cannot list libraries yet (#115), so for them the sidebar shows the medium sections only.
+
+## Admin
+
+Admin is a settings app laid out like System Settings. From 1024 px the same floating sidebar the browse shell uses carries a Home link, a search field and the sections in three groups: Overview and Activity, then Libraries, Users and Groups, then Plugins and General. Typing filters the groups into one flat list. Below 1024 px the section list is the first screen and each section pushes in from the right; the phone tab bar stays, with Settings current, so Home is one tap away. Push and pop animate the content pane like iOS, with a cross-fade on desktop, at equal depth and under reduced motion. The settings screen is labelled General in the nav, because Settings inside Settings would read as itself; its URL stays `/admin/settings`.
+
+- **AdminPage** is the one section layout: a tinted back row (the parent on detail pages, or "Settings" back to `/admin` on phones), a `text-large-title` with its actions at the end of the row on desktop and below it on phone, then a `max-w-3xl` column of groups.
+- **FormGroup** is one grouped panel: an optional `text-headline` title, a `rounded-lg bg-elevated` panel, a footnote description and action buttons on the row below it. When its root is a `form` the actions hold the Save button. While it loads, skeleton rows hold the same height. A failure renders between the panel and the footnote. With `bare` the panel stays off and the group is only its container, heading and footnote, so callers can lay out their own cards; loading is then the caller's to skeleton.
+- **FormRow** is a label/control pair inside a panel, with an inset hairline between rows. From the panel's `@lg` container width up it is a `[12rem_minmax(0,1fr)]` grid; below it stacks. Below that width, `inline` rows keep the label left and the control at the end on one line instead, for switches, selects and read-only values.
+- **ListRow** is a navigable row inside a panel: leading content, a title over a caption, trailing content and a chevron. With `href` the whole row is the link; with `onclick` it is a button. `tone="destructive"` colours the caption for a failure, such as an unreachable registry, and wraps it instead of truncating, so the whole error stays readable.
+- **EmptyState** fills a panel when it has nothing to show: a round fill icon, a `text-headline` title and an optional action.
+- **CapabilityList** is the one read of a plugin's declared capabilities: a plain panel of rows, each an icon next to the capability's `describeCapabilities` line, plus its named network hosts. The files icon is destructive, because it writes to the library. A plugin with none reads "It asks for no permissions."
+- **PluginCard** is one installed plugin in a grid of `bg-elevated` cards: a tile with the puzzle glyph, the name, `version · origin`, a status dot (success on, tertiary off, destructive failed) with the failed time and message, and its switch. A failed plugin shows a Restart button instead of the switch. The buttons are Configure, always present, and Remove in ghost destructive through `ConfirmDialog`. The card's failures render above its buttons.
+- **FilesSwitch** is the Select that sets one plugin's or all plugins' file access: On, Off for an hour, Off for a day or Off, with an extra "Off until …" item while a timed window runs. It saves on change and reports through `onfailure`.
+- **ConfigForm** renders a plugin's config fields as a Settings `FormGroup`: booleans as inline switches, options as a Select (optional fields get a "Not set" item), numbers and strings as Inputs, everything else as a mono Textarea. It saves through the caller's callback and confirms with a "Settings saved" toast.
+- **AdminNav** renders the sections for the sidebar and the phone list from the one model in `$lib/admin.ts`, along with the search field.
+- **ScanState** is a library scan's dot and label, from `scanState` in `$lib/scan.ts`, with an optional "Last scan" footnote decoded from the run's UUIDv7.
+- **FolderBrowser** picks a server folder: a dialog from 1024 px and a full-height bottom sheet below, one shared body. A scrollable breadcrumb and a typed path (slashes collapsed, trailing slash dropped) sit under the title, the child folders list fills the middle, and a preview region shows what a scan of the current folder would find, debounced and aborted on every move. A listing failure replaces the preview. Opening or moving by row or crumb focuses the first folder row. `onchoose` throws to keep it open.
+- **FolderFields** is the Folders panel of a library form: one row per folder with Change and Remove, an Add folder action and one FolderBrowser configured for add or repoint. Removing a saved folder confirms first.
+
+Saves confirm with a toast and failures stay inline in their own group. Destructive actions go through `ConfirmDialog`, whose title names the loss ("Revoke this session?"). Write-only secrets use `SecretInput`, a password field with an eye toggle. `TabBar` is shared by the browse and admin shells.
+
+## Screens
+
+- **Page header**: `text-large-title`, with its controls at the end of the same row on desktop and below it on phone, where the title shares its row with the profile button.
+- **Home**: the hero carousel from the window's top edge, then the shelves: Continue Watching and Next Up as landscape shelves, every other shelf as posters. The title is for screen readers while the hero shows, and visible on phones otherwise. A hero-sized skeleton and two skeleton shelves hold the page while it loads. Empty Home offers Add a library to admins.
+- **Movies and Shows**: a large title, the library's name when filtered, a Sort menu (Recently added, Title) kept in the URL, and the poster grid. It loads 24 cards at a time and fetches the next page 800 px before the end comes into view, with a row of skeleton posters reserving the space and a status for screen readers. There is no Show more button. A failed page shows the error with Try again.
+- **Search**: a large title and the search field, focused on arrival with a pointer. Results update 150 ms after typing stops, and the query stays in the URL. They come grouped as Movies and Shows, in the order of each group's best match. The previous results stay, dimmed, until the next answer arrives, so the page never flashes empty while you type. A status tells screen readers how many results matched.
+- **Admin libraries**: the list is one group of rows, each with the medium icon, the folder count and the scan state, pushing into the library. New library is one form: name and medium, then FolderFields keeping a draft until Add library. The library page is groups in order name and medium, Folders, Scan, Stored versions, Delete. Folder changes save at once on a saved library; the browser's button adds or repoints, Remove asks first, and the name saves with its own Save. The preview names what it found ("12 movies", "3 seasons, 40 episodes"), what it could not name ("2 videos weren't recognised"), or why there is nothing ("Nothing to scan here", "This folder doesn't exist").
+- **Plugins**: installed plugins as a grid of PluginCards, two to a row when the column allows, then the all-plugins file access, the Available list from every registry, and Registries with an add row. Add plugin opens a dialog: a source field, then a preview that lists every capability before Install. An Available row opens the same preview directly. Configure opens a dialog with the plugin's capabilities, its file access when it has `files`, and its ConfigForm. Remove goes through an alert that names what goes with the plugin.
+- **Activity**: Now playing has one row per session: the landscape still, the title linking to its page, who is watching and on which app, the play method as a badge (tint only for Transcode) beside the Version, then for a transcode its output, node and what it converts, and a progress bar with the time. Store jobs list running jobs with a poster, segment counts and a bar, then the queued ones with when they start. Both groups reload every 10 s and on session events, and the bars move without shifting anything.
+- **Detail pages**: all four kinds share one layout: the ambient backdrop under everything, the detail bar over a full-bleed hero, then sections on the page scheme. The hero shows the eyebrow (a Season's or Episode's Show and season), the logo or title, a meta line with the content rating, the clamped overview, a facts row with format badges, the actions row and, when the Item has credits, the starring aside. A Movie's section order is Versions (with the store request row), then Cast & crew. A Show's is the season picker and episode shelf, then Cast & crew. A Season's is an Episodes grid, then Cast & crew. An Episode's is More in its Season, then Versions, then Cast & crew. A hero-sized skeleton and the bar hold the page while the detail loads.
+- **Player**: `/play/{id}` fills the window with the video and is always dark. Nothing is pinned above the picture. Two bands fade in and out together over it. On top, over a soft gradient: a glass Back button and the title, with an Episode's Show and code under it. At the bottom, over a gradient from the bottom edge: the scrubber with elapsed time on the left and remaining time (`−2:19`) on the right, then a row with mute and volume on the left, Back 10 seconds, Play and Forward 10 seconds in the centre, and Picture in Picture, the settings gear and Full Screen on the right. On phones the transport moves to the middle of the screen, larger, over a soft radial scrim, and the volume slider gives way to the device's buttons.
+  - The controls and the cursor fade after 3 s without pointer movement, taps or keys. They stay while paused or ended, while a notice shows, while the settings menu is open, while a mouse rests on the bottom band and while keyboard focus is in a band; a clicked button does not hold them. A click on the picture plays or pauses, and a double click toggles fullscreen. On touch, a tap shows or hides the controls, and a double tap on the left or right third skips 10 s with a fading wash.
+  - Keys: Space or K plays and pauses, Left and Right skip 10 s, Up and Down step the volume, F toggles fullscreen, M mutes and C turns subtitles off and back on. They leave focused buttons, sliders and open menus to their own keys.
+  - Fullscreen takes the whole player, so the controls come along. An iPhone, which has no element fullscreen, uses the video's own.
+  - Captions use `::cue`: white on a 72% black box, sized from the window's short side, and lifted above the bottom band while it shows. The lift uses `::-webkit-media-text-track-container`, so Firefox keeps captions at the bottom.
+  - A Version, audio or subtitle change restarts the session at the current position and keeps a paused video paused. A Version switch rewrites `?version=` in place, so the player never reloads, and resets the audio and subtitle choice, since Streams belong to a File.
+  - Notices sit centred in a `material-thick` panel: Cannot play this Version, Server unreachable and Playback stopped. The scrubber, volume, transport and Picture in Picture hide with a notice, while the settings gear and Full Screen stay, so another Version or subtitle choice can recover. The last two offer Try again. A spinner appears after 400 ms of buffering. Back returns through history when the detail page opened the player.
+  - The scrubber and volume are white, as in the Apple TV app's player, rather than the tint: over a film, the accent would be one more colour competing with the picture. The focus ring stays tint.
+  - The state lives in `src/lib/player-state.ts`, a store with no DOM that `bun test` covers. The components render it and forward events to it.
+- **Sign in, setup, invite and errors**: `FocusScreen`, a centred card on `bg-elevated` under a faint tint wash (plain `bg-background` full-bleed below 640 px, content starting a sixth of the way down). Optional Lucide icon over a large title. Single sign-on sits above the password form as a full-width secondary button with an `or` divider, a peer not a footnote. Sign in shakes the card once on a wrong password (a keyframed four-leg shake, gone under reduced motion). Setup walks Account, Library and Scan under a numbered stepper; Account collects fields only, and Add library creates the admin, the library and the scan, so Back exists only until the account is made. The Scan step shows an indeterminate or determinate `Progress`, the success check when done, `Scan again` on failure and an `Open Settings` link. The error page covers unreachable, not-found and generic failures, each with one action. A service worker caches the build, the fonts and `200.html`; with the server stopped the app still opens and the first failed request shows `Server unreachable` with `Try again`.
+

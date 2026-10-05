@@ -15,6 +15,8 @@ export type PlaybackOptions = {
   durationSeconds: number | null;
   /** Where to start, in seconds; null resumes where the viewer left off. */
   startAt: number | null;
+  /** Starts loaded but paused, so a paused viewer stays paused across a switch. */
+  paused?: boolean;
   /** The audio and subtitle Streams to play; the server picks what is absent. */
   streams: StreamChoice;
   onNotice: (notice: PlayerNotice) => void;
@@ -201,7 +203,7 @@ export function play(options: PlaybackOptions) {
         });
         hls.loadSource(url);
         hls.attachMedia(video);
-        void resumePlaying();
+        if (!options.paused) void resumePlaying();
         return;
       }
       if (video.canPlayType("application/vnd.apple.mpegurl") === "") {
@@ -215,7 +217,7 @@ export function play(options: PlaybackOptions) {
     }
     seekOnLoad(at);
     video.src = url;
-    void resumePlaying();
+    if (!options.paused) void resumePlaying();
   }
 
   async function open() {

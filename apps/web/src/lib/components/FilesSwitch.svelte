@@ -1,22 +1,30 @@
 <script lang="ts">
+import * as Select from "$lib/components/ui/select/index.ts";
+import type { FailureCode } from "$lib/errors.ts";
 import { readFailure } from "$lib/errors.ts";
-import { type FilesOff, filesChoice, filesOffFor } from "$lib/plugins.ts";
-import Failure from "./Failure.svelte";
+import {
+  type FilesChoice,
+  type FilesOff,
+  filesChoice,
+  filesOffFor,
+} from "$lib/plugins.ts";
 
+/** The file access choice of one plugin or all plugins: a Select that saves on change. */
 const {
   id,
-  label,
   off,
   save,
+  onfailure,
 }: {
   id: string;
-  label: string;
   off: FilesOff;
   save: (off: FilesOff) => Promise<void>;
+  onfailure: (
+    failure: { code: FailureCode; message: string } | undefined,
+  ) => void;
 } = $props();
 
 let busy = $state(false);
-let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
 
 const current = $derived(filesChoice(off));
 const until = $derived(
@@ -27,9 +35,17 @@ const until = $derived(
       })
     : "",
 );
+const labels: Record<Exclude<FilesChoice, "until">, string> = {
+  on: "On",
+  hour: "Off for an hour",
+  day: "Off for a day",
+  off: "Off",
+};
 
-async function change(select: HTMLSelectElement) {
-  const choice = select.value;
+let snapped = $state<Exclude<FilesChoice, "until"> | undefined>(undefined);
+const value = $derived<FilesChoice>(snapped ?? current);
+
+async function change(choice: string) {
   if (
     choice !== "on" &&
     choice !== "hour" &&
@@ -37,45 +53,39 @@ async function change(select: HTMLSelectElement) {
     choice !== "off"
   )
     return;
+  snapped = choice;
   busy = true;
-  failure = undefined;
+  onfailure(undefined);
   try {
     await save(filesOffFor(choice));
+    snapped = undefined;
   } catch (error) {
-    failure = readFailure(error);
-    select.value = current;
+    onfailure(readFailure(error));
+    snapped = undefined;
   } finally {
     busy = false;
   }
 }
 </script>
 
-<div class="switch">
-  <label for={id}>{label}</label>
-  <select
-    {id}
-    value={current}
-    onchange={(event) => change(event.currentTarget)}
-    disabled={busy}
-  >
-    <option value="on">On</option>
+<Select.Root
+  type="single"
+  {value}
+  onValueChange={(next) => void change(next)}
+  disabled={busy}
+>
+  <Select.Trigger {id}>
+    <Select.Value
+      >{value === "until" ? `Off until ${until}` : labels[value]}</Select.Value
+    >
+  </Select.Trigger>
+  <Select.Content>
+    <Select.Item value="on">On</Select.Item>
     {#if current === "until"}
-      <option value="until">Off until {until}</option>
+      <Select.Item value="until">Off until {until}</Select.Item>
     {/if}
-    <option value="hour">Off for an hour</option>
-    <option value="day">Off for a day</option>
-    <option value="off">Off</option>
-  </select>
-</div>
-{#if failure}
-  <Failure {failure} />
-{/if}
-
-<style>
-.switch {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-}
-</style>
+    <Select.Item value="hour">Off for an hour</Select.Item>
+    <Select.Item value="day">Off for a day</Select.Item>
+    <Select.Item value="off">Off</Select.Item>
+  </Select.Content>
+</Select.Root>

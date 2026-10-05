@@ -7,6 +7,71 @@ export type ScanStatus = Awaited<
 
 type ScanStatusInput = Parameters<PendiaClient["libraries"]["scanStatus"]>[0];
 
+/** What setup's Scan step derives from a scan status reading. */
+export type ScanProgress =
+  | { state: "starting" }
+  | { state: "running"; fraction: number | null }
+  | { state: "done" }
+  | { state: "failed"; failed: number; error: string | null };
+
+/** Reads a scan status into what the setup screen shows. */
+export function scanProgress(status: ScanStatus | undefined): ScanProgress {
+  if (status === undefined) return { state: "starting" };
+  const { queued, running, completed, failed } = status.counts;
+  if (queued + running > 0) {
+    const total = queued + running + completed + failed;
+    const done = completed + failed;
+    // Nothing has finished yet, so a determinate bar would sit empty.
+    return { state: "running", fraction: done === 0 ? null : done / total };
+  }
+  if (failed > 0)
+    return {
+      state: "failed",
+      failed,
+      error: status.latest?.state === "failed" ? status.latest.error : null,
+    };
+  return { state: "done" };
+}
+
+/** What setup's Scan step shows: a failed request outranks the last scan reading. */
+export function scanPhase(
+  progress: ScanProgress,
+  request: { failed: boolean; runId: string | undefined },
+): ScanProgress["state"] | "unstarted" | "unfollowed" {
+  if (request.failed)
+    return request.runId === undefined ? "unstarted" : "unfollowed";
+  return progress.state;
+}
+
+/** A library's scan state as one label and tone for lists and panels. */
+export function scanState(status: ScanStatus | undefined): {
+  label: string;
+  tone: "active" | "done" | "error" | "idle";
+} {
+  if (status === undefined || status.latest === null)
+    return { label: "Not scanned", tone: "idle" };
+  const { queued, running, completed, failed } = status.counts;
+  if (running > 0) return { label: "Scanning", tone: "active" };
+  if (queued > 0) return { label: "Queued", tone: "active" };
+  if (failed > 0 && completed === 0)
+    return { label: "Scan failed", tone: "error" };
+  if (failed > 0)
+    return {
+      label: `Scanned with ${failed === 1 ? "1 error" : `${failed} errors`}`,
+      tone: "error",
+    };
+  if (completed > 0) return { label: "Scanned", tone: "done" };
+  return { label: "Not scanned", tone: "idle" };
+}
+
+/** The run's start time, decoded from its UUIDv7 id; null while no run is known. */
+export function scanStartedAt(status: ScanStatus | undefined): Date | null {
+  const runId = status?.runId;
+  if (runId == null) return null;
+  const ms = Number.parseInt(runId.replaceAll("-", "").slice(0, 12), 16);
+  return Number.isNaN(ms) ? null : new Date(ms);
+}
+
 /** The one call the scan poller makes, so a test can stand a reader in. */
 export type ScanReader = {
   libraries: {

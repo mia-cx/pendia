@@ -1,174 +1,447 @@
-:root {
-  color-scheme: light dark;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  font-synthesis: none;
-  --canvas: oklch(97% 0.012 250deg);
-  --ink: oklch(22% 0.025 250deg);
-  --muted: oklch(48% 0.025 250deg);
-  --signal: oklch(57% 0.17 255deg);
-  --danger: oklch(52% 0.16 25deg);
-  --surface: oklch(91% 0.014 250deg);
-  --line: color-mix(in oklch, var(--ink) 16%, transparent);
-  --radius-poster: 8px;
-  --gutter: clamp(16px, 4vw, 40px);
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* dark: applies under the system dark setting and inside a .dark subtree (the player). */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    @slot;
+  }
+  &:where(.dark, .dark *) {
+    @slot;
+  }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: oklch(17% 0.02 250deg);
-    --ink: oklch(94% 0.012 250deg);
-    --muted: oklch(70% 0.025 250deg);
-    --signal: oklch(66% 0.17 255deg);
-    --danger: oklch(70% 0.16 25deg);
-    --surface: oklch(24% 0.022 250deg);
+@font-face {
+  font-family: InterVariable;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: InterVariable;
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/InterVariable-Italic.woff2") format("woff2");
+}
+
+/* The scheme itself lives apart: declaring it on .dark re-runs light-dark() inside the subtree. */
+:root {
+  color-scheme: light dark;
+}
+.dark {
+  color-scheme: dark;
+}
+
+/* Role tokens. Each is defined once on :root and again on .dark, so a dark subtree recomputes them with its own color-scheme. */
+:root,
+.dark {
+  --background: light-dark(oklch(100% 0 0deg), oklch(15.5% 0.004 275deg));
+  --background-elevated: light-dark(
+    oklch(97.2% 0.003 275deg),
+    oklch(21% 0.005 275deg)
+  );
+  --background-raised: light-dark(
+    oklch(100% 0 0deg),
+    oklch(24.5% 0.006 275deg)
+  );
+
+  --label: light-dark(oklch(18% 0.005 275deg), oklch(97% 0.002 275deg));
+  --label-secondary: light-dark(
+    oklch(50% 0.008 275deg),
+    oklch(72% 0.008 275deg)
+  );
+  --label-tertiary: light-dark(
+    oklch(66% 0.006 275deg),
+    oklch(55% 0.008 275deg)
+  );
+
+  --fill: light-dark(
+    oklch(18% 0.005 275deg / 6%),
+    oklch(97% 0.002 275deg / 9%)
+  );
+  --fill-strong: light-dark(
+    oklch(18% 0.005 275deg / 11%),
+    oklch(97% 0.002 275deg / 16%)
+  );
+  --separator: light-dark(
+    oklch(18% 0.005 275deg / 12%),
+    oklch(97% 0.002 275deg / 12%)
+  );
+  --border-control: light-dark(
+    oklch(18% 0.005 275deg / 18%),
+    oklch(97% 0.002 275deg / 18%)
+  );
+
+  /* The one accent: Pendia indigo. */
+  --tint: light-dark(oklch(53% 0.21 272deg), oklch(70% 0.16 272deg));
+  --tint-foreground: light-dark(oklch(100% 0 0deg), oklch(16% 0.03 272deg));
+  --tint-fill: light-dark(
+    oklch(53% 0.21 272deg / 12%),
+    oklch(70% 0.16 272deg / 18%)
+  );
+
+  --destructive: light-dark(oklch(55% 0.21 25deg), oklch(69% 0.19 25deg));
+  --destructive-foreground: light-dark(
+    oklch(100% 0 0deg),
+    oklch(16% 0.03 25deg)
+  );
+  --success: light-dark(oklch(55% 0.15 150deg), oklch(74% 0.17 150deg));
+
+  /* Materials: translucent bars, sidebars and menus. See the fallbacks below. */
+  --material: light-dark(
+    oklch(98.5% 0.002 275deg / 72%),
+    oklch(23% 0.005 275deg / 66%)
+  );
+  --material-thick: light-dark(
+    oklch(98.5% 0.002 275deg / 86%),
+    oklch(23% 0.005 275deg / 84%)
+  );
+  --material-solid: light-dark(
+    oklch(97.2% 0.003 275deg),
+    oklch(21% 0.005 275deg)
+  );
+  --material-edge: light-dark(
+    oklch(100% 0 0deg / 55%),
+    oklch(100% 0 0deg / 9%)
+  );
+  --material-blur: 28px;
+
+  --scrim: light-dark(oklch(0% 0 0deg / 24%), oklch(0% 0 0deg / 52%));
+
+  --elevation-float:
+    0 0 0 0.5px var(--separator),
+    0 12px 40px -12px light-dark(oklch(0% 0 0deg / 22%), oklch(0% 0 0deg / 60%));
+  --elevation-lift: 0 18px 36px -14px
+    light-dark(oklch(0% 0 0deg / 38%), oklch(0% 0 0deg / 72%));
+
+  /* Layout */
+  --gutter: clamp(1rem, 3.2vw, 3rem);
+  --sidebar-width: 16.5rem;
+  --sidebar-rail: 4.25rem;
+  --sidebar-inset: 0.5rem;
+
+  /* Motion, after the transitions.dev scale */
+  --duration-micro: 80ms;
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --duration-slow: 400ms;
+  --duration-very-slow: 500ms;
+  --distance-micro: 4px;
+  --distance-small: 6px;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+  --distance-large: 30px;
+  --scale-large: 0.96;
+  --scale-medium: 0.97;
+  --scale-small: 0.98;
+  --scale-tiny: 0.99;
+  --blur-small: 2px;
+  --blur-medium: 3px;
+  --blur-large: 8px;
+}
+
+@media (prefers-contrast: more) {
+  :root,
+  .dark {
+    --background: light-dark(oklch(100% 0 0deg), oklch(0% 0 0deg));
+    --background-elevated: light-dark(oklch(96% 0 0deg), oklch(17% 0 0deg));
+    --background-raised: light-dark(oklch(100% 0 0deg), oklch(20% 0 0deg));
+    --label: light-dark(oklch(0% 0 0deg), oklch(100% 0 0deg));
+    --label-secondary: light-dark(oklch(32% 0 0deg), oklch(86% 0 0deg));
+    --label-tertiary: light-dark(oklch(42% 0 0deg), oklch(76% 0 0deg));
+    --fill: light-dark(oklch(0% 0 0deg / 10%), oklch(100% 0 0deg / 16%));
+    --fill-strong: light-dark(oklch(0% 0 0deg / 18%), oklch(100% 0 0deg / 26%));
+    --separator: light-dark(oklch(0% 0 0deg / 45%), oklch(100% 0 0deg / 50%));
+    --border-control: light-dark(
+      oklch(0% 0 0deg / 70%),
+      oklch(100% 0 0deg / 70%)
+    );
+    --tint: light-dark(oklch(43% 0.22 272deg), oklch(80% 0.13 272deg));
+    --material: light-dark(oklch(98% 0 0deg / 96%), oklch(14% 0 0deg / 96%));
+    --material-thick: var(--material);
+    --material-solid: light-dark(oklch(98% 0 0deg), oklch(14% 0 0deg));
+    --material-edge: var(--separator);
+  }
+}
+
+/* Solid surfaces when the browser cannot blur or the user asks for less transparency. */
+@supports not (
+    (backdrop-filter: blur(1px)) or
+    (-webkit-backdrop-filter: blur(1px))
+  ) {
+  :root,
+  .dark {
+    --material: var(--material-solid);
+    --material-thick: var(--material-solid);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  .dark {
+    --material: var(--material-solid);
+    --material-thick: var(--material-solid);
+  }
+}
+
+@theme {
+  --color-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, InterVariable, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* The Apple type scale. Weight and tracking travel with the size. */
+  --text-display: clamp(2.25rem, 1.5rem + 3vw, 3.5rem);
+  --text-display--line-height: 1.07;
+  --text-display--letter-spacing: -0.03em;
+  --text-display--font-weight: 700;
+  --text-large-title: 2.125rem;
+  --text-large-title--line-height: 1.206;
+  --text-large-title--letter-spacing: -0.025em;
+  --text-large-title--font-weight: 700;
+  --text-title-1: 1.75rem;
+  --text-title-1--line-height: 1.214;
+  --text-title-1--letter-spacing: -0.022em;
+  --text-title-1--font-weight: 700;
+  --text-title-2: 1.375rem;
+  --text-title-2--line-height: 1.273;
+  --text-title-2--letter-spacing: -0.019em;
+  --text-title-2--font-weight: 700;
+  --text-title-3: 1.25rem;
+  --text-title-3--line-height: 1.25;
+  --text-title-3--letter-spacing: -0.017em;
+  --text-title-3--font-weight: 600;
+  --text-headline: 1.0625rem;
+  --text-headline--line-height: 1.294;
+  --text-headline--letter-spacing: -0.011em;
+  --text-headline--font-weight: 600;
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.294;
+  --text-body--letter-spacing: -0.011em;
+  --text-callout: 1rem;
+  --text-callout--line-height: 1.3125;
+  --text-callout--letter-spacing: -0.01em;
+  --text-subheadline: 0.9375rem;
+  --text-subheadline--line-height: 1.333;
+  --text-subheadline--letter-spacing: -0.009em;
+  --text-footnote: 0.8125rem;
+  --text-footnote--line-height: 1.385;
+  --text-footnote--letter-spacing: -0.003em;
+  --text-caption-1: 0.75rem;
+  --text-caption-1--line-height: 1.333;
+  --text-caption-2: 0.6875rem;
+  --text-caption-2--line-height: 1.182;
+  --text-caption-2--letter-spacing: 0.006em;
+
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.25rem;
+  --radius-2xl: 1.75rem;
+  --radius-poster: 0.625rem;
+
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+}
+
+/* Tailwind colour names. Pendia's own roles first, then the names shadcn-svelte components use. */
+@theme inline {
+  --color-white: oklch(100% 0 0deg);
+  --color-black: oklch(0% 0 0deg);
+
+  --color-background: var(--background);
+  --color-elevated: var(--background-elevated);
+  --color-raised: var(--background-raised);
+  --color-label: var(--label);
+  --color-label-secondary: var(--label-secondary);
+  --color-label-tertiary: var(--label-tertiary);
+  --color-fill: var(--fill);
+  --color-fill-strong: var(--fill-strong);
+  --color-separator: var(--separator);
+  --color-tint: var(--tint);
+  --color-tint-foreground: var(--tint-foreground);
+  --color-tint-fill: var(--tint-fill);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-scrim: var(--scrim);
+
+  --color-foreground: var(--label);
+  --color-card: var(--background-elevated);
+  --color-card-foreground: var(--label);
+  --color-popover: var(--background-raised);
+  --color-popover-foreground: var(--label);
+  --color-primary: var(--label);
+  --color-primary-foreground: var(--background);
+  --color-secondary: var(--fill);
+  --color-secondary-foreground: var(--label);
+  --color-muted: var(--fill);
+  --color-muted-foreground: var(--label-secondary);
+  --color-accent: var(--fill-strong);
+  --color-accent-foreground: var(--label);
+  --color-border: var(--separator);
+  --color-input: var(--border-control);
+  --color-ring: var(--tint);
+
+  --shadow-float: var(--elevation-float);
+  --shadow-lift: var(--elevation-lift);
+}
+
+/* A translucent surface that blurs what scrolls beneath it. */
+@utility material {
+  background-color: var(--material);
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(180%);
+  backdrop-filter: blur(var(--material-blur)) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--material-edge);
+}
+
+/* A container that reaches under the sidebar and to the window's edge. */
+@utility bleed {
+  margin-inline: calc(-1 * var(--shell-start)) calc(-1 * var(--gutter));
+}
+
+/* The surface behind missing or failed artwork: a quiet hue from the title under a soft sheen. High contrast drops the hue so text contrast stays maximal. */
+@utility artwork-fallback {
+  background-image:
+    radial-gradient(
+      120% 90% at 15% 0%,
+      light-dark(oklch(100% 0 0deg / 70%), oklch(100% 0 0deg / 8%)) 0%,
+      transparent 60%
+    ),
+    linear-gradient(
+      160deg,
+      light-dark(
+        oklch(93% 0.035 var(--fallback-hue, 0)),
+        oklch(36% 0.06 var(--fallback-hue, 0))
+      ),
+      light-dark(
+        oklch(85% 0.05 calc(var(--fallback-hue, 0) + 35)),
+        oklch(22% 0.045 calc(var(--fallback-hue, 0) + 35))
+      )
+    );
+
+  @media (prefers-contrast: more) {
+    background-image:
+      radial-gradient(
+        120% 90% at 15% 0%,
+        light-dark(oklch(100% 0 0deg / 70%), oklch(100% 0 0deg / 8%)) 0%,
+        transparent 60%
+      ),
+      linear-gradient(
+        160deg,
+        light-dark(
+          oklch(93% 0 var(--fallback-hue, 0)),
+          oklch(36% 0 var(--fallback-hue, 0))
+        ),
+        light-dark(
+          oklch(85% 0 var(--fallback-hue, 0)),
+          oklch(22% 0 var(--fallback-hue, 0))
+        )
+      );
+  }
+}
+
+/* The denser material for menus, toasts and tooltips. */
+@utility material-thick {
+  background-color: var(--material-thick);
+  -webkit-backdrop-filter: blur(var(--material-blur)) saturate(180%);
+  backdrop-filter: blur(var(--material-blur)) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--material-edge);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--label);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    letter-spacing: var(--text-body--letter-spacing);
+    font-synthesis-weight: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  /* One focus ring for every control. */
+  :focus-visible {
+    outline: 2px solid var(--tint);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklch, var(--tint) 28%, transparent);
   }
 }
 
 @media (prefers-contrast: more) {
-  :root {
-    --canvas: oklch(100% 0 0deg);
-    --ink: oklch(10% 0 0deg);
-    --muted: oklch(30% 0 0deg);
+  :focus-visible {
+    outline-width: 3px;
   }
 }
 
-@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
-  :root {
-    --canvas: oklch(8% 0 0deg);
-    --ink: oklch(98% 0 0deg);
-    --muted: oklch(82% 0 0deg);
+/* Error shake for the sign-in card: legs of 80, 60, 80 and 60 ms,
+   after transitions-dev 12-error-state-shake. */
+[data-shake] {
+  animation: shake-x calc(var(--duration-micro) * 2 + 120ms) linear;
+}
+@keyframes shake-x {
+  0% {
+    transform: translateX(0);
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  28.57% {
+    transform: translateX(var(--distance-small));
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  57.14% {
+    transform: translateX(calc(var(--distance-small) * -1));
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  78.57% {
+    transform: translateX(var(--distance-micro));
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-shake] {
+    animation: none;
   }
 }
 
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: var(--canvas);
-  color: var(--ink);
-  line-height: 1.5;
-}
-
-h1,
-h2,
-h3 {
-  line-height: 1.2;
-  text-wrap: balance;
-}
-
-h1 {
-  font-size: 28px;
-}
-
-h2 {
-  font-size: 20px;
-}
-
-h3 {
-  font-size: 16px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  padding: 8px 12px;
-  border-bottom: 1px solid color-mix(in oklch, var(--ink) 16%, transparent);
-  text-align: left;
-}
-
-th {
-  color: var(--muted);
-  font-weight: 600;
-}
-
-label {
-  display: block;
-  font-weight: 600;
-}
-
-input,
-select {
-  min-height: 32px;
-  padding: 4px 8px;
-  border: 1px solid color-mix(in oklch, var(--ink) 32%, transparent);
-  border-radius: 6px;
-  background: var(--canvas);
-  color: var(--ink);
-  font: inherit;
-}
-
-button {
-  min-height: 32px;
-  padding: 4px 14px;
-  border: 1px solid color-mix(in oklch, var(--ink) 32%, transparent);
-  border-radius: 6px;
-  background: var(--canvas);
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-fieldset {
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-:focus-visible {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
-}
-
-.failure {
-  padding: 12px 16px;
-  border: 1px solid var(--danger);
-  border-radius: 8px;
-}
-
-.failure h2 {
-  margin: 0 0 4px;
-  font-size: 16px;
-}
-
-.failure p {
-  margin: 0;
-  color: var(--muted);
-}
-
-.poster-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(140px, 25vw), 1fr));
-  gap: 24px 16px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+/* Reduced motion keeps every fade and drops every movement. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    --tw-enter-translate-x: 0 !important;
+    --tw-enter-translate-y: 0 !important;
+    --tw-enter-scale: 1 !important;
+    --tw-enter-rotate: 0 !important;
+    --tw-exit-translate-x: 0 !important;
+    --tw-exit-translate-y: 0 !important;
+    --tw-exit-scale: 1 !important;
+    --tw-exit-rotate: 0 !important;
+    scroll-behavior: auto !important;
+  }
 }

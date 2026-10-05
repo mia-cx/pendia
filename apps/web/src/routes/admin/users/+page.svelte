@@ -1,9 +1,19 @@
 <script lang="ts">
+import { toast } from "svelte-sonner";
 import { client } from "$lib/api.ts";
 import { createInvite } from "$lib/auth.ts";
-import Failure from "$lib/components/Failure.svelte";
+import AdminPage from "$lib/components/admin/AdminPage.svelte";
+import FormGroup from "$lib/components/admin/FormGroup.svelte";
+import FormRow from "$lib/components/admin/FormRow.svelte";
+import ListRow from "$lib/components/admin/ListRow.svelte";
+import SecretInput from "$lib/components/SecretInput.svelte";
+import { Badge } from "$lib/components/ui/badge/index.ts";
+import { Button } from "$lib/components/ui/button/index.ts";
+import { Input } from "$lib/components/ui/input/index.ts";
+import * as Select from "$lib/components/ui/select/index.ts";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
+import { initials } from "$lib/shell.ts";
 
 const list = resource(() => client.users.list());
 const denied = $derived(
@@ -12,14 +22,16 @@ const denied = $derived(
 
 type InviteResult = Awaited<ReturnType<typeof createInvite>>;
 
-const instant = (value: string) => new Date(value).toLocaleString();
+const instant = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
 
 let addUsername = $state("");
 let addPassword = $state("");
 let addDisplayName = $state("");
 let addBusy = $state(false);
 let addFailure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
-let addNotice = $state("");
 
 let inviteEmail = $state("");
 let inviteDays = $state("7");
@@ -39,6 +51,7 @@ async function copyLink(link: string) {
   try {
     await navigator.clipboard.writeText(link);
     copied = link;
+    toast.success("Link copied");
   } catch {
     // A denied clipboard leaves the selectable field as the way to copy.
     canCopy = false;
@@ -49,7 +62,6 @@ async function addUser(event: SubmitEvent) {
   event.preventDefault();
   addBusy = true;
   addFailure = undefined;
-  addNotice = "";
   const username = addUsername;
   const password = addPassword;
   const displayName = addDisplayName;
@@ -62,7 +74,7 @@ async function addUser(event: SubmitEvent) {
     if (addUsername === username) addUsername = "";
     if (addPassword === password) addPassword = "";
     if (addDisplayName === displayName) addDisplayName = "";
-    addNotice = `Added ${created.username}.`;
+    toast.success(`Account created for ${created.username}`);
     await list.reload();
   } catch (error) {
     addFailure = readFailure(error);
@@ -88,185 +100,146 @@ async function sendInvite(event: SubmitEvent) {
     inviteBusy = false;
   }
 }
+
+const dayOptions = [
+  { value: "1", label: "1 day" },
+  { value: "7", label: "7 days" },
+  { value: "30", label: "30 days" },
+];
 </script>
 
-<svelte:head>
-  <title>Users · Pendia admin</title>
-</svelte:head>
-
-<h2>Users</h2>
-
-{#if list.failure}
-  <Failure failure={list.failure} />
-  <button
-    type="button"
-    onclick={() => list.reload()}
-    disabled={list.loading}>Retry</button
+<AdminPage title="Users">
+  <FormGroup
+    loading={list.data === undefined && !list.failure ? 3 : undefined}
+    failure={list.failure ?? undefined}
   >
-{:else}
-  <table>
-    <thead>
-      <tr>
-        <th>Username</th>
-        <th>Display name</th>
-        <th>Email</th>
-        <th>Created</th>
-        <th>Status</th>
-        <th><span class="sr-only">Actions</span></th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each list.data ?? [] as row (row.id)}
-        <tr>
-          <td>{row.username}</td>
-          <td>{row.displayName}</td>
-          <td>{row.email ?? "Not set"}</td>
-          <td>{instant(row.createdAt)}</td>
-          <td>{row.disabledAt === null ? "Enabled" : "Disabled"}</td>
-          <td><a href={`/admin/users/${row.id}`}>Manage</a></td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
-{/if}
+    {#each list.data ?? [] as row (row.id)}
+      <ListRow
+        title={row.displayName}
+        caption="@{row.username}{row.email ? ` · ${row.email}` : ''}"
+        href="/admin/users/{row.id}"
+      >
+        {#snippet leading()}
+          <span
+            class="flex size-8 shrink-0 items-center justify-center rounded-full bg-fill-strong text-footnote font-semibold text-label"
+            >{initials(row.displayName || row.username)}</span
+          >
+        {/snippet}
+        {#if row.disabledAt !== null}
+          <Badge>Disabled</Badge>
+        {/if}
+      </ListRow>
+    {/each}
+    {#snippet actions()}
+      {#if list.failure}
+        <Button
+          variant="secondary"
+          onclick={() => list.reload()}
+          disabled={list.loading}>Try again</Button
+        >
+      {/if}
+    {/snippet}
+  </FormGroup>
 
-{#if !denied}
-<div class="forms">
-  <form onsubmit={addUser}>
-    <h3>Create a user</h3>
-    <p class="muted">A new account joins the built-in users group.</p>
-    {#if addFailure}
-      <Failure failure={addFailure} />
-    {/if}
-    {#if addNotice}
-      <p class="muted">{addNotice}</p>
-    {/if}
-    <label for="addUsername">Username</label>
-    <input
-      id="addUsername"
-      name="username"
-      autocomplete="off"
-      required
-      bind:value={addUsername}
-    />
-    <label for="addPassword">Password</label>
-    <input
-      id="addPassword"
-      name="password"
-      type="password"
-      autocomplete="new-password"
-      required
-      bind:value={addPassword}
-    />
-    <label for="addDisplayName">Display name</label>
-    <input
-      id="addDisplayName"
-      name="displayName"
-      bind:value={addDisplayName}
-    />
-    <button type="submit" disabled={addBusy}>Create user</button>
-  </form>
+  {#if !denied}
+    <FormGroup
+      title="Invite"
+      onsubmit={sendInvite}
+      failure={inviteFailure}
+    >
+      <FormRow label="Email" for="inviteEmail">
+        <Input
+          id="inviteEmail"
+          name="email"
+          type="email"
+          required
+          bind:value={inviteEmail}
+        />
+      </FormRow>
+      <FormRow label="Link expires" for="inviteDays" inline>
+        <Select.Root type="single" bind:value={inviteDays}>
+          <Select.Trigger id="inviteDays">
+            <Select.Value
+              >{dayOptions.find((o) => o.value === inviteDays)
+                ?.label}</Select.Value
+            >
+          </Select.Trigger>
+          <Select.Content>
+            {#each dayOptions as option (option.value)}
+              <Select.Item value={option.value}>{option.label}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={inviteBusy}>Create invite link</Button>
+      {/snippet}
+    </FormGroup>
 
-  <form onsubmit={sendInvite}>
-    <h3>Invite a user</h3>
-    {#if inviteFailure}
-      <Failure failure={inviteFailure} />
-    {/if}
-    <label for="inviteEmail">Email</label>
-    <input
-      id="inviteEmail"
-      name="email"
-      type="email"
-      required
-      bind:value={inviteEmail}
-    />
-    <label for="inviteDays">Expires after</label>
-    <select id="inviteDays" name="expires" bind:value={inviteDays}>
-      <option value="1">1 day</option>
-      <option value="7">7 days</option>
-      <option value="30">30 days</option>
-    </select>
-    <button type="submit" disabled={inviteBusy}>Create invite</button>
     {#if inviteResult}
       {@const link = `${location.origin}/invite/${inviteResult.token}`}
-      <div class="token">
-        <p class="muted">
-          Copy this link now. It is shown once and cannot be read again.
-        </p>
-        <label for="inviteLink">Invite link</label>
-        <div class="copy">
-          <input
-            id="inviteLink"
-            readonly
-            value={link}
-            onclick={(event) => event.currentTarget.select()}
-          />
-          {#if canCopy}
-            <button type="button" onclick={() => copyLink(link)}
-              >{copied === link ? "Copied" : "Copy"}</button
-            >
-          {/if}
-        </div>
-        <label for="inviteToken">Token</label>
-        <input
-          id="inviteToken"
-          readonly
-          value={inviteResult.token}
-          onclick={(event) => event.currentTarget.select()}
-        />
-        <p class="muted">
-          For {inviteResult.invite.email}, expires {instant(
-            inviteResult.invite.expiresAt,
-          )}.
-        </p>
-      </div>
+      <FormGroup
+        title="Invite link"
+        description="For {inviteResult.invite.email}. Expires {instant.format(
+          new Date(inviteResult.invite.expiresAt),
+        )}. Copy it now, you can't view it again."
+      >
+        <FormRow label="Link" for="inviteLink">
+          <div class="flex items-center gap-2">
+            <Input
+              id="inviteLink"
+              readonly
+              class="font-mono"
+              value={link}
+              onclick={(event) => event.currentTarget.select()}
+            />
+            {#if canCopy}
+              <Button
+                variant="secondary"
+                onclick={() => copyLink(link)}
+                >{copied === link ? "Copied" : "Copy"}</Button
+              >
+            {/if}
+          </div>
+        </FormRow>
+      </FormGroup>
     {/if}
-  </form>
-</div>
-{/if}
 
-<style>
-.forms {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 48px;
-  margin-top: 32px;
-}
-
-form {
-  display: grid;
-  width: 100%;
-  max-width: 360px;
-  gap: 8px;
-  align-content: start;
-}
-
-form h3,
-form p {
-  margin: 0 0 4px;
-}
-
-form :global(.failure) {
-  margin-bottom: 4px;
-}
-
-.token {
-  display: grid;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.token input {
-  width: 100%;
-  font-family: ui-monospace, monospace;
-}
-
-.copy {
-  display: flex;
-  gap: 8px;
-}
-
-.copy input {
-  min-width: 0;
-}
-</style>
+    <FormGroup
+      title="New account"
+      onsubmit={addUser}
+      failure={addFailure}
+      description="New accounts join the users group."
+    >
+      <FormRow label="Username" for="addUsername">
+        <Input
+          id="addUsername"
+          name="username"
+          autocomplete="off"
+          required
+          bind:value={addUsername}
+        />
+      </FormRow>
+      <FormRow label="Password" for="addPassword">
+        <SecretInput
+          id="addPassword"
+          name="password"
+          autocomplete="new-password"
+          required
+          bind:value={addPassword}
+        />
+      </FormRow>
+      <FormRow label="Display name" for="addDisplayName">
+        <Input
+          id="addDisplayName"
+          name="displayName"
+          placeholder="Optional"
+          bind:value={addDisplayName}
+        />
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={addBusy}>Create account</Button>
+      {/snippet}
+    </FormGroup>
+  {/if}
+</AdminPage>

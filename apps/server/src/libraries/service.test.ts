@@ -248,6 +248,31 @@ describe.skipIf(!databaseUrl)("library service", () => {
       expect((await getLibrary(db, admin.id, library.id)).name).toBe("Movies");
     }));
 
+  test("accepts roots that don't exist on this server", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const ghost = "/srv/not-mounted-here/movies";
+      const created = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        roots: [ghost],
+      });
+      expect(created.roots.map((root) => root.path)).toEqual([ghost]);
+      const [root] = created.roots;
+      if (root === undefined) throw new Error("Library has no root.");
+      const updated = await updateLibrary(db, admin.id, created.id, {
+        roots: [
+          { id: root.id, path: ghost },
+          { path: "/mnt/other-host/shows" },
+        ],
+      });
+      expect(updated.roots.map((root) => root.path)).toEqual([
+        ghost,
+        "/mnt/other-host/shows",
+      ]);
+    }));
+
   test("non-admin actors cannot perform any operation", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

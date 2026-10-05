@@ -1,13 +1,20 @@
 import { sveltekit } from "@sveltejs/kit/vite";
-import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
+import { defineConfig, type ProxyOptions } from "vite";
+
+const api = process.env.PENDIA_DEV_API ?? "http://127.0.0.1:3000";
+
+// Keep the dev server's Host so the API's Origin check sees a same-origin call.
+const sameOrigin: ProxyOptions = { target: api, changeOrigin: false };
 
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [tailwindcss(), sveltekit()],
   server: {
     proxy: {
-      "/rpc": "http://127.0.0.1:3000",
-      "/api": "http://127.0.0.1:3000",
-      "/healthz": "http://127.0.0.1:3000",
+      "/rpc": sameOrigin,
+      "/api": sameOrigin,
+      "/healthz": sameOrigin,
+      "/readyz": sameOrigin,
     },
   },
 });

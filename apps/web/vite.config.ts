@@ -4,21 +4,17 @@ import { defineConfig, type ProxyOptions } from "vite";
 
 const api = process.env.PENDIA_DEV_API ?? "http://127.0.0.1:3000";
 
-// The API checks Origin on mutations, so the dev proxy has to forward the
-// API's own origin rather than the page's.
-const proxied: ProxyOptions = {
-  target: api,
-  changeOrigin: true,
-  headers: { origin: api },
-};
+// Keep the dev server's Host so the API's Origin check sees a same-origin call.
+const sameOrigin: ProxyOptions = { target: api, changeOrigin: false };
 
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   server: {
     proxy: {
-      "/rpc": proxied,
-      "/api": proxied,
-      "/healthz": api,
+      "/rpc": sameOrigin,
+      "/api": sameOrigin,
+      "/healthz": sameOrigin,
+      "/readyz": sameOrigin,
     },
   },
 });

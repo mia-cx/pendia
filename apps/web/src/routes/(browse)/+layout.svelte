@@ -1,14 +1,11 @@
 <script lang="ts">
 import ChevronUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
-import ClapperboardIcon from "@lucide/svelte/icons/clapperboard";
-import HouseIcon from "@lucide/svelte/icons/house";
 import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
-import SearchIcon from "@lucide/svelte/icons/search";
-import SettingsIcon from "@lucide/svelte/icons/settings";
-import TvIcon from "@lucide/svelte/icons/tv";
 import { onNavigate } from "$app/navigation";
 import { page } from "$app/state";
 import AccountMenu from "$lib/components/AccountMenu.svelte";
+import { navIcons } from "$lib/components/nav-icons.ts";
+import TabBar from "$lib/components/TabBar.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
 import {
@@ -23,19 +20,6 @@ const { data, children }: LayoutProps = $props();
 
 const entries = $derived(navigation(data.me.admin, data.libraries));
 const settings = $derived(entries.find((e) => e.icon === "settings"));
-const tabs = $derived(
-  ["home", "movies", "shows", "search", "settings"]
-    .map((icon) => entries.find((e) => e.icon === icon))
-    .filter((e): e is NavEntry => e !== undefined),
-);
-
-const icons = {
-  search: SearchIcon,
-  home: HouseIcon,
-  movies: ClapperboardIcon,
-  shows: TvIcon,
-  settings: SettingsIcon,
-};
 
 let collapsed = $state(
   typeof document !== "undefined" &&
@@ -77,7 +61,7 @@ onNavigate((nav) => {
 </svelte:head>
 
 {#snippet navRow(entry: NavEntry, children: boolean)}
-  {@const Icon = icons[entry.icon]}
+  {@const Icon = navIcons[entry.icon]}
   {@const current = isCurrentSection(page.url, entry, children && !collapsed)}
   <Tooltip.Root disabled={!collapsed}>
     <Tooltip.Trigger>
@@ -238,27 +222,7 @@ onNavigate((nav) => {
     </AccountMenu>
   </aside>
 
-  <nav
-    aria-label="Main"
-    class="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-40 mx-auto grid h-16 max-w-md auto-cols-fr grid-flow-col items-stretch material rounded-full shadow-float lg:hidden"
-  >
-    {#each tabs as tab (tab.href)}
-      {@const Icon = icons[tab.icon]}
-      {@const current = isCurrentSection(page.url, tab, false)}
-      <a
-        href={tab.href}
-        aria-current={current ? "page" : undefined}
-        class="relative flex flex-col items-center justify-center gap-0.5 text-label-secondary"
-        class:text-tint={current}
-      >
-        {#if current}
-          <span class="absolute inset-x-1 inset-y-1.5 rounded-full bg-tint-fill" aria-hidden="true"></span>
-        {/if}
-        <Icon class="relative size-6" />
-        <span class="relative text-caption-2 font-semibold">{tab.label}</span>
-      </a>
-    {/each}
-  </nav>
+  <TabBar admin={data.me.admin} />
 
   <div class="relative">
     <div class="absolute top-3 right-(--gutter) z-30 lg:hidden">

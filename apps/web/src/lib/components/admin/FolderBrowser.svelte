@@ -130,7 +130,8 @@ async function loadListing() {
 /** Previews the settled folder 300 ms after the last move; every move aborts the pending walk. */
 function schedulePreview() {
   previewController?.abort();
-  const controller = (previewController = new AbortController());
+  const controller = new AbortController();
+  previewController = controller;
   clearTimeout(previewTimer);
   preview = undefined;
   previewFailure = undefined;

@@ -337,7 +337,7 @@ const VolumeIcon = $derived(
 <!-- svelte-ignore a11y_no_static_element_interactions: the player surface watches mouse movement -->
 <div
   bind:this={root}
-  class="player fixed inset-0 overflow-hidden bg-black text-white select-none dark scheme-dark"
+  class="player fixed inset-0 overflow-hidden bg-black text-white select-none dark"
   class:cursor-none={!shown}
   data-controls={shown ? "shown" : "hidden"}
   style:--controls-height="{barHeight}px"
@@ -463,25 +463,14 @@ const VolumeIcon = $derived(
     {/if}
   </div>
 
-  <!-- Phones get a dim layer so the centred transport reads on bright frames. -->
-  <div
-    aria-hidden="true"
-    class={cn(
-      "pointer-events-none absolute inset-0 bg-black/30 transition-opacity ease-smooth-out sm:hidden",
-      shown
-        ? "opacity-100 duration-(--duration-fast)"
-        : "opacity-0 duration-(--duration-medium)",
-    )}
-  ></div>
-
   <!-- svelte-ignore a11y_no_static_element_interactions: hover over the bar holds the controls up -->
   <div
     data-bar
-    inert={!shown}
+    inert={!shown || playerState?.notice !== undefined}
     bind:clientHeight={barHeight}
     class={cn(
       "absolute inset-x-0 bottom-0 bg-linear-to-t from-black/70 via-black/30 to-transparent pt-12 transition-opacity ease-smooth-out",
-      shown
+      shown && playerState?.notice === undefined
         ? "opacity-100 duration-(--duration-fast)"
         : "pointer-events-none opacity-0 duration-(--duration-medium)",
     )}
@@ -541,6 +530,11 @@ const VolumeIcon = $derived(
         <div
           class="flex items-center justify-center gap-2 sm:col-start-2 max-sm:pointer-events-none max-sm:fixed max-sm:inset-0"
         >
+          <!-- A soft scrim behind the transport, instead of dimming the whole frame and its captions. -->
+          <div
+            aria-hidden="true"
+            class="pointer-events-none absolute top-1/2 left-1/2 h-44 w-80 -translate-x-1/2 -translate-y-1/2 bg-radial from-black/40 to-transparent to-70% sm:hidden"
+          ></div>
           <Button
             variant="ghost"
             aria-label="Back 10 seconds"

@@ -20,6 +20,9 @@ let wrap = $state<HTMLDivElement>();
 let dragging = $state<number | null>(null);
 /** The time under the pointer while a mouse hovers the track. */
 let hover = $state<number | null>(null);
+// onValueChange also fires for programmatic and keyboard changes; only a real
+// pointer drag should open the capsule.
+let pointerDown = false;
 /** Capsule edge distance so it never leaves the bar. */
 const previewInset = 28;
 
@@ -50,12 +53,18 @@ function onPointerLeave(event: PointerEvent) {
   class="relative flex-1"
   onpointermove={onPointerMove}
   onpointerleave={onPointerLeave}
+  onpointerdown={() => (pointerDown = true)}
+  onpointerup={() => (pointerDown = false)}
+  onpointercancel={() => (pointerDown = false)}
+  onlostpointercapture={() => (pointerDown = false)}
 >
   <Slider.Root
     variant="media"
     type="single"
     value={shown}
-    onValueChange={(next) => (dragging = next)}
+    onValueChange={(next) => {
+      if (pointerDown) dragging = next;
+    }}
     onValueCommit={(next) => {
       dragging = null;
       onseek(next);

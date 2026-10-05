@@ -1,4 +1,13 @@
-import { and, asc, desc, eq, inArray, type SQL, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  type SQL,
+  type SQLWrapper,
+  sql,
+} from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Schema } from "effect";
 import { Effect } from "effect";
@@ -43,7 +52,7 @@ export type ListItemsInput = {
 
 // Instants cross the API as the database's own UTC text at microsecond
 // precision, so a cursor never rounds a timestamp the driver truncated.
-const instantText = (column: typeof items.addedAt) =>
+const instantText = (column: SQLWrapper) =>
   sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
 // A single-table select renders columns unqualified, which would bind to
@@ -296,6 +305,7 @@ export function getItemDetail(db: Database, caller: Caller, id: string) {
             itemId: progress.itemId,
             positionSeconds: progress.positionSeconds,
             completed: progress.completed,
+            updatedAt: instantText(progress.updatedAt),
           })
           .from(progress)
           .where(
@@ -320,6 +330,7 @@ export function getItemDetail(db: Database, caller: Caller, id: string) {
               : {
                   positionSeconds: mark.positionSeconds,
                   completed: mark.completed,
+                  updatedAt: mark.updatedAt,
                 },
         };
       });

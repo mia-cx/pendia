@@ -552,7 +552,11 @@ const rows = Array.from(
             overview:
               "Mark's team questions the true nature of their work while tensions rise on the severed floor.",
             durationSeconds: 3300,
-            progress: { positionSeconds: 1320, completed: false },
+            progress: {
+              positionSeconds: 1320,
+              completed: false,
+              updatedAt: "2026-01-02T03:04:05.678000Z",
+            },
           })}
         />
       </li>
@@ -564,7 +568,11 @@ const rows = Array.from(
             overview:
               "The innies make contact with their outies in a desperate bid for freedom.",
             durationSeconds: 2400,
-            progress: { positionSeconds: 2400, completed: true },
+            progress: {
+              positionSeconds: 2400,
+              completed: true,
+              updatedAt: "2026-01-02T03:04:05.678000Z",
+            },
           })}
         />
       </li>

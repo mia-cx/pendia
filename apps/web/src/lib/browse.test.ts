@@ -290,7 +290,11 @@ describe("upNextEpisode", () => {
 
   test("one in progress picks it", () => {
     const episodes = [
-      episode("a", { positionSeconds: 10, completed: false }),
+      episode("a", {
+        positionSeconds: 10,
+        completed: false,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
       episode("b"),
     ];
     expect(upNextEpisode(episodes)?.id).toBe("a");
@@ -298,7 +302,11 @@ describe("upNextEpisode", () => {
 
   test("a completed episode picks the next unfinished", () => {
     const episodes = [
-      episode("a", { positionSeconds: 100, completed: true }),
+      episode("a", {
+        positionSeconds: 100,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
       episode("b"),
     ];
     expect(upNextEpisode(episodes)?.id).toBe("b");
@@ -306,10 +314,94 @@ describe("upNextEpisode", () => {
 
   test("everything watched starts over", () => {
     const episodes = [
-      episode("a", { positionSeconds: 100, completed: true }),
-      episode("b", { positionSeconds: 100, completed: true }),
+      episode("a", {
+        positionSeconds: 100,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
+      episode("b", {
+        positionSeconds: 100,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:02.000000Z",
+      }),
     ];
     expect(upNextEpisode(episodes)?.id).toBe("a");
+  });
+
+  test("an unfinished rewatch beats later completed Episodes", () => {
+    const episodes = [
+      episode("a", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
+      episode("b", {
+        positionSeconds: 600,
+        completed: false,
+        updatedAt: "2026-01-01T00:00:03.000000Z",
+      }),
+      episode("c", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:02.000000Z",
+      }),
+    ];
+    expect(upNextEpisode(episodes)?.id).toBe("b");
+  });
+
+  test("an Episode left unfinished comes back after the last one", () => {
+    const episodes = [
+      episode("a", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
+      episode("b", {
+        positionSeconds: 600,
+        completed: false,
+        updatedAt: "2026-01-01T00:00:02.000000Z",
+      }),
+      episode("c", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:03.000000Z",
+      }),
+    ];
+    expect(upNextEpisode(episodes)?.id).toBe("b");
+  });
+
+  test("ties go to the later Episode", () => {
+    const episodes = [
+      episode("a", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
+      episode("b", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
+      episode("c"),
+    ];
+    expect(upNextEpisode(episodes)?.id).toBe("c");
+  });
+
+  test("the latest completed Episode moves on to the next unfinished", () => {
+    const episodes = [
+      episode("a", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:02.000000Z",
+      }),
+      episode("b", {
+        positionSeconds: 2700,
+        completed: true,
+        updatedAt: "2026-01-01T00:00:01.000000Z",
+      }),
+      episode("c"),
+    ];
+    expect(upNextEpisode(episodes)?.id).toBe("c");
   });
 
   test("empty gives undefined", () => {

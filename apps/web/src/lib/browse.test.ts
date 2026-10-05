@@ -8,7 +8,13 @@ import {
   itemHref,
 } from "./browse.ts";
 
-const show = { id: "show-1", title: "Severance", posterArtworkId: null };
+const show = {
+  id: "show-1",
+  title: "Severance",
+  posterArtworkId: null,
+  backdropArtworkId: null,
+  logoArtworkId: null,
+};
 
 function card(overrides: Partial<BrowseCard>): BrowseCard {
   return {
@@ -19,6 +25,9 @@ function card(overrides: Partial<BrowseCard>): BrowseCard {
     year: 2016,
     addedAt: "2026-01-01T00:00:00.000000Z",
     posterArtworkId: null,
+    backdropArtworkId: null,
+    logoArtworkId: null,
+    thumbArtworkId: null,
     parentId: null,
     seasonNumber: null,
     episodeNumber: null,

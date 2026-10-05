@@ -15,6 +15,7 @@ import AdminPage from "$lib/components/admin/AdminPage.svelte";
 import EmptyState from "$lib/components/admin/EmptyState.svelte";
 import FormGroup from "$lib/components/admin/FormGroup.svelte";
 import { Badge } from "$lib/components/ui/badge/index.ts";
+import { Progress } from "$lib/components/ui/progress/index.ts";
 import { followEvents } from "$lib/events.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
@@ -71,20 +72,13 @@ function startLabel(runAfter: string) {
 </script>
 
 {#snippet bar(label: string, value: number, max: number, text: string)}
-  <div
-    role="progressbar"
+  <Progress
+    {value}
+    {max}
     aria-label={label}
-    aria-valuemin={0}
-    aria-valuemax={max}
-    aria-valuenow={value}
     aria-valuetext={text}
-    class="h-1 flex-1 overflow-hidden rounded-full bg-fill-strong"
-  >
-    <div
-      class="h-full rounded-full bg-tint transition-[width] duration-(--duration-slow) ease-smooth-out motion-reduce:transition-none"
-      style:width="{Math.min(100, max > 0 ? (value / max) * 100 : 0)}%"
-    ></div>
-  </div>
+    class="flex-1"
+  />
 {/snippet}
 
 <AdminPage title="Activity">

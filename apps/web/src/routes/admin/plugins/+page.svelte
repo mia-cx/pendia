@@ -393,9 +393,7 @@ function registryRemoveDescription(count: number) {
     if (!open) configuring = undefined;
   }}
 >
-  <Dialog.Content
-    class="max-h-[calc(100svh-2rem)] max-w-lg overflow-y-auto"
-  >
+  <Dialog.Content class="max-w-lg">
     {#if configuringPlugin}
       {@const plugin = configuringPlugin}
       <Dialog.Header>
@@ -460,9 +458,7 @@ function registryRemoveDescription(count: number) {
     }
   }}
 >
-  <Dialog.Content
-    class="max-h-[calc(100svh-2rem)] max-w-lg overflow-y-auto"
-  >
+  <Dialog.Content class="max-w-lg">
     {#if preview}
       {@const name = preview.name}
       <Dialog.Header>

@@ -60,7 +60,13 @@ async function submit(event: SubmitEvent) {
       medium,
       roots: sent.map((row) => row.path),
     });
-    toast.success(`${created.name} added. Scanning now.`);
+    try {
+      await client.libraries.scan({ id: created.id });
+      toast.success(`${created.name} added. Scanning now.`);
+    } catch {
+      // The library is made either way; Scan now is on its page.
+      toast.success(`${created.name} added`);
+    }
     await goto(`/admin/libraries/${created.id}`, { replaceState: true });
   } catch (error) {
     const refused = refusedRoot(error);

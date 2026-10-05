@@ -286,7 +286,7 @@ function registryRemoveDescription(count: number) {
     <FormGroup
       title="Available"
       loading={registries.data === undefined && !registries.failure ? 2 : undefined}
-      failure={entryPreviewFailure}
+      failure={registries.failure ?? entryPreviewFailure}
     >
       {#each registries.data ?? [] as registry (registry.url)}
         {#each registry.entries as entry (entry.name)}
@@ -331,6 +331,15 @@ function registryRemoveDescription(count: number) {
           >
         </div>
       {/if}
+      {#snippet actions()}
+        {#if registries.failure}
+          <Button
+            variant="secondary"
+            disabled={registries.loading}
+            onclick={() => void registries.reload()}>Try again</Button
+          >
+        {/if}
+      {/snippet}
     </FormGroup>
 
     <FormGroup
@@ -366,7 +375,10 @@ function registryRemoveDescription(count: number) {
         </ListRow>
       {:else}
         <div class="relative min-h-12 px-4 py-2.5">
-          <span class="text-subheadline text-label-secondary">No registries</span
+          <span class="text-subheadline text-label-secondary"
+            >{registries.failure
+              ? "Registries didn't load."
+              : "No registries"}</span
           >
         </div>
       {/each}

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { ScanReader, ScanStatus } from "./scan.ts";
-import { scanProgress, scanState, waitForScan } from "./scan.ts";
+import {
+  type ScanProgress,
+  scanPhase,
+  scanProgress,
+  scanState,
+  waitForScan,
+} from "./scan.ts";
 
 const libraryId = "11111111-1111-4111-8111-111111111111";
 
@@ -181,5 +187,37 @@ describe("scanState", () => {
       label: "Scanned",
       tone: "done",
     });
+  });
+});
+
+describe("scanPhase", () => {
+  test("a failed request with no run id is unstarted, even over a failed scan", () => {
+    const failed: ScanProgress = { state: "failed", failed: 2, error: "x" };
+    expect(scanPhase(failed, { failed: true, runId: undefined })).toBe(
+      "unstarted",
+    );
+  });
+
+  test("a failed request with a run id is unfollowed", () => {
+    expect(
+      scanPhase(
+        { state: "running", fraction: 0.5 },
+        { failed: true, runId: "abc" },
+      ),
+    ).toBe("unfollowed");
+  });
+
+  test("a live request passes the progress state through", () => {
+    const cases: ScanProgress[] = [
+      { state: "starting" },
+      { state: "running", fraction: null },
+      { state: "running", fraction: 0.25 },
+      { state: "done" },
+      { state: "failed", failed: 1, error: null },
+    ];
+    for (const progress of cases)
+      expect(scanPhase(progress, { failed: false, runId: "abc" })).toBe(
+        progress.state,
+      );
   });
 });

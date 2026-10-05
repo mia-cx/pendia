@@ -12,7 +12,12 @@ import { Label } from "$lib/components/ui/label/index.ts";
 import { Progress } from "$lib/components/ui/progress/index.ts";
 import * as Select from "$lib/components/ui/select/index.ts";
 import { readFailure } from "$lib/errors.ts";
-import { type ScanStatus, scanProgress, waitForScan } from "$lib/scan.ts";
+import {
+  type ScanStatus,
+  scanPhase,
+  scanProgress,
+  waitForScan,
+} from "$lib/scan.ts";
 import {
   createAdmin,
   createFirstLibrary,
@@ -41,6 +46,9 @@ let rootPath = $state("");
 let medium = $state<LibraryMedium>("movies");
 
 const progress = $derived(scanProgress(status));
+const phase = $derived(
+  scanPhase(progress, { failed: failure !== undefined, runId }),
+);
 
 const controller = new AbortController();
 onDestroy(() => controller.abort());
@@ -110,6 +118,8 @@ async function rescan() {
   if (!session) return;
   busy = true;
   failure = undefined;
+  runId = undefined;
+  status = undefined;
   try {
     const { jobId } = await startScan(session, libraryId);
     runId = jobId;
@@ -133,21 +143,14 @@ async function resumeWatch() {
   }
 }
 
-/** Follows the run that was started, or starts one when no run id came back. */
-async function retryScan() {
-  if (runId === undefined) {
-    await rescan();
-    return;
-  }
-  await resumeWatch();
-}
-
 const scanTitle = $derived(
-  progress.state === "done"
+  phase === "done"
     ? "Your library is ready"
-    : progress.state === "failed"
+    : phase === "failed"
       ? "The scan failed"
-      : "Scanning your library",
+      : phase === "unstarted"
+        ? "The scan did not start"
+        : "Scanning your library",
 );
 const title = $derived(
   step === 0
@@ -167,7 +170,7 @@ const title = $derived(
     <ol aria-label="Setup progress" class="flex items-center gap-2">
       {#each stepTitles as stepTitle, index (stepTitle)}
         {@const stepDone =
-          index < step || (index === 2 && progress.state === "done")}
+          index < step || (index === 2 && phase === "done")}
         <li
           class="flex items-center gap-2"
           aria-current={index === step && !stepDone ? "step" : undefined}
@@ -327,11 +330,11 @@ const title = $derived(
           {libraryName}
         </p>
         <div class="mt-4 flex h-8 w-full items-center">
-          {#if progress.state === "done"}
+          {#if phase === "done"}
             <span class="check-pop mx-auto">
               <CircleCheckIcon class="size-8 text-success" />
             </span>
-          {:else if progress.state === "failed"}
+          {:else if phase === "failed" || phase === "unstarted"}
             <span class="check-pop mx-auto">
               <CircleXIcon class="size-8 text-destructive" />
             </span>
@@ -347,7 +350,7 @@ const title = $derived(
           {/if}
         </div>
         <div class="mt-4 flex w-full flex-col items-center gap-4">
-          {#if progress.state === "failed"}
+          {#if phase === "failed" && progress.state === "failed"}
             <Failure
               inline
               failure={{
@@ -362,19 +365,21 @@ const title = $derived(
               disabled={busy}>Scan again</Button
             >
             <Button variant="ghost" href="/">Start watching</Button>
-          {:else if failure}
-            <Failure
-              inline
-              failure={{
-                code: "UNKNOWN",
-                message:
-                  "This page stopped following the scan. The scan keeps running.",
-              }}
-            />
+          {:else if phase === "unstarted" && failure}
+            <Failure {failure} inline />
             <Button
               size="lg"
               class="w-full"
-              onclick={retryScan}
+              onclick={rescan}
+              disabled={busy}>Try again</Button
+            >
+            <Button variant="ghost" href="/">Start watching</Button>
+          {:else if phase === "unfollowed" && failure}
+            <Failure {failure} inline />
+            <Button
+              size="lg"
+              class="w-full"
+              onclick={resumeWatch}
               disabled={busy}>Check again</Button
             >
           {:else}

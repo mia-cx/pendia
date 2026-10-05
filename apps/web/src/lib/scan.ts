@@ -7,14 +7,15 @@ export type ScanStatus = Awaited<
 
 type ScanStatusInput = Parameters<PendiaClient["libraries"]["scanStatus"]>[0];
 
-/** Reads a scan status into what the setup screen shows. */
-export function scanProgress(
-  status: ScanStatus | undefined,
-):
+/** What setup's Scan step derives from a scan status reading. */
+export type ScanProgress =
   | { state: "starting" }
   | { state: "running"; fraction: number | null }
   | { state: "done" }
-  | { state: "failed"; failed: number; error: string | null } {
+  | { state: "failed"; failed: number; error: string | null };
+
+/** Reads a scan status into what the setup screen shows. */
+export function scanProgress(status: ScanStatus | undefined): ScanProgress {
   if (status === undefined) return { state: "starting" };
   const { queued, running, completed, failed } = status.counts;
   if (queued + running > 0) {
@@ -30,6 +31,16 @@ export function scanProgress(
       error: status.latest?.state === "failed" ? status.latest.error : null,
     };
   return { state: "done" };
+}
+
+/** What setup's Scan step shows: a failed request outranks the last scan reading. */
+export function scanPhase(
+  progress: ScanProgress,
+  request: { failed: boolean; runId: string | undefined },
+): ScanProgress["state"] | "unstarted" | "unfollowed" {
+  if (request.failed)
+    return request.runId === undefined ? "unstarted" : "unfollowed";
+  return progress.state;
 }
 
 /** A library's scan state as one label and tone for lists and panels. */

@@ -63,7 +63,10 @@ export const DetailChild = Schema.Struct({
   overview: Schema.NullOr(Schema.String),
   durationSeconds: Schema.NullOr(Schema.Number),
   progress: Schema.NullOr(
-    Schema.Struct({ positionSeconds: Schema.Number, completed: Schema.Boolean }),
+    Schema.Struct({
+      positionSeconds: Schema.Number,
+      completed: Schema.Boolean,
+    }),
   ),
 });
 

@@ -50,9 +50,7 @@ onMount(() => {
 </div>
 
 <Dialog.Root bind:open>
-  <Dialog.Content
-    class="max-h-[calc(100svh-2rem)] grid-rows-[auto_minmax(0,1fr)]"
-  >
+  <Dialog.Content class="grid-rows-[auto_minmax(0,1fr)]">
     <Dialog.Header>
       <Dialog.Title>{title}</Dialog.Title>
     </Dialog.Header>

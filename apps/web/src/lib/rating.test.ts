@@ -58,6 +58,33 @@ describe("createRatingWrites", () => {
     expect(get(writes)).toBeUndefined();
   });
 
+  test("an older save landing after a newer failure shows the saved rating", async () => {
+    const { pending, save } = saves();
+    const writes = createRatingWrites(save);
+
+    const first = writes.write(8);
+    const second = writes.write(4);
+    pending[1]?.reject(new Error("offline"));
+    expect(await second).toBe(false);
+    expect(get(writes)).toBe(8);
+    pending[0]?.resolve({ rating: 8 });
+    expect(await first).toBe(true);
+    expect(get(writes)).toBe(8);
+  });
+
+  test("an older save landing after a failed clear shows the saved rating", async () => {
+    const { pending, save } = saves();
+    const writes = createRatingWrites(save);
+
+    const first = writes.write(8);
+    const cleared = writes.write(null);
+    pending[1]?.reject(new Error("offline"));
+    expect(await cleared).toBe(false);
+    pending[0]?.resolve({ rating: 8 });
+    expect(await first).toBe(true);
+    expect(get(writes)).toBe(8);
+  });
+
   test("an earlier write settling late does not override a newer choice", async () => {
     const { pending, save } = saves();
     const writes = createRatingWrites(save);
@@ -70,5 +97,19 @@ describe("createRatingWrites", () => {
     pending[1]?.reject(new Error("offline"));
     expect(await second).toBe(false);
     expect(get(writes)).toBe(8);
+  });
+
+  test("an older choice still pending does not hide a newer saved one", async () => {
+    const { pending, save } = saves();
+    const writes = createRatingWrites(save);
+
+    const first = writes.write(8);
+    const second = writes.write(4);
+    pending[1]?.resolve({ rating: 4 });
+    expect(await second).toBe(true);
+    expect(get(writes)).toBe(4);
+    pending[0]?.resolve({ rating: 8 });
+    expect(await first).toBe(true);
+    expect(get(writes)).toBe(4);
   });
 });

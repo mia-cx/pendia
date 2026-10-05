@@ -273,7 +273,7 @@ export function getItemDetail(db: Database, caller: Caller, id: string) {
     );
     if (!detail) return yield* new ApiError({ code: "NOT_FOUND" });
     const enriched = yield* fromHost(async () => {
-      if (children.length === 0) return children;
+      if (children.length === 0) return [];
       const ids = children.map((child) => child.id);
       const [overviews, runtimes, marks] = await Promise.all([
         db

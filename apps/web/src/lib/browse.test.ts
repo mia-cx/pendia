@@ -5,6 +5,7 @@ import {
   cardLabel,
   episodeCode,
   fallbackHue,
+  formatBadges,
   formatBytes,
   formatDuration,
   groupByKind,
@@ -243,5 +244,26 @@ describe("browse helpers", () => {
       },
     ]);
     expect(bare.map((slide) => slide.card.id)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("formatBadges", () => {
+  test("collects 4K and HDR formats across versions, best first", () => {
+    expect(
+      formatBadges(["1080p · HEVC · HDR10", "4K · Dolby Vision · TRUEHD"]),
+    ).toEqual(["4K", "Dolby Vision", "HDR10"]);
+  });
+
+  test("a 1080p or 720p version earns HD", () => {
+    expect(formatBadges(["1080p · H264"])).toEqual(["HD"]);
+    expect(formatBadges(["720p"])).toEqual(["HD"]);
+  });
+
+  test("an SD version earns no resolution badge", () => {
+    expect(formatBadges(["480p · H264"])).toEqual([]);
+  });
+
+  test("an edition tag is not a format", () => {
+    expect(formatBadges(["Director's Cut · 4K"])).toEqual(["4K"]);
   });
 });

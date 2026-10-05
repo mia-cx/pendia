@@ -4,6 +4,7 @@ export const shelfColumns = {
   poster: "auto-cols-[clamp(7.5rem,30vw,10.5rem)] lg:auto-cols-[11.5rem]",
   landscape:
     "auto-cols-[min(80vw,19rem)] lg:auto-cols-[clamp(15rem,21vw,19rem)]",
+  person: "auto-cols-[6rem] lg:auto-cols-[7rem]",
 } as const;
 </script>
 
@@ -21,7 +22,7 @@ const {
 }: {
   title: string;
   id: string;
-  size?: "poster" | "landscape";
+  size?: "poster" | "landscape" | "person";
   href?: string;
   children: Snippet;
 } = $props();

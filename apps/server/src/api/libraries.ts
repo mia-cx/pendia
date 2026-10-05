@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import { FolderError, listFolders } from "../libraries/folders.ts";
 import {
   createLibrary,
   deleteLibrary,
@@ -16,12 +17,23 @@ import {
 } from "../stored/service.ts";
 import { authenticated, authenticatedMutation } from "./context.ts";
 import { ApiError, fromHost, runApi } from "./errors.ts";
-import { Library, LibraryInput, LibraryUpdate, ScanStatus } from "./schema.ts";
+import {
+  AbsolutePath,
+  FolderListing,
+  Library,
+  LibraryInput,
+  LibraryUpdate,
+  ScanStatus,
+} from "./schema.ts";
 
 const idInput = Schema.standardSchemaV1(Schema.Struct({ id: Schema.UUID }));
 
-/** Like `fromHost`, but a refused root answers BAD_REQUEST with its index as `data.root`. */
-const writeRoots = <A>(run: () => Promise<A>) =>
+/**
+ * Like `fromHost`, but host errors with an API shape become typed failures:
+ * a refused root answers BAD_REQUEST with its index as `data.root`, and a
+ * folder browse failure answers with the code it carries.
+ */
+const libraryHost = <A>(run: () => Promise<A>) =>
   fromHost(run).pipe(
     Effect.catchAllDefect((defect) =>
       defect instanceof RootError
@@ -34,7 +46,11 @@ const writeRoots = <A>(run: () => Promise<A>) =>
                 : { data: { root: defect.root } }),
             }),
           )
-        : Effect.die(defect),
+        : defect instanceof FolderError
+          ? Effect.fail(
+              new ApiError({ code: defect.code, reason: defect.message }),
+            )
+          : Effect.die(defect),
     ),
   );
 const libraryOutput = Schema.standardSchemaV1(Library);
@@ -62,7 +78,7 @@ const create = authenticatedMutation
   .output(libraryOutput)
   .handler(async ({ context, input }) =>
     runApi(
-      writeRoots(() =>
+      libraryHost(() =>
         createLibrary(context.db, context.caller.user.id, input),
       ),
     ),
@@ -74,7 +90,7 @@ const update = authenticatedMutation
   .output(libraryOutput)
   .handler(async ({ context, input: { id, ...changes } }) =>
     runApi(
-      writeRoots(() =>
+      libraryHost(() =>
         updateLibrary(context.db, context.caller.user.id, id, changes),
       ),
     ),
@@ -166,10 +182,27 @@ const setStoredVersions = authenticatedMutation
     ),
   );
 
+const folders = authenticated
+  .route({ method: "GET", path: "/folders" })
+  .input(
+    Schema.standardSchemaV1(
+      Schema.Struct({ path: Schema.optional(AbsolutePath) }),
+    ),
+  )
+  .output(Schema.standardSchemaV1(FolderListing))
+  .handler(async ({ context, input }) =>
+    runApi(
+      libraryHost(() =>
+        listFolders(context.db, context.caller.user.id, input.path ?? "/"),
+      ),
+    ),
+  );
+
 /** The library administration procedures mounted under `libraries`. */
 export const libraryProcedures = {
   list,
   get,
+  folders,
   create,
   update,
   delete: remove,

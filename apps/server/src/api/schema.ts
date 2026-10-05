@@ -113,6 +113,23 @@ export const LibraryUpdate = Schema.Struct({
   ),
 });
 
+/** An absolute filesystem path input: starts at / and holds no NUL. */
+export const AbsolutePath = Schema.String.pipe(
+  Schema.filter((path) => path.startsWith("/") && !path.includes("\0"), {
+    message: () => "Enter an absolute path, like /srv/movies.",
+  }),
+);
+
+/** One folder's direct child folders, answered to the admin folder browser. */
+export const FolderListing = Schema.Struct({
+  /** The folder that was listed, after normalisation. */
+  path: Schema.String,
+  /** Its direct child folders in natural order; dot-folders and symlinks stay hidden. */
+  folders: Schema.Array(
+    Schema.Struct({ name: Schema.String, path: Schema.String }),
+  ),
+});
+
 /** The authenticated caller returned by the me procedure. */
 export const Me = Schema.Struct({
   user: Schema.Struct({

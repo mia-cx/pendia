@@ -10,6 +10,7 @@ import { migrateDatabase } from "../db/migrate.ts";
 import {
   files,
   items,
+  progress,
   segmentTimelines,
   sessionRegistry,
   transcoderCapabilities,
@@ -19,7 +20,7 @@ import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startPendia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { decidePlayback } from "../playback/decisions.ts";
-import { listPlaybackSessions } from "./playback-sessions.ts";
+import { listPlaybackSessions, transcodeReasons } from "./playback-sessions.ts";
 import type { pendiaRouter } from "./router.ts";
 
 async function seed(db: Database) {
@@ -139,6 +140,108 @@ const transcodeDecision = decidePlayback(
   { isLan: true },
 );
 
+// An h264+aac mp4 for a client that takes it all plays directly.
+const directDecision = decidePlayback(
+  {
+    container: "mp4",
+    video: {
+      codec: "h264",
+      width: 1920,
+      height: 1080,
+      bitrate: 6_000_000,
+      hdr: "sdr",
+    },
+    audio: [{ codec: "aac", channels: 2 }],
+    subtitles: [{ format: "srt", kind: "text" }],
+  },
+  {
+    containers: ["mp4"],
+    videoCodecs: [{ codec: "h264" }],
+    audioCodecs: [{ codec: "aac", maxChannels: 2 }],
+    subtitleFormats: ["srt"],
+    hdr: ["sdr"],
+  },
+  { isLan: true },
+);
+
+// Six-channel AC3 on an AAC-stereo-only client re-encodes audio while the h264 video copies.
+const audioOnlyDecision = decidePlayback(
+  {
+    container: "mkv",
+    video: {
+      codec: "h264",
+      width: 1920,
+      height: 1080,
+      bitrate: 6_000_000,
+      hdr: "sdr",
+    },
+    audio: [{ codec: "ac3", channels: 6 }],
+    subtitles: [],
+  },
+  {
+    containers: ["mp4"],
+    videoCodecs: [{ codec: "h264" }],
+    audioCodecs: [{ codec: "aac", maxChannels: 2 }],
+    subtitleFormats: [],
+    hdr: ["sdr"],
+  },
+  { isLan: true },
+);
+
+// A bitmap subtitle the client cannot draw burns into a video transcode.
+const burnDecision = decidePlayback(
+  {
+    container: "mkv",
+    video: {
+      codec: "h264",
+      width: 1920,
+      height: 1080,
+      bitrate: 6_000_000,
+      hdr: "sdr",
+    },
+    audio: [{ codec: "aac", channels: 2 }],
+    subtitles: [{ format: "pgs", kind: "bitmap" }],
+  },
+  {
+    containers: ["mkv"],
+    videoCodecs: [{ codec: "h264" }],
+    audioCodecs: [{ codec: "aac", maxChannels: 2 }],
+    subtitleFormats: ["srt"],
+    hdr: ["sdr"],
+  },
+  { isLan: true },
+);
+
+describe("transcodeReasons", () => {
+  test("direct play, remux and stored Versions convert nothing", () => {
+    expect(directDecision.method).toBe("direct-play");
+    expect(transcodeReasons(directDecision)).toEqual([]);
+    expect(transcodeReasons(null)).toEqual([]);
+    expect(
+      transcodeReasons({
+        method: "stored",
+        selection: { audio: 0 },
+      }),
+    ).toEqual([]);
+  });
+
+  test("an audio-only transcode converts audio", () => {
+    expect(audioOnlyDecision.method).toBe("transcode");
+    expect(audioOnlyDecision.video.action).toBe("copy");
+    expect(transcodeReasons(audioOnlyDecision)).toEqual(["audio"]);
+  });
+
+  test("a video transcode names video first, audio last", () => {
+    expect(transcodeDecision.method).toBe("transcode");
+    expect(transcodeReasons(transcodeDecision)).toEqual(["video"]);
+  });
+
+  test("a burned-in bitmap subtitle names subtitles", () => {
+    expect(burnDecision.method).toBe("transcode");
+    expect(transcodeReasons(burnDecision)).toContain("subtitles");
+  });
+});
+
 describe.skipIf(!databaseUrl)("playback sessions", () => {
   test("lists live and queued sessions with client, Item, rung and transcoder", () =>
     withDatabase(async (db) => {
@@ -206,8 +309,29 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
         clientName: "Pendia Web",
         deviceName: "Firefox",
         item: { id: fx.item.id, title: "Alien", kind: "movie" },
+        version: {
+          id: fx.version.id,
+          label: "Original",
+          durationSeconds: null,
+        },
+        positionSeconds: null,
+        reasons: [],
         rungs: ["source"],
       });
+      expect(listed[0]?.reasons).toEqual(["video"]);
+      expect(listed[1]?.reasons).toEqual([]);
+
+      await db.insert(progress).values({
+        userId: fx.viewer.id,
+        itemId: fx.item.id,
+        versionId: fx.version.id,
+        format: "video",
+        positionSeconds: 42.5,
+      });
+      const [updated] = (await listPlaybackSessions(db, fx.admin.id)).filter(
+        (session) => session.id === direct.id,
+      );
+      expect(updated?.positionSeconds).toBe(42.5);
 
       await db
         .update(sessionRegistry)

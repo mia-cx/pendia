@@ -41,7 +41,8 @@ Player state lives in one browser-free module with `bun test` coverage. The Svel
 - The scrubber and volume use white, as the Apple TV player does, rather than the tint. The focus ring stays tint.
 - Caption lift uses `::-webkit-media-text-track-container`, which Chromium and WebKit honour. Firefox shows captions at the default line.
 - The token block is declared on both `:root` and `.dark`. Lightning CSS resolves `light-dark()` where a token is declared, so before this a `.dark` subtree inside a light page kept light materials: the player's menus and the Home hero's glass buttons rendered light in the light scheme. This touches every dark subtree, not only the player.
-- While a notice shows, the bottom band hides and goes inert, since none of its controls can act on a stopped session. The top band stays for Back.
+- While a notice shows, the scrubber, volume, transport and Picture in Picture hide, since they cannot act on a stopped session. The settings gear and Full Screen stay, so picking another Version or subtitle recovers, and the top band stays for Back.
+- A Version switch clamps the position to the destination Version's length, and an `ended` event always releases the position hold.
 - On phones the transport sits mid-screen over a small radial scrim rather than a full-screen dim, so the picture stays readable.
 - The Home hero before and after shots are not pixel-comparable: the carousel landed on different slides. Computed styles confirm the hero's glass buttons now resolve to dark materials.
 

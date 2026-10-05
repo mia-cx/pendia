@@ -46,7 +46,10 @@ type RecordedRequest = SessionRequest & {
 };
 
 /** A createPlayer on FakeMedia whose sessions and clock the test drives. */
-function setup(overrides: Partial<Parameters<typeof createPlayer>[0]> = {}) {
+function setup(
+  overrides: Partial<Parameters<typeof createPlayer>[0]> = {},
+  fake: { likeVideo?: boolean } = {},
+) {
   const media = new FakeMedia();
   const requests: RecordedRequest[] = [];
   const timers: { run: () => void; cancelled: boolean }[] = [];
@@ -63,11 +66,17 @@ function setup(overrides: Partial<Parameters<typeof createPlayer>[0]> = {}) {
         ...request,
         closed: false,
         close: () => {
+          if (fake.likeVideo) {
+            // video.load(): pauses and rewinds without firing any event.
+            media.paused = true;
+            media.currentTime = 0;
+          }
           entry.closed = true;
           return Promise.resolve();
         },
       };
       requests.push(entry);
+      if (fake.likeVideo && !request.paused) void media.play().catch(() => {});
       return entry;
     },
     schedule: (run, _ms) => {
@@ -190,7 +199,7 @@ describe("player state", () => {
   });
 
   test("an audio choice reopens at the position with the Stream and paused kept", async () => {
-    const { media, requests, player, state, play } = setup();
+    const { media, requests, player, state, play, tracks } = setup();
     play();
     media.fire("playing");
     media.currentTime = 30;
@@ -199,6 +208,9 @@ describe("player state", () => {
     const choosing = player.chooseAudio(1);
     expect(state().switching).toBe(true);
     await choosing;
+    // The switch ends when the new session's tracks arrive.
+    expect(state().switching).toBe(true);
+    requests[1]?.onTracks(tracks());
     expect(state().switching).toBe(false);
 
     expect(requests).toHaveLength(2);
@@ -238,6 +250,7 @@ describe("player state", () => {
 
     await player.chooseSubtitles(3);
     expect(requests[1]?.streams.subtitleStreamIndex).toBe(3);
+    requests[1]?.onTracks(tracks());
     await player.chooseSubtitles(null);
     expect(requests[2]?.streams.subtitleStreamIndex).toBe(null);
 
@@ -314,7 +327,7 @@ describe("player state", () => {
   });
 
   test("a switch clamps the position to the shorter Version", async () => {
-    const { media, requests, player, state, play } = setup({
+    const { media, requests, player, state, play, tracks } = setup({
       versions: [
         { id: "long", durationSeconds: 100 },
         { id: "short", durationSeconds: 60 },
@@ -333,6 +346,7 @@ describe("player state", () => {
     expect(requests[1]?.startAt).toBe(60);
 
     // The media ends at its own edge; switching back does not resume past it.
+    requests[1]?.onTracks(tracks());
     media.currentTime = 60;
     media.paused = true;
     media.fire("ended");
@@ -413,6 +427,158 @@ describe("player state", () => {
     player.resume();
     expect(requests).toHaveLength(2);
     expect(requests[1]?.startAt).toBe(55);
+  });
+
+  test("a Version switch hides the old tracks until the new plan's arrive", async () => {
+    const { requests, player, state, tracks } = setup();
+    requests[0]?.onTracks(tracks());
+
+    await player.chooseVersion("v2");
+    expect(state().switching).toBe(true);
+    expect(state().tracks).toBeUndefined();
+
+    // Every restart is refused while the switch is in flight.
+    await player.chooseAudio(1);
+    await player.chooseSubtitles(3);
+    await player.toggleSubtitles();
+    await player.retry();
+    await player.chooseVersion("v1");
+    expect(requests).toHaveLength(2);
+
+    // A late answer from the superseded session is ignored.
+    requests[0]?.onTracks(tracks());
+    requests[0]?.onNotice({
+      title: "Late",
+      message: "From the old session.",
+      retry: false,
+    });
+    expect(state().tracks).toBeUndefined();
+    expect(state().switching).toBe(true);
+    expect(state().notice).toBeUndefined();
+
+    const v2Tracks = tracks({
+      audioStreams: [
+        { index: 4, title: null, codec: "aac", language: "eng", channels: 2 },
+        { index: 5, title: null, codec: "aac", language: "jpn", channels: 6 },
+      ],
+      subtitleStreams: [
+        { index: 6, title: null, codec: "srt", language: "eng", forced: false },
+      ],
+      audioStreamIndex: 4,
+    });
+    requests[1]?.onTracks(v2Tracks);
+    expect(state().switching).toBe(false);
+    expect(state().tracks).toEqual(v2Tracks);
+
+    await player.chooseAudio(5);
+    expect(requests[2]?.versionId).toBe("v2");
+    expect(requests[2]?.streams.audioStreamIndex).toBe(5);
+  });
+
+  test("a failed Version plan ends the switch and keeps the Version menu usable", async () => {
+    const { requests, player, state, tracks } = setup();
+    requests[0]?.onTracks(tracks());
+
+    await player.chooseVersion("v2");
+    requests[1]?.onNotice({
+      title: "Cannot play this Version",
+      message: "The File is missing.",
+      retry: false,
+    });
+    expect(state().switching).toBe(false);
+    expect(state().tracks).toBeUndefined();
+    expect(state().notice?.title).toBe("Cannot play this Version");
+
+    await player.chooseVersion("v1");
+    expect(requests[2]?.versionId).toBe("v1");
+    expect(state().notice).toBeUndefined();
+  });
+
+  test("a playing video restores playing after the page cache, and the store agrees", async () => {
+    const { media, requests, player, state, tick } = setup(
+      {},
+      { likeVideo: true },
+    );
+    await Promise.resolve();
+    media.fire("playing");
+    media.currentTime = 42;
+    media.fire("timeupdate");
+    expect(state().playing).toBe(true);
+
+    await player.suspend();
+    expect(media.paused).toBe(true);
+    expect(state().playing).toBe(false);
+
+    player.resume();
+    expect(requests[1]?.paused).toBe(false);
+    expect(requests[1]?.startAt).toBe(42);
+    await Promise.resolve();
+    media.fire("playing");
+    expect(media.paused).toBe(false);
+    expect(state().playing).toBe(true);
+    tick();
+    expect(state().controls).toBe(false);
+  });
+
+  test("a paused video restores paused after the page cache", async () => {
+    const { media, requests, player, state } = setup({}, { likeVideo: true });
+    await Promise.resolve();
+    media.pause();
+    media.currentTime = 42;
+
+    await player.suspend();
+    const playCalls = media.playCalls;
+    player.resume();
+    expect(requests[1]?.paused).toBe(true);
+    await Promise.resolve();
+    expect(media.paused).toBe(true);
+    expect(state().playing).toBe(false);
+    expect(state().controls).toBe(true);
+    expect(media.playCalls).toBe(playCalls);
+  });
+
+  test("a refused autoplay on restore leaves it paused with the controls up", async () => {
+    const { media, requests, player, state } = setup({}, { likeVideo: true });
+    await Promise.resolve();
+    media.fire("playing");
+    media.currentTime = 42;
+
+    await player.suspend();
+    media.refusePlay = true;
+    player.resume();
+    expect(requests[1]?.paused).toBe(false);
+    await Promise.resolve();
+    expect(media.paused).toBe(true);
+    expect(state().playing).toBe(false);
+    expect(state().controls).toBe(true);
+  });
+
+  test("a playing viewer stays playing across a failed Version plan", async () => {
+    const { media, requests, player, state } = setup({}, { likeVideo: true });
+    await Promise.resolve();
+    media.fire("playing");
+    media.currentTime = 30;
+    media.fire("timeupdate");
+
+    // The plan fails after the old session unloaded the media: paused is
+    // clobbered, but the viewer's intent survives.
+    media.refusePlay = true;
+    await player.chooseVersion("v2");
+    expect(requests[1]?.paused).toBe(false);
+    requests[1]?.onNotice({
+      title: "Cannot play this Version",
+      message: "The File is missing.",
+      retry: false,
+    });
+    expect(state().playing).toBe(false);
+    expect(media.paused).toBe(true);
+    expect(state().controls).toBe(true);
+
+    media.refusePlay = false;
+    await player.chooseVersion("v1");
+    expect(requests[2]?.paused).toBe(false);
+    await Promise.resolve();
+    expect(state().playing).toBe(true);
   });
 
   test("close is safe twice and stops listening", async () => {

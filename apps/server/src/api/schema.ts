@@ -57,6 +57,16 @@ export const Shelf = Schema.Struct({
   ),
 });
 
+/** A detail's child: its browse card with the overview, runtime and the caller's progress an episode row shows. */
+export const DetailChild = Schema.Struct({
+  ...BrowseCard.fields,
+  overview: Schema.NullOr(Schema.String),
+  durationSeconds: Schema.NullOr(Schema.Number),
+  progress: Schema.NullOr(
+    Schema.Struct({ positionSeconds: Schema.Number, completed: Schema.Boolean }),
+  ),
+});
+
 /** The item shape returned by detail endpoints. */
 export const ItemDetail = Schema.Struct({
   ...BrowseCard.fields,
@@ -83,7 +93,7 @@ export const ItemDetail = Schema.Struct({
       bytes: Schema.Number,
     }),
   ),
-  children: Schema.Array(BrowseCard),
+  children: Schema.Array(DetailChild),
 });
 
 /** The library shape returned by library endpoints. */

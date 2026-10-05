@@ -70,7 +70,12 @@ let registryBusy = $state(false);
 let registryFailure = $state<FailureShape | undefined>(undefined);
 let registryRemoveFailure = $state<FailureShape | undefined>(undefined);
 
+// One preview generation shared by both entry points: a newer flow or a
+// closed dialog retires any response still in flight.
+let previewGeneration = 0;
+
 function openAdd() {
+  previewGeneration += 1;
   source = "";
   preview = undefined;
   previewFailure = undefined;
@@ -80,15 +85,19 @@ function openAdd() {
 
 async function previewSource(event?: SubmitEvent) {
   event?.preventDefault();
+  const generation = ++previewGeneration;
   previewBusy = true;
   previewFailure = undefined;
   installFailure = undefined;
   preview = undefined;
   try {
-    preview = await client.plugins.preview({ source });
+    const result = await client.plugins.preview({ source });
+    if (generation !== previewGeneration) return;
+    preview = result;
     await tick();
     previewTitle?.focus();
   } catch (error) {
+    if (generation !== previewGeneration) return;
     previewFailure = readFailure(error);
   } finally {
     previewBusy = false;
@@ -98,17 +107,21 @@ async function previewSource(event?: SubmitEvent) {
 async function previewEntry(entry: RegistryEntry) {
   const latest = entry.versions[0];
   if (latest === undefined) return;
+  const generation = ++previewGeneration;
   entryPreviewBusy = entry.name;
   entryPreviewFailure = undefined;
   try {
+    const result = await client.plugins.preview({ source: latest.source });
+    if (generation !== previewGeneration) return;
     source = latest.source;
-    preview = await client.plugins.preview({ source: latest.source });
+    preview = result;
     previewFailure = undefined;
     installFailure = undefined;
     addOpen = true;
     await tick();
     previewTitle?.focus();
   } catch (error) {
+    if (generation !== previewGeneration) return;
     entryPreviewFailure = readFailure(error);
   } finally {
     entryPreviewBusy = undefined;
@@ -464,6 +477,7 @@ function registryRemoveDescription(count: number) {
   bind:open={addOpen}
   onOpenChangeComplete={(open) => {
     if (!open) {
+      previewGeneration += 1;
       preview = undefined;
       previewFailure = undefined;
       installFailure = undefined;

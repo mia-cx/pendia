@@ -28,6 +28,15 @@ const {
 
 const titleId = $props.id();
 
+// The Switch moves on click before the save answers; when the write
+// settles (busy returns to false), resync to the saved state. A failed
+// save leaves plugin.enabled unchanged, which puts the switch back to
+// match the status text, and the next click sends the intent again.
+let checked = $derived.by(() => {
+  void busy;
+  return plugin.enabled;
+});
+
 function failedAt(at: string) {
   return new Date(at).toLocaleString(undefined, {
     dateStyle: "medium",
@@ -55,10 +64,10 @@ function failedAt(at: string) {
       </div>
       {#if !plugin.failure}
         <Switch
-          checked={plugin.enabled}
+          bind:checked
           aria-label={plugin.name}
           disabled={busy}
-          onCheckedChange={(enabled) => ontoggle(enabled)}
+          onCheckedChange={ontoggle}
         />
       {/if}
     </div>

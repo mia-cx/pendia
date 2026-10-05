@@ -1,3 +1,5 @@
+import { reachServer, ServerUnreachable } from "./api.ts";
+
 /** The icon key a section row renders; AdminNav maps each key to a Lucide component. */
 export type AdminIcon =
   | "gauge"
@@ -140,4 +142,19 @@ export function navDirection(from: string, to: string): "push" | "pop" | null {
   if (after > before) return "push";
   if (after < before) return "pop";
   return null;
+}
+
+/** Reads /readyz: Pendia answers 200 when ready and a JSON 503 when its database is down; anything else means Pendia did not answer. */
+export async function checkHealth(
+  transport?: typeof fetch,
+): Promise<"ready" | "no-database" | "unreachable"> {
+  try {
+    const response = await reachServer("/readyz", undefined, transport);
+    if (response.ok) return "ready";
+    if (response.status === 503) return "no-database";
+    return "unreachable";
+  } catch (error) {
+    if (error instanceof ServerUnreachable) return "unreachable";
+    throw error;
+  }
 }

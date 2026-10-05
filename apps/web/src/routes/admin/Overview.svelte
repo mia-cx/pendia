@@ -1,5 +1,6 @@
 <script lang="ts">
 import { onDestroy } from "svelte";
+import { checkHealth } from "$lib/admin.ts";
 import { client } from "$lib/api.ts";
 import { cardLabel, itemHref } from "$lib/browse.ts";
 import Artwork from "$lib/components/Artwork.svelte";
@@ -42,12 +43,7 @@ const healthStates = {
 const reloadMs = 10_000;
 
 async function loadHealth() {
-  try {
-    const answer = await fetch("/readyz");
-    health = answer.status === 200 ? "ready" : "no-database";
-  } catch {
-    health = "unreachable";
-  }
+  health = await checkHealth();
 }
 
 async function loadScans() {

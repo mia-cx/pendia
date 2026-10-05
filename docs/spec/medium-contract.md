@@ -7,7 +7,7 @@ Movies and shows are two mediums, not one. They share a probe, the video format 
 ## What a medium hands over
 
 1. Kinds, each with the extra columns it adds and whether it holds Versions. Shows: Show, Season, Episode, where only Episode holds Versions.
-2. Scan rules: which paths in a library belong to it, what a canonical folder is, how to parse one, and which files inside are extras rather than Versions.
+2. Scan rules: which paths in a library belong to it, which Item folder a file belongs to at any depth, how to parse a folder's name, and which files inside are extras rather than Versions. The rules read names, not a fixed layout.
 3. Providers it consumes: metadata, subtitles, artwork.
 4. Formats it plays.
 5. Browse: which core shelves its Items join, the shelves only it can compute, and the client route per kind.

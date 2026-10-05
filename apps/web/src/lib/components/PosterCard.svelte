@@ -73,6 +73,11 @@ const label = $derived(
       {/if}
     </Artwork>
   </span>
+  {#if card.kind === "season"}
+    <span class="mt-2 block truncate text-subheadline text-label"
+      >{card.title}</span
+    >
+  {/if}
   {#if href === null}
     <span class="sr-only">{label}</span>
   {/if}

@@ -31,7 +31,7 @@ const {
   {:else}
     <span class="text-subheadline text-label">{label}</span>
   {/if}
-  <div class={cn("min-w-0", inline && "flex shrink-0 items-center gap-3")}>
+  <div class={cn("min-w-0", inline && "flex items-center gap-3")}>
     {@render children()}
     {#if hint && !inline}
       <p class="mt-1 text-footnote text-label-secondary">{hint}</p>

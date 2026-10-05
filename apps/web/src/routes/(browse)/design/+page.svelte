@@ -21,7 +21,9 @@ import { Button } from "$lib/components/ui/button/index.ts";
 import * as Dialog from "$lib/components/ui/dialog/index.ts";
 import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.ts";
 import { Input } from "$lib/components/ui/input/index.ts";
+import { Label } from "$lib/components/ui/label/index.ts";
 import * as Popover from "$lib/components/ui/popover/index.ts";
+import { Progress } from "$lib/components/ui/progress/index.ts";
 import * as ScrollArea from "$lib/components/ui/scroll-area/index.ts";
 import * as Select from "$lib/components/ui/select/index.ts";
 import { Separator } from "$lib/components/ui/separator/index.ts";
@@ -138,6 +140,10 @@ const rows = Array.from(
   <section class="flex flex-col gap-4">
     <h2 class="text-title-2">Fields</h2>
     <div class="flex flex-col gap-3">
+      <div class="flex w-72 flex-col gap-1.5">
+        <Label for="design-title">Title</Label>
+        <Input id="design-title" value="Dune: Part Two" />
+      </div>
       <Input placeholder="Search titles" aria-label="Search" class="w-72" />
       <Input value="Dune: Part Two" aria-label="Title" class="w-72" />
       <Input value="not-an-email" aria-invalid="true" aria-label="Invalid field" class="w-72" />
@@ -172,6 +178,14 @@ const rows = Array.from(
       <Tabs.Content value="versions" class="text-label-secondary">Three versions on disk.</Tabs.Content>
       <Tabs.Content value="extras" class="text-label-secondary">Behind-the-scenes features.</Tabs.Content>
     </Tabs.Root>
+  </section>
+
+  <section class="flex flex-col gap-4">
+    <h2 class="text-title-2">Progress</h2>
+    <div class="flex w-72 flex-col gap-3">
+      <Progress value={40} aria-label="Scan progress" />
+      <Progress value={null} aria-label="Scan progress, indeterminate" />
+    </div>
   </section>
 
   <section class="flex flex-col gap-4">

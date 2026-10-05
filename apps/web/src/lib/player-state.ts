@@ -208,7 +208,7 @@ export function createPlayer(options: {
   }
 
   const listeners: [string, () => void][] = [
-    ["play", () => patch({ playing: true })],
+    ["play", () => patch({ playing: true, ended: false })],
     [
       "pause",
       () => {
@@ -224,6 +224,13 @@ export function createPlayer(options: {
       },
     ],
     ["waiting", () => patch({ buffering: true })],
+    // A paused load or a refused autoplay never fires `playing`.
+    [
+      "canplay",
+      () => {
+        if (media.paused) patch({ buffering: false });
+      },
+    ],
     [
       "playing",
       () => {
@@ -267,17 +274,8 @@ export function createPlayer(options: {
   /** Wakes the controls and restarts the stillness timer. */
   function activity() {
     if (!current.controls) patch({ controls: true });
-    if (!heldUp()) {
-      if (hideTimerOn) cancelHide();
-      hideTimerOn = true;
-      hideCancel = schedule(() => {
-        hideTimerOn = false;
-        hideCancel = undefined;
-        if (!heldUp()) patch({ controls: false });
-      }, hideAfterMs);
-    } else {
-      cancelHide();
-    }
+    cancelHide();
+    settleControls();
   }
 
   openSession(current.versionId, options.startAt, streams, false);

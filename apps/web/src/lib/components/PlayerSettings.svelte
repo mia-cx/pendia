@@ -94,6 +94,26 @@ const sections = $derived.by((): Section[] => {
 });
 </script>
 
+{#snippet radioList(section: Section)}
+  <DropdownMenu.RadioGroup
+    value={section.value}
+    onValueChange={section.choose}
+  >
+    {#each section.options as option (option.value)}
+      <DropdownMenu.RadioItem
+        value={option.value}
+        closeOnSelect
+        disabled={state.switching}
+      >
+        {option.label}
+        {#if option.detail}
+          <span class="ml-auto shrink-0 whitespace-nowrap text-footnote text-label-secondary">{option.detail}</span>
+        {/if}
+      </DropdownMenu.RadioItem>
+    {/each}
+  </DropdownMenu.RadioGroup>
+{/snippet}
+
 {#if sections.length > 0}
   <DropdownMenu.Root
     onOpenChange={(open) => player.hold("menu", open)}
@@ -109,7 +129,7 @@ const sections = $derived.by((): Section[] => {
       side="top"
       align="end"
       sideOffset={8}
-      class="w-72"
+      class="w-80"
       portalProps={{ to: portal }}
     >
       {#each sections as section, index (section.heading)}
@@ -123,45 +143,13 @@ const sections = $derived.by((): Section[] => {
               <span class="ml-auto text-footnote text-label-secondary">{section.current}</span>
             </DropdownMenu.SubTrigger>
             <DropdownMenu.SubContent portalProps={{ to: portal }}>
-              <DropdownMenu.RadioGroup
-                value={section.value}
-                onValueChange={section.choose}
-              >
-                {#each section.options as option (option.value)}
-                  <DropdownMenu.RadioItem
-                    value={option.value}
-                    closeOnSelect
-                    disabled={state.switching}
-                  >
-                    {option.label}
-                    {#if option.detail}
-                      <span class="ml-auto text-footnote text-label-secondary">{option.detail}</span>
-                    {/if}
-                  </DropdownMenu.RadioItem>
-                {/each}
-              </DropdownMenu.RadioGroup>
+              {@render radioList(section)}
             </DropdownMenu.SubContent>
           </DropdownMenu.Sub>
         {:else}
           <DropdownMenu.Group>
             <DropdownMenu.GroupHeading>{section.heading}</DropdownMenu.GroupHeading>
-            <DropdownMenu.RadioGroup
-              value={section.value}
-              onValueChange={section.choose}
-            >
-              {#each section.options as option (option.value)}
-                <DropdownMenu.RadioItem
-                  value={option.value}
-                  closeOnSelect
-                  disabled={state.switching}
-                >
-                  {option.label}
-                  {#if option.detail}
-                    <span class="ml-auto text-footnote text-label-secondary">{option.detail}</span>
-                  {/if}
-                </DropdownMenu.RadioItem>
-              {/each}
-            </DropdownMenu.RadioGroup>
+            {@render radioList(section)}
           </DropdownMenu.Group>
         {/if}
       {/each}

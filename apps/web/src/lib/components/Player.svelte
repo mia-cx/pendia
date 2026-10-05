@@ -12,7 +12,8 @@ import Volume1Icon from "@lucide/svelte/icons/volume-1";
 import Volume2Icon from "@lucide/svelte/icons/volume-2";
 import VolumeXIcon from "@lucide/svelte/icons/volume-x";
 import { onDestroy, untrack } from "svelte";
-import { afterNavigate } from "$app/navigation";
+import { afterNavigate, replaceState } from "$app/navigation";
+import { page } from "$app/state";
 import { client } from "$lib/api.ts";
 import { episodeCode, itemHref } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
@@ -30,15 +31,12 @@ let {
   id,
   versionId,
   startAt,
-  player = $bindable(),
 }: {
   id: string;
   /** The Version to play first; null or unknown plays the first. */
   versionId: string | null;
   /** Where to start, in seconds; null resumes. */
   startAt: number | null;
-  /** The player, so the route can follow Version switches. */
-  player?: ReturnType<typeof createPlayer>;
 } = $props();
 
 // The Version choice is part of the load: a link that names no Version plays
@@ -55,6 +53,7 @@ const item = resource(async () => {
 let video = $state<HTMLVideoElement>();
 let root = $state<HTMLElement>();
 let barHeight = $state(0);
+let player = $state<ReturnType<typeof createPlayer>>();
 let playerState = $state<PlayerState>();
 let fullscreen = $state(false);
 let pip = $state(false);
@@ -121,6 +120,17 @@ $effect(() => {
   const store = player?.state;
   if (store === undefined) return;
   return store.subscribe((next) => (playerState = next));
+});
+
+// A Version switch updates the URL instead of remounting the player.
+$effect(() => {
+  const current = playerState?.versionId;
+  if (current === undefined) return;
+  if (page.url.searchParams.get("version") === current) return;
+  const url = new URL(page.url);
+  url.searchParams.set("version", current);
+  url.searchParams.delete("t");
+  replaceState(url, page.state);
 });
 
 // PiP events are not in TypeScript's element attributes.
@@ -245,42 +255,43 @@ function onKeydown(event: KeyboardEvent) {
   player?.activity();
   const onSlider = target?.closest("[role='slider']") !== null;
   const onAction = target?.closest("button, a, [role='slider']") !== null;
-  switch (event.code) {
-    case "Space":
-    case "KeyK":
+  // event.key, not code: non-QWERTY layouts get the letters they press.
+  switch (event.key.toLowerCase()) {
+    case " ":
+    case "k":
       if (onAction) return;
       event.preventDefault();
       player?.togglePlay();
       return;
-    case "ArrowLeft":
+    case "arrowleft":
       if (onSlider) return;
       event.preventDefault();
       player?.skip(-10);
       return;
-    case "ArrowRight":
+    case "arrowright":
       if (onSlider) return;
       event.preventDefault();
       player?.skip(10);
       return;
-    case "ArrowUp":
+    case "arrowup":
       if (onSlider) return;
       event.preventDefault();
       player?.setVolume((playerState?.volume ?? 0) + 0.1);
       return;
-    case "ArrowDown":
+    case "arrowdown":
       if (onSlider) return;
       event.preventDefault();
       player?.setVolume((playerState?.volume ?? 1) - 0.1);
       return;
-    case "KeyF":
+    case "f":
       event.preventDefault();
       void toggleFullscreen();
       return;
-    case "KeyM":
+    case "m":
       event.preventDefault();
       player?.toggleMute();
       return;
-    case "KeyC":
+    case "c":
       event.preventDefault();
       void player?.toggleSubtitles();
       return;
@@ -452,12 +463,24 @@ const VolumeIcon = $derived(
     {/if}
   </div>
 
+  <!-- Phones get a dim layer so the centred transport reads on bright frames. -->
+  <div
+    aria-hidden="true"
+    class={cn(
+      "pointer-events-none absolute inset-0 bg-black/30 transition-opacity ease-smooth-out sm:hidden",
+      shown
+        ? "opacity-100 duration-(--duration-fast)"
+        : "opacity-0 duration-(--duration-medium)",
+    )}
+  ></div>
+
   <!-- svelte-ignore a11y_no_static_element_interactions: hover over the bar holds the controls up -->
   <div
     data-bar
     inert={!shown}
+    bind:clientHeight={barHeight}
     class={cn(
-      "absolute inset-x-0 bottom-0 bg-linear-to-t from-black/75 via-black/35 to-transparent pt-24 transition-opacity ease-smooth-out",
+      "absolute inset-x-0 bottom-0 bg-linear-to-t from-black/70 via-black/30 to-transparent pt-12 transition-opacity ease-smooth-out",
       shown
         ? "opacity-100 duration-(--duration-fast)"
         : "pointer-events-none opacity-0 duration-(--duration-medium)",
@@ -470,7 +493,7 @@ const VolumeIcon = $derived(
     onfocusin={barFocusIn}
     onfocusout={barFocusOut}
   >
-    <div bind:clientHeight={barHeight} class="flex flex-col gap-2">
+    <div class="flex flex-col gap-2">
       <div class="flex items-center gap-3">
         <span
           class="min-w-14 text-right text-footnote tabular-nums text-white/80"
@@ -516,7 +539,7 @@ const VolumeIcon = $derived(
           </div>
         </div>
         <div
-          class="flex items-center justify-center gap-2 max-sm:pointer-events-none max-sm:fixed max-sm:inset-0"
+          class="flex items-center justify-center gap-2 sm:col-start-2 max-sm:pointer-events-none max-sm:fixed max-sm:inset-0"
         >
           <Button
             variant="ghost"
@@ -524,10 +547,10 @@ const VolumeIcon = $derived(
             class="relative size-11 text-white hover:bg-white/12 max-sm:pointer-events-auto max-sm:size-12"
             onclick={() => player?.skip(-10)}
           >
-            <RotateCcwIcon class="size-6" aria-hidden="true" />
+            <RotateCcwIcon class="size-7 max-sm:size-9" aria-hidden="true" />
             <span
               aria-hidden="true"
-              class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pt-0.5 text-caption-2 font-semibold"
+              class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pt-0.5 text-caption-2 font-semibold max-sm:text-caption-1"
               >10</span
             >
           </Button>
@@ -549,15 +572,15 @@ const VolumeIcon = $derived(
             class="relative size-11 text-white hover:bg-white/12 max-sm:pointer-events-auto max-sm:size-12"
             onclick={() => player?.skip(10)}
           >
-            <RotateCwIcon class="size-6" aria-hidden="true" />
+            <RotateCwIcon class="size-7 max-sm:size-9" aria-hidden="true" />
             <span
               aria-hidden="true"
-              class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pt-0.5 text-caption-2 font-semibold"
+              class="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pt-0.5 text-caption-2 font-semibold max-sm:text-caption-1"
               >10</span
             >
           </Button>
         </div>
-        <div class="flex items-center justify-end gap-1">
+        <div class="col-start-3 flex items-center justify-end gap-1">
           {#if typeof document !== "undefined" && document.pictureInPictureEnabled}
             <Button
               variant="ghost"
@@ -646,7 +669,7 @@ const VolumeIcon = $derived(
     color: white;
     font-family: var(--font-sans);
     font-weight: 500;
-    font-size: clamp(1rem, 3.6vh, 2.25rem);
+    font-size: clamp(1rem, calc(0.5rem + 2.6vmin), 2.25rem);
     line-height: 1.3;
   }
 

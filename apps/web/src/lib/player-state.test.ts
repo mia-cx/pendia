@@ -222,6 +222,16 @@ describe("player state", () => {
     expect(requests[1]?.paused).toBe(true);
   });
 
+  test("a paused restart buffers until canplay, then shows ready", async () => {
+    const { media, player, state } = setup();
+    const choosing = player.chooseAudio(1);
+    expect(state().buffering).toBe(true);
+    await choosing;
+    // Paused media never fires `playing`; canplay ends the spinner instead.
+    media.fire("canplay");
+    expect(state().buffering).toBe(false);
+  });
+
   test("subtitle choices and toggleSubtitles remember the last Stream", async () => {
     const { requests, player, tracks } = setup();
     requests[0]?.onTracks(tracks());

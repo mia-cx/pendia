@@ -378,6 +378,7 @@ describe("TMDB metadata provider", () => {
     expect(url.searchParams.get("append_to_response")).toBe(
       "credits,release_dates,external_ids,images",
     );
+    expect(url.searchParams.get("include_image_language")).toBe("en,null");
     expect(calls[0]?.init?.headers).toEqual({ accept: "application/json" });
     expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
   });

@@ -265,7 +265,11 @@ async function fetchMovie(
   // TMDB answers 404 for deleted or merged movies.
   const body = await get(
     `/movie/${match.providerId}`,
-    { append_to_response: "credits,release_dates,external_ids,images" },
+    {
+      append_to_response: "credits,release_dates,external_ids,images",
+      // English to match the title's language, plus language-neutral images.
+      include_image_language: "en,null",
+    },
     true,
   );
   if (body === undefined) return null;

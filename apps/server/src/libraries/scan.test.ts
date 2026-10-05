@@ -8,31 +8,39 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   episodes,
+  favourites,
   files,
   itemAncestors,
   items,
   movies,
   progress,
   providerIds,
+  ratings,
   seasons,
   shows,
   streams,
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { moviesMedium } from "../mediums/movies.ts";
 import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { locateFile } from "./roots.ts";
-import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import {
+  inScope,
+  scanDirectory,
+  scanScope,
+  scanShowDirectory,
+} from "./scan.ts";
 import { addRoot, insertLibraries } from "./testing.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
@@ -1832,4 +1840,851 @@ describe.skipIf(!databaseUrl)("scans across roots", () => {
         expect(perEpisode.filter((row) => row.number === 2).length).toBe(1);
       });
     }));
+});
+
+describe.skipIf(!databaseUrl)("scans at any depth", () => {
+  /** Creates each root-relative file under its root. */
+  async function populateRoots(
+    entries: readonly [root: string, path: string][],
+  ) {
+    for (const [root, path] of entries) {
+      await mkdir(join(root, dirname(path)), { recursive: true });
+      await createVideoFixture(join(root, path));
+    }
+  }
+
+  const rootShows = async (db: Database, libraryId: string) =>
+    db
+      .select()
+      .from(items)
+      .where(and(eq(items.libraryId, libraryId), eq(items.kind, "show")))
+      .orderBy(asc(items.title));
+
+  test("two single-show roots become two titled Shows at the library root", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const bad = join(dir, "Breaking Bad (2008)");
+        const wire = join(dir, "The Wire (2002)");
+        await populateRoots([
+          [bad, "Season 1/Breaking Bad - S01E01.mkv"],
+          [wire, "Season 1/The Wire - S01E01.mkv"],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: bad,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        await addRoot(db, library.id, wire);
+
+        const first = await scanShowDirectory(db, library.id, ".");
+        expect(first.itemIds).toHaveLength(2);
+        expect(await rootShows(db, library.id)).toMatchObject([
+          {
+            title: "Breaking Bad",
+            year: 2008,
+            canonicalFolder: ".",
+            titleKey: "breaking bad (2008)",
+          },
+          {
+            title: "The Wire",
+            year: 2002,
+            canonicalFolder: ".",
+            titleKey: "the wire (2002)",
+          },
+        ]);
+
+        const second = await scanShowDirectory(db, library.id, ".");
+        expect(second.itemIds.sort()).toEqual(first.itemIds.sort());
+      });
+    }));
+
+  for (const order of ["root first", "folder first"] as const) {
+    test(`a Show spanning a root and a folder in another root settles at the folder (${order})`, () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withVideoFixture(async (dir) => {
+          const a = join(dir, "library");
+          const b = join(dir, "Breaking Bad (2008)");
+          const episode = "Season 1/Breaking Bad - S01E01.mkv";
+          await populateRoots([
+            [a, `Breaking Bad (2008)/${episode}`],
+            [b, episode],
+          ]);
+          const [library] = await insertLibraries(db, {
+            name: "Shows",
+            medium: "shows",
+            rootPath: a,
+          });
+          if (!library) throw new Error("Fixture library missing.");
+          const rootB = await addRoot(db, library.id, b);
+
+          const scans =
+            order === "root first"
+              ? ([".", "Breaking Bad (2008)"] as const)
+              : (["Breaking Bad (2008)", "."] as const);
+          for (const path of scans)
+            await scanShowDirectory(db, library.id, path, {
+              reconcileMissing: true,
+            });
+
+          const [show] = await rootShows(db, library.id);
+          expect(show).toMatchObject({
+            title: "Breaking Bad",
+            canonicalFolder: "Breaking Bad (2008)",
+            titleKey: "",
+          });
+          expect(await rootShows(db, library.id)).toHaveLength(1);
+          const fileRows = await db.select().from(files);
+          expect(new Set(fileRows.map((file) => file.rootId))).toEqual(
+            new Set([library.rootId, rootB]),
+          );
+          const episodeVersions = await db
+            .select({ versionId: versions.id })
+            .from(versions)
+            .innerJoin(episodes, eq(episodes.itemId, versions.itemId));
+          expect(episodeVersions).toHaveLength(2);
+
+          for (const path of scans)
+            await scanShowDirectory(db, library.id, path, {
+              reconcileMissing: true,
+            });
+          const [stable] = await rootShows(db, library.id);
+          expect(stable).toMatchObject({
+            id: show?.id,
+            canonicalFolder: "Breaking Bad (2008)",
+            titleKey: "",
+          });
+          expect(
+            new Set((await db.select().from(files)).map((file) => file.id)),
+          ).toEqual(new Set(fileRows.map((file) => file.id)));
+        });
+      }));
+  }
+
+  test("a single-show root merges with a tagged folder by provider id", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const a = join(dir, "library");
+        const b = join(dir, "breaking-bad [tvdbid-81189]");
+        const episode = "Season 1/Breaking Bad - S01E01.mkv";
+        await populateRoots([
+          [a, `Breaking Bad (2008) [tvdbid-81189]/${episode}`],
+          [b, episode],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: a,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const rootB = await addRoot(db, library.id, b);
+
+        await scanShowDirectory(db, library.id, ".");
+        await scanShowDirectory(
+          db,
+          library.id,
+          "Breaking Bad (2008) [tvdbid-81189]",
+        );
+
+        const [show] = await rootShows(db, library.id);
+        expect(show).toMatchObject({
+          canonicalFolder: "Breaking Bad (2008) [tvdbid-81189]",
+          titleKey: "",
+        });
+        expect(await rootShows(db, library.id)).toHaveLength(1);
+        expect(await db.select().from(providerIds)).toMatchObject([
+          { provider: "tvdb", value: "81189", itemId: show?.id },
+        ]);
+        expect(
+          new Set((await db.select().from(files)).map((file) => file.rootId)),
+        ).toEqual(new Set([library.rootId, rootB]));
+      });
+    }));
+
+  test("loose movies in one folder become titled Items", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const arrivals = "Movies/Arrival.2016.1080p.WEB-DL.mkv";
+        await populateRoots([
+          [root, "Movies/Dune.2021.1080p.BluRay.x264-GROUP.mkv"],
+          [root, "Movies/Dune.2021.2160p.WEB-DL.DDP5.1.mkv"],
+          [root, arrivals],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+
+        const scanned = await scanDirectory(db, library.id, "Movies");
+        expect(scanned.itemIds).toHaveLength(2);
+        const rootMovies = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"))
+          .orderBy(asc(items.title));
+        expect(rootMovies).toMatchObject([
+          {
+            title: "Arrival",
+            year: 2016,
+            canonicalFolder: "Movies",
+            titleKey: "arrival (2016)",
+          },
+          {
+            title: "Dune",
+            year: 2021,
+            canonicalFolder: "Movies",
+            titleKey: "dune (2021)",
+          },
+        ]);
+        const [arrival, dune] = rootMovies;
+        const versionsOf = async (itemId: string) =>
+          (
+            await db
+              .select({ id: versions.id })
+              .from(versions)
+              .where(eq(versions.itemId, itemId))
+          ).map((row) => row.id);
+        expect(await versionsOf(dune?.id ?? "")).toHaveLength(2);
+
+        const rescan = await scanDirectory(db, library.id, "Movies");
+        expect(rescan.itemIds.sort()).toEqual(scanned.itemIds.sort());
+
+        await rm(join(root, arrivals));
+        await scanDirectory(db, library.id, "Movies", {
+          reconcileMissing: true,
+        });
+        expect(await db.select().from(items)).toMatchObject([
+          { id: dune?.id, title: "Dune", canonicalFolder: "Movies" },
+        ]);
+        expect(await versionsOf(arrival?.id ?? "")).toHaveLength(0);
+      });
+    }));
+
+  test("a folder Item and a titled group in one root stay put", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await populateRoots([
+          [root, "Dune (2021)/Dune (2021).mkv"],
+          [root, "Movies/Dune.2021.1080p.mkv"],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+
+        const state = async () => {
+          const movieItems = await db
+            .select()
+            .from(items)
+            .where(eq(items.kind, "movie"));
+          const versionRows = await db.select().from(versions);
+          return { movieItems, versionRows };
+        };
+        await scanDirectory(db, library.id, "Dune (2021)");
+        for (const path of ["Movies", "Dune (2021)", "Movies"]) {
+          await scanDirectory(db, library.id, path);
+          const { movieItems, versionRows } = await state();
+          expect(movieItems).toHaveLength(1);
+          expect(movieItems[0]).toMatchObject({
+            canonicalFolder: "Dune (2021)",
+            titleKey: "",
+          });
+          expect(versionRows).toHaveLength(2);
+        }
+      });
+    }));
+
+  test.each(["file", "item"] as const)(
+    "a lone group's scan ignores a %s delete change's provider ids",
+    (target) =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withVideoFixture(async (root) => {
+          const arrival = "Movies/Arrival.2016.mkv";
+          const dune = "Movies/Dune.2021.mkv";
+          await populateRoots([
+            [root, arrival],
+            [root, dune],
+          ]);
+          const [library] = await insertLibraries(db, {
+            name: "Movies",
+            medium: "movies",
+            rootPath: root,
+          });
+          if (!library) throw new Error("Fixture library missing.");
+
+          await scanDirectory(db, library.id, "Movies", {
+            changes: [
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: arrival,
+                providerIds: { tmdb: "329865" },
+              },
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: dune,
+                providerIds: { tmdb: "438631" },
+              },
+            ],
+          });
+          const [duneItem] = await db
+            .select()
+            .from(items)
+            .where(eq(items.title, "Dune"));
+          if (!duneItem) throw new Error("Dune Item missing.");
+
+          await rm(join(root, arrival));
+          await scanDirectory(db, library.id, "Movies", {
+            changes: [
+              {
+                kind: "delete",
+                target,
+                rootId: library.rootId,
+                path: arrival,
+                providerIds: { tmdb: "329865" },
+              },
+            ],
+          });
+          const movieItems = await db.select().from(items);
+          expect(movieItems).toMatchObject([
+            { id: duneItem.id, title: "Dune", canonicalFolder: "Movies" },
+          ]);
+          expect(await db.select().from(providerIds)).toMatchObject([
+            { itemId: duneItem.id, provider: "tmdb", value: "438631" },
+          ]);
+        });
+      }),
+  );
+
+  test("an old multi-movie Item keeps its Files, folder and marks", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const arrival = "Movies (2020)/Arrival.2016.mkv";
+        const dune = "Movies (2020)/Dune.2021.mkv";
+        await populateRoots([
+          [root, arrival],
+          [root, dune],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+
+        const scanned = await scanDirectory(db, library.id, "Movies (2020)");
+        expect(scanned.itemIds).toHaveLength(1);
+        const [original] = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"));
+        if (!original) throw new Error("Movie Item missing.");
+        const oldVersions = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.itemId, original.id));
+        expect(oldVersions).toHaveLength(2);
+        const watched = oldVersions[0];
+        if (!watched) throw new Error("Version missing.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: original.id,
+          versionId: watched.id,
+          format: "video",
+          positionSeconds: 33,
+        });
+        await db
+          .insert(favourites)
+          .values({ userId: admin.id, itemId: original.id });
+        await db
+          .insert(ratings)
+          .values({ userId: admin.id, itemId: original.id, value: "8.5" });
+        await db
+          .update(items)
+          .set({ title: "Curated", metadataState: "matched" })
+          .where(eq(items.id, original.id));
+
+        // The upgrade moved the folder: the stored rows follow it by hand.
+        await rename(join(root, "Movies (2020)"), join(root, "Movies"));
+        await db
+          .update(items)
+          .set({ canonicalFolder: "Movies" })
+          .where(eq(items.id, original.id));
+        await db
+          .update(files)
+          .set({ path: "Movies/Arrival.2016.mkv" })
+          .where(eq(files.path, arrival));
+        await db
+          .update(files)
+          .set({ path: "Movies/Dune.2021.mkv" })
+          .where(eq(files.path, dune));
+        const oldFileIds = (await db.select({ id: files.id }).from(files))
+          .map((row) => row.id)
+          .sort();
+
+        await scanDirectory(db, library.id, "Movies");
+        await scanDirectory(db, library.id, "Movies");
+        await scanDirectory(db, library.id, "Movies", {
+          reconcileMissing: true,
+        });
+        const movieItems = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"));
+        expect(movieItems).toMatchObject([
+          {
+            id: original.id,
+            title: "Curated",
+            canonicalFolder: "Movies",
+            titleKey: "",
+            metadataState: "matched",
+          },
+        ]);
+        expect(
+          (await db.select({ id: versions.id }).from(versions))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual(oldVersions.map((version) => version.id).sort());
+        expect(
+          (await db.select({ id: files.id }).from(files))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual(oldFileIds);
+        expect(await db.select().from(progress)).toMatchObject([
+          {
+            itemId: original.id,
+            versionId: watched.id,
+            positionSeconds: 33,
+          },
+        ]);
+        expect(await db.select().from(favourites)).toMatchObject([
+          { itemId: original.id },
+        ]);
+        expect(await db.select().from(ratings)).toMatchObject([
+          { itemId: original.id, value: "8.5" },
+        ]);
+
+        await createVideoFixture(join(root, "Movies", "Heat.1995.mkv"));
+        await scanDirectory(db, library.id, "Movies");
+        const renamed = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"))
+          .orderBy(asc(items.title));
+        expect(renamed).toMatchObject([
+          { id: original.id, title: "Curated", titleKey: "" },
+          {
+            title: "Heat",
+            year: 1995,
+            canonicalFolder: "Movies",
+            titleKey: "heat (1995)",
+          },
+        ]);
+        const heat = renamed[1];
+        if (!heat) throw new Error("Heat Item missing.");
+        expect(
+          await db.select().from(versions).where(eq(versions.itemId, heat.id)),
+        ).toHaveLength(1);
+      });
+    }));
+
+  test("old disc Items keep their Files, folders and marks", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const { library, discs } = await seedAlienDiscs(db, root);
+        const cd1 = discs[0];
+        const cd2 = discs[1];
+        if (!cd1 || !cd2) throw new Error("Seed discs missing.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: cd2.item.id,
+          versionId: cd2.versionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        await db
+          .insert(favourites)
+          .values({ userId: admin.id, itemId: cd2.item.id });
+        await db
+          .insert(ratings)
+          .values({ userId: admin.id, itemId: cd2.item.id, value: "8.5" });
+
+        for (const folder of [
+          "Alien (1979)",
+          "Alien (1979)/CD1",
+          "Alien (1979)/CD2",
+          "Alien (1979)",
+        ]) {
+          await scanDirectory(db, library.id, folder, {
+            reconcileMissing: true,
+          });
+        }
+
+        const movieItems = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"))
+          .orderBy(asc(items.canonicalFolder));
+        expect(movieItems).toMatchObject([
+          { id: cd1.item.id, canonicalFolder: "Alien (1979)/CD1" },
+          { id: cd2.item.id, canonicalFolder: "Alien (1979)/CD2" },
+        ]);
+        expect(
+          (await db.select({ id: versions.id }).from(versions))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual([cd1.versionId, cd2.versionId].sort());
+        expect(
+          (await db.select({ id: files.id }).from(files))
+            .map((row) => row.id)
+            .sort(),
+        ).toEqual([cd1.fileId, cd2.fileId].sort());
+        expect(await db.select().from(progress)).toMatchObject([
+          {
+            itemId: cd2.item.id,
+            versionId: cd2.versionId,
+            positionSeconds: 33,
+          },
+        ]);
+        expect(await db.select().from(favourites)).toMatchObject([
+          { itemId: cd2.item.id },
+        ]);
+        expect(await db.select().from(ratings)).toMatchObject([
+          { itemId: cd2.item.id, value: "8.5" },
+        ]);
+      });
+    }));
+
+  test("a foreign owner's Version timelines refresh in place", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const { library, discs } = await seedAlienDiscs(db, root);
+        const cd2 = discs[1];
+        if (!cd2) throw new Error("Seed disc missing.");
+        const [before] = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.id, cd2.versionId));
+        expect(before?.timelineAligned).toBe(true);
+
+        // A fresh stamp makes the probe run again instead of hitting cache.
+        await utimes(
+          join(root, "Alien (1979)/CD2/Alien.1979.CD2.mkv"),
+          new Date(),
+          new Date(),
+        );
+        const scanned = await scanDirectory(db, library.id, "Alien (1979)", {
+          probe: async (file) => {
+            const result = await probeVideo(file);
+            return file.endsWith("CD2.mkv")
+              ? { ...result, keyframesSeconds: null }
+              : result;
+          },
+        });
+        expect(scanned.itemIds).toContain(cd2.item.id);
+        const [after] = await db
+          .select()
+          .from(versions)
+          .where(eq(versions.id, cd2.versionId));
+        expect(after).toMatchObject({
+          keyframesSeconds: null,
+          timelineAligned: false,
+        });
+      });
+    }));
+
+  test.each(["folder tags", "webhook ids"])(
+    "a preserved legacy Item keeps its match when its groups' %s disagree",
+    (source) =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withVideoFixture(async (root) => {
+          const tagged = source === "folder tags";
+          const arrival = `Movies (2020)/Arrival.2016${tagged ? ".{tmdb-329865}" : ""}.mkv`;
+          const dune = `Movies (2020)/Dune.2021${tagged ? ".{tmdb-438631}" : ""}.mkv`;
+          const movedArrival = `Movies/Arrival.2016${tagged ? ".{tmdb-329865}" : ""}.mkv`;
+          const movedDune = `Movies/Dune.2021${tagged ? ".{tmdb-438631}" : ""}.mkv`;
+          for (const path of [movedArrival, movedDune]) {
+            expect(moviesMedium.scan.identify(path)).toMatchObject({
+              kind: "movie",
+              canonicalFolder: "Movies",
+            });
+          }
+          await populateRoots([
+            [root, arrival],
+            [root, dune],
+          ]);
+          const [library] = await insertLibraries(db, {
+            name: "Movies",
+            medium: "movies",
+            rootPath: root,
+          });
+          if (!library) throw new Error("Fixture library missing.");
+          const scanned = await scanDirectory(db, library.id, "Movies (2020)");
+          expect(scanned.itemIds).toHaveLength(1);
+          const [original] = await db
+            .select()
+            .from(items)
+            .where(eq(items.kind, "movie"));
+          if (!original) throw new Error("Movie Item missing.");
+          await db
+            .update(items)
+            .set({ title: "Curated", metadataState: "matched" })
+            .where(eq(items.id, original.id));
+
+          // The upgrade moved the folder: the stored rows follow it by hand.
+          await rename(join(root, "Movies (2020)"), join(root, "Movies"));
+          await db
+            .update(items)
+            .set({ canonicalFolder: "Movies" })
+            .where(eq(items.id, original.id));
+          await db
+            .update(files)
+            .set({ path: movedArrival })
+            .where(eq(files.path, arrival));
+          await db
+            .update(files)
+            .set({ path: movedDune })
+            .where(eq(files.path, dune));
+          await db
+            .delete(providerIds)
+            .where(eq(providerIds.itemId, original.id));
+
+          const changes = tagged
+            ? []
+            : [
+                { path: movedArrival, providerIds: { tmdb: "329865" } },
+                { path: movedDune, providerIds: { tmdb: "438631" } },
+              ].map((change) => ({
+                kind: "add" as const,
+                rootId: library.rootId,
+                ...change,
+              }));
+          await scanDirectory(db, library.id, "Movies", { changes });
+          await scanDirectory(db, library.id, "Movies", { changes });
+          const [kept] = await db
+            .select()
+            .from(items)
+            .where(eq(items.kind, "movie"));
+          expect(kept).toMatchObject({
+            id: original.id,
+            title: "Curated",
+            metadataState: "matched",
+          });
+          expect(
+            await db
+              .select()
+              .from(providerIds)
+              .where(eq(providerIds.itemId, original.id)),
+          ).toEqual([]);
+        });
+      }),
+  );
+
+  test("two differently named Files asserting one TMDB id become one movie", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const alien = "Movies/Alien.1979.mkv";
+        const french = "Movies/Le.Huitieme.Passager.1979.mkv";
+        await populateRoots([
+          [root, alien],
+          [root, french],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const changes = [alien, french].map((path) => ({
+          kind: "add" as const,
+          rootId: library.rootId,
+          path,
+          providerIds: { tmdb: "348" },
+        }));
+
+        const first = await scanDirectory(db, library.id, "Movies", {
+          changes,
+        });
+        const movieItems = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"));
+        expect(movieItems).toHaveLength(1);
+        const [item] = movieItems;
+        if (!item) throw new Error("Movie Item missing.");
+        expect(first.itemId).toBe(item.id);
+        expect(
+          await db.select().from(files).where(eq(files.itemId, item.id)),
+        ).toHaveLength(2);
+        expect(
+          await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, item.id)),
+        ).toMatchObject([{ provider: "tmdb", value: "348" }]);
+
+        const again = await scanDirectory(db, library.id, "Movies", {
+          changes,
+        });
+        expect(again.itemId).toBe(item.id);
+        expect(
+          await db.select().from(items).where(eq(items.kind, "movie")),
+        ).toHaveLength(1);
+        expect(
+          await db.select().from(files).where(eq(files.itemId, item.id)),
+        ).toHaveLength(2);
+      });
+    }));
+
+  test("a matched movie gaining a second File takes a new asserted id", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const alien = "Movies/Alien.1979.mkv";
+        const french = "Movies/Le.Huitieme.Passager.1979.mkv";
+        await populateRoots([[root, alien]]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+
+        await scanDirectory(db, library.id, "Movies", {
+          changes: [
+            {
+              kind: "add",
+              rootId: library.rootId,
+              path: alien,
+              providerIds: { tmdb: "348" },
+            },
+          ],
+        });
+        const [original] = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"));
+        if (!original) throw new Error("Movie Item missing.");
+        await db
+          .update(items)
+          .set({ title: "Curated", metadataState: "matched" })
+          .where(eq(items.id, original.id));
+
+        await createVideoFixture(join(root, french));
+        await scanDirectory(db, library.id, "Movies", {
+          changes: [alien, french].map((path) => ({
+            kind: "add" as const,
+            rootId: library.rootId,
+            path,
+            providerIds: { tmdb: "348", imdb: "tt0078748" },
+          })),
+        });
+        expect(
+          await db.select().from(items).where(eq(items.kind, "movie")),
+        ).toMatchObject([
+          {
+            id: original.id,
+            titleKey: original.titleKey,
+            metadataState: "pending",
+          },
+        ]);
+        expect(
+          await db.select().from(files).where(eq(files.itemId, original.id)),
+        ).toHaveLength(2);
+        expect(
+          await db
+            .select()
+            .from(providerIds)
+            .where(eq(providerIds.itemId, original.id))
+            .orderBy(asc(providerIds.provider)),
+        ).toMatchObject([
+          { provider: "imdb", value: "tt0078748" },
+          { provider: "tmdb", value: "348" },
+        ]);
+      });
+    }));
+
+  /** Seeds two scanned Items and moves their files under one movie's disc folders. */
+  const seedAlienDiscs = async (db: Database, root: string) => {
+    await populateRoots([
+      [root, "A (1979)/a.mkv"],
+      [root, "B (1980)/b.mkv"],
+    ]);
+    const [library] = await insertLibraries(db, {
+      name: "Movies",
+      medium: "movies",
+      rootPath: root,
+    });
+    if (!library) throw new Error("Fixture library missing.");
+    await scanDirectory(db, library.id, "A (1979)");
+    await scanDirectory(db, library.id, "B (1980)");
+    const oldItems = await db
+      .select()
+      .from(items)
+      .where(eq(items.kind, "movie"))
+      .orderBy(asc(items.canonicalFolder));
+    if (oldItems.length !== 2) throw new Error("Seed Items missing.");
+    const moves = [
+      ["A (1979)/a.mkv", "Alien (1979)/CD1/Alien.1979.CD1.mkv"],
+      ["B (1980)/b.mkv", "Alien (1979)/CD2/Alien.1979.CD2.mkv"],
+    ] as const;
+    const discs = [];
+    for (const [index, [from, to]] of moves.entries()) {
+      await mkdir(join(root, dirname(to)), { recursive: true });
+      await rename(join(root, from), join(root, to));
+      const item = oldItems[index];
+      if (!item) throw new Error("Old Item missing.");
+      await db
+        .update(items)
+        .set({ canonicalFolder: dirname(to) })
+        .where(eq(items.id, item.id));
+      await db.update(files).set({ path: to }).where(eq(files.itemId, item.id));
+      const [file] = await db
+        .select()
+        .from(files)
+        .where(eq(files.itemId, item.id));
+      if (!file) throw new Error("Seed File missing.");
+      discs.push({ item, fileId: file.id, versionId: file.versionId });
+    }
+    return { library, discs };
+  };
+});
+
+describe("inScope", () => {
+  const { rules } = scanScope("movies");
+
+  test("a non-recursive scope accepts a file directly in the scope folder", () => {
+    expect(
+      inScope(
+        rules,
+        "Alien (1979)/CD1",
+        false,
+        "Alien (1979)/CD1/Alien.1979.CD1.mkv",
+      ),
+    ).toBe(true);
+  });
 });

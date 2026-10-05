@@ -28,10 +28,17 @@
   src: url("/fonts/InterVariable-Italic.woff2") format("woff2");
 }
 
-/* Role tokens. Each is defined once; light-dark() picks the value from the element's color-scheme. */
+/* The scheme itself lives apart: declaring it on .dark re-runs light-dark() inside the subtree. */
 :root {
   color-scheme: light dark;
+}
+.dark {
+  color-scheme: dark;
+}
 
+/* Role tokens. Each is defined once on :root and again on .dark, so a dark subtree recomputes them with its own color-scheme. */
+:root,
+.dark {
   --background: light-dark(oklch(100% 0 0deg), oklch(15.5% 0.004 275deg));
   --background-elevated: light-dark(
     oklch(97.2% 0.003 275deg),
@@ -139,7 +146,8 @@
 }
 
 @media (prefers-contrast: more) {
-  :root {
+  :root,
+  .dark {
     --background: light-dark(oklch(100% 0 0deg), oklch(0% 0 0deg));
     --background-elevated: light-dark(oklch(96% 0 0deg), oklch(17% 0 0deg));
     --background-raised: light-dark(oklch(100% 0 0deg), oklch(20% 0 0deg));
@@ -166,14 +174,16 @@
     (backdrop-filter: blur(1px)) or
     (-webkit-backdrop-filter: blur(1px))
   ) {
-  :root {
+  :root,
+  .dark {
     --material: var(--material-solid);
     --material-thick: var(--material-solid);
   }
 }
 
 @media (prefers-reduced-transparency: reduce) {
-  :root {
+  :root,
+  .dark {
     --material: var(--material-solid);
     --material-thick: var(--material-solid);
   }

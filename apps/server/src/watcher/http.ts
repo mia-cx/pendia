@@ -19,7 +19,12 @@ import { createJobQueue } from "../jobs/queue.ts";
 import { runScanJob } from "../libraries/jobs.ts";
 import { cacheProbe } from "../libraries/probe-cache.ts";
 import { type RootedPath, rootedKey, rootsOf } from "../libraries/roots.ts";
-import { inScope, type ScanSource } from "../libraries/scan.ts";
+import {
+  inScope,
+  isLibraryScan,
+  type ScanSource,
+  scanScope,
+} from "../libraries/scan.ts";
 import type {
   createChangeDebouncer,
   WatchedChange,
@@ -119,6 +124,8 @@ export type WatcherClaim = {
     rootsRevision: number;
     path: string;
     medium: (typeof libraries.$inferSelect)["medium"];
+    /** Whether the job is the fan-out Library scan; a directory scan walks the Item scope only. */
+    library: boolean;
     /** Files whose cached probe is current at this size and mtime. */
     cached: (typeof ReportedFile.Encoded)[];
     /** Stored Files outside the scope whose existence the scan may need: the rest of a moved Show. */
@@ -219,25 +226,28 @@ async function claim(
   const { libraryId, path } = job.payload;
   const library = watched.find((candidate) => candidate.id === libraryId);
   if (library === undefined) throw new Error("Claimed an unwatched scan.");
-  // A Library scan only lists files, so it needs no probes.
-  const cached =
-    path === "."
-      ? []
-      : await db
-          .select({
-            rootId: probeCache.rootId,
-            path: probeCache.path,
-            bytes: probeCache.bytes,
-            modifiedNs: probeCache.modifiedNs,
-          })
-          .from(probeCache)
-          .where(
-            and(
-              inArray(probeCache.rootId, library.rootIds),
-              sql`starts_with(${probeCache.path}, ${`${path}/`})`,
-              sql`${probeCache.result} ? 'keyframesSeconds'`,
-            ),
-          );
+  const libraryScan = isLibraryScan(job.payload);
+  // A Library scan only lists files, so it needs no probes. A "." directory
+  // scan covers every Item at the roots, so every cached probe is in scope.
+  const cached = libraryScan
+    ? []
+    : await db
+        .select({
+          rootId: probeCache.rootId,
+          path: probeCache.path,
+          bytes: probeCache.bytes,
+          modifiedNs: probeCache.modifiedNs,
+        })
+        .from(probeCache)
+        .where(
+          and(
+            inArray(probeCache.rootId, library.rootIds),
+            ...(path === "."
+              ? []
+              : [sql`starts_with(${probeCache.path}, ${`${path}/`})`]),
+            sql`${probeCache.result} ? 'keyframesSeconds'`,
+          ),
+        );
   const moves = (job.payload.changes ?? []).flatMap((change) =>
     change.kind === "move" ? [change] : [],
   );
@@ -262,6 +272,7 @@ async function claim(
       rootsRevision: library.rootsRevision,
       path,
       medium: library.medium,
+      library: libraryScan,
       cached: cached.map((file) => Schema.encodeSync(ReportedFile)(file)),
       check,
     },
@@ -301,15 +312,24 @@ async function filesSharingShow(
 /** Reads a scan's files from a watcher's report and its probes into the probe cache. */
 function reportedScanSource(
   db: Database,
-  rootIds: readonly string[],
+  roots: readonly { id: string; path: string }[],
+  medium: (typeof libraries.$inferSelect)["medium"],
   report: Extract<typeof ScanReport.Type, { files: unknown }>,
 ): ScanSource {
-  if (report.files.some((file) => !rootIds.includes(file.rootId)))
+  const { rules } = scanScope(medium);
+  const names = new Map(
+    roots.map((root) => [root.id, posix.basename(root.path)]),
+  );
+  if (report.files.some((file) => !names.has(file.rootId)))
     throw new Error("Watcher reported a file outside the Library's roots.");
   const reportedFiles = new Map(
     report.files.map((file) => [
       rootedKey(file),
-      { ...file, modifiedAt: new Date(Number(file.modifiedNs / 1_000_000n)) },
+      {
+        ...file,
+        rootName: names.get(file.rootId) ?? "",
+        modifiedAt: new Date(Number(file.modifiedNs / 1_000_000n)),
+      },
     ]),
   );
   const probes = new Map(
@@ -320,7 +340,7 @@ function reportedScanSource(
     rootsRevision: report.rootsRevision,
     async walk(path, recursive) {
       const walked = [...reportedFiles.values()];
-      if (walked.some((file) => !inScope(path, recursive, file.path)))
+      if (walked.some((file) => !inScope(rules, path, recursive, file.path)))
         throw new Error("Watcher reported a file outside the scan scope.");
       return walked;
     },
@@ -394,11 +414,12 @@ async function finishJob(db: Database, request: Request, jobId: string) {
   try {
     // A report naming a root a removal deleted fails here; it still settles the job.
     const roots = await rootsOf(db, payload.libraryId);
-    const source = reportedScanSource(
-      db,
-      roots.map((root) => root.id),
-      report,
-    );
+    const [claimLibrary] = await db
+      .select({ medium: libraries.medium })
+      .from(libraries)
+      .where(eq(libraries.id, payload.libraryId));
+    if (claimLibrary === undefined) throw new AuthError("NOT_FOUND");
+    const source = reportedScanSource(db, roots, claimLibrary.medium, report);
     await queue.hold(held, () => runScanJob(db, payload, job, source));
   } catch (error) {
     const failed = await queue.fail(held, error);

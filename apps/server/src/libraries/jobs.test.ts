@@ -556,4 +556,53 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         }
       });
     }));
+
+  test("a library scan of a single-show root fans out one root directory scan", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (dir) => {
+        const root = join(dir, "Breaking Bad (2008)");
+        await mkdir(join(root, "Season 1"), { recursive: true });
+        await createVideoFixture(
+          join(root, "Season 1", "Breaking Bad - S01E01.mkv"),
+        );
+        const library = await insertLibrary(db, "Shows", root, "shows");
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+
+        const rootJob = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "." },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim();
+        expect(claimed?.id).toBe(rootJob.id);
+        await registry.run(claimed ?? rootJob);
+        await queue.complete(claimed ?? rootJob);
+
+        const fanned = await listJobs(db, { state: "queued" });
+        expect(fanned.map((job) => job.payload)).toEqual([
+          {
+            type: "scan",
+            libraryId: library.id,
+            path: ".",
+            reconcileMissing: true,
+            runId: rootJob.id,
+          },
+        ]);
+
+        const directory = await queue.claim(["scan"]);
+        if (!directory) throw new Error("Root directory scan was not queued.");
+        await registry.run(directory);
+        await queue.complete(directory);
+        const [show] = await db.select().from(items);
+        expect(show).toMatchObject({
+          kind: "show",
+          title: "Breaking Bad",
+          canonicalFolder: ".",
+          titleKey: "breaking bad (2008)",
+        });
+        expect(await queue.claim(["scan"])).toBeUndefined();
+      });
+    }));
 });

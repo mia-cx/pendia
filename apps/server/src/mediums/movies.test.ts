@@ -4,6 +4,10 @@ import { editionTag, isVideoExtra, isVideoPath } from "./video-common/paths.ts";
 
 const { identify, parse, isExtra } = moviesMedium.scan;
 
+/** Turns plain paths into single-root walked files for groupMoviePaths. */
+const rooted = (paths: string[], rootName = "library", rootId = "root") =>
+  paths.map((path) => ({ rootId, rootName, path }));
+
 describe("isVideoPath", () => {
   test("accepts supported extensions case-insensitively", () => {
     expect(isVideoPath("Alien (1979)/Alien.MKV")).toBe(true);
@@ -88,8 +92,11 @@ describe("identify", () => {
     expect(identify("Alien (1979)/../Alien.mkv")).toBeNull();
   });
 
-  test("rejects files at the library root and non-video files", () => {
-    expect(identify("Alien.mkv")).toBeNull();
+  test("identifies a file directly in a root", () => {
+    expect(identify("Alien.mkv")).toEqual({
+      kind: "movie",
+      canonicalFolder: ".",
+    });
     expect(identify("Alien (1979)/Alien.srt")).toBeNull();
   });
 
@@ -252,20 +259,33 @@ describe("isExtra", () => {
 });
 
 describe("groupMoviePaths", () => {
-  test("groups resolution variants of one film into a single group", () => {
-    const groups = groupMoviePaths([
-      "Alien (1979)/Alien.1979.1080p.mkv",
-      "Alien (1979)/Alien.1979.2160p.mkv",
+  test("groups loose CJK-named movies separately", () => {
+    const groups = groupMoviePaths(
+      rooted(["映画/君の名は.2016.mkv", "映画/天気の子.2019.mkv"]),
+    );
+    expect(groups.map((group) => group.title)).toEqual([
+      "君の名は",
+      "天気の子",
     ]);
+  });
+
+  test("groups resolution variants of one film into a single group", () => {
+    const groups = groupMoviePaths(
+      rooted([
+        "Alien (1979)/Alien.1979.1080p.mkv",
+        "Alien (1979)/Alien.1979.2160p.mkv",
+      ]),
+    );
     expect(groups).toEqual([
       {
         canonicalFolder: "Alien (1979)",
+        titleKey: "",
         title: "Alien",
         year: 1979,
         providerIds: {},
-        paths: [
-          "Alien (1979)/Alien.1979.1080p.mkv",
-          "Alien (1979)/Alien.1979.2160p.mkv",
+        files: [
+          { rootId: "root", path: "Alien (1979)/Alien.1979.1080p.mkv" },
+          { rootId: "root", path: "Alien (1979)/Alien.1979.2160p.mkv" },
         ],
       },
     ]);
@@ -273,14 +293,15 @@ describe("groupMoviePaths", () => {
 
   test("extracts Radarr provider ids from the canonical folder", () => {
     const folder = "Alien (1979) {tmdb-348} {imdb-tt0078748} {tvdb=123}";
-    const groups = groupMoviePaths([`${folder}/Alien.mkv`]);
+    const groups = groupMoviePaths(rooted([`${folder}/Alien.mkv`]));
     expect(groups).toEqual([
       {
         canonicalFolder: folder,
+        titleKey: "",
         title: "Alien",
         year: 1979,
         providerIds: { tmdb: "348", imdb: "tt0078748", tvdb: "123" },
-        paths: [`${folder}/Alien.mkv`],
+        files: [{ rootId: "root", path: `${folder}/Alien.mkv` }],
       },
     ]);
   });
@@ -288,8 +309,10 @@ describe("groupMoviePaths", () => {
   test("extracts Jellyfin and Emby bracket ids", () => {
     const jellyfin = "The Movie (2010) [tmdbid-1520211] [imdbid-tt1375666]";
     const emby = "The Movie (2010) [tmdb-1520211]";
-    const [fromJellyfin] = groupMoviePaths([`${jellyfin}/The.Movie.mkv`]);
-    const [fromEmby] = groupMoviePaths([`${emby}/The.Movie.mkv`]);
+    const [fromJellyfin] = groupMoviePaths(
+      rooted([`${jellyfin}/The.Movie.mkv`]),
+    );
+    const [fromEmby] = groupMoviePaths(rooted([`${emby}/The.Movie.mkv`]));
     expect(fromJellyfin?.providerIds).toEqual({
       tmdb: "1520211",
       imdb: "tt1375666",
@@ -301,7 +324,7 @@ describe("groupMoviePaths", () => {
 
   test("lowercases providers, trims values and keeps the first duplicate", () => {
     const folder = "Alien (1979) {TMDB- 348 } {tmdb-999} {Imdb=TT0078748}";
-    const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);
+    const [group] = groupMoviePaths(rooted([`${folder}/Alien.mkv`]));
     expect(group?.providerIds).toEqual({ tmdb: "348", imdb: "tt0078748" });
     expect(group?.title).toBe("Alien");
   });
@@ -309,111 +332,269 @@ describe("groupMoviePaths", () => {
   test("ignores malformed values and keeps a later valid duplicate", () => {
     const folder =
       "Alien (1979) {tmdb-abc} {imdb-123} {tvdb-x2} {tmdb-0} {imdb-tt0} {imdb-tt0000000} {tmdb-348} {imdb-tt0078748}";
-    const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);
+    const [group] = groupMoviePaths(rooted([`${folder}/Alien.mkv`]));
     expect(group?.providerIds).toEqual({ tmdb: "348", imdb: "tt0078748" });
     expect(group?.title).toBe("Alien");
   });
 
   test("ignores empty provider id values", () => {
     const folder = "Alien (1979) {tmdb-} {tvdb- }";
-    const [group] = groupMoviePaths([`${folder}/Alien.mkv`]);
+    const [group] = groupMoviePaths(rooted([`${folder}/Alien.mkv`]));
     expect(group?.providerIds).toEqual({});
     expect(group?.title).toBe("Alien");
   });
 
   test("does not split explicit edition tags into separate groups", () => {
-    const groups = groupMoviePaths([
-      "Alien (1979)/Alien {edition-Director's Cut}.mkv",
-      "Alien (1979)/Alien.mkv",
-    ]);
+    const groups = groupMoviePaths(
+      rooted([
+        "Alien (1979)/Alien {edition-Director's Cut}.mkv",
+        "Alien (1979)/Alien.mkv",
+      ]),
+    );
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.paths).toEqual([
+    expect(groups[0]?.files.map((file) => file.path)).toEqual([
       "Alien (1979)/Alien {edition-Director's Cut}.mkv",
       "Alien (1979)/Alien.mkv",
     ]);
   });
 
   test("keeps same-titled distinct folders as distinct groups", () => {
-    const groups = groupMoviePaths([
-      "Collection A/Alien (1979)/a.mkv",
-      "Collection B/Alien (1979)/b.mkv",
-    ]);
+    const groups = groupMoviePaths(
+      rooted([
+        "Collection A/Alien (1979)/a.mkv",
+        "Collection B/Alien (1979)/b.mkv",
+      ]),
+    );
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.title)).toEqual(["Alien", "Alien"]);
     expect(groups[0]?.canonicalFolder).not.toBe(groups[1]?.canonicalFolder);
   });
 
   test("skips extras, store paths, traversal and unsupported files", () => {
-    const groups = groupMoviePaths([
-      "Alien (1979)/Alien.1979.2160p.mkv",
-      "Alien (1979)/extras/making-of.mkv",
-      "Alien (1979)/Alien-trailer.mkv",
-      "Alien (1979)/.pendia/cover.mkv",
-      "Alien (1979)/file.mkv.pendia/init.mp4",
-      "Alien (1979)/Alien.srt",
-      "loose.mkv",
-      "../escape/Alien (1979)/Alien.mkv",
-      "/absolute/Alien (1979)/Alien.mkv",
-    ]);
+    const groups = groupMoviePaths(
+      rooted([
+        "Alien (1979)/Alien.1979.2160p.mkv",
+        "Alien (1979)/extras/making-of.mkv",
+        "Alien (1979)/Alien-trailer.mkv",
+        "Alien (1979)/.pendia/cover.mkv",
+        "Alien (1979)/file.mkv.pendia/init.mp4",
+        "Alien (1979)/Alien.srt",
+        "../escape/Alien (1979)/Alien.mkv",
+        "/absolute/Alien (1979)/Alien.mkv",
+      ]),
+    );
     expect(groups).toEqual([
       {
         canonicalFolder: "Alien (1979)",
+        titleKey: "",
         title: "Alien",
         year: 1979,
         providerIds: {},
-        paths: ["Alien (1979)/Alien.1979.2160p.mkv"],
+        files: [{ rootId: "root", path: "Alien (1979)/Alien.1979.2160p.mkv" }],
       },
     ]);
   });
 
   test("groups a main film beside its trailer under an ambiguous title", () => {
-    const groups = groupMoviePaths([
-      "The Interview (2014)/The Interview.mkv",
-      "The Interview (2014)/The Interview-trailer.mkv",
-      "The Interview (2014)/The Interview.sample.mkv",
-    ]);
+    const groups = groupMoviePaths(
+      rooted([
+        "The Interview (2014)/The Interview.mkv",
+        "The Interview (2014)/The Interview-trailer.mkv",
+        "The Interview (2014)/The Interview.sample.mkv",
+      ]),
+    );
     expect(groups).toEqual([
       {
         canonicalFolder: "The Interview (2014)",
+        titleKey: "",
         title: "The Interview",
         year: 2014,
         providerIds: {},
-        paths: ["The Interview (2014)/The Interview.mkv"],
+        files: [
+          { rootId: "root", path: "The Interview (2014)/The Interview.mkv" },
+        ],
       },
     ]);
   });
 
   test("keeps an extras-named top folder beside real nested extras", () => {
-    const groups = groupMoviePaths([
-      "Shorts/Shorts.mkv",
-      "Shorts/extras/making-of.mkv",
-      "Alien (1979)/shorts/clip.mkv",
-    ]);
+    const groups = groupMoviePaths(
+      rooted([
+        "Shorts/Shorts.mkv",
+        "Shorts/extras/making-of.mkv",
+        "Alien (1979)/shorts/clip.mkv",
+      ]),
+    );
     expect(groups).toEqual([
       {
         canonicalFolder: "Shorts",
+        titleKey: "",
         title: "Shorts",
         year: null,
         providerIds: {},
-        paths: ["Shorts/Shorts.mkv"],
+        files: [{ rootId: "root", path: "Shorts/Shorts.mkv" }],
       },
     ]);
   });
 
   test("deduplicates repeated paths and sorts output", () => {
-    const groups = groupMoviePaths([
-      "B Movie (2000)/b.mkv",
-      "A Movie (1999)/a.mkv",
-      "B Movie (2000)/b.mkv",
-      "B Movie (2000)/a.mkv",
-    ]);
+    const groups = groupMoviePaths(
+      rooted([
+        "B Movie (2000)/b.mkv",
+        "A Movie (1999)/a.mkv",
+        "B Movie (2000)/b.mkv",
+        "B Movie (2000)/a.mkv",
+      ]),
+    );
     expect(groups.map((group) => group.canonicalFolder)).toEqual([
       "A Movie (1999)",
       "B Movie (2000)",
     ]);
-    expect(groups[1]?.paths).toEqual([
+    expect(groups[1]?.files.map((file) => file.path)).toEqual([
       "B Movie (2000)/a.mkv",
       "B Movie (2000)/b.mkv",
+    ]);
+  });
+
+  test("names a Radarr collection movie from its tagged folder", () => {
+    const folder =
+      "Into the Blue Collection/Into the Blue (2005) [tmdbid-11968]";
+    const path = `${folder}/Into the Blue (2005) [tmdbid-11968] - [WEBDL-1080p] - PiRaTeS.mkv`;
+    const groups = groupMoviePaths(rooted([path]));
+    expect(groups).toEqual([
+      {
+        canonicalFolder: folder,
+        titleKey: "",
+        title: "Into the Blue",
+        year: 2005,
+        providerIds: { tmdb: "11968" },
+        files: [{ rootId: "root", path }],
+      },
+    ]);
+  });
+
+  test("keeps a release folder as its own Item", () => {
+    const folder =
+      "X-Men Collection/X-Men Apocalypse (2016) [tmdbid-246655]/X-Men Apocalypse (2016) [tmdbid-246655] - [Remux-2160p] [HDR10] [TrueHD Atmos 7.1] [Remux Tier 01] - [FraMeSToR]";
+    const path = `${folder}/X-Men Apocalypse (2016) [tmdbid-246655] - [Remux-2160p] [HDR10] [TrueHD Atmos 7.1] [Remux Tier 01] - [FraMeSToR] - [1080p].mkv`;
+    const groups = groupMoviePaths(rooted([path]));
+    expect(groups).toEqual([
+      {
+        canonicalFolder: folder,
+        titleKey: "",
+        title: "X-Men Apocalypse",
+        year: 2016,
+        providerIds: { tmdb: "246655" },
+        files: [{ rootId: "root", path }],
+      },
+    ]);
+  });
+
+  test("titles loose files in one folder as their own movies", () => {
+    const groups = groupMoviePaths(
+      rooted([
+        "Movies/Dune.2021.1080p.BluRay.x264-GROUP.mkv",
+        "Movies/Dune.2021.2160p.WEB-DL.DDP5.1.mkv",
+        "Movies/Arrival (2016).mkv",
+      ]),
+    );
+    expect(groups).toEqual([
+      {
+        canonicalFolder: "Movies",
+        titleKey: "arrival (2016)",
+        title: "Arrival",
+        year: 2016,
+        providerIds: {},
+        files: [{ rootId: "root", path: "Movies/Arrival (2016).mkv" }],
+      },
+      {
+        canonicalFolder: "Movies",
+        titleKey: "dune (2021)",
+        title: "Dune",
+        year: 2021,
+        providerIds: {},
+        files: [
+          {
+            rootId: "root",
+            path: "Movies/Dune.2021.1080p.BluRay.x264-GROUP.mkv",
+          },
+          { rootId: "root", path: "Movies/Dune.2021.2160p.WEB-DL.DDP5.1.mkv" },
+        ],
+      },
+    ]);
+  });
+
+  test("titles a loose file in a root from its name", () => {
+    const groups = groupMoviePaths(rooted(["The.Matrix.1999.2160p.mkv"], "hq"));
+    expect(groups).toEqual([
+      {
+        canonicalFolder: ".",
+        titleKey: "the matrix (1999)",
+        title: "The Matrix",
+        year: 1999,
+        providerIds: {},
+        files: [{ rootId: "root", path: "The.Matrix.1999.2160p.mkv" }],
+      },
+    ]);
+  });
+
+  test("finds the one movie a root points at", () => {
+    const groups = groupMoviePaths(
+      rooted(
+        ["Dune (2021) - 1080p.mkv", "abc123.mkv"],
+        "Dune (2021) [tmdbid-438631]",
+      ),
+    );
+    expect(groups).toEqual([
+      {
+        canonicalFolder: ".",
+        titleKey: "dune (2021)",
+        title: "Dune",
+        year: 2021,
+        providerIds: { tmdb: "438631" },
+        files: [
+          { rootId: "root", path: "Dune (2021) - 1080p.mkv" },
+          { rootId: "root", path: "abc123.mkv" },
+        ],
+      },
+    ]);
+  });
+
+  test("folds disc and part folders into the movie above", () => {
+    const groups = groupMoviePaths(
+      rooted([
+        "Movie (2000)/CD1/Movie (2000).mkv",
+        "Movie (2000)/Disc 2/Movie (2000).mkv",
+        "Movie (2000)/part 1/Movie (2000).mkv",
+      ]),
+    );
+    expect(groups).toEqual([
+      {
+        canonicalFolder: "Movie (2000)",
+        titleKey: "",
+        title: "Movie",
+        year: 2000,
+        providerIds: {},
+        files: [
+          { rootId: "root", path: "Movie (2000)/CD1/Movie (2000).mkv" },
+          { rootId: "root", path: "Movie (2000)/Disc 2/Movie (2000).mkv" },
+          { rootId: "root", path: "Movie (2000)/part 1/Movie (2000).mkv" },
+        ],
+      },
+    ]);
+  });
+
+  test("keeps a year-less folder whose file names the same title", () => {
+    const groups = groupMoviePaths(rooted(["Dune/Dune.2021.1080p.mkv"]));
+    expect(groups).toEqual([
+      {
+        canonicalFolder: "Dune",
+        titleKey: "",
+        title: "Dune",
+        year: null,
+        providerIds: {},
+        files: [{ rootId: "root", path: "Dune/Dune.2021.1080p.mkv" }],
+      },
     ]);
   });
 });

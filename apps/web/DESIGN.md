@@ -85,7 +85,7 @@ The shadcn-svelte set lives in `src/lib/components/ui`, on bits-ui for keyboard 
 - **Input**: a filled field with no border, 17 px on phones so iOS does not zoom, 15 px from 1024 px.
 - **Select**: an Apple pop-up button with up-down chevrons; the chosen item shows a leading check.
 - **Dropdown menu, popover, tooltip**: `material-thick`, growing from their trigger. Tooltips wait 500 ms and close at once.
-- **Dialog, alert dialog, sheet**: over the scrim. Alerts are compact and centred, with two full-width buttons that name the action. Side sheets float inset from the edge; bottom sheets carry a grabber.
+- **Dialog, alert dialog, sheet**: over the scrim. Alerts are compact and centred, with two full-width buttons that name the action. Side sheets float inset from the edge; bottom sheets carry a grabber. Dialogs and alerts stop 1rem short of the dynamic viewport and scroll inside, so their buttons stay reachable in phone landscape.
 - **Slider, switch, tabs**: the tint fills the range and the on switch. Tabs are a segmented control.
 - **Table**: hairline rows, footnote headers, tabular numbers.
 - **Textarea**: the same filled field as Input, `min-h-24` and vertically resizable.

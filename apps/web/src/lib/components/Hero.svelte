@@ -35,10 +35,15 @@ const {
 } = $props();
 
 let loaded = $state(false);
+
+// A bare fallback earns a shorter hero so art-free pages reach content sooner.
+const compact = $derived(backdropId === null && posterId === null);
 </script>
 
 <div
-  class="dark [color-scheme:dark] relative isolate overflow-hidden bg-black h-[min(78svh,44rem)] lg:h-[min(82svh,max(30rem,56vw))]"
+  class="dark [color-scheme:dark] relative isolate overflow-hidden bg-black {compact
+    ? 'h-[min(60svh,30rem)] lg:h-[min(62svh,36rem)]'
+    : 'h-[min(78svh,44rem)] lg:h-[min(82svh,max(30rem,56vw))]'}"
 >
   {#if backdropId}
     <img

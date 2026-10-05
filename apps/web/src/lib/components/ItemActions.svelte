@@ -8,7 +8,12 @@ import { onDestroy } from "svelte";
 import { toast } from "svelte-sonner";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
-import { type DetailChild, episodeCode, type ItemDetail } from "$lib/browse.ts";
+import {
+  type DetailChild,
+  episodeCode,
+  type ItemDetail,
+  upNextEpisode,
+} from "$lib/browse.ts";
 import { Button } from "$lib/components/ui/button/index.ts";
 import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.ts";
 import * as Popover from "$lib/components/ui/popover/index.ts";
@@ -20,10 +25,13 @@ import { resource } from "$lib/resource.svelte.ts";
 const {
   detail,
   reload,
+  episodes = detail.children,
 }: {
   detail: ItemDetail;
   /** Reloads the page's detail resource, after a refresh job ends. */
   reload: () => void;
+  /** The Episodes the up next pill chooses from; defaults to the Item's children. */
+  episodes?: readonly DetailChild[];
 } = $props();
 
 const admin = $derived(page.data.me?.admin === true);
@@ -54,15 +62,10 @@ const fallback = $derived(
 );
 const choice = $derived(start.data ?? fallback);
 
-// A Season's children are its Episodes; the first unfinished one is up next.
-// A Show's Seasons hold no play target until Phase B picks the Episode.
+// On Show and Season pages the pill plays the Episode that is up next.
 const upNext = $derived.by<DetailChild | undefined>(() => {
-  if (detail.kind !== "season") return undefined;
-  return (
-    detail.children.find(
-      (child) => child.progress !== null && !child.progress.completed,
-    ) ?? detail.children.find((child) => child.kind === "episode")
-  );
+  if (detail.kind !== "show" && detail.kind !== "season") return undefined;
+  return upNextEpisode(episodes);
 });
 
 const marks = resource(() => client.marks.get({ itemId: detail.id }));
@@ -193,9 +196,11 @@ onDestroy(() => refreshAbort?.abort());
   {:else if upNext !== undefined}
     <Button size="pill" class="max-sm:flex-1 max-sm:min-w-0" href="/play/{upNext.id}">
       <PlayIcon fill="currentColor" />
-      {upNext.progress === null || upNext.progress.completed
-        ? `Play ${episodeCode(upNext) ?? ""}`
-        : `Resume ${episodeCode(upNext) ?? ""}`}
+      {upNext.progress !== null &&
+      !upNext.progress.completed &&
+      upNext.progress.positionSeconds > 0
+        ? `Resume ${episodeCode(upNext) ?? ""}`
+        : `Play ${episodeCode(upNext) ?? ""}`}
     </Button>
   {/if}
 

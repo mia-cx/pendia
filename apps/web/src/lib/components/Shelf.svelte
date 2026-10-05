@@ -14,13 +14,16 @@ import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 import { onMount, type Snippet } from "svelte";
 
 const {
-  title,
+  title = undefined,
+  heading = undefined,
   id,
   size = "poster",
   href = undefined,
   children,
 }: {
-  title: string;
+  title?: string;
+  /** Custom heading content, replacing the plain or linked title. */
+  heading?: Snippet;
   id: string;
   size?: "poster" | "landscape" | "person";
   href?: string;
@@ -64,7 +67,9 @@ const paddle =
 <section aria-labelledby={id}>
   <div class="flex h-8 items-center justify-between">
     <h2 {id} class="text-title-2">
-      {#if href}
+      {#if heading}
+        {@render heading()}
+      {:else if href}
         <a
           {href}
           class="group/title inline-flex items-center gap-0.5 text-label no-underline"

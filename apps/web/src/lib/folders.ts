@@ -19,6 +19,12 @@ export function crumbs(path: string): { name: string; path: string }[] {
   return entries;
 }
 
+/** A typed folder path tidied for the server: slashes collapsed, no trailing slash except `/`. Relative input passes through. */
+export function normaliseFolder(path: string): string {
+  if (!path.startsWith("/")) return path;
+  return path.replace(/\/+/g, "/").replace(/(.)\/+$/u, "$1");
+}
+
 /** The folder one level up; `/` is its own parent. */
 export function parentFolder(path: string): string {
   const parts = path.split("/").filter((part) => part !== "");

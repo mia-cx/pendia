@@ -21,6 +21,7 @@ import {
   crumbs,
   describePreview,
   type FolderPreview,
+  normaliseFolder,
   overlapping,
   parentFolder,
 } from "$lib/folders.ts";
@@ -72,10 +73,14 @@ let previewTimer: ReturnType<typeof setTimeout> | undefined;
 let typing = $state(false);
 let pathDraft = $state("/");
 let pathField = $state<HTMLInputElement | null>(null);
+let listEl = $state<HTMLDivElement | null>(null);
+let navEl = $state<HTMLElement | null>(null);
+let focusNextListing = $state(false);
 let busy = $state(false);
 let chooseFailure = $state<string | undefined>(undefined);
 
 const overlapped = $derived(overlapping(current, taken));
+const allCrumbs = $derived(crumbs(current));
 const described = $derived(
   preview === undefined ? undefined : describePreview(preview, medium),
 );
@@ -92,7 +97,7 @@ $effect(() => {
   if (open && !wasOpen) {
     typing = false;
     chooseFailure = undefined;
-    navigate(start);
+    navigate(start, true);
   } else if (!open && wasOpen) {
     previewController?.abort();
     clearTimeout(previewTimer);
@@ -101,13 +106,14 @@ $effect(() => {
   wasOpen = open;
 });
 
-function navigate(path: string) {
-  current = path;
-  pathDraft = path;
-  typing = false;
+/** Moves to `folder`; `focusRow` lands keyboard users on the new list. */
+function navigate(folder: string, focusRow = false) {
+  current = normaliseFolder(folder);
+  pathDraft = current;
   chooseFailure = undefined;
+  focusNextListing ||= focusRow;
   void loadListing();
-  schedulePreview();
+  void tick().then(() => navEl?.scrollTo({ left: navEl.scrollWidth }));
 }
 
 async function loadListing() {
@@ -118,12 +124,27 @@ async function loadListing() {
     if (ticket !== loadTicket) return;
     listing = answer.folders;
     listingFailure = undefined;
+    schedulePreview();
   } catch (error) {
     if (ticket !== loadTicket) return;
     listing = undefined;
     listingFailure = readFailure(error);
+    // The list names the problem; the preview region stays empty.
+    previewController?.abort();
+    clearTimeout(previewTimer);
+    preview = undefined;
+    previewFailure = undefined;
+    previewWaiting = false;
   } finally {
-    if (ticket === loadTicket) listingLoading = false;
+    if (ticket === loadTicket) {
+      listingLoading = false;
+      const focus = focusNextListing;
+      focusNextListing = false;
+      if (focus) {
+        await tick();
+        listEl?.querySelector("button")?.focus();
+      }
+    }
   }
 }
 
@@ -211,16 +232,17 @@ async function choose() {
         />
       {:else}
         <nav
+          bind:this={navEl}
           aria-label="Folder path"
-          class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+          class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          {#each crumbs(current) as crumb, index (crumb.path)}
+          {#each allCrumbs as crumb, index (crumb.path)}
             {#if index > 0}
               <ChevronRightIcon
                 class="size-3.5 shrink-0 text-label-tertiary"
               />
             {/if}
-            {@const last = index === crumbs(current).length - 1}
+            {@const last = index === allCrumbs.length - 1}
             {#if last}
               <span
                 aria-current="location"
@@ -231,9 +253,9 @@ async function choose() {
               <Button
                 variant="ghost"
                 size="sm"
-                class="px-2"
+                class="px-2 text-label-secondary"
                 aria-label="Root folder"
-                onclick={() => navigate("/")}
+                onclick={() => navigate("/", true)}
               >
                 <HardDriveIcon class="size-4" />
               </Button>
@@ -241,8 +263,8 @@ async function choose() {
               <Button
                 variant="ghost"
                 size="sm"
-                class="px-2 whitespace-nowrap"
-                onclick={() => navigate(crumb.path)}>{crumb.name}</Button
+                class="px-2 whitespace-nowrap text-label-secondary"
+                onclick={() => navigate(crumb.path, true)}>{crumb.name}</Button
               >
             {/if}
           {/each}
@@ -267,7 +289,7 @@ async function choose() {
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto px-4">
-      <div class="rounded-lg bg-elevated">
+      <div bind:this={listEl} class="rounded-lg bg-fill">
         {#if listingLoading}
           {#each { length: 6 } as _, i (i)}
             <div
@@ -284,7 +306,7 @@ async function choose() {
               <Button
                 variant="secondary"
                 size="sm"
-                onclick={() => navigate(parentFolder(current))}
+                onclick={() => navigate(parentFolder(current), true)}
                 >Go up</Button
               >
             </div>
@@ -293,7 +315,7 @@ async function choose() {
           {#each listing ?? [] as folder (folder.path)}
             <ListRow
               title={folder.name}
-              onclick={() => navigate(folder.path)}
+              onclick={() => navigate(folder.path, true)}
             >
               {#snippet leading()}
                 <FolderIcon class="size-5 text-tint" />
@@ -353,7 +375,7 @@ async function choose() {
         </div>
       {:else if previewFailure}
         <Failure inline failure={previewFailure} />
-      {:else}
+      {:else if !listingFailure}
         <Skeleton class="h-5 w-32" />
         <p class="mt-1.5 text-footnote text-label-secondary">
           Looking for {medium}…

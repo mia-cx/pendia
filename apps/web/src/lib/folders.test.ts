@@ -3,6 +3,7 @@ import {
   crumbs,
   describePreview,
   type FolderPreview,
+  normaliseFolder,
   overlapping,
   parentFolder,
 } from "./folders.ts";
@@ -16,6 +17,17 @@ describe("crumbs", () => {
       { name: "films", path: "/srv/media/films" },
     ]);
     expect(crumbs("/")).toEqual([{ name: "/", path: "/" }]);
+  });
+});
+
+describe("normaliseFolder", () => {
+  test("collapses slashes and drops a trailing slash, keeping /", () => {
+    expect(normaliseFolder("/srv//media/")).toBe("/srv/media");
+    expect(normaliseFolder("//srv///media")).toBe("/srv/media");
+    expect(normaliseFolder("/")).toBe("/");
+    expect(normaliseFolder("///")).toBe("/");
+    expect(normaliseFolder("/srv/media")).toBe("/srv/media");
+    expect(normaliseFolder("relative/path/")).toBe("relative/path/");
   });
 });
 

@@ -12,7 +12,7 @@ Pendia should feel like Apple built a self-hosted media player. Artwork leads, t
 
 ## Tokens
 
-All tokens live in `src/lib/app.css`. Each colour is defined once with `light-dark()`, so a subtree that sets `color-scheme: dark` gets the dark values. The player does this to stay dark in both schemes. Light and dark follow the system setting; there is no theme switch.
+All tokens live in `src/lib/app.css`. Each colour is defined once with `light-dark()`, in a block declared on both `:root` and `.dark`. Lightning CSS resolves `light-dark()` where a token is declared, so declaring the block on `.dark` too is what lets a `.dark` subtree (the player, heroes, landscape cards) recompute every token with dark values. Light and dark follow the system setting; there is no theme switch.
 
 Tailwind's default palette, type scale and radii are reset. Only these tokens exist, so an ad hoc colour or size fails to compile into anything.
 
@@ -84,9 +84,9 @@ The shadcn-svelte set lives in `src/lib/components/ui`, on bits-ui for keyboard 
 - **Button**: `default` (label colour), `secondary` (fill), `ghost`, `outline`, `tinted`, `glass` (material, for buttons over artwork), `destructive` and `link`. Sizes `sm` 32, `default` 40 (44 on touch), `lg` 48, `pill` 44 (the round-ended Play button on heroes), and round `icon-sm`, `icon`, `icon-lg`. Buttons press down to 97%.
 - **Input**: a filled field with no border, 17 px on phones so iOS does not zoom, 15 px from 1024 px.
 - **Select**: an Apple pop-up button with up-down chevrons; the chosen item shows a leading check.
-- **Dropdown menu, popover, tooltip**: `material-thick`, growing from their trigger. Tooltips wait 500 ms and close at once.
+- **Dropdown menu, popover, tooltip**: `material-thick`, growing from their trigger. Tooltips wait 500 ms and close at once. Radio items lead with a check on the chosen one, like Select.
 - **Dialog, alert dialog, sheet**: over the scrim. Alerts are compact and centred, with two full-width buttons that name the action. Side sheets float inset from the edge; bottom sheets carry a grabber.
-- **Slider, switch, tabs**: the tint fills the range and the on switch. Tabs are a segmented control.
+- **Slider, switch, tabs**: the tint fills the range and the on switch. Tabs are a segmented control. The slider's `media` variant is the player's: a 4 px track in translucent white that thickens to 6 px under the pointer, a white range, a `track` layer for buffered ranges, and a thumb that shows only on hover, focus or drag. `valueText` gives the thumb words to announce.
 - **Table**: hairline rows, footnote headers, tabular numbers.
 - **Toast**: svelte-sonner, bottom centre and above the tab bar on phones, following the system scheme.
 - **Badge, skeleton, scroll area**: capsules, pulsing fills, and overlay scrollbars that show on hover.
@@ -103,6 +103,8 @@ Artwork leads every one of these. Titles come from the art itself where it has t
 - **Hero** is a full-bleed image the height of most of the window (78% on phones, up to 82% from 1024 px), always dark inside. The backdrop fills it under a bottom scrim, a left scrim from 1024 px and a thin top scrim for the phone's profile button. Without a backdrop, the poster fills it as a blurred, darkened wash; without either, a dark gradient. At the bottom-left, in the content column: the logo, bottom-aligned in a reserved box, or the title in `text-display`; then the content the page gives it. Home's carousel uses it, and the detail pages (#109) share it.
 - **Hero carousel** opens Home with up to five heroes: Continue Watching first, then Recently added, with art-led Items before any without a backdrop. Each slide shows `Movie · Romance · Drama · 2013` (an Episode shows its code and title), a two-line overview whose space is reserved before it loads, the white pill (`Resume`, `Play`, or `Go to show` for a Show) and a round glass details button. Slides scroll and snap, so touch swipes them natively. Thin chevrons at both edges (pointer devices) wrap around, and dots centred under the content jump to a slide. It never advances on its own: a carousel that moves by itself needs a pause control, and Home is about what you were watching. It is a region named Featured; each slide is a group named `2 of 5`, and slides out of view are inert.
 - **Poster grid** fills the width with columns at least 152 px wide, or three across on a phone.
+- **Scrubber** is the player's timeline, on the media slider. Buffered ranges show in a lighter white. While a mouse hovers it or a drag runs, a capsule above the pointer shows the time there; that capsule is the slot scrubber thumbnails join later. A drag shows its time and seeks once, on release. Screen readers hear `12:34 of 1:45:00`.
+- **Player settings** is the gear menu at the player's bottom right. It holds Version, Audio and Subtitles, in that order, as grouped sections with a leading check on the current choice. Each section appears only when it offers a choice, and the gear hides when none does. Version rows add the File's size. A section with more than five options folds into one row that shows the current choice and opens a submenu, so the menu stays short. Choices disable while a switch runs. The menu renders inside the player, so it stays dark and shows in fullscreen.
 - **Skeletons** copy the loaded geometry exactly: the hero's height, the shelf header row and the card frames, using the shelf's own column sizes, so nothing moves when content arrives.
 
 ## Shell
@@ -119,6 +121,15 @@ Artwork leads every one of these. Titles come from the art itself where it has t
 - **Home**: the hero carousel from the window's top edge, then the shelves: Continue Watching and Next Up as landscape shelves, every other shelf as posters. The title is for screen readers while the hero shows, and visible on phones otherwise. A hero-sized skeleton and two skeleton shelves hold the page while it loads. Empty Home offers Add a library to admins.
 - **Movies and Shows**: a large title, the library's name when filtered, a Sort menu (Recently added, Title) kept in the URL, and the poster grid. It loads 24 cards at a time and fetches the next page 800 px before the end comes into view, with a row of skeleton posters reserving the space and a status for screen readers. There is no Show more button. A failed page shows the error with Try again.
 - **Search**: a large title and the search field, focused on arrival with a pointer. Results update 150 ms after typing stops, and the query stays in the URL. They come grouped as Movies and Shows, in the order of each group's best match. The previous results stay, dimmed, until the next answer arrives, so the page never flashes empty while you type. A status tells screen readers how many results matched.
+- **Player**: `/play/{id}` fills the window with the video and is always dark. Nothing is pinned above the picture. Two bands fade in and out together over it. On top, over a soft gradient: a glass Back button and the title, with an Episode's Show and code under it. At the bottom, over a gradient from the bottom edge: the scrubber with elapsed time on the left and remaining time (`−2:19`) on the right, then a row with mute and volume on the left, Back 10 seconds, Play and Forward 10 seconds in the centre, and Picture in Picture, the settings gear and Full Screen on the right. On phones the transport moves to the middle of the screen, larger, over a soft radial scrim, and the volume slider gives way to the device's buttons.
+  - The controls and the cursor fade after 3 s without pointer movement, taps or keys. They stay while paused or ended, while a notice shows, while the settings menu is open, while a mouse rests on the bottom band and while keyboard focus is in a band; a clicked button does not hold them. A click on the picture plays or pauses, and a double click toggles fullscreen. On touch, a tap shows or hides the controls, and a double tap on the left or right third skips 10 s with a fading wash.
+  - Keys: Space or K plays and pauses, Left and Right skip 10 s, Up and Down step the volume, F toggles fullscreen, M mutes and C turns subtitles off and back on. They leave focused buttons, sliders and open menus to their own keys.
+  - Fullscreen takes the whole player, so the controls come along. An iPhone, which has no element fullscreen, uses the video's own.
+  - Captions use `::cue`: white on a 72% black box, sized from the window's short side, and lifted above the bottom band while it shows. The lift uses `::-webkit-media-text-track-container`, so Firefox keeps captions at the bottom.
+  - A Version, audio or subtitle change restarts the session at the current position and keeps a paused video paused. A Version switch rewrites `?version=` in place, so the player never reloads, and resets the audio and subtitle choice, since Streams belong to a File.
+  - Notices sit centred in a `material-thick` panel and hide the bottom band: Cannot play this Version, Server unreachable and Playback stopped. The last two offer Try again. A spinner appears after 400 ms of buffering. Back returns through history when the detail page opened the player.
+  - The scrubber and volume are white, as in the Apple TV app's player, rather than the tint: over a film, the accent would be one more colour competing with the picture. The focus ring stays tint.
+  - The state lives in `src/lib/player-state.ts`, a store with no DOM that `bun test` covers. The components render it and forward events to it.
 
 ## Temporary aliases
 
@@ -134,12 +145,11 @@ Artwork leads every one of these. Titles come from the art itself where it has t
 | `--surface` | `--background-elevated` |
 | `--line` | `--separator` |
 
-Screens still on `legacy`: the detail pages (#109), the player (#110), sign in, setup, invite and the error page (#111), and admin (#112 to #114).
+Screens still on `legacy`: the detail pages (#109), sign in, setup, invite and the error page (#111), and admin (#112 to #114).
 
 ## Not yet redesigned
 
 These notes describe behaviour the later slices keep while they restyle it.
 
 - **Detail pages** (#109) lead with the backdrop when one exists, then the poster beside the title, facts, an actions row and the overview. Seasons, Episodes, Versions and credits follow as their own sections. Movie and Episode pages put Play in the actions row; with unfinished Progress it shows Resume from the saved position, as the primary button, and Play from start beside it. The row keeps a 44 px height while it loads.
-- **Player**: `/play/{id}` fills the window and is dark in both schemes. One bar on top holds Back, the title (an Episode adds its Show and code) and a Version select when the Item has more than one Version. The video keeps the browser's controls for now. Notices sit over the stage without moving anything: Cannot play this Version, Server unreachable and Playback stopped; only the last two offer Try again, which restarts at the current position. Back returns through history when the detail page opened the player.
 - **Offline**: a service worker caches the build, the fonts and `200.html`. With the server stopped, the app still opens, and the first failed request shows Server unreachable with Try again. API calls and media never pass through the worker.

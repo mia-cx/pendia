@@ -7,26 +7,39 @@ export function createRatingWrites(
   write: (rating: number | null) => Promise<boolean>;
 } {
   const store = writable<number | null | undefined>(undefined);
-  let latest = 0;
+  let ticket = 0;
+  const pending: { ticket: number; rating: number | null }[] = [];
   let acknowledged: number | null | undefined;
   let ackTicket = 0;
 
   /** Shows `rating` and saves it; resolves false when the save fails. */
   async function write(rating: number | null): Promise<boolean> {
-    const ticket = ++latest;
+    const mine = ++ticket;
+    pending.push({ ticket: mine, rating });
     store.set(rating);
+    let saved: boolean;
     try {
-      const saved = await save(rating);
-      if (ticket > ackTicket) {
-        acknowledged = saved.rating;
-        ackTicket = ticket;
+      const result = await save(rating);
+      if (mine > ackTicket) {
+        acknowledged = result.rating;
+        ackTicket = mine;
       }
-      if (ticket === latest) store.set(acknowledged);
-      return true;
+      saved = true;
     } catch {
-      if (ticket === latest) store.set(acknowledged);
-      return false;
+      saved = false;
     }
+    pending.splice(
+      pending.findIndex((entry) => entry.ticket === mine),
+      1,
+    );
+    const last = pending[pending.length - 1];
+    // A pending choice shows only while it is newer than the last acknowledged one.
+    store.set(
+      last !== undefined && last.ticket > ackTicket
+        ? last.rating
+        : acknowledged,
+    );
+    return saved;
   }
 
   return { subscribe: store.subscribe, write };

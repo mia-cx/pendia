@@ -23,6 +23,7 @@ export const buttonVariants = tv({
       sm: "h-8 px-3 text-footnote",
       default: "h-10 px-4 text-subheadline pointer-coarse:h-11",
       lg: "h-12 px-6 text-headline rounded-lg [&_svg:not([class*='size-'])]:size-5",
+      pill: "h-11 rounded-full px-7 text-headline [&_svg:not([class*='size-'])]:size-5",
       icon: "size-10 rounded-full pointer-coarse:size-11",
       "icon-sm": "size-8 rounded-full",
       "icon-lg": "size-12 rounded-full",

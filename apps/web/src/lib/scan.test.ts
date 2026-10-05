@@ -1,14 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { ScanReader, ScanStatus } from "./scan.ts";
-import { waitForScan } from "./scan.ts";
+import { scanProgress, waitForScan } from "./scan.ts";
 
 const libraryId = "11111111-1111-4111-8111-111111111111";
 
-function status(counts: Partial<ScanStatus["counts"]>): ScanStatus {
+function status(
+  counts: Partial<ScanStatus["counts"]>,
+  latest: ScanStatus["latest"] = null,
+): ScanStatus {
   return {
     libraryId,
     counts: { queued: 0, running: 0, completed: 0, failed: 0, ...counts },
-    latest: null,
+    latest,
     runId: null,
   };
 }
@@ -71,5 +74,58 @@ describe("waitForScan", () => {
       waitForScan(client, libraryId, { timeoutMs: 5 }),
     ).rejects.toThrow("Timed out waiting for the first scan.");
     expect(stalled?.aborted).toBe(true);
+  });
+});
+
+describe("scanProgress", () => {
+  test("starting while no status has arrived", () => {
+    expect(scanProgress(undefined)).toEqual({ state: "starting" });
+  });
+
+  test("running reports the finished fraction", () => {
+    expect(
+      scanProgress(status({ queued: 1, running: 1, completed: 2 })),
+    ).toEqual({ state: "running", fraction: 0.5 });
+  });
+
+  test("running with nothing finished yet reads indeterminate", () => {
+    expect(scanProgress(status({ running: 1 }))).toEqual({
+      state: "running",
+      fraction: null,
+    });
+  });
+
+  test("a settled scan reads done", () => {
+    expect(scanProgress(status({ completed: 3 }))).toEqual({ state: "done" });
+  });
+
+  test("failed carries the count and the latest job's error", () => {
+    const latest = {
+      id: "22222222-2222-4222-8222-222222222222",
+      state: "failed" as const,
+      error: "permission denied on /srv/movies",
+    };
+    expect(scanProgress(status({ failed: 1 }, latest))).toEqual({
+      state: "failed",
+      failed: 1,
+      error: "permission denied on /srv/movies",
+    });
+  });
+
+  test("failed without a failed latest job reads no error", () => {
+    const latest = {
+      id: "22222222-2222-4222-8222-222222222222",
+      state: "completed" as const,
+      error: null,
+    };
+    expect(scanProgress(status({ failed: 2 }, latest))).toEqual({
+      state: "failed",
+      failed: 2,
+      error: null,
+    });
+  });
+
+  test("a settled scan with nothing completed still reads done", () => {
+    expect(scanProgress(status({}))).toEqual({ state: "done" });
   });
 });

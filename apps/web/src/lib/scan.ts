@@ -7,6 +7,31 @@ export type ScanStatus = Awaited<
 
 type ScanStatusInput = Parameters<PendiaClient["libraries"]["scanStatus"]>[0];
 
+/** Reads a scan status into what the setup screen shows. */
+export function scanProgress(
+  status: ScanStatus | undefined,
+):
+  | { state: "starting" }
+  | { state: "running"; fraction: number | null }
+  | { state: "done" }
+  | { state: "failed"; failed: number; error: string | null } {
+  if (status === undefined) return { state: "starting" };
+  const { queued, running, completed, failed } = status.counts;
+  if (queued + running > 0) {
+    const total = queued + running + completed + failed;
+    const done = completed + failed;
+    // Nothing has finished yet, so a determinate bar would sit empty.
+    return { state: "running", fraction: done === 0 ? null : done / total };
+  }
+  if (failed > 0)
+    return {
+      state: "failed",
+      failed,
+      error: status.latest?.state === "failed" ? status.latest.error : null,
+    };
+  return { state: "done" };
+}
+
 /** The one call the scan poller makes, so a test can stand a reader in. */
 export type ScanReader = {
   libraries: {

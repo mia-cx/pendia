@@ -138,6 +138,10 @@ export function signOut(options: AuthOptions = {}) {
   return postJson<{ ok: true }>("/api/auth/logout", undefined, options);
 }
 
+/** The screen-ready sentence explaining the username rules. */
+export const usernameRule =
+  "A username uses letters, digits, dots, underscores and hyphens, and starts with a letter or digit.";
+
 /** An invite token's state, as the status route reads it. */
 export type InviteStatus = "live" | "expired" | "accepted" | "unknown";
 

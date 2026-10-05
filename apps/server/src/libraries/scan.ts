@@ -547,6 +547,22 @@ function groupChangeProviderIds(
   return merged;
 }
 
+/** Merges groups' provider ids, or undefined when two groups give one provider different values. Empty values assert nothing. */
+function mergeProviderIds(
+  assertions: readonly Record<string, string>[],
+): Record<string, string> | undefined {
+  const merged: Record<string, string> = {};
+  for (const ids of assertions) {
+    for (const [provider, value] of Object.entries(ids)) {
+      if (value === "") continue;
+      const held = merged[provider];
+      if (held !== undefined && held !== value) return undefined;
+      merged[provider] = value;
+    }
+  }
+  return merged;
+}
+
 /** Deletes leaf Items still holding no Versions after queued file deletes. */
 async function deleteEmptiedItems(
   tx: Transaction,
@@ -660,10 +676,11 @@ async function reconcileStaleFiles(
 
 /**
  * Finds the root Item one group writes to: exact folder and title key
- * first, then the group's webhook provider ids, then the Item owning the
- * group's Files, then the title-key fallback, else a new Item. A found
- * Item moves to the group's folder and key only when the group holds
- * Files in the Item's home root.
+ * first, then the group's webhook provider ids, which check the ids
+ * earlier groups of this scan asserted before stored ids, then the Item
+ * owning the group's Files, then the title-key fallback, else a new
+ * Item. A found Item moves to the group's folder and key only when the
+ * group holds Files in the Item's home root.
  */
 async function findGroupItem(
   tx: Transaction,
@@ -681,6 +698,8 @@ async function findGroupItem(
       files: readonly RootedPath[];
     };
     changeProviderIds: Record<string, string>;
+    /** Webhook ids earlier groups of this scan asserted, as `provider:value` to Item id. */
+    sameScan?: ReadonlyMap<string, string>;
     candidates: () => Promise<Awaited<ReturnType<typeof rootItemCandidates>>>;
     claimed: Set<string>;
   },
@@ -703,10 +722,31 @@ async function findGroupItem(
     libraryId,
     context.changeProviderIds,
   );
+  const earlier = new Set(
+    Object.entries(context.changeProviderIds).flatMap(([provider, value]) => {
+      const itemId =
+        value === ""
+          ? undefined
+          : context.sameScan?.get(`${provider}:${value}`);
+      return itemId === undefined ? [] : [itemId];
+    }),
+  );
+  if (earlier.size > 1) throw new AuthError("CONFLICT");
+  const [earlierId] = earlier;
   if (exact && found && exact.id !== found.id) throw new AuthError("CONFLICT");
   if (exact) {
+    if (earlierId !== undefined && exact.id !== earlierId)
+      throw new AuthError("CONFLICT");
     if (exact.kind !== kind) throw new AuthError("CONFLICT");
     return exact;
+  }
+  if (earlierId !== undefined) {
+    if (found !== undefined && found.id !== earlierId)
+      throw new AuthError("CONFLICT");
+    // The earlier group already placed this Item during this scan.
+    const [row] = await tx.select().from(items).where(eq(items.id, earlierId));
+    if (row === undefined) throw new Error("Same-scan Item missing.");
+    return row;
   }
   let located = found;
   if (located === undefined) {
@@ -842,6 +882,7 @@ export async function scanDirectory(
     let candidates: Awaited<ReturnType<typeof rootItemCandidates>> | undefined;
     const singleGroup = groups.length === 1;
 
+    const asserted = new Map<string, string>();
     const resolved = [];
     for (const group of groups) {
       // Only webhook ids may find an Item elsewhere in the Library. Folder
@@ -856,21 +897,20 @@ export async function scanDirectory(
         kind: "movie",
         group,
         changeProviderIds: webhookProviderIds,
+        sameScan: asserted,
         candidates: async () =>
           (candidates ??= await rootItemCandidates(tx, libraryId, "movie")),
         claimed,
       });
       itemIds.push(item.id);
       resolved.push({ group, itemId: item.id, webhookProviderIds });
+      for (const [provider, value] of Object.entries(webhookProviderIds)) {
+        if (value !== "") asserted.set(`${provider}:${value}`, item.id);
+      }
     }
-    // An Item more than one group resolved to is shared by legacy
-    // subgroups: no subgroup's ids rewrite the whole Item's match.
-    const shared = new Set(
-      itemIds.filter((id, index) => itemIds.indexOf(id) !== index),
-    );
     const timelineOwners = new Set<string>();
 
-    for (const { group, itemId, webhookProviderIds } of resolved) {
+    for (const { group, itemId } of resolved) {
       for (const named of group.files) {
         const member = memberByKey.get(rootedKey(named));
         if (!member) throw new Error(`Unprobed member: ${named.path}`);
@@ -964,29 +1004,36 @@ export async function scanDirectory(
         await upsertFileStreams(tx, versionId, fileId, member.probe);
       }
 
-      // A changed provider id invalidates the match, so metadata re-fetches.
-      // Webhook ids assert; folder tags only fill ids nothing asserted yet.
-      // A shared legacy Item keeps its ids and match state untouched.
-      if (!shared.has(itemId)) {
-        const assertedChanged = await setItemProviderIds(
-          tx,
-          itemId,
-          webhookProviderIds,
-        );
-        const filledChanged = await setItemProviderIds(
-          tx,
-          itemId,
-          group.providerIds,
-          { fillOnly: true },
-        );
-        if (assertedChanged || filledChanged) {
-          await tx
-            .update(items)
-            .set({ metadataState: "pending", updatedAt: new Date() })
-            .where(eq(items.id, itemId));
-        }
-      }
       timelineOwners.add(itemId);
+    }
+
+    // A changed provider id invalidates the match, so metadata re-fetches.
+    // Webhook ids assert; folder tags only fill ids nothing asserted yet.
+    // An Item's groups merge their ids. Groups that give one provider two
+    // values write none of that kind, so a legacy Item holding several
+    // movies keeps its match. A lone asserting group still applies, because
+    // webhook ids are authoritative.
+    for (const [itemId, owned] of Map.groupBy(
+      resolved,
+      (entry) => entry.itemId,
+    )) {
+      const webhook = mergeProviderIds(
+        owned.map((entry) => entry.webhookProviderIds),
+      );
+      const tagged = mergeProviderIds(
+        owned.map((entry) => entry.group.providerIds),
+      );
+      const assertedChanged =
+        webhook !== undefined &&
+        (await setItemProviderIds(tx, itemId, webhook));
+      const filledChanged =
+        tagged !== undefined &&
+        (await setItemProviderIds(tx, itemId, tagged, { fillOnly: true }));
+      if (assertedChanged || filledChanged)
+        await tx
+          .update(items)
+          .set({ metadataState: "pending", updatedAt: new Date() })
+          .where(eq(items.id, itemId));
     }
     for (const owner of timelineOwners) await persistScanTimelines(tx, owner);
 

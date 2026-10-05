@@ -294,8 +294,8 @@ async function choose() {
       {/if}
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto px-4">
-      <div bind:this={listEl} class="rounded-lg bg-fill">
+    <div class="min-h-0 flex-1 overflow-y-auto px-3">
+      <div bind:this={listEl} class="rounded-lg bg-fill p-1">
         {#if listingLoading}
           {#each { length: 6 } as _, i (i)}
             <div

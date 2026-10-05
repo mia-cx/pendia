@@ -88,14 +88,14 @@ function showMore() {
   if (!loading && cursor !== null) void load(sort, libraryId, cursor);
 }
 
-// The Show more button loads the next page as it scrolls into view.
+// The sentinel loads the next page well before it scrolls into view.
 $effect(() => {
   if (!more) return;
   const observer = new IntersectionObserver(
     (entries) => {
       if (entries.some((entry) => entry.isIntersecting)) showMore();
     },
-    { rootMargin: "400px 0px" },
+    { rootMargin: "800px 0px" },
   );
   observer.observe(more);
   return () => observer.disconnect();
@@ -136,8 +136,6 @@ function setSort(value: string) {
     {#each { length: 18 } as _}
       <li>
         <Skeleton class="block aspect-[2/3] rounded-poster" />
-        <Skeleton class="mt-2 h-5 w-3/4" />
-        <Skeleton class="mt-1 h-[1.125rem] w-1/2" />
       </li>
     {/each}
   </PosterGrid>
@@ -147,20 +145,26 @@ function setSort(value: string) {
   {#each cards as card (card.id)}
     <li><PosterCard {card} /></li>
   {/each}
+  {#if loaded && loading}
+    {#each { length: 6 } as _}
+      <li aria-hidden="true">
+        <Skeleton class="block aspect-[2/3] rounded-poster" />
+      </li>
+    {/each}
+  {/if}
 </PosterGrid>
+
+<p role="status" class="sr-only">
+  {#if loaded && loading}Loading more titles{/if}
+</p>
 
 {#if failure}
   <Failure {failure} />
+  {#if cards.length > 0}
+    <div class="mt-6 flex justify-center">
+      <Button variant="secondary" onclick={showMore}>Try again</Button>
+    </div>
+  {/if}
 {/if}
 
-{#if cursor !== null}
-  <div class="mt-8 flex justify-center">
-    <Button
-      variant="secondary"
-      bind:ref={more}
-      onclick={showMore}
-      disabled={loading}
-      aria-busy={loading}>Show more</Button
-    >
-  </div>
-{/if}
+<div bind:this={more} aria-hidden="true" class="h-px"></div>

@@ -1,22 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { ORPCError } from "@orpc/client";
-import { queuesScan, refusedRoot, removedRoots } from "./roots.ts";
+import { queuesScan, refusedRoot } from "./roots.ts";
 
 const saved = [
   { id: "a", path: "/srv/movies" },
   { id: "b", path: "/srv/more" },
 ];
-
-describe("removedRoots", () => {
-  test("names the saved roots missing from the draft", () => {
-    expect(removedRoots(saved, saved)).toEqual([]);
-    expect(removedRoots(saved, [saved[1]])).toEqual([saved[0]]);
-    expect(removedRoots(saved, [])).toEqual(saved);
-    expect(
-      removedRoots(saved, [{ path: "/new" }, { id: "b", path: "/other" }]),
-    ).toEqual([saved[0]]);
-  });
-});
 
 describe("queuesScan", () => {
   test("a new row or a repointed root queues a scan", () => {

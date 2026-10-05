@@ -151,8 +151,11 @@ export async function* walkLibrary(
     recursive?: boolean;
     /** Called with the library-relative path of each regular file the rules reject. */
     onSkipped?: (path: string) => void;
+    /** Aborts the traversal. */
+    signal?: AbortSignal;
   } = {},
 ): AsyncGenerator<LibraryFile> {
+  options.signal?.throwIfAborted();
   const recursive = options.recursive ?? true;
   const start = await resolveEntry(rootPath, options.path ?? ".", "requested");
   if (start.stat.isFile()) {
@@ -173,9 +176,11 @@ export async function* walkLibrary(
     absolute: string,
     relative: string,
   ): AsyncGenerator<LibraryFile> {
+    options.signal?.throwIfAborted();
     const entries = await readdir(absolute, { withFileTypes: true });
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
+      options.signal?.throwIfAborted();
       const child = relative === "." ? entry.name : `${relative}/${entry.name}`;
       if (entry.isSymbolicLink()) {
         continue;

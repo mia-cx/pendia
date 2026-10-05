@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "./legacy.css";
 
 /* dark: applies under the system dark setting and inside a .dark subtree (the player). */
 @custom-variant dark {

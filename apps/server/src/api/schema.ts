@@ -127,6 +127,72 @@ export const LibraryUpdate = Schema.Struct({
   ),
 });
 
+/** An absolute filesystem path input: starts at / and holds no NUL. */
+export const AbsolutePath = Schema.String.pipe(
+  Schema.filter((path) => path.startsWith("/") && !path.includes("\0"), {
+    message: () => "Enter an absolute path, like /srv/movies.",
+  }),
+);
+
+/** One folder's direct child folders, answered to the admin folder browser. */
+export const FolderListing = Schema.Struct({
+  /** The folder that was listed, after normalisation. */
+  path: Schema.String,
+  /** Its direct child folders in natural order; dot-folders and symlinks stay hidden. */
+  folders: Schema.Array(
+    Schema.Struct({ name: Schema.String, path: Schema.String }),
+  ),
+});
+
+/** How many recognised Items a scan preview may list as examples; REST sends a query string, RPC a number. */
+export const PreviewExamples = Schema.Union(
+  Schema.Number,
+  Schema.NumberFromString,
+).pipe(
+  Schema.filter(
+    (count) => Number.isInteger(count) && count >= 0 && count <= 20,
+    { message: () => "examples must be an integer from 0 to 20, inclusive" },
+  ),
+);
+
+/** A recognised Item a scan preview shows as an example. */
+export const ScanPreviewExample = Schema.Union(
+  Schema.Struct({
+    kind: Schema.Literal("movie"),
+    title: Schema.String,
+    year: Schema.NullOr(Schema.Number),
+    folder: Schema.String,
+    files: Schema.Int,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("show"),
+    title: Schema.String,
+    year: Schema.NullOr(Schema.Number),
+    folder: Schema.String,
+    seasons: Schema.Array(Schema.Int),
+    episodes: Schema.Int,
+  }),
+);
+
+/** What a scan of one folder would find, without writing anything. */
+export const ScanPreview = Schema.Struct({
+  counts: Schema.Union(
+    Schema.Struct({ movie: Schema.Int }),
+    Schema.Struct({
+      show: Schema.Int,
+      season: Schema.Int,
+      episode: Schema.Int,
+    }),
+  ),
+  /** Video files that are neither recognised nor extras. */
+  unrecognised: Schema.Int,
+  examples: Schema.Array(ScanPreviewExample),
+  /** Why the preview found nothing, or null when it found something. */
+  reason: Schema.NullOr(
+    Schema.Literal("missing", "not-a-folder", "empty", "unrecognised"),
+  ),
+});
+
 /** The authenticated caller returned by the me procedure. */
 export const Me = Schema.Struct({
   user: Schema.Struct({

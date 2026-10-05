@@ -4,6 +4,7 @@ import {
   type ScanProgress,
   scanPhase,
   scanProgress,
+  scanStartedAt,
   scanState,
   waitForScan,
 } from "./scan.ts";
@@ -219,5 +220,21 @@ describe("scanPhase", () => {
       expect(scanPhase(progress, { failed: false, runId: "abc" })).toBe(
         progress.state,
       );
+  });
+});
+
+describe("scanStartedAt", () => {
+  test("decodes the run's start from its UUIDv7 id", () => {
+    const ms = 1_757_600_000_000;
+    const hex = ms.toString(16).padStart(12, "0");
+    const runId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7abc-8def-0123456789ab`;
+    expect(scanStartedAt({ ...status({ completed: 2 }), runId })).toEqual(
+      new Date(ms),
+    );
+  });
+
+  test("answers null without a run", () => {
+    expect(scanStartedAt(undefined)).toBeNull();
+    expect(scanStartedAt(status({ completed: 2 }))).toBeNull();
   });
 });

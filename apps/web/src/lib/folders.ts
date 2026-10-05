@@ -120,7 +120,7 @@ export function describePreview(
 /**
  * Whether the folder browser's choose button can run: never on an overlap or a
  * bad preview, and on a listing failure only when the path is missing on this
- * server — it may be mounted later, or live on another host.
+ * server, since it may be mounted later or live on another host.
  */
 export function canChoose({
   overlapped,

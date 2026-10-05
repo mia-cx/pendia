@@ -52,10 +52,11 @@ async function saveName(event: SubmitEvent) {
   nameBusy = true;
   nameFailure = undefined;
   try {
-    const answer = await writeQueue(() =>
-      client.libraries.update({ id, name }),
-    );
-    library.set(answer);
+    const answer = await writeQueue(async () => {
+      const saved = await client.libraries.update({ id, name });
+      library.set(saved);
+      return saved;
+    });
     name = answer.name;
     toast.success("Name saved");
   } catch (error) {

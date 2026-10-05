@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  canChoose,
   crumbs,
   describePreview,
   type FolderPreview,
@@ -202,5 +203,29 @@ describe("describePreview", () => {
     expect(show.examples).toEqual([
       { title: "Breaking Bad (2008)", caption: "2 seasons, 3 episodes" },
     ]);
+  });
+});
+
+describe("canChoose", () => {
+  test("blocks an overlap and every listing failure but a missing path", () => {
+    expect(canChoose({ overlapped: true })).toBe(false);
+    expect(canChoose({ overlapped: false })).toBe(true);
+    expect(canChoose({ overlapped: false, listingCode: "NOT_FOUND" })).toBe(
+      true,
+    );
+    for (const listingCode of ["FORBIDDEN", "BAD_REQUEST", "UNREACHABLE"]) {
+      expect(canChoose({ overlapped: false, listingCode })).toBe(false);
+    }
+  });
+
+  test("blocks a missing or not-a-folder preview", () => {
+    expect(canChoose({ overlapped: false, reason: "missing" })).toBe(false);
+    expect(canChoose({ overlapped: false, reason: "not-a-folder" })).toBe(
+      false,
+    );
+    expect(canChoose({ overlapped: false, reason: "empty" })).toBe(true);
+    expect(
+      canChoose({ overlapped: false, listingCode: "NOT_FOUND", reason: null }),
+    ).toBe(true);
   });
 });

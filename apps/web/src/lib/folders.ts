@@ -116,3 +116,22 @@ export function describePreview(
     examples,
   };
 }
+
+/**
+ * Whether the folder browser's choose button can run: never on an overlap or a
+ * bad preview, and on a listing failure only when the path is missing on this
+ * server — it may be mounted later, or live on another host.
+ */
+export function canChoose({
+  overlapped,
+  listingCode,
+  reason,
+}: {
+  overlapped: boolean;
+  listingCode?: string;
+  reason?: string | null;
+}): boolean {
+  if (overlapped) return false;
+  if (listingCode !== undefined && listingCode !== "NOT_FOUND") return false;
+  return reason !== "missing" && reason !== "not-a-folder";
+}

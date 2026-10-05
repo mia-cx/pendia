@@ -19,6 +19,7 @@ import { Skeleton } from "$lib/components/ui/skeleton/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
 import { type FailureCode, readFailure } from "$lib/errors.ts";
 import {
+  canChoose,
   crumbs,
   describePreview,
   type FolderPreview,
@@ -87,10 +88,11 @@ const described = $derived(
 );
 const chooseDisabled = $derived(
   busy ||
-    overlapped ||
-    listingFailure !== undefined ||
-    preview?.reason === "missing" ||
-    preview?.reason === "not-a-folder",
+    !canChoose({
+      overlapped,
+      listingCode: listingFailure?.code,
+      reason: preview?.reason,
+    }),
 );
 
 let wasOpen = false;
@@ -381,6 +383,17 @@ async function choose() {
         </div>
       {:else if previewFailure}
         <Failure inline failure={previewFailure} />
+      {:else if listingFailure?.code === "NOT_FOUND"}
+        <div class="flex items-start gap-2">
+          <InfoIcon class="mt-0.5 size-4 shrink-0 text-label-secondary" />
+          <div class="min-w-0">
+            <p class="text-headline text-label">No preview</p>
+            <p class="text-footnote text-label-secondary">
+              This server can't see this folder. You can still choose it if
+              it's mounted later or on another host.
+            </p>
+          </div>
+        </div>
       {:else if !listingFailure}
         <Skeleton class="h-5 w-32" />
         <p class="mt-1.5 text-footnote text-label-secondary">

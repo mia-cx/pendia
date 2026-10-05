@@ -80,7 +80,7 @@ async function addFolder(path: string) {
   toast.success(
     result.queued
       ? `Folder added. Scanning ${result.answer.name}.`
-      : "Folder added.",
+      : "Folder added",
   );
 }
 
@@ -95,7 +95,7 @@ async function repointFolder(index: number, path: string) {
   toast.success(
     result.queued
       ? `Folder changed. Scanning ${result.answer.name}.`
-      : "Folder changed.",
+      : "Folder changed",
   );
 }
 

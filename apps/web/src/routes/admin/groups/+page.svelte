@@ -12,6 +12,7 @@ import * as Dialog from "$lib/components/ui/dialog/index.ts";
 import { Input } from "$lib/components/ui/input/index.ts";
 import { Switch } from "$lib/components/ui/switch/index.ts";
 import { readFailure } from "$lib/errors.ts";
+import { cacheSavedGroup } from "$lib/groups.ts";
 import {
   type Permission,
   permissionLabels,
@@ -93,13 +94,16 @@ async function saveEdit() {
   editFailure = undefined;
   const perms = [...editPerms];
   try {
-    await client.groups.setPermissions({ id: row.id, permissions: perms });
+    const saved = await client.groups.setPermissions({
+      id: row.id,
+      permissions: perms,
+    });
     if (editing?.id === row.id && samePermissions(editPerms, perms)) {
       editOpen = false;
       editing = undefined;
     }
     toast.success(`${row.name} saved`);
-    await list.reload();
+    await cacheSavedGroup(list, saved);
   } catch (error) {
     if (editing?.id === row.id) editFailure = readFailure(error);
   } finally {

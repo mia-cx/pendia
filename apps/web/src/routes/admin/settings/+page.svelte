@@ -1,7 +1,17 @@
 <script lang="ts">
+import { toast } from "svelte-sonner";
 import { client } from "$lib/api.ts";
 import { fromMbps, toMbps } from "$lib/bitrate.ts";
+import AdminPage from "$lib/components/admin/AdminPage.svelte";
+import FormGroup from "$lib/components/admin/FormGroup.svelte";
+import FormRow from "$lib/components/admin/FormRow.svelte";
+import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
 import Failure from "$lib/components/Failure.svelte";
+import SecretInput from "$lib/components/SecretInput.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import { Input } from "$lib/components/ui/input/index.ts";
+import { Switch } from "$lib/components/ui/switch/index.ts";
+import { Textarea } from "$lib/components/ui/textarea/index.ts";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
@@ -82,6 +92,7 @@ async function saveProxies(event: SubmitEvent) {
       ),
     );
     if (proxyInput === submitted) proxyInput = null;
+    toast.success("Trusted proxies saved");
   } catch (error) {
     proxyFailure = readFailure(error);
   } finally {
@@ -105,6 +116,7 @@ async function saveCap(event: SubmitEvent) {
   try {
     settings.set(await serial(() => client.settings.update({ bitrateCapBps })));
     if (capInput === submitted) capInput = null;
+    toast.success("Bitrate cap saved");
   } catch (error) {
     capFailure = readFailure(error);
   } finally {
@@ -126,6 +138,7 @@ async function saveWindow(event: SubmitEvent) {
     );
     if (windowStart === start) windowStart = null;
     if (windowEnd === end) windowEnd = null;
+    toast.success("Store window saved");
   } catch (error) {
     windowFailure = readFailure(error);
   } finally {
@@ -143,6 +156,11 @@ async function saveArtwork(checked: boolean) {
       ),
     );
     artChecked = null;
+    toast.success(
+      checked
+        ? "Artwork now requires sign-in"
+        : "Artwork no longer requires sign-in",
+    );
   } catch (error) {
     artChecked = null;
     artFailure = readFailure(error);
@@ -167,6 +185,7 @@ async function addKey(event: SubmitEvent) {
       keyName = "";
       keyValue = "";
     }
+    toast.success(`${name.trim()} key saved`);
   } catch (error) {
     keyFailure = readFailure(error);
   } finally {
@@ -184,6 +203,7 @@ async function saveSecret(event: SubmitEvent) {
       await serial(() => client.settings.update({ oidcClientSecret })),
     );
     if (secretValue === oidcClientSecret) secretValue = "";
+    toast.success("Client secret saved");
   } catch (error) {
     secretFailure = readFailure(error);
   } finally {
@@ -198,6 +218,7 @@ async function removeKey(name: string) {
     settings.set(
       await serial(() => client.settings.deleteProviderKey({ name })),
     );
+    toast.success(`${name} key removed`);
   } catch (error) {
     removeFailures[name] = readFailure(error);
   } finally {
@@ -206,316 +227,256 @@ async function removeKey(name: string) {
 }
 </script>
 
-<svelte:head>
-  <title>Settings · Pendia admin</title>
-</svelte:head>
-
-<h2>Settings</h2>
-
-{#if settings.failure}
-  <Failure failure={settings.failure} />
-  <button
-    type="button"
-    onclick={() => settings.reload()}
-    disabled={settings.loading}>Retry</button
-  >
-{:else if !settings.data}
-  <p class="muted">Loading.</p>
-{:else}
-  {@const store = settings.data.artworkStore}
-  {@const secretSet = settings.data.oidcClientSecretSet}
-  <section>
-    <h3>Trusted proxies</h3>
-    <p class="muted">
-      Trust is by exact IP address, not CIDR or hostname. No proxy is trusted
-      by default.
-    </p>
-    <form onsubmit={saveProxies} class="stack">
-      {#if proxyFailure}
-        <Failure failure={proxyFailure} />
-      {/if}
-      <label for="proxyList">One address per line</label>
-      <textarea
-        id="proxyList"
-        name="proxies"
-        rows="4"
-        value={proxyValue}
-        oninput={(event) => (proxyInput = event.currentTarget.value)}
-      ></textarea>
-      <button type="submit" disabled={proxyBusy}>Save</button>
-    </form>
-  </section>
-
-  <section>
-    <h3>Bitrate cap</h3>
-    <form onsubmit={saveCap} class="stack">
-      {#if capFailure}
-        <Failure failure={capFailure} />
-      {/if}
-      <label for="globalCap">Default bitrate cap in Mbit/s</label>
-      <input
-        id="globalCap"
-        name="bitrateCap"
-        type="number"
-        min="0"
-        step="any"
-        inputmode="decimal"
-        value={capValue}
-        oninput={(event) => (capInput = event.currentTarget.value)}
-      />
-      <p class="muted">Leave this empty for no cap.</p>
-      <button type="submit" disabled={capBusy}>Save</button>
-    </form>
-  </section>
-
-  <section>
-    <h3>Store window</h3>
-    <p class="muted">
-      Store jobs run between these times, in the server's time zone. The same
-      start and end means all day.
-    </p>
-    <form onsubmit={saveWindow} class="stack">
-      {#if windowFailure}
-        <Failure failure={windowFailure} />
-      {/if}
-      <div class="times">
-        <div>
-          <label for="windowStart">Start</label>
-          <input
-            id="windowStart"
-            type="time"
-            required
-            value={startValue}
-            oninput={(event) => (windowStart = event.currentTarget.value)}
-          />
-        </div>
-        <div>
-          <label for="windowEnd">End</label>
-          <input
-            id="windowEnd"
-            type="time"
-            required
-            value={endValue}
-            oninput={(event) => (windowEnd = event.currentTarget.value)}
-          />
-        </div>
-      </div>
-      <button type="submit" disabled={windowBusy}>Save</button>
-    </form>
-  </section>
-
-  <section>
-    <h3>Artwork auth</h3>
-    <p class="muted">
-      Artwork routes accept anonymous requests by default, and nothing enforces
-      this toggle yet because no artwork route exists in this build.
-    </p>
-    <div class="check">
-      <input
-        id="artworkAuth"
-        type="checkbox"
-        checked={artChecked ?? settings.data.artworkRequiresAuth}
-        onchange={(event) => {
-          artChecked = event.currentTarget.checked;
-          void saveArtwork(artChecked);
-        }}
-        disabled={artBusy}
-      />
-      <label for="artworkAuth">Require auth for artwork</label>
+<AdminPage title="General">
+  {#if settings.failure}
+    <Failure failure={settings.failure} />
+    <div>
+      <Button
+        variant="secondary"
+        onclick={() => settings.reload()}
+        disabled={settings.loading}>Try again</Button
+      >
     </div>
-    {#if artFailure}
-      <Failure failure={artFailure} />
-    {/if}
-  </section>
+  {:else if !settings.data}
+    <FormGroup title="Network" loading={1}>
+      <span></span>
+    </FormGroup>
+    <FormGroup title="Playback" loading={1}>
+      <span></span>
+    </FormGroup>
+    <FormGroup title="Store window" loading={2}>
+      <span></span>
+    </FormGroup>
+    <FormGroup title="Artwork" loading={3}>
+      <span></span>
+    </FormGroup>
+    <FormGroup title="Provider keys" loading={2}>
+      <span></span>
+    </FormGroup>
+    <FormGroup title="Single sign-on" loading={3}>
+      <span></span>
+    </FormGroup>
+  {:else}
+    {@const store = settings.data.artworkStore}
+    {@const secretSet = settings.data.oidcClientSecretSet}
+    <FormGroup
+      title="Network"
+      onsubmit={saveProxies}
+      failure={proxyFailure}
+      description="One IP address per line. Ranges and hostnames aren't supported."
+    >
+      <FormRow label="Trusted proxies" for="proxyList">
+        <Textarea
+          id="proxyList"
+          name="proxies"
+          rows={4}
+          class="font-mono"
+          value={proxyValue}
+          oninput={(event) => (proxyInput = event.currentTarget.value)}
+        />
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={proxyBusy}>Save</Button>
+      {/snippet}
+    </FormGroup>
 
-  <section>
-    <h3>Artwork store</h3>
-    <dl class="store">
-      <dt>Originals</dt>
-      <dd>{artworkBackends[store.backend]}</dd>
+    <FormGroup
+      title="Playback"
+      onsubmit={saveCap}
+      failure={capFailure}
+      description="Leave empty for no cap."
+    >
+      <FormRow label="Default bitrate cap" for="globalCap">
+        <div class="flex items-center gap-3">
+          <Input
+            id="globalCap"
+            name="bitrateCap"
+            type="number"
+            min="0"
+            step="any"
+            inputmode="decimal"
+            class="w-32"
+            value={capValue}
+            oninput={(event) => (capInput = event.currentTarget.value)}
+          />
+          <span class="text-subheadline text-label-secondary">Mbit/s</span>
+        </div>
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={capBusy}>Save</Button>
+      {/snippet}
+    </FormGroup>
+
+    <FormGroup
+      title="Store window"
+      onsubmit={saveWindow}
+      failure={windowFailure}
+      description="Store jobs run between these times, in the server's time zone. Use the same time twice to run all day."
+    >
+      <FormRow label="Starts" for="windowStart">
+        <Input
+          id="windowStart"
+          type="time"
+          required
+          class="w-36"
+          value={startValue}
+          oninput={(event) => (windowStart = event.currentTarget.value)}
+        />
+      </FormRow>
+      <FormRow label="Ends" for="windowEnd">
+        <Input
+          id="windowEnd"
+          type="time"
+          required
+          class="w-36"
+          value={endValue}
+          oninput={(event) => (windowEnd = event.currentTarget.value)}
+        />
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={windowBusy}>Save</Button>
+      {/snippet}
+    </FormGroup>
+
+    <FormGroup
+      title="Artwork"
+      failure={artFailure}
+      description="Set by PENDIA_ARTWORK_STORE when Pendia starts."
+    >
+      <FormRow label="Require sign-in for artwork" for="artworkAuth" inline>
+        <Switch
+          id="artworkAuth"
+          checked={artChecked ?? settings.data.artworkRequiresAuth}
+          onCheckedChange={(checked) => {
+            artChecked = checked;
+            void saveArtwork(checked);
+          }}
+          disabled={artBusy}
+        />
+      </FormRow>
+      <FormRow label="Originals" inline>
+        <span class="text-subheadline text-label-secondary"
+          >{artworkBackends[store.backend]}</span
+        >
+      </FormRow>
       {#if store.path !== null}
-        <dt>{store.backend === "colocated" ? "Fallback path" : "Path"}</dt>
-        <dd>{store.path}</dd>
+        <FormRow
+          label={store.backend === "colocated" ? "Fallback path" : "Path"}
+          inline
+        >
+          <span class="break-all text-subheadline text-label-secondary"
+            >{store.path}</span
+          >
+        </FormRow>
       {/if}
       {#if store.bucket !== null}
-        <dt>Bucket</dt>
-        <dd>{store.bucket}</dd>
+        <FormRow label="Bucket" inline>
+          <span class="break-all text-subheadline text-label-secondary"
+            >{store.bucket}</span
+          >
+        </FormRow>
       {/if}
       {#if store.endpoint !== null}
-        <dt>Endpoint</dt>
-        <dd>{store.endpoint}</dd>
+        <FormRow label="Endpoint" inline>
+          <span class="break-all text-subheadline text-label-secondary"
+            >{store.endpoint}</span
+          >
+        </FormRow>
       {/if}
-    </dl>
-    <p class="muted">Pendia reads this from PENDIA_ARTWORK_STORE at start.</p>
-  </section>
+    </FormGroup>
 
-  <section>
-    <h3>Provider keys</h3>
-    <p class="muted">
-      A key value is write-only and never read back, so the table lists names
-      only.
-    </p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th><span class="sr-only">Actions</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each settings.data.providerKeys as name (name)}
-          <tr>
-            <td class="name">{name}</td>
-            <td class="actions">
-              <button
-                type="button"
-                onclick={() => removeKey(name)}
-                disabled={removeBusy[name] === true}>Remove</button
+    <FormGroup title="Provider keys">
+      {#each settings.data.providerKeys as name (name)}
+        <FormRow label={name} inline>
+          <span class="text-subheadline text-label-secondary">
+            <span aria-hidden="true">••••••••</span>
+            <span class="sr-only">Hidden</span>
+          </span>
+          <ConfirmDialog
+            title="Remove the {name} key?"
+            description="Anything that uses {name} stops working until you add the key again."
+            action="Remove key"
+            onconfirm={() => removeKey(name)}
+          >
+            {#snippet trigger(props)}
+              <Button
+                {...props}
+                variant="ghost"
+                size="sm"
+                class="text-destructive"
+                disabled={removeBusy[name] === true}>Remove</Button
               >
-              {#if Object.hasOwn(removeFailures, name)}
-                <Failure failure={removeFailures[name]} />
-              {/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-    {#if settings.data.providerKeys.length === 0}
-      <p class="muted">No provider keys set.</p>
-    {/if}
-    <form onsubmit={addKey} class="stack keys">
-      {#if keyFailure}
-        <Failure failure={keyFailure} />
-      {/if}
-      <label for="keyName">Name</label>
-      <input id="keyName" name="name" required bind:value={keyName} />
-      <label for="keyValue">Value</label>
-      <input
-        id="keyValue"
-        name="value"
-        type="password"
-        autocomplete="off"
-        required
-        bind:value={keyValue}
-      />
-      <button type="submit" disabled={keyBusy}>Set key</button>
-    </form>
-  </section>
+            {/snippet}
+          </ConfirmDialog>
+          {#if Object.hasOwn(removeFailures, name)}
+            <Failure failure={removeFailures[name]} />
+          {/if}
+        </FormRow>
+      {:else}
+        <div class="relative min-h-12 px-4 py-2.5">
+          <span class="text-subheadline text-label-secondary"
+            >No provider keys yet.</span
+          >
+        </div>
+      {/each}
+    </FormGroup>
 
-  <section>
-    <h3>OIDC</h3>
-    <dl class="store">
-      <dt>Status</dt>
-      <dd>{settings.data.oidcConfigured ? "Configured" : "Not configured"}</dd>
-      <dt>Client secret</dt>
-      <dd>{secretSet ? "Set" : "Not set"}</dd>
-    </dl>
-    <p class="muted">
-      The issuer and client ID are set in the database; see
-      apps/server/README.md.
-    </p>
-    <form onsubmit={saveSecret} class="stack">
-      {#if secretFailure}
-        <Failure failure={secretFailure} />
-      {/if}
-      <label for="oidcSecret"
-        >{secretSet ? "New client secret" : "Client secret"}</label
+    <FormGroup title="Add a key" onsubmit={addKey} failure={keyFailure}>
+      <FormRow label="Name" for="keyName">
+        <Input id="keyName" name="name" required bind:value={keyName} />
+      </FormRow>
+      <FormRow label="Value" for="keyValue">
+        <SecretInput
+          id="keyValue"
+          name="value"
+          autocomplete="off"
+          required
+          bind:value={keyValue}
+        />
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={keyBusy}>Save key</Button>
+      {/snippet}
+    </FormGroup>
+
+    <FormGroup
+      title="Single sign-on"
+      onsubmit={saveSecret}
+      failure={secretFailure}
+      description="Set the issuer and client ID in the database. See apps/server/README.md."
+    >
+      <FormRow label="Status" inline>
+        <span class="text-subheadline text-label-secondary"
+          >{settings.data.oidcConfigured ? "Set up" : "Not set up"}</span
+        >
+      </FormRow>
+      <FormRow label="Client secret" inline>
+        <span class="text-subheadline text-label-secondary">
+          {#if secretSet}
+            <span aria-hidden="true">••••••••</span>
+            <span class="sr-only">Hidden</span>
+          {:else}
+            Not set
+          {/if}
+        </span>
+      </FormRow>
+      <FormRow
+        label={secretSet ? "New client secret" : "Client secret"}
+        for="oidcSecret"
       >
-      <input
-        id="oidcSecret"
-        name="clientSecret"
-        type="password"
-        autocomplete="off"
-        required
-        bind:value={secretValue}
-      />
-      <button type="submit" disabled={secretBusy}
-        >{secretSet ? "Replace secret" : "Set secret"}</button
-      >
-    </form>
-  </section>
-{/if}
-
-<style>
-section {
-  max-width: 720px;
-  margin-bottom: 32px;
-}
-
-.stack {
-  display: grid;
-  max-width: 360px;
-  gap: 8px;
-  align-content: start;
-}
-
-.stack p {
-  margin: 0;
-}
-
-.keys {
-  margin-top: 16px;
-}
-
-table {
-  table-layout: fixed;
-  max-width: 480px;
-}
-
-td {
-  height: 48px;
-  vertical-align: middle;
-}
-
-.name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.actions {
-  white-space: nowrap;
-}
-
-.times {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-}
-
-.times input {
-  display: block;
-  margin-top: 4px;
-}
-
-.store {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 16px;
-  margin: 0 0 8px;
-}
-
-.store dt {
-  color: var(--muted);
-}
-
-.store dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-}
-
-.check label {
-  font-weight: 400;
-}
-
-section :global(.failure) {
-  margin: 8px 0;
-}
-</style>
+        <SecretInput
+          id="oidcSecret"
+          name="clientSecret"
+          autocomplete="off"
+          required
+          bind:value={secretValue}
+        />
+      </FormRow>
+      {#snippet actions()}
+        <Button type="submit" disabled={secretBusy}
+          >{secretSet ? "Replace secret" : "Save secret"}</Button
+        >
+      {/snippet}
+    </FormGroup>
+  {/if}
+</AdminPage>

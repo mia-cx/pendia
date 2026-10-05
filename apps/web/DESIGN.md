@@ -88,6 +88,7 @@ The shadcn-svelte set lives in `src/lib/components/ui`, on bits-ui for keyboard 
 - **Dialog, alert dialog, sheet**: over the scrim. Alerts are compact and centred, with two full-width buttons that name the action. Side sheets float inset from the edge; bottom sheets carry a grabber.
 - **Slider, switch, tabs**: the tint fills the range and the on switch. Tabs are a segmented control. The slider's `media` variant is the player's: a 4 px track in translucent white that thickens to 6 px under the pointer, a white range, a `track` layer for buffered ranges, and a thumb that shows only on hover, focus or drag. `valueText` gives the thumb words to announce.
 - **Table**: hairline rows, footnote headers, tabular numbers.
+- **Textarea**: the same filled field as Input, `min-h-24` and vertically resizable.
 - **Toast**: svelte-sonner, bottom centre and above the tab bar on phones, following the system scheme.
 - **Badge, skeleton, scroll area**: capsules, pulsing fills, and overlay scrollbars that show on hover.
 
@@ -114,6 +115,20 @@ Artwork leads every one of these. Titles come from the art itself where it has t
 - Content starts at `--shell-start`, past the sidebar and the gutter. Full-bleed content may extend under the sidebar with a negative margin of the same size.
 - A skip link leads to the content. Page changes cross-fade through view transitions, with the sidebar and tab bar held still; typing in search, sorting and filtering do not fade.
 - Viewers cannot list libraries yet (#115), so for them the sidebar shows the medium sections only.
+
+## Admin
+
+Admin is a settings app laid out like System Settings. From 1024 px the same floating sidebar the browse shell uses carries a Home link, a search field and the sections in three groups: Overview and Activity, then Libraries, Users and Groups, then Plugins and General. Typing filters the groups into one flat list. Below 1024 px the section list is the first screen and each section pushes in from the right; the phone tab bar stays, with Settings current, so Home is one tap away. Push and pop animate the content pane like iOS, with a cross-fade on desktop, at equal depth and under reduced motion. The settings screen is labelled General in the nav, because Settings inside Settings would read as itself; its URL stays `/admin/settings`.
+
+- **AdminPage** is the one section layout: a tinted back row (the parent on detail pages, or "Settings" back to `/admin` on phones), a `text-large-title` with its actions at the end of the row on desktop and below it on phone, then a `max-w-3xl` column of groups.
+- **FormGroup** is one grouped panel: an optional `text-headline` title, a `rounded-lg bg-elevated` panel, a footnote description and action buttons on the row below it. When its root is a `form` the actions hold the Save button. While it loads, skeleton rows hold the same height. A failure renders between the panel and the footnote.
+- **FormRow** is a label/control pair inside a panel, with an inset hairline between rows. From the panel's `@lg` container width up it is a `[12rem_minmax(0,1fr)]` grid; below it stacks. Below that width, `inline` rows keep the label left and the control at the end on one line instead, for switches, selects and read-only values.
+- **ListRow** is a navigable row inside a panel: leading content, a title over a caption, trailing content and a chevron. With `href` the whole row is the link.
+- **AdminNav** renders the sections for the sidebar and the phone list from the one model in `$lib/admin.ts`, along with the search field.
+
+Saves confirm with a toast and failures stay inline in their own group. Destructive actions go through `ConfirmDialog`, whose title names the loss ("Revoke this session?"). Write-only secrets use `SecretInput`, a password field with an eye toggle. `TabBar` is shared by the browse and admin shells.
+
+Later slices drop a screen in as an `AdminPage` of `FormGroup`s, then remove the path from the legacy list in `routes/admin/+layout.svelte`.
 
 ## Screens
 
@@ -145,7 +160,7 @@ Artwork leads every one of these. Titles come from the art itself where it has t
 | `--surface` | `--background-elevated` |
 | `--line` | `--separator` |
 
-Screens still on `legacy`: the detail pages (#109), sign in, setup, invite and the error page (#111), and admin (#112 to #114).
+Screens still on `legacy`: the detail pages (#109), sign in, setup, invite and the error page (#111), and admin libraries, plugins and activity (#113, #114).
 
 ## Not yet redesigned
 

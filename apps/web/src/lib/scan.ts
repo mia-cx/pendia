@@ -7,6 +7,27 @@ export type ScanStatus = Awaited<
 
 type ScanStatusInput = Parameters<PendiaClient["libraries"]["scanStatus"]>[0];
 
+/** A library's scan state as one label and tone for lists and panels. */
+export function scanState(status: ScanStatus | undefined): {
+  label: string;
+  tone: "active" | "done" | "error" | "idle";
+} {
+  if (status === undefined || status.latest === null)
+    return { label: "Not scanned", tone: "idle" };
+  const { queued, running, completed, failed } = status.counts;
+  if (running > 0) return { label: "Scanning", tone: "active" };
+  if (queued > 0) return { label: "Queued", tone: "active" };
+  if (failed > 0 && completed === 0)
+    return { label: "Scan failed", tone: "error" };
+  if (failed > 0)
+    return {
+      label: `Scanned with ${failed === 1 ? "1 error" : `${failed} errors`}`,
+      tone: "error",
+    };
+  if (completed > 0) return { label: "Scanned", tone: "done" };
+  return { label: "Not scanned", tone: "idle" };
+}
+
 /** The one call the scan poller makes, so a test can stand a reader in. */
 export type ScanReader = {
   libraries: {

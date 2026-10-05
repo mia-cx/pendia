@@ -3,6 +3,7 @@ import {
   artworkSrcset,
   type BrowseCard,
   cardLabel,
+  type DetailChild,
   episodeCode,
   fallbackHue,
   formatBadges,
@@ -18,7 +19,6 @@ import {
   timeLeft,
   titleArt,
   upNextEpisode,
-  type DetailChild,
 } from "./browse.ts";
 
 const show = {

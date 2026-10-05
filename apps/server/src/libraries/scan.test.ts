@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -1830,6 +1830,231 @@ describe.skipIf(!databaseUrl)("scans across roots", () => {
           .innerJoin(episodes, eq(episodes.itemId, versions.itemId));
         expect(perEpisode.filter((row) => row.number === 1).length).toBe(2);
         expect(perEpisode.filter((row) => row.number === 2).length).toBe(1);
+      });
+    }));
+});
+
+describe.skipIf(!databaseUrl)("scans at any depth", () => {
+  /** Creates each root-relative file under its root. */
+  async function populateRoots(
+    entries: readonly [root: string, path: string][],
+  ) {
+    for (const [root, path] of entries) {
+      await mkdir(join(root, dirname(path)), { recursive: true });
+      await createVideoFixture(join(root, path));
+    }
+  }
+
+  const rootShows = async (db: Database, libraryId: string) =>
+    db
+      .select()
+      .from(items)
+      .where(and(eq(items.libraryId, libraryId), eq(items.kind, "show")))
+      .orderBy(asc(items.title));
+
+  test("two single-show roots become two titled Shows at the library root", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const bad = join(dir, "Breaking Bad (2008)");
+        const wire = join(dir, "The Wire (2002)");
+        await populateRoots([
+          [bad, "Season 1/Breaking Bad - S01E01.mkv"],
+          [wire, "Season 1/The Wire - S01E01.mkv"],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: bad,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        await addRoot(db, library.id, wire);
+
+        const first = await scanShowDirectory(db, library.id, ".");
+        expect(first.itemIds).toHaveLength(2);
+        expect(await rootShows(db, library.id)).toMatchObject([
+          {
+            title: "Breaking Bad",
+            year: 2008,
+            canonicalFolder: ".",
+            titleKey: "breaking bad (2008)",
+          },
+          {
+            title: "The Wire",
+            year: 2002,
+            canonicalFolder: ".",
+            titleKey: "the wire (2002)",
+          },
+        ]);
+
+        const second = await scanShowDirectory(db, library.id, ".");
+        expect(second.itemIds.sort()).toEqual(first.itemIds.sort());
+      });
+    }));
+
+  for (const order of ["root first", "folder first"] as const) {
+    test(`a Show spanning a root and a folder in another root settles at the folder (${order})`, () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        await withVideoFixture(async (dir) => {
+          const a = join(dir, "library");
+          const b = join(dir, "Breaking Bad (2008)");
+          const episode = "Season 1/Breaking Bad - S01E01.mkv";
+          await populateRoots([
+            [a, `Breaking Bad (2008)/${episode}`],
+            [b, episode],
+          ]);
+          const [library] = await insertLibraries(db, {
+            name: "Shows",
+            medium: "shows",
+            rootPath: a,
+          });
+          if (!library) throw new Error("Fixture library missing.");
+          const rootB = await addRoot(db, library.id, b);
+
+          const scans =
+            order === "root first"
+              ? ([".", "Breaking Bad (2008)"] as const)
+              : (["Breaking Bad (2008)", "."] as const);
+          for (const path of scans)
+            await scanShowDirectory(db, library.id, path, {
+              reconcileMissing: true,
+            });
+
+          const [show] = await rootShows(db, library.id);
+          expect(show).toMatchObject({
+            title: "Breaking Bad",
+            canonicalFolder: "Breaking Bad (2008)",
+            titleKey: "",
+          });
+          expect(await rootShows(db, library.id)).toHaveLength(1);
+          const fileRows = await db.select().from(files);
+          expect(new Set(fileRows.map((file) => file.rootId))).toEqual(
+            new Set([library.rootId, rootB]),
+          );
+          const episodeVersions = await db
+            .select({ versionId: versions.id })
+            .from(versions)
+            .innerJoin(episodes, eq(episodes.itemId, versions.itemId));
+          expect(episodeVersions).toHaveLength(2);
+
+          for (const path of scans)
+            await scanShowDirectory(db, library.id, path, {
+              reconcileMissing: true,
+            });
+          const [stable] = await rootShows(db, library.id);
+          expect(stable).toMatchObject({
+            id: show?.id,
+            canonicalFolder: "Breaking Bad (2008)",
+            titleKey: "",
+          });
+          expect(
+            new Set((await db.select().from(files)).map((file) => file.id)),
+          ).toEqual(new Set(fileRows.map((file) => file.id)));
+        });
+      }));
+  }
+
+  test("a single-show root merges with a tagged folder by provider id", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (dir) => {
+        const a = join(dir, "library");
+        const b = join(dir, "breaking-bad [tvdbid-81189]");
+        const episode = "Season 1/Breaking Bad - S01E01.mkv";
+        await populateRoots([
+          [a, `Breaking Bad (2008) [tvdbid-81189]/${episode}`],
+          [b, episode],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: a,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const rootB = await addRoot(db, library.id, b);
+
+        await scanShowDirectory(db, library.id, ".");
+        await scanShowDirectory(
+          db,
+          library.id,
+          "Breaking Bad (2008) [tvdbid-81189]",
+        );
+
+        const [show] = await rootShows(db, library.id);
+        expect(show).toMatchObject({
+          canonicalFolder: "Breaking Bad (2008) [tvdbid-81189]",
+          titleKey: "",
+        });
+        expect(await rootShows(db, library.id)).toHaveLength(1);
+        expect(await db.select().from(providerIds)).toMatchObject([
+          { provider: "tvdb", value: "81189", itemId: show?.id },
+        ]);
+        expect(
+          new Set((await db.select().from(files)).map((file) => file.rootId)),
+        ).toEqual(new Set([library.rootId, rootB]));
+      });
+    }));
+
+  test("loose movies in one folder become titled Items", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        const arrivals = "Movies/Arrival.2016.1080p.WEB-DL.mkv";
+        await populateRoots([
+          [root, "Movies/Dune.2021.1080p.BluRay.x264-GROUP.mkv"],
+          [root, "Movies/Dune.2021.2160p.WEB-DL.DDP5.1.mkv"],
+          [root, arrivals],
+        ]);
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+
+        const scanned = await scanDirectory(db, library.id, "Movies");
+        expect(scanned.itemIds).toHaveLength(2);
+        const rootMovies = await db
+          .select()
+          .from(items)
+          .where(eq(items.kind, "movie"))
+          .orderBy(asc(items.title));
+        expect(rootMovies).toMatchObject([
+          {
+            title: "Arrival",
+            year: 2016,
+            canonicalFolder: "Movies",
+            titleKey: "arrival (2016)",
+          },
+          {
+            title: "Dune",
+            year: 2021,
+            canonicalFolder: "Movies",
+            titleKey: "dune (2021)",
+          },
+        ]);
+        const [arrival, dune] = rootMovies;
+        const versionsOf = async (itemId: string) =>
+          (
+            await db
+              .select({ id: versions.id })
+              .from(versions)
+              .where(eq(versions.itemId, itemId))
+          ).map((row) => row.id);
+        expect(await versionsOf(dune?.id ?? "")).toHaveLength(2);
+
+        const rescan = await scanDirectory(db, library.id, "Movies");
+        expect(rescan.itemIds.sort()).toEqual(scanned.itemIds.sort());
+
+        await rm(join(root, arrivals));
+        await scanDirectory(db, library.id, "Movies", {
+          reconcileMissing: true,
+        });
+        expect(await db.select().from(items)).toMatchObject([
+          { id: dune?.id, title: "Dune", canonicalFolder: "Movies" },
+        ]);
+        expect(await versionsOf(arrival?.id ?? "")).toHaveLength(0);
       });
     }));
 });

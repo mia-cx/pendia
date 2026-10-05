@@ -87,6 +87,8 @@ export const items = pgTable(
     tags: text("tags").array().notNull().default(sql`'{}'::text[]`),
     metadataState: metadataState("metadata_state").notNull().default("pending"),
     canonicalFolder: text("canonical_folder").notNull(),
+    // Empty when the Item folder below the root names one title; otherwise the normalised title and year.
+    titleKey: text("title_key").notNull().default(""),
     addedAt: instant("added_at").notNull().defaultNow(),
     updatedAt: instant("updated_at").notNull().defaultNow(),
   },

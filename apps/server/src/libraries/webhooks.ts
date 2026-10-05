@@ -154,6 +154,7 @@ export function createChangeDebouncer(
     changes: ChangeEvent[],
   ): Promise<void> => {
     const medium = source === "sonarr" ? "shows" : "movies";
+    const { rules } = scanScope(medium);
     const roots = await db
       .select({
         id: libraryRoots.id,
@@ -200,13 +201,9 @@ export function createChangeDebouncer(
         throw new InvalidWebhookError("Webhook path must be absolute.");
     };
 
-    // The folder one scan covers: the Show folder or the Movie folder. A
-    // file directly in the library root has none, which is ".".
-    const scanFolder = (relativePath: string) => {
-      if (source === "radarr") return dirname(relativePath);
-      const slash = relativePath.indexOf("/");
-      return slash < 0 ? "." : relativePath.slice(0, slash);
-    };
+    // The folder one scan covers: the file's Item folder, "." at the root.
+    const scanFolder = (relativePath: string) =>
+      rules.itemFolder(dirname(relativePath));
 
     const resolved: ResolvedChange[] = [];
     for (const change of changes) {
@@ -241,10 +238,6 @@ export function createChangeDebouncer(
               "Webhook move crosses library roots.",
             );
           previousDirectory = scanFolder(previous.relativePath);
-          if (directory === "." || previousDirectory === ".")
-            throw new InvalidWebhookError(
-              "Webhook path must name a folder inside the library root.",
-            );
           // A move between two roots of one Library leaves its source
           // root, and the destination folder's scan adds it there.
           if (previous.rootId !== rootId) {
@@ -297,11 +290,6 @@ export function createChangeDebouncer(
           };
         }
       }
-      // A scan job at the library root rejects changes on every attempt.
-      if (directory === "." || previousDirectory === ".")
-        throw new InvalidWebhookError(
-          "Webhook path must name a folder inside the library root.",
-        );
       resolved.push({ libraryId, path: directory, scan });
       // A move into another Show or Movie scans its source too. Servarr's
       // provider ids name the destination, so the source scan goes without them.
@@ -342,7 +330,7 @@ export function createChangeDebouncer(
       .where(eq(libraryRoots.id, rootId));
     if (library === undefined) throw new AuthError("NOT_FOUND");
     const libraryId = library.id;
-    const { rules } = scanScope(library.medium, ".");
+    const { rules } = scanScope(library.medium);
     const accepts = (path: string) => acceptsLibraryFile(rules, path);
     const resolved: ResolvedChange[] = [];
     for (const change of changes) {
@@ -366,10 +354,7 @@ export function createChangeDebouncer(
       if (scan === undefined) continue;
       resolved.push({
         libraryId,
-        path:
-          library.medium === "shows"
-            ? (scan.path.split("/")[0] ?? scan.path)
-            : dirname(scan.path),
+        path: rules.itemFolder(dirname(scan.path)),
         scan,
       });
     }

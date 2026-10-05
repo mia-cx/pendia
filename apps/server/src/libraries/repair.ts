@@ -136,8 +136,6 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
           and(eq(items.libraryId, library.id), eq(items.kind, medium.itemKind)),
         );
       const itemFolders = new Set(existing.map((item) => item.canonicalFolder));
-      const topLevel = (path: string) =>
-        path === "." ? undefined : path.split("/")[0];
       const next = new Map<string, bigint>();
       const scans = new Map<string, Map<string, bigint | undefined>>();
       const addUpdate = (
@@ -158,35 +156,12 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
           next.set(key, directory.modifiedNs);
           continue;
         }
-        // A "." Item folder is the Library scan's own scope, not a directory scan.
-        const folders = [
-          ...new Set(
-            directory.files
-              .map((file) => medium.rules.identify(file)?.canonicalFolder)
-              .filter(
-                (folder): folder is string =>
-                  folder !== undefined && folder !== ".",
-              ),
-          ),
-        ];
-        for (const folder of folders) {
-          addUpdate(folder, key, directory.modifiedNs);
-        }
-        const top = topLevel(path);
-        let needsScan = folders.length > 0;
-        if (medium.itemKind === "movie" && itemFolders.has(path)) {
-          addUpdate(path, key, directory.modifiedNs);
-          needsScan = true;
-        }
-        if (
-          medium.itemKind === "show" &&
-          top !== undefined &&
-          itemFolders.has(top)
-        ) {
-          addUpdate(top, key, directory.modifiedNs);
-          needsScan = true;
-        }
-        if (!needsScan) {
+        // A changed directory scans its Item folder when it holds media or an Item.
+        const scanFolder = medium.rules.itemFolder(path);
+        const needsScan =
+          directory.files.length > 0 || itemFolders.has(scanFolder);
+        if (needsScan) addUpdate(scanFolder, key, directory.modifiedNs);
+        else {
           next.set(key, directory.modifiedNs);
           continue;
         }
@@ -197,14 +172,8 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
         if (walked.has(key)) continue;
         // Root ids hold no colon, so the path follows the first one.
         const path = key.slice(key.indexOf(":") + 1);
-        if (medium.itemKind === "movie") {
-          if (itemFolders.has(path)) addUpdate(path, key, undefined);
-        } else {
-          const top = topLevel(path);
-          if (top !== undefined && itemFolders.has(top)) {
-            addUpdate(top, key, undefined);
-          }
-        }
+        const scanFolder = medium.rules.itemFolder(path);
+        if (itemFolders.has(scanFolder)) addUpdate(scanFolder, key, undefined);
       }
       for (const folder of itemFolders) {
         if (!walkedPaths.has(folder)) addUpdate(folder, folder, undefined);

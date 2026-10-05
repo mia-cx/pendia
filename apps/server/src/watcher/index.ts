@@ -81,13 +81,13 @@ async function runScan(
     return root;
   };
   try {
-    const { rules, recursive } = scanScope(job.medium, job.path);
+    const { rules } = scanScope(job.medium);
     const files: (LibraryFile & { rootId: string })[] = [];
     for (const rootId of job.rootIds) {
       try {
         for await (const file of walkLibrary(pathOf(rootId), rules, {
           path: job.path,
-          recursive,
+          recursive: job.library,
         }))
           files.push({ ...file, rootId });
       } catch (error) {
@@ -104,7 +104,7 @@ async function runScan(
       { probes: unknown }
     >["probes"][number][] = [];
     // A Library scan only lists files; its directory scans probe them.
-    for (const file of job.path === "." ? [] : files) {
+    for (const file of job.library ? [] : files) {
       if (cached.has(cacheKey(encodeFile(file)))) continue;
       const { absolute } = await locateIn(pathOf(file.rootId), file.path);
       const ffprobe = await readFfprobe(absolute);

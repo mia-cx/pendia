@@ -543,8 +543,8 @@ describe("groupMoviePaths", () => {
         year: 2021,
         providerIds: { tmdb: "438631" },
         files: [
-          { rootId: "root", path: "abc123.mkv" },
           { rootId: "root", path: "Dune (2021) - 1080p.mkv" },
+          { rootId: "root", path: "abc123.mkv" },
         ],
       },
     ]);

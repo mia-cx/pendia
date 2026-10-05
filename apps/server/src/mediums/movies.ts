@@ -177,7 +177,7 @@ export function groupMoviePaths(files: Iterable<RootedName>): MoviePathGroup[] {
       ...group,
       files: group.files.sort(
         (a, b) =>
-          a.path.localeCompare(b.path) ||
+          (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) ||
           rootRank(a.rootId) - rootRank(b.rootId),
       ),
     }))

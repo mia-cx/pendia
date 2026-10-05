@@ -242,6 +242,79 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       });
     }));
 
+  test("stores a root-anchored Item's artwork under the root's .pendia", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const item = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Dune",
+          year: 2021,
+          canonicalFolder: ".",
+          titleKey: "dune (2021)",
+          extension: {},
+        });
+        const { request } = mockRequest(() => new Response(png));
+        const row = await storeArtworkOriginal(db, item.id, poster, request);
+        expect(row.storageKey).toMatch(
+          new RegExp(`^\\.pendia/artwork/${row.id}\\.[0-9a-f-]{36}$`),
+        );
+        expect(await readFile(join(root, row.storageKey))).toEqual(png);
+      });
+    }));
+
+  test("stores loose movies' colocated artwork under one folder's .pendia", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        await mkdir(join(root, "Movies"), { recursive: true });
+        const dune = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Dune",
+          year: 2021,
+          canonicalFolder: "Movies",
+          titleKey: "dune (2021)",
+          extension: {},
+        });
+        const arrival = await insertItem(db, {
+          libraryId: library.id,
+          kind: "movie",
+          title: "Arrival",
+          year: 2016,
+          canonicalFolder: "Movies",
+          titleKey: "arrival (2016)",
+          extension: {},
+        });
+        const { request } = mockRequest(() => new Response(png));
+        const first = await storeArtworkOriginal(db, dune.id, poster, request);
+        const second = await storeArtworkOriginal(
+          db,
+          arrival.id,
+          poster,
+          request,
+        );
+        expect(first.storageKey).toMatch(/^Movies\/\.pendia\/artwork\//);
+        expect(second.storageKey).toMatch(/^Movies\/\.pendia\/artwork\//);
+        expect(first.storageKey).not.toBe(second.storageKey);
+        expect(await readFile(join(root, first.storageKey))).toEqual(png);
+        expect(await readFile(join(root, second.storageKey))).toEqual(png);
+      });
+    }));
+
   test("returns the selected row without a request for the same source", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

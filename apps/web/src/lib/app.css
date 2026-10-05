@@ -118,10 +118,24 @@
   --sidebar-inset: 0.5rem;
 
   /* Motion, after the transitions.dev scale */
+  --duration-micro: 80ms;
   --duration-quick: 150ms;
   --duration-fast: 250ms;
   --duration-medium: 350ms;
   --duration-slow: 400ms;
+  --duration-very-slow: 500ms;
+  --distance-micro: 4px;
+  --distance-small: 6px;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+  --distance-large: 30px;
+  --scale-large: 0.96;
+  --scale-medium: 0.97;
+  --scale-small: 0.98;
+  --scale-tiny: 0.99;
+  --blur-small: 2px;
+  --blur-medium: 3px;
+  --blur-large: 8px;
 }
 
 @media (prefers-contrast: more) {
@@ -321,6 +335,38 @@
 @media (prefers-contrast: more) {
   :focus-visible {
     outline-width: 3px;
+  }
+}
+
+/* Error shake for the sign-in card: legs of 80, 60, 80 and 60 ms,
+   after transitions-dev 12-error-state-shake. */
+[data-shake] {
+  animation: shake-x calc(var(--duration-micro) * 2 + 120ms) linear;
+}
+@keyframes shake-x {
+  0% {
+    transform: translateX(0);
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  28.57% {
+    transform: translateX(var(--distance-small));
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  57.14% {
+    transform: translateX(calc(var(--distance-small) * -1));
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  78.57% {
+    transform: translateX(var(--distance-micro));
+    animation-timing-function: var(--ease-smooth-out);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-shake] {
+    animation: none;
   }
 }
 

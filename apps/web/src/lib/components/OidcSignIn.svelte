@@ -1,27 +1,19 @@
 <script lang="ts">
+import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 import { oidcLoginUrl } from "../auth.ts";
+import { Button } from "./ui/button/index.ts";
 
 const { name, invite }: { name: string | null; invite?: string } = $props();
 </script>
 
 <!-- A server route, so the router must hand it to the browser. -->
-<a class="oidc" href={oidcLoginUrl(invite)} data-sveltekit-reload
-  >Sign in with {name ?? "SSO"}</a
+<Button
+  href={oidcLoginUrl(invite)}
+  data-sveltekit-reload
+  variant="secondary"
+  size="lg"
+  class="w-full"
 >
-
-<style>
-  .oidc {
-    display: grid;
-    min-height: 32px;
-    place-items: center;
-    padding: 4px 14px;
-    border: 1px solid color-mix(in oklch, var(--ink) 32%, transparent);
-    border-radius: 6px;
-    color: var(--ink);
-    text-decoration: none;
-  }
-
-  .oidc:hover {
-    border-color: var(--signal);
-  }
-</style>
+  <KeyRoundIcon />
+  Continue with {name ?? "single sign-on"}
+</Button>

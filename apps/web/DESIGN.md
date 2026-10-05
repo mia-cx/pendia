@@ -71,7 +71,7 @@ One scale, Apple's platform sizes. Weight and tracking travel with the size, so 
 
 ### Motion
 
-After the transitions.dev scale: `--duration-quick` 150 ms for closes and tooltips, `--duration-fast` 250 ms for opens, hovers and page fades, `--duration-medium` 350 ms for sheets, `--duration-slow` 400 ms for image fades and toasts. `ease-smooth-out` settles everything; `ease-spring` carries a small overshoot for lifts and the switch thumb. Opens are slower than closes. Under reduced motion, a global rule zeroes tw-animate's translate, scale and rotate, so every sheet, menu and dialog fades instead of moving, and lifts become a shadow change.
+After the transitions.dev scale: `--duration-micro` 80 ms for shake segments, `--duration-quick` 150 ms for closes and tooltips, `--duration-fast` 250 ms for opens, hovers and page fades, `--duration-medium` 350 ms for sheets, `--duration-slow` 400 ms for image fades, toasts and progress bars, `--duration-very-slow` 500 ms for emphasis moments. Distances `--distance-micro` 4, `--distance-small` 6, `--distance-base` 8, `--distance-medium` 12 and `--distance-large` 30 px, scales `--scale-tiny` to `--scale-large` and blurs `--blur-small` to `--blur-large` complete the scale. `ease-smooth-out` settles everything; `ease-spring` carries a small overshoot for lifts and the switch thumb. Opens are slower than closes. Under reduced motion, a global rule zeroes tw-animate's translate, scale and rotate, so every sheet, menu and dialog fades instead of moving, and lifts become a shadow change.
 
 ### Focus
 
@@ -83,11 +83,14 @@ The shadcn-svelte set lives in `src/lib/components/ui`, on bits-ui for keyboard 
 
 - **Button**: `default` (label colour), `secondary` (fill), `ghost`, `outline`, `tinted`, `glass` (material, for buttons over artwork), `destructive` and `link`. Sizes `sm` 32, `default` 40 (44 on touch), `lg` 48, `pill` 44 (the round-ended Play button on heroes), and round `icon-sm`, `icon`, `icon-lg`. Buttons press down to 97%.
 - **Input**: a filled field with no border, 17 px on phones so iOS does not zoom, 15 px from 1024 px.
+- **Label**: a subheadline-medium caption 6 px above its field. An optional field reads `Display name Optional`, the marker in secondary label colour.
+- **Progress**: a 6 px capsule; the tint indicator eases to its width. Indeterminate slides a tint segment on a loop, or pulses a static segment under reduced motion.
 - **Select**: an Apple pop-up button with up-down chevrons; the chosen item shows a leading check.
 - **Dropdown menu, popover, tooltip**: `material-thick`, growing from their trigger. Tooltips wait 500 ms and close at once. Radio items lead with a check on the chosen one, like Select.
 - **Dialog, alert dialog, sheet**: over the scrim. Alerts are compact and centred, with two full-width buttons that name the action. Side sheets float inset from the edge; bottom sheets carry a grabber. Dialogs and alerts stop 1rem short of the dynamic viewport and scroll inside, so their buttons stay reachable in phone landscape.
 - **Slider, switch, tabs**: the tint fills the range and the on switch. Tabs are a segmented control. The slider's `media` variant is the player's: a 4 px track in translucent white that thickens to 6 px under the pointer, a white range, a `track` layer for buffered ranges, and a thumb that shows only on hover, focus or drag. `valueText` gives the thumb words to announce.
 - **Table**: hairline rows, footnote headers, tabular numbers.
+- **Failure**: a destructive-tinted callout for screen-level errors. Its `inline` mode is a single destructive row with an alert icon, for failures inside a form.
 - **Textarea**: the same filled field as Input, `min-h-24` and vertically resizable.
 - **Toast**: svelte-sonner, bottom centre and above the tab bar on phones, following the system scheme.
 - **Badge, skeleton, scroll area**: capsules, pulsing fills, and overlay scrollbars that show on hover.
@@ -145,6 +148,7 @@ Later slices drop a screen in as an `AdminPage` of `FormGroup`s, then remove the
   - Notices sit centred in a `material-thick` panel: Cannot play this Version, Server unreachable and Playback stopped. The scrubber, volume, transport and Picture in Picture hide with a notice, while the settings gear and Full Screen stay, so another Version or subtitle choice can recover. The last two offer Try again. A spinner appears after 400 ms of buffering. Back returns through history when the detail page opened the player.
   - The scrubber and volume are white, as in the Apple TV app's player, rather than the tint: over a film, the accent would be one more colour competing with the picture. The focus ring stays tint.
   - The state lives in `src/lib/player-state.ts`, a store with no DOM that `bun test` covers. The components render it and forward events to it.
+- **Sign in, setup, invite and errors**: `FocusScreen`, a centred card on `bg-elevated` under a faint tint wash (plain `bg-background` full-bleed below 640 px, content starting a sixth of the way down). Optional Lucide icon over a large title. Single sign-on sits above the password form as a full-width secondary button with an `or` divider, a peer not a footnote. Sign in shakes the card once on a wrong password (a keyframed four-leg shake, gone under reduced motion). Setup walks Account, Library and Scan under a numbered stepper; Account collects fields only, and Add library creates the admin, the library and the scan, so Back exists only until the account is made. The Scan step shows an indeterminate or determinate `Progress`, the success check when done, `Scan again` on failure and an `Open Settings` link. The error page covers unreachable, not-found and generic failures, each with one action. A service worker caches the build, the fonts and `200.html`; with the server stopped the app still opens and the first failed request shows `Server unreachable` with `Try again`.
 
 ## Temporary aliases
 
@@ -160,11 +164,10 @@ Later slices drop a screen in as an `AdminPage` of `FormGroup`s, then remove the
 | `--surface` | `--background-elevated` |
 | `--line` | `--separator` |
 
-Screens still on `legacy`: the detail pages (#109), sign in, setup, invite and the error page (#111), and admin libraries, plugins and activity (#113, #114).
+Screens still on `legacy`: the detail pages (#109), and admin libraries, plugins and activity (#113, #114).
 
 ## Not yet redesigned
 
 These notes describe behaviour the later slices keep while they restyle it.
 
 - **Detail pages** (#109) lead with the backdrop when one exists, then the poster beside the title, facts, an actions row and the overview. Seasons, Episodes, Versions and credits follow as their own sections. Movie and Episode pages put Play in the actions row; with unfinished Progress it shows Resume from the saved position, as the primary button, and Play from start beside it. The row keeps a 44 px height while it loads.
-- **Offline**: a service worker caches the build, the fonts and `200.html`. With the server stopped, the app still opens, and the first failed request shows Server unreachable with Try again. API calls and media never pass through the worker.

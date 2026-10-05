@@ -1,8 +1,13 @@
 <script lang="ts">
+import { onMount } from "svelte";
 import { goto } from "$app/navigation";
 import { signIn } from "$lib/auth.ts";
 import Failure from "$lib/components/Failure.svelte";
+import FocusScreen from "$lib/components/FocusScreen.svelte";
 import OidcSignIn from "$lib/components/OidcSignIn.svelte";
+import { Button } from "$lib/components/ui/button/index.ts";
+import { Input } from "$lib/components/ui/input/index.ts";
+import { Label } from "$lib/components/ui/label/index.ts";
 import { readFailure } from "$lib/errors.ts";
 import type { PageProps } from "./$types";
 
@@ -12,8 +17,9 @@ let username = $state("");
 let password = $state("");
 let busy = $state(false);
 let failure = $state<ReturnType<typeof readFailure> | undefined>(undefined);
+let card = $state<HTMLDivElement | undefined>(undefined);
 
-const provider = $derived(data.oidc?.name ?? "SSO");
+const provider = $derived(data.oidc?.name ?? "single sign-on");
 
 // The OIDC routes send the browser back here with a lowercased auth error code.
 function oidcMessage(code: string) {
@@ -34,6 +40,27 @@ const oidcFailure = $derived(
 );
 const shown = $derived(failure ?? oidcFailure);
 
+onMount(() => {
+  if (!matchMedia("(pointer: fine)").matches) return;
+  // SvelteKit resets focus to the page root after hydration; defer past it.
+  requestAnimationFrame(() => document.getElementById("username")?.focus());
+});
+
+/** Shakes the card once, macOS login style; each failed attempt replays it. */
+function shakeCard() {
+  if (!card) return;
+  card.addEventListener(
+    "animationend",
+    () => card?.removeAttribute("data-shake"),
+    { once: true },
+  );
+  // Reduced motion skips the animation, so animationend may never fire.
+  setTimeout(() => card?.removeAttribute("data-shake"), 500);
+  card.removeAttribute("data-shake");
+  void card.offsetWidth; // force reflow so the animation restarts
+  card.setAttribute("data-shake", "");
+}
+
 async function submit(event: SubmitEvent) {
   event.preventDefault();
   busy = true;
@@ -45,6 +72,7 @@ async function submit(event: SubmitEvent) {
   } catch (error) {
     failure = readFailure(error);
     busy = false;
+    if (failure.code === "UNAUTHORIZED") shakeCard();
   }
 }
 </script>
@@ -53,73 +81,42 @@ async function submit(event: SubmitEvent) {
   <title>Sign in · Pendia</title>
 </svelte:head>
 
-<main class="legacy">
-  <h1>Sign in</h1>
-  {#if shown}
-    <Failure failure={shown} />
-  {/if}
-  <form onsubmit={submit}>
-    <label for="username">Username</label>
-    <input
-      id="username"
-      name="username"
-      autocomplete="username"
-      required
-      bind:value={username}
-    />
-    <label for="password">Password</label>
-    <input
-      id="password"
-      name="password"
-      type="password"
-      autocomplete="current-password"
-      required
-      bind:value={password}
-    />
-    <button type="submit" disabled={busy}>Sign in</button>
-  </form>
+<FocusScreen title="Sign in to Pendia" bind:card>
   {#if data.oidc}
-    <div class="oidc">
-      <OidcSignIn name={data.oidc.name} />
+    <OidcSignIn name={data.oidc.name} />
+    <div class="my-5 flex w-full items-center gap-3">
+      <span class="h-px flex-1 bg-separator"></span>
+      <span class="text-footnote text-label-secondary">or</span>
+      <span class="h-px flex-1 bg-separator"></span>
     </div>
   {/if}
-</main>
-
-<style>
-  main {
-    display: grid;
-    min-height: 100svh;
-    align-content: center;
-    justify-items: center;
-    padding: 32px;
-  }
-
-  h1 {
-    margin: 0 0 24px;
-  }
-
-  main :global(.failure) {
-    width: 100%;
-    max-width: 320px;
-    margin-bottom: 16px;
-  }
-
-  form {
-    display: grid;
-    width: 100%;
-    max-width: 320px;
-    gap: 8px;
-  }
-
-  form button {
-    margin-top: 8px;
-  }
-
-  .oidc {
-    width: 100%;
-    max-width: 320px;
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid var(--line);
-  }
-</style>
+  <form class="flex w-full flex-col gap-4" onsubmit={submit}>
+    <div class="flex flex-col gap-1.5">
+      <Label for="username">Username</Label>
+      <Input
+        id="username"
+        name="username"
+        autocomplete="username"
+        required
+        bind:value={username}
+      />
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <Label for="password">Password</Label>
+      <Input
+        id="password"
+        name="password"
+        type="password"
+        autocomplete="current-password"
+        required
+        bind:value={password}
+      />
+    </div>
+    {#if shown}
+      <Failure failure={shown} inline />
+    {/if}
+    <Button type="submit" size="lg" class="mt-2 w-full" disabled={busy}>
+      Sign in
+    </Button>
+  </form>
+</FocusScreen>

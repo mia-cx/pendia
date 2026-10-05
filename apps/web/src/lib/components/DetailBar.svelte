@@ -24,14 +24,25 @@ let inApp = $state(false);
 
 $effect(() => {
   if (hero === undefined) return;
+  // The bar solidifies once the hero is about half scrolled away: a sentinel
+  // inside the hero leaves view when its middle reaches the bar.
+  const sentinel = document.createElement("div");
+  sentinel.style.cssText =
+    "position:absolute;left:0;right:0;top:50%;height:1px;pointer-events:none";
+  sentinel.setAttribute("aria-hidden", "true");
+  const host = hero.firstElementChild ?? hero;
+  host.appendChild(sentinel);
   const observer = new IntersectionObserver(
     (entries) => {
       past = !entries.some((entry) => entry.isIntersecting);
     },
     { threshold: 0, rootMargin: `-${barHeight} 0px 0px 0px` },
   );
-  observer.observe(hero);
-  return () => observer.disconnect();
+  observer.observe(sentinel);
+  return () => {
+    observer.disconnect();
+    sentinel.remove();
+  };
 });
 
 afterNavigate(({ from }) => {

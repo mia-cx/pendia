@@ -63,13 +63,15 @@ describe("walkLibrary", () => {
       await mkdir(join(root, "a", "b", "c"), { recursive: true });
       await mkdir(join(root, "d", "e"), { recursive: true });
       const files: string[] = [];
-      await expect(async () => {
-        for await (const file of walkLibrary(root, moviesMedium.scan, {
-          signal: AbortSignal.abort(),
-        })) {
-          files.push(file.path);
-        }
-      }).rejects.toThrow();
+      await expect(
+        (async () => {
+          for await (const file of walkLibrary(root, moviesMedium.scan, {
+            signal: AbortSignal.abort(),
+          })) {
+            files.push(file.path);
+          }
+        })(),
+      ).rejects.toThrow();
       expect(files).toEqual([]);
     }));
 

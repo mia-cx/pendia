@@ -24,6 +24,12 @@ import {
 
 const { identify, parse, isExtra } = showsScan;
 
+/** Turns plain paths into single-root walked files for groupShowPaths. */
+const rooted = (paths: string[], rootName = "library", rootId = "root") =>
+  paths.map((path) => ({ rootId, rootName, path }));
+
+const version = (paths: string[], rootId = "root") => ({ rootId, paths });
+
 describe("identify", () => {
   test("identifies an episode under a tagged Sonarr show folder", () => {
     expect(
@@ -42,13 +48,19 @@ describe("identify", () => {
     ).not.toBeNull();
   });
 
-  test("rejects a filename season that disagrees with its folder", () => {
+  test("accepts a filename season that disagrees with its folder", () => {
     expect(
       identify("The Expanse (2015)/Season 01/The Expanse S02E01.mkv"),
-    ).toBeNull();
+    ).toEqual({
+      kind: "episode",
+      canonicalFolder: "The Expanse (2015)",
+    });
     expect(
       identify("The Expanse (2015)/Specials/The Expanse S01E01.mkv"),
-    ).toBeNull();
+    ).toEqual({
+      kind: "episode",
+      canonicalFolder: "The Expanse (2015)",
+    });
   });
 
   test("accepts separated season folder spellings", () => {
@@ -58,6 +70,9 @@ describe("identify", () => {
       "SEASON_3",
       "Season-4",
       "Season05",
+      "Series 1",
+      "S02",
+      "s3",
     ]) {
       const number = Number(folder.replace(/\D+/g, ""));
       const tag = `S${String(number).padStart(2, "0")}E01`;
@@ -68,20 +83,35 @@ describe("identify", () => {
     }
   });
 
-  test("accepts every episode token form with matching season", () => {
+  test("accepts every episode token form", () => {
     for (const file of [
       "Show S01E01.mkv",
-      "Show S1E001.mkv",
+      "Show s1e2.mkv",
       "Show S01E02-E03.mkv",
       "Show S01E02-03.mkv",
       "Show S01E02E03.mkv",
       "Show.S01E02.1080p.mkv",
+      "Show S01.E02.mkv",
+      "Show 1x02.mkv",
+      "Show 1x02-03.mkv",
+      "Show E02.mkv",
+      "Show Ep 02.mkv",
+      "Show Episode 2.mkv",
     ]) {
       expect(identify(`Show/Season 01/${file}`)).toEqual({
         kind: "episode",
         canonicalFolder: "Show",
       });
     }
+  });
+
+  test("keeps a show folder named like an episode-only token", () => {
+    expect(
+      identify("Episode 1 Fans/Season 1/Episode 1 Fans - S01E01.mkv"),
+    ).toEqual({
+      kind: "episode",
+      canonicalFolder: "Episode 1 Fans",
+    });
   });
 
   test("rejects tokens without separator boundaries", () => {
@@ -121,13 +151,22 @@ describe("identify", () => {
     });
   });
 
-  test("rejects absolute, escaping and wrong-depth paths", () => {
+  test("accepts episodes at any depth and rejects unsafe paths", () => {
     expect(identify("/library/Show/Season 01/Show S01E01.mkv")).toBeNull();
     expect(identify("../Show/Season 01/Show S01E01.mkv")).toBeNull();
     expect(identify("Show/../Season 01/Show S01E01.mkv")).toBeNull();
-    expect(identify("Show S01E01.mkv")).toBeNull();
-    expect(identify("Show/Show S01E01.mkv")).toBeNull();
-    expect(identify("Show/Season 01/nested/Show S01E01.mkv")).toBeNull();
+    expect(identify("Show S01E01.mkv")).toEqual({
+      kind: "episode",
+      canonicalFolder: ".",
+    });
+    expect(identify("Show/Show S01E01.mkv")).toEqual({
+      kind: "episode",
+      canonicalFolder: "Show",
+    });
+    expect(identify("Show/Season 01/nested/Show S01E01.mkv")).toEqual({
+      kind: "episode",
+      canonicalFolder: "Show/Season 01/nested",
+    });
   });
 
   test("rejects split extras after removing the part marker", () => {
@@ -137,7 +176,7 @@ describe("identify", () => {
       "Show/Season 01/Show S01E01_featurette_cd3.mkv",
     ]) {
       expect(identify(path)).toBeNull();
-      expect(groupShowPaths([path])).toEqual([]);
+      expect(groupShowPaths(rooted([path]))).toEqual([]);
     }
     expect(identify("Show/Season 01/Show S01E01 - part1.mkv")).toEqual({
       kind: "episode",
@@ -177,22 +216,32 @@ describe("isExtra", () => {
     expect(isExtra("extras/Season 01/extras S01E01.mkv")).toBe(true);
     expect(isExtra("Show/.pendia/cover.mkv")).toBe(true);
   });
+
+  test("flags a root-level sample file", () => {
+    expect(isExtra("Show S01E01.sample.mkv")).toBe(true);
+    expect(
+      groupShowPaths(rooted(["Show S01E01.sample.mkv"], "Show (2020)")),
+    ).toEqual([]);
+  });
 });
 
 describe("groupShowPaths", () => {
   test("groups one show into seasons, episodes and split versions", () => {
-    const groups = groupShowPaths([
-      "The Expanse (2015)/Season 01/The Expanse S01E01 - part2.mkv",
-      "The Expanse (2015)/Specials/The Expanse S00E01.mkv",
-      "The Expanse (2015)/Season 01/The Expanse S01E01 - part1.mkv",
-      "The Expanse (2015)/Season 01/The Expanse S01E02-E03.mkv",
-      "The Expanse (2015)/Season 01/The Expanse S01E04E05.mkv",
-      "The Expanse (2015)/Season 01/The Expanse S01E06.mkv",
-      "The Expanse (2015)/Season 01/The Expanse S01E06.1080p.mkv",
-    ]);
+    const groups = groupShowPaths(
+      rooted([
+        "The Expanse (2015)/Season 01/The Expanse S01E01 - part2.mkv",
+        "The Expanse (2015)/Specials/The Expanse S00E01.mkv",
+        "The Expanse (2015)/Season 01/The Expanse S01E01 - part1.mkv",
+        "The Expanse (2015)/Season 01/The Expanse S01E02-E03.mkv",
+        "The Expanse (2015)/Season 01/The Expanse S01E04E05.mkv",
+        "The Expanse (2015)/Season 01/The Expanse S01E06.mkv",
+        "The Expanse (2015)/Season 01/The Expanse S01E06.1080p.mkv",
+      ]),
+    );
     expect(groups).toEqual([
       {
         canonicalFolder: "The Expanse (2015)",
+        titleKey: "",
         title: "The Expanse",
         year: 2015,
         providerIds: {},
@@ -207,11 +256,9 @@ describe("groupShowPaths", () => {
                 episodeEndNumber: null,
                 title: "Episode 1",
                 versions: [
-                  {
-                    paths: [
-                      "The Expanse (2015)/Specials/The Expanse S00E01.mkv",
-                    ],
-                  },
+                  version([
+                    "The Expanse (2015)/Specials/The Expanse S00E01.mkv",
+                  ]),
                 ],
               },
             ],
@@ -226,12 +273,10 @@ describe("groupShowPaths", () => {
                 episodeEndNumber: null,
                 title: "Episode 1",
                 versions: [
-                  {
-                    paths: [
-                      "The Expanse (2015)/Season 01/The Expanse S01E01 - part1.mkv",
-                      "The Expanse (2015)/Season 01/The Expanse S01E01 - part2.mkv",
-                    ],
-                  },
+                  version([
+                    "The Expanse (2015)/Season 01/The Expanse S01E01 - part1.mkv",
+                    "The Expanse (2015)/Season 01/The Expanse S01E01 - part2.mkv",
+                  ]),
                 ],
               },
               {
@@ -239,11 +284,9 @@ describe("groupShowPaths", () => {
                 episodeEndNumber: 3,
                 title: "Episodes 2-3",
                 versions: [
-                  {
-                    paths: [
-                      "The Expanse (2015)/Season 01/The Expanse S01E02-E03.mkv",
-                    ],
-                  },
+                  version([
+                    "The Expanse (2015)/Season 01/The Expanse S01E02-E03.mkv",
+                  ]),
                 ],
               },
               {
@@ -251,11 +294,9 @@ describe("groupShowPaths", () => {
                 episodeEndNumber: 5,
                 title: "Episodes 4-5",
                 versions: [
-                  {
-                    paths: [
-                      "The Expanse (2015)/Season 01/The Expanse S01E04E05.mkv",
-                    ],
-                  },
+                  version([
+                    "The Expanse (2015)/Season 01/The Expanse S01E04E05.mkv",
+                  ]),
                 ],
               },
               {
@@ -263,16 +304,12 @@ describe("groupShowPaths", () => {
                 episodeEndNumber: null,
                 title: "Episode 6",
                 versions: [
-                  {
-                    paths: [
-                      "The Expanse (2015)/Season 01/The Expanse S01E06.1080p.mkv",
-                    ],
-                  },
-                  {
-                    paths: [
-                      "The Expanse (2015)/Season 01/The Expanse S01E06.mkv",
-                    ],
-                  },
+                  version([
+                    "The Expanse (2015)/Season 01/The Expanse S01E06.1080p.mkv",
+                  ]),
+                  version([
+                    "The Expanse (2015)/Season 01/The Expanse S01E06.mkv",
+                  ]),
                 ],
               },
             ],
@@ -283,17 +320,19 @@ describe("groupShowPaths", () => {
   });
 
   test("reads Sonarr and Jellyfin provider tags from the Show folder", () => {
-    const [sonarr] = groupShowPaths([
-      "The Expanse (2015) {tvdb-280619} {imdb-tt3230854}/Season 01/S01E01.mkv",
-    ]);
+    const [sonarr] = groupShowPaths(
+      rooted([
+        "The Expanse (2015) {tvdb-280619} {imdb-tt3230854}/Season 01/S01E01.mkv",
+      ]),
+    );
     expect(sonarr).toMatchObject({
       title: "The Expanse",
       year: 2015,
       providerIds: { tvdb: "280619", imdb: "tt3230854" },
     });
-    const [jellyfin] = groupShowPaths([
-      "The Expanse (2015) [tvdbid-280619]/Season 01/S01E01.mkv",
-    ]);
+    const [jellyfin] = groupShowPaths(
+      rooted(["The Expanse (2015) [tvdbid-280619]/Season 01/S01E01.mkv"]),
+    );
     expect(jellyfin).toMatchObject({
       title: "The Expanse",
       providerIds: { tvdb: "280619" },
@@ -301,39 +340,39 @@ describe("groupShowPaths", () => {
   });
 
   test("groups every split marker spelling into one version", () => {
-    const groups = groupShowPaths([
-      "Show/Season 01/Show S01E01 pt2.mkv",
-      "Show/Season 01/Show S01E01-cd1.mkv",
-      "Show/Season 01/Show S01E01 - part3.mkv",
-    ]);
+    const groups = groupShowPaths(
+      rooted([
+        "Show/Season 01/Show S01E01 pt2.mkv",
+        "Show/Season 01/Show S01E01-cd1.mkv",
+        "Show/Season 01/Show S01E01 - part3.mkv",
+      ]),
+    );
     expect(groups[0]?.seasons[0]?.episodes[0]?.versions).toEqual([
-      {
-        paths: [
-          "Show/Season 01/Show S01E01-cd1.mkv",
-          "Show/Season 01/Show S01E01 pt2.mkv",
-          "Show/Season 01/Show S01E01 - part3.mkv",
-        ],
-      },
+      version([
+        "Show/Season 01/Show S01E01-cd1.mkv",
+        "Show/Season 01/Show S01E01 pt2.mkv",
+        "Show/Season 01/Show S01E01 - part3.mkv",
+      ]),
     ]);
   });
 
   test("skips extras, unsafe paths and unsupported files", () => {
-    const groups = groupShowPaths([
-      "Show/Season 01/Show S01E01.mkv",
-      "Show/Season 01/extras/clip S01E02.mkv",
-      "Show/Season 01/Show S01E02-trailer.mkv",
-      "Show/.pendia/cover S01E02.mkv",
-      "extras/Season 01/extras S01E01.mkv",
-      "Show/Season 01/Show S01E02.srt",
-      "Show/Show S01E02.mkv",
-      "loose S01E02.mkv",
-      "Show/Season 01/nested/Show S01E02.mkv",
-      "../escape/Season 01/Show S01E02.mkv",
-      "/absolute/Season 01/Show S01E02.mkv",
-    ]);
+    const groups = groupShowPaths(
+      rooted([
+        "Show/Season 01/Show S01E01.mkv",
+        "Show/Season 01/extras/clip S01E02.mkv",
+        "Show/Season 01/Show S01E02-trailer.mkv",
+        "Show/.pendia/cover S01E02.mkv",
+        "extras/Season 01/extras S01E01.mkv",
+        "Show/Season 01/Show S01E02.srt",
+        "../escape/Season 01/Show S01E02.mkv",
+        "/absolute/Season 01/Show S01E02.mkv",
+      ]),
+    );
     expect(groups).toEqual([
       {
         canonicalFolder: "Show",
+        titleKey: "",
         title: "Show",
         year: null,
         providerIds: {},
@@ -347,7 +386,7 @@ describe("groupShowPaths", () => {
                 episodeNumber: 1,
                 episodeEndNumber: null,
                 title: "Episode 1",
-                versions: [{ paths: ["Show/Season 01/Show S01E01.mkv"] }],
+                versions: [version(["Show/Season 01/Show S01E01.mkv"])],
               },
             ],
           },
@@ -362,7 +401,7 @@ describe("groupShowPaths", () => {
       "Show/Season 01/Show S01E01-E02.mkv",
     ];
     for (const input of [paths, [...paths].reverse()]) {
-      const [group] = groupShowPaths(input);
+      const [group] = groupShowPaths(rooted(input));
       expect(group?.seasons).toHaveLength(1);
       expect(group?.seasons[0]?.seasonNumber).toBe(1);
       expect(group?.seasons[0]?.canonicalFolder).toBe("Show/Season 01");
@@ -372,8 +411,8 @@ describe("groupShowPaths", () => {
           episodeEndNumber: 2,
           title: "Episodes 1-2",
           versions: [
-            { paths: ["Show/Season 01/Show S01E01-E02.mkv"] },
-            { paths: ["Show/Season 1/Show S01E01.mkv"] },
+            version(["Show/Season 01/Show S01E01-E02.mkv"]),
+            version(["Show/Season 1/Show S01E01.mkv"]),
           ],
         },
       ]);
@@ -386,13 +425,13 @@ describe("groupShowPaths", () => {
       "Show/Season 01/Show S01E01 - part2.mkv",
     ];
     for (const input of [paths, [...paths].reverse()]) {
-      const [group] = groupShowPaths(input);
+      const [group] = groupShowPaths(rooted(input));
       expect(group?.seasons).toHaveLength(1);
       expect(group?.seasons[0]?.seasonNumber).toBe(1);
       expect(group?.seasons[0]?.episodes).toHaveLength(1);
       const versions = group?.seasons[0]?.episodes[0]?.versions;
       expect(versions).toHaveLength(2);
-      expect(versions?.map((version) => version.paths)).toEqual([
+      expect(versions?.map((version_) => version_.paths)).toEqual([
         ["Show/Season 01/Show S01E01 - part2.mkv"],
         ["Show/Season 1/Show S01E01 - part1.mkv"],
       ]);
@@ -408,8 +447,8 @@ describe("groupShowPaths", () => {
       "A Show/Season 01/A Show S01E01.mkv",
       "A Show/Season 10/A Show S10E01.mkv",
     ];
-    const first = groupShowPaths(input);
-    const second = groupShowPaths([...input].reverse());
+    const first = groupShowPaths(rooted(input));
+    const second = groupShowPaths(rooted([...input].reverse()));
     expect(first).toEqual(second);
     expect(first.map((group) => group.canonicalFolder)).toEqual([
       "A Show",
@@ -424,6 +463,186 @@ describe("groupShowPaths", () => {
     expect(first[1]?.seasons.map((season) => season.seasonNumber)).toEqual([
       1, 2,
     ]);
+  });
+
+  test("names a Sonarr episode folder by the show above it", () => {
+    const folder = "Doctor Who 2005 (2005) [tvdbid-78804]";
+    const path = `${folder}/Season 13/Doctor Who (2005) - S13E06 - The Vanquishers 6 [WEBDL-1080p] [NOSiViD]/Doctor Who (2005) - S13E06 - The Vanquishers 6 [WEBDL-1080p] - NOSiViD.mkv`;
+    const [group] = groupShowPaths(rooted([path]));
+    expect(group).toMatchObject({
+      canonicalFolder: folder,
+      titleKey: "",
+      title: "Doctor Who 2005",
+      year: 2005,
+      providerIds: { tvdb: "78804" },
+    });
+    expect(group?.seasons).toEqual([
+      {
+        canonicalFolder: `${folder}/Season 13`,
+        seasonNumber: 13,
+        title: "Season 13",
+        episodes: [
+          {
+            episodeNumber: 6,
+            episodeEndNumber: null,
+            title: "Episode 6",
+            versions: [version([path])],
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("anchors a season to the show folder when no season folder exists", () => {
+    const folder = "Fairy Tail (2009) [tvdbid-114801]";
+    const path = `${folder}/Fairy Tail (2009) - S02E06 - 054 - Maiden of the Sky [Bluray-1080p] [URANiME]/Fairy Tail (2009) - S02E06 - 054 - Maiden of the Sky [Bluray-1080p] - URANiME.mkv`;
+    const [group] = groupShowPaths(rooted([path]));
+    expect(group).toMatchObject({
+      canonicalFolder: folder,
+      titleKey: "",
+      title: "Fairy Tail",
+      year: 2009,
+      providerIds: { tvdb: "114801" },
+    });
+    expect(group?.seasons).toEqual([
+      {
+        canonicalFolder: folder,
+        seasonNumber: 2,
+        title: "Season 2",
+        episodes: [
+          {
+            episodeNumber: 6,
+            episodeEndNumber: null,
+            title: "Episode 6",
+            versions: [version([path])],
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("reads Specials folders at any depth as season zero", () => {
+    const folder = "Doctor Who (2023) [tvdbid-449991]";
+    const path = `${folder}/Specials/Doctor Who (2023) - S00E01 - The Star Beast [WEBDL-1080p] [Kitsune]/Doctor Who (2023) - S00E01 - The Star Beast [WEBDL-1080p] - Kitsune.mkv`;
+    const [group] = groupShowPaths(rooted([path]));
+    expect(group?.seasons[0]?.seasonNumber).toBe(0);
+    expect(group?.seasons[0]?.canonicalFolder).toBe(`${folder}/Specials`);
+  });
+
+  test("names a single-show root from the root folder", () => {
+    const groups = groupShowPaths(
+      rooted(
+        ["Season 1/Breaking Bad - S01E01.mkv", "Breaking.Bad.S01E02.mkv"],
+        "Breaking Bad (2008)",
+      ),
+    );
+    expect(groups).toEqual([
+      {
+        canonicalFolder: ".",
+        titleKey: "breaking bad (2008)",
+        title: "Breaking Bad",
+        year: 2008,
+        providerIds: {},
+        seasons: [
+          {
+            canonicalFolder: "Season 1",
+            seasonNumber: 1,
+            title: "Season 1",
+            episodes: [
+              {
+                episodeNumber: 1,
+                episodeEndNumber: null,
+                title: "Episode 1",
+                versions: [version(["Season 1/Breaking Bad - S01E01.mkv"])],
+              },
+              {
+                episodeNumber: 2,
+                episodeEndNumber: null,
+                title: "Episode 2",
+                versions: [version(["Breaking.Bad.S01E02.mkv"])],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("keeps two single-show roots apart by title key", () => {
+    const groups = groupShowPaths([
+      {
+        rootId: "a",
+        rootName: "Breaking Bad (2008)",
+        path: "Season 1/S01E01.mkv",
+      },
+      { rootId: "b", rootName: "The Wire (2002)", path: "Season 1/S01E01.mkv" },
+    ]);
+    expect(groups.map((group) => group.titleKey)).toEqual([
+      "breaking bad (2008)",
+      "the wire (2002)",
+    ]);
+    expect(groups.every((group) => group.canonicalFolder === ".")).toBe(true);
+  });
+
+  test("titles loose files in one folder as their own shows", () => {
+    const groups = groupShowPaths(
+      rooted([
+        "TV/Breaking.Bad.S01E01.mkv",
+        "TV/The.Wire.S01E01.mkv",
+        "TV/Breaking Bad - S01E02.mkv",
+      ]),
+    );
+    expect(groups).toMatchObject([
+      {
+        canonicalFolder: "TV",
+        titleKey: "breaking bad",
+        title: "Breaking Bad",
+      },
+      { canonicalFolder: "TV", titleKey: "the wire", title: "The Wire" },
+    ]);
+    const breaking = groups.find((group) => group.title === "Breaking Bad");
+    expect(breaking?.seasons).toHaveLength(1);
+    expect(breaking?.seasons[0]?.canonicalFolder).toBe("TV");
+    expect(
+      breaking?.seasons[0]?.episodes.map((episode) => episode.episodeNumber),
+    ).toEqual([1, 2]);
+  });
+
+  test("reads episodes without a season folder", () => {
+    const cases: [string, number, number][] = [
+      ["Show/Show - E05.mkv", 1, 5],
+      ["Show/Season 2/Ep 03.mkv", 2, 3],
+      ["Show/Season 2/Episode 4.mkv", 2, 4],
+      ["Show/S03/1x02.mkv", 1, 2],
+      ["Show/Series 2/Show 2x05.mkv", 2, 5],
+    ];
+    for (const [path, season, episode] of cases) {
+      const [group] = groupShowPaths(rooted([path]));
+      expect(group?.seasons[0], path).toMatchObject({ seasonNumber: season });
+      expect(group?.seasons[0]?.episodes[0]?.episodeNumber).toBe(episode);
+    }
+  });
+
+  test("folds disc folders into the season above", () => {
+    const [group] = groupShowPaths(
+      rooted(["Show/Season 1/Disc 1/Show S01E01.mkv"]),
+    );
+    expect(group?.canonicalFolder).toBe("Show");
+    expect(group?.seasons[0]?.canonicalFolder).toBe("Show/Season 1");
+    expect(group?.seasons[0]?.episodes[0]?.episodeNumber).toBe(1);
+  });
+
+  test("rejects extras at any depth and absolute numbering", () => {
+    for (const path of [
+      "Show/Season 1/extras/x S01E01.mkv",
+      "Show/Featurettes/Show S01E01.mkv",
+      "Show/Season 01/Show S01E01.sample.mkv",
+      "Show/.pendia/cover S01E01.mkv",
+      "Show/Season 01/file.mkv.pendia/init S01E01.mp4",
+      "Show/Show - 012.mkv",
+    ]) {
+      expect(groupShowPaths(rooted([path]))).toEqual([]);
+    }
   });
 });
 

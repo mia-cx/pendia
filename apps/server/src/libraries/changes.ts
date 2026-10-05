@@ -230,14 +230,16 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-/** Updates an Item folder and re-keys colocated artwork that moved with it. */
+/** Updates an Item folder and title key, and re-keys colocated artwork that moved with it. */
 export async function updateItemCanonicalFolder(
   db: Connection,
   item: typeof items.$inferSelect,
   canonicalFolder: string,
+  titleKey: string = item.titleKey,
 ): Promise<void> {
-  if (item.canonicalFolder === canonicalFolder) return;
-  const marker = "/.pendia/artwork/";
+  if (item.canonicalFolder === canonicalFolder && item.titleKey === titleKey)
+    return;
+  const tailPattern = /(?:^|\/)(\.pendia\/artwork\/.+)$/;
   const roots = await assetRoots(db, item.id);
   const inRoot = (rootId: string, storageKey: string) =>
     absolutePath(db, { rootId, path: storageKey });
@@ -246,9 +248,9 @@ export async function updateItemCanonicalFolder(
     .from(artwork)
     .where(and(eq(artwork.itemId, item.id), eq(artwork.backend, "colocated")));
   for (const row of rows) {
-    const index = row.storageKey.lastIndexOf(marker);
-    if (index < 0) throw new Error("Invalid artwork storage key.");
-    const nextStorageKey = `${canonicalFolder}${row.storageKey.slice(index)}`;
+    const tail = tailPattern.exec(row.storageKey)?.[1];
+    if (tail === undefined) throw new Error("Invalid artwork storage key.");
+    const nextStorageKey = posix.join(canonicalFolder, tail);
     // The file moved with the Item folder in whichever root actually holds it.
     let holder: string | undefined;
     for (const root of roots) {
@@ -269,7 +271,7 @@ export async function updateItemCanonicalFolder(
   }
   await db
     .update(items)
-    .set({ canonicalFolder, updatedAt: new Date() })
+    .set({ canonicalFolder, titleKey, updatedAt: new Date() })
     .where(eq(items.id, item.id));
 }
 
@@ -379,31 +381,40 @@ export async function applyScanChanges(
       if (emptied !== undefined) emptiedItemIds.push(emptied);
       continue;
     }
-    let item = await findItemByProviderIds(db, libraryId, change.providerIds);
-    if (!item) {
-      const [byFolder] = await db
-        .select()
-        .from(items)
-        .where(
-          and(eq(items.libraryId, libraryId), eq(items.canonicalFolder, path)),
-        );
-      item = byFolder;
-    }
-    if (!item) continue;
-    // An Item another root still holds loses only this root's Files.
-    const held = await db
-      .select({ file: files })
-      .from(files)
-      .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
-      .where(eq(itemAncestors.ancestorId, item.id));
-    if (held.every(({ file }) => file.rootId === change.rootId)) {
-      await deleteItemSubtree(db, item.id, deletedArtwork);
-      continue;
-    }
-    for (const { file } of held) {
-      if (file.rootId !== change.rootId) continue;
-      const emptied = await removeFile(db, file);
-      if (emptied !== undefined) emptiedItemIds.push(emptied);
+    const found = await findItemByProviderIds(
+      db,
+      libraryId,
+      change.providerIds,
+    );
+    const candidates =
+      found !== undefined
+        ? [found]
+        : await db
+            .select()
+            .from(items)
+            .where(
+              and(
+                eq(items.libraryId, libraryId),
+                isNull(items.parentId),
+                eq(items.canonicalFolder, path),
+              ),
+            );
+    for (const item of candidates) {
+      // An Item another root still holds loses only this root's Files.
+      const held = await db
+        .select({ file: files })
+        .from(files)
+        .innerJoin(itemAncestors, eq(itemAncestors.descendantId, files.itemId))
+        .where(eq(itemAncestors.ancestorId, item.id));
+      if (held.every(({ file }) => file.rootId === change.rootId)) {
+        await deleteItemSubtree(db, item.id, deletedArtwork);
+        continue;
+      }
+      for (const { file } of held) {
+        if (file.rootId !== change.rootId) continue;
+        const emptied = await removeFile(db, file);
+        if (emptied !== undefined) emptiedItemIds.push(emptied);
+      }
     }
   }
   return [...new Set(emptiedItemIds)];

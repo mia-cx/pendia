@@ -6,15 +6,24 @@ import {
   seasons as seasonTable,
   shows as showTable,
 } from "../db/schema/shows.ts";
-import type { Medium, ScanRules } from "./medium.ts";
+import type { Medium, RootedName, ScanRules } from "./medium.ts";
 import { isVideoExtra, isVideoPath } from "./video-common/paths.ts";
+import { folderProviderIds } from "./video-common/provider-ids.ts";
 import {
-  folderProviderIds,
-  stripProviderTags,
-} from "./video-common/provider-ids.ts";
+  namesOneTitle,
+  parseRelease,
+  parseTitle,
+  sameTitle,
+  titleKey,
+} from "./video-common/titles.ts";
 
 /** Sonarr-style path rules shared by show walks and the shows medium. */
-export const showsScan = { identify, parse, isExtra } satisfies ScanRules;
+export const showsScan = {
+  identify,
+  parse,
+  isExtra,
+  itemFolder,
+} satisfies ScanRules;
 
 /** Create the shows medium with its database-backed next up shelf. */
 export function createShowsMedium(db: Database): Medium {
@@ -113,42 +122,115 @@ export async function nextUp(db: Database, userId: string): Promise<string[]> {
   return rows.filter((row) => viewable.has(row.libraryId)).map((row) => row.id);
 }
 
-const seasonFolderPattern = /^season[\s._-]*(\d+)$/i;
-const episodeTokenPattern =
-  /(?:^|[\s._-])s(\d{1,2})e(\d{1,3})(?:-e?(\d{1,3})|e(\d{1,3}))?(?=$|[\s._-])/i;
+const seasonFolderPattern = /^(?:season|series)[\s._-]*(\d{1,4})$/i;
+const shortSeasonFolderPattern = /^s(\d{1,4})$/i;
+const specialsFolderPattern = /^specials$/i;
+const discFolderPattern = /^(?:disc|disk|dvd|cd)[\s._-]*\d{1,2}$/i;
 const splitMarkerPattern = /^(.*?)[\s._-]+(?:part|pt|cd)[\s._-]*(\d+)$/i;
 
+const tokenBefore = "(?:^|[\\s._-])";
+const tokenAfter = "(?=$|[\\s._-])";
+const fullTokenPattern = new RegExp(
+  `${tokenBefore}s(\\d{1,2})[\\s._]?e(\\d{1,3})(?:-e?(\\d{1,3})|e(\\d{1,3}))?${tokenAfter}`,
+  "i",
+);
+const crossTokenPattern = new RegExp(
+  `${tokenBefore}(\\d{1,2})x(\\d{2,3})(?:-(\\d{2,3}))?${tokenAfter}`,
+  "i",
+);
+const episodeOnlyPattern = new RegExp(
+  `${tokenBefore}(?:e|ep|episode)[\\s._-]*(\\d{1,3})${tokenAfter}`,
+  "i",
+);
+
 function seasonNumber(folder: string): number | null {
-  if (folder.toLowerCase() === "specials") {
+  if (specialsFolderPattern.test(folder)) {
     return 0;
   }
-  const match = seasonFolderPattern.exec(folder);
+  const match =
+    seasonFolderPattern.exec(folder) ?? shortSeasonFolderPattern.exec(folder);
   return match?.[1] === undefined ? null : Number(match[1]);
 }
 
-interface EpisodeNumbers {
-  season: number;
+interface EpisodeToken {
+  season: number | null;
   start: number;
   end: number | null;
+  index: number;
 }
 
-function episodeNumbers(stem: string): EpisodeNumbers | null {
-  const match = episodeTokenPattern.exec(stem);
-  const end = match?.[3] ?? match?.[4];
-  if (match?.[1] === undefined || match[2] === undefined) {
-    return null;
+/** The first full or cross episode token in a stem, or null; descending ranges count as none. */
+function episodeFolderToken(stem: string): EpisodeToken | null {
+  const full = fullTokenPattern.exec(stem);
+  if (full?.[1] !== undefined && full[2] !== undefined) {
+    const end = full[3] ?? full[4];
+    const start = Number(full[2]);
+    const endNumber = end === undefined ? null : Number(end);
+    if (endNumber !== null && endNumber < start) {
+      return null;
+    }
+    return {
+      season: Number(full[1]),
+      start,
+      end: endNumber,
+      index: full.index,
+    };
   }
-  const start = Number(match[2]);
-  const endNumber = end === undefined ? null : Number(end);
-  if (endNumber !== null && endNumber < start) {
-    return null;
+  const cross = crossTokenPattern.exec(stem);
+  if (cross?.[1] !== undefined && cross[2] !== undefined) {
+    const start = Number(cross[2]);
+    const end = cross[3] === undefined ? null : Number(cross[3]);
+    if (end !== null && end < start) {
+      return null;
+    }
+    return { season: Number(cross[1]), start, end, index: cross.index };
   }
-  return { season: Number(match[1]), start, end: endNumber };
+  return null;
+}
+
+/** The first episode token in a stem, or null; descending ranges count as none. */
+function episodeToken(stem: string): EpisodeToken | null {
+  if (fullTokenPattern.test(stem) || crossTokenPattern.test(stem)) {
+    return episodeFolderToken(stem);
+  }
+  const only = episodeOnlyPattern.exec(stem);
+  if (only?.[1] !== undefined) {
+    return {
+      season: null,
+      start: Number(only[1]),
+      end: null,
+      index: only.index,
+    };
+  }
+  return null;
+}
+
+/** Whether a folder name is structural: a season, disc or episode folder. */
+function isStructuralFolder(name: string): boolean {
+  return (
+    seasonNumber(name) !== null ||
+    discFolderPattern.test(name) ||
+    episodeFolderToken(name) !== null
+  );
+}
+
+/** The Item folder a file in this directory belongs to, or ".". */
+function itemFolder(directory: string): string {
+  const parts = directory.split("/");
+  let end = parts.length;
+  while (end > 0 && isStructuralFolder(parts[end - 1] ?? "")) {
+    end -= 1;
+  }
+  return end === 0 ? "." : parts.slice(0, end).join("/");
 }
 
 interface AcceptedPath {
   canonicalFolder: string;
-  seasonFolder: string;
+  titleKey: string;
+  title: string;
+  year: number | null;
+  providerIds: Record<string, string>;
+  seasonFolder: string | null;
   seasonNumber: number;
   episodeNumber: number;
   episodeEndNumber: number | null;
@@ -156,57 +238,93 @@ interface AcceptedPath {
   part: number | null;
 }
 
-function analyze(path: string): AcceptedPath | null {
+function analyze(rootName: string, path: string): AcceptedPath | null {
   const parts = path.split("/");
   if (
     posix.isAbsolute(path) ||
     parts.includes("..") ||
-    parts.length !== 3 ||
     !isVideoPath(path) ||
     isExtra(path)
   ) {
     return null;
   }
-  const [canonicalFolder, seasonFolder, name] = parts;
-  if (
-    canonicalFolder === undefined ||
-    seasonFolder === undefined ||
-    name === undefined
-  ) {
-    return null;
-  }
-  const season = seasonNumber(seasonFolder);
-  if (
-    season === null ||
-    canonicalFolder === "." ||
-    parse(canonicalFolder).title === ""
-  ) {
-    return null;
-  }
-  const stem = posix.basename(name, posix.extname(name));
+  const directory = posix.dirname(path);
+  const anchor = itemFolder(directory);
+  const stem = posix.basename(path, posix.extname(path));
   const split = splitMarkerPattern.exec(stem);
   const versionStem = split?.[1] ?? stem;
   const part = split?.[2] === undefined ? null : Number(split[2]);
   if (
     split !== null &&
-    isExtra(
-      `${canonicalFolder}/${seasonFolder}/${versionStem}${posix.extname(name)}`,
-    )
+    isExtra(posix.join(directory, `${versionStem}${posix.extname(path)}`))
   ) {
     return null;
   }
-  const episode = episodeNumbers(versionStem);
-  if (episode === null || episode.season !== season) {
+  const token = episodeToken(versionStem);
+  if (token === null) {
+    return null;
+  }
+
+  const between =
+    anchor === "."
+      ? directory === "."
+        ? []
+        : directory.split("/")
+      : directory === anchor
+        ? []
+        : directory.slice(anchor.length + 1).split("/");
+  let seasonFolder: string | null = null;
+  for (const [index, folderPart] of between.entries()) {
+    if (seasonNumber(folderPart) === null) continue;
+    const relative = between.slice(0, index + 1).join("/");
+    seasonFolder = anchor === "." ? relative : `${anchor}/${relative}`;
+  }
+  const loose = seasonFolder === null;
+  const folderName = anchor === "." ? rootName : posix.basename(anchor);
+  const folderTitle = parseTitle(folderName);
+  const prefix = versionStem.slice(0, token.index).replace(/[\s._-]+$/, "");
+  const prefixTitle = loose ? parseRelease(prefix) : null;
+
+  let title: string;
+  let year: number | null;
+  let key: string;
+  let providerIds: Record<string, string>;
+  if (
+    prefixTitle !== null &&
+    prefixTitle.title !== "" &&
+    !namesOneTitle(folderName) &&
+    !sameTitle(prefixTitle.title, folderTitle.title)
+  ) {
+    title = prefixTitle.title;
+    year = prefixTitle.year;
+    key = titleKey(title, year);
+    providerIds = folderProviderIds(stem);
+  } else {
+    title = folderTitle.title;
+    year = folderTitle.year;
+    key = anchor === "." ? titleKey(title, year) : "";
+    providerIds = folderProviderIds(folderName);
+  }
+  if (title === "") {
     return null;
   }
   return {
-    canonicalFolder,
+    canonicalFolder: anchor,
+    titleKey: key,
+    title,
+    year,
+    providerIds,
     seasonFolder,
-    seasonNumber: season,
-    episodeNumber: episode.start,
-    episodeEndNumber: episode.end,
+    seasonNumber:
+      token.season ??
+      (seasonFolder === null
+        ? null
+        : seasonNumber(posix.basename(seasonFolder))) ??
+      1,
+    episodeNumber: token.start,
+    episodeEndNumber: token.end,
     versionKey:
-      part === null ? `file:${path}` : `stem:${seasonFolder}:${versionStem}`,
+      part === null ? `file:${path}` : `stem:${directory}:${versionStem}`,
     part,
   };
 }
@@ -219,13 +337,13 @@ function isExtra(path: string): boolean {
   if (parts[0]?.toLowerCase() === "extras") {
     return true;
   }
-  return isVideoExtra(parts.slice(1).join("/"));
+  return isVideoExtra(parts.length === 1 ? path : parts.slice(1).join("/"));
 }
 
 function identify(
   path: string,
 ): { kind: string; canonicalFolder: string } | null {
-  const accepted = analyze(path);
+  const accepted = analyze("library", path);
   if (accepted === null) {
     return null;
   }
@@ -236,17 +354,12 @@ function parse(canonicalFolder: string): {
   title: string;
   year: number | null;
 } {
-  const folder = stripProviderTags(posix.basename(canonicalFolder));
-  const match = /^(.*?)\s*\((\d{4})\)(?:\s.*)?$/.exec(folder);
-  const rawTitle = (match?.[1] ?? folder).trim();
-  const title = rawTitle.includes(" ")
-    ? rawTitle
-    : rawTitle.replace(/[._]/g, " ");
-  return { title, year: match?.[2] ? Number(match[2]) : null };
+  return parseTitle(posix.basename(canonicalFolder));
 }
 
-/** One grouped Version of an Episode, with split Files in playback order. */
+/** One grouped Version of an Episode: its root and split Files in playback order. */
 export interface ShowVersionPathGroup {
+  rootId: string;
   paths: string[];
 }
 
@@ -268,9 +381,10 @@ export interface SeasonPathGroup {
   episodes: EpisodePathGroup[];
 }
 
-/** One canonical Show folder and its accepted Seasons and Episodes. */
+/** One canonical Show: its Item folder, title key and accepted Seasons and Episodes. */
 export interface ShowPathGroup {
   canonicalFolder: string;
+  titleKey: string;
   title: string;
   year: number | null;
   providerIds: Record<string, string>;
@@ -333,49 +447,76 @@ export function mergeEpisodeRanges<V extends ShowVersionPathGroup>(
   });
 }
 
-/** Group accepted library-relative paths into canonical Shows, Seasons, Episodes and Versions. */
-export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
+/** Group walked files into canonical Shows by Item folder and title key. */
+export function groupShowPaths(files: Iterable<RootedName>): ShowPathGroup[] {
+  interface VersionFile {
+    rootId: string;
+    part: number | null;
+    path: string;
+  }
   const groups = new Map<
     string,
-    Map<
-      number,
-      {
-        seasonFolder: string;
-        seasonNumber: number;
-        episodes: Map<
-          number,
-          {
-            end: number | null;
-            versions: Map<string, { part: number | null; path: string }[]>;
-          }
-        >;
-      }
-    >
+    {
+      canonicalFolder: string;
+      titleKey: string;
+      title: string;
+      year: number | null;
+      providerIds: Record<string, string>;
+      seasons: Map<
+        number,
+        {
+          seasonFolder: string | null;
+          seasonNumber: number;
+          episodes: Map<
+            number,
+            {
+              end: number | null;
+              versions: Map<string, VersionFile[]>;
+            }
+          >;
+        }
+      >;
+    }
   >();
+  const rootOrder: string[] = [];
   const seen = new Set<string>();
-  for (const path of paths) {
-    if (seen.has(path)) {
+  for (const file of files) {
+    if (!rootOrder.includes(file.rootId)) rootOrder.push(file.rootId);
+    const key = `${file.rootId}:${file.path}`;
+    if (seen.has(key)) {
       continue;
     }
-    seen.add(path);
-    const accepted = analyze(path);
+    seen.add(key);
+    const accepted = analyze(file.rootName, file.path);
     if (accepted === null) {
       continue;
     }
-    let seasons = groups.get(accepted.canonicalFolder);
-    if (!seasons) {
-      seasons = new Map();
-      groups.set(accepted.canonicalFolder, seasons);
+    const groupKey = `${accepted.canonicalFolder}\u0000${accepted.titleKey}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = {
+        canonicalFolder: accepted.canonicalFolder,
+        titleKey: accepted.titleKey,
+        title: accepted.title,
+        year: accepted.year,
+        providerIds: accepted.providerIds,
+        seasons: new Map(),
+      };
+      groups.set(groupKey, group);
     }
-    let season = seasons.get(accepted.seasonNumber);
+    let season = group.seasons.get(accepted.seasonNumber);
     if (!season) {
       season = {
         seasonFolder: accepted.seasonFolder,
         seasonNumber: accepted.seasonNumber,
         episodes: new Map(),
       };
-      seasons.set(accepted.seasonNumber, season);
-    } else if (accepted.seasonFolder.localeCompare(season.seasonFolder) < 0) {
+      group.seasons.set(accepted.seasonNumber, season);
+    } else if (
+      accepted.seasonFolder !== null &&
+      (season.seasonFolder === null ||
+        accepted.seasonFolder.localeCompare(season.seasonFolder) < 0)
+    ) {
       season.seasonFolder = accepted.seasonFolder;
     }
     let episode = season.episodes.get(accepted.episodeNumber);
@@ -388,21 +529,28 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
         accepted.episodeEndNumber,
       );
     }
-    let version = episode.versions.get(accepted.versionKey);
+    const versionKey = `${file.rootId}:${accepted.versionKey}`;
+    let version = episode.versions.get(versionKey);
     if (!version) {
       version = [];
-      episode.versions.set(accepted.versionKey, version);
+      episode.versions.set(versionKey, version);
     }
-    version.push({ part: accepted.part, path });
+    version.push({ rootId: file.rootId, part: accepted.part, path: file.path });
   }
-  return [...groups.entries()]
-    .map(([canonicalFolder, seasons]) => ({
-      canonicalFolder,
-      ...parse(canonicalFolder),
-      providerIds: folderProviderIds(canonicalFolder),
-      seasons: [...seasons.values()]
+  const rootRank = (rootId: string) => {
+    const rank = rootOrder.indexOf(rootId);
+    return rank === -1 ? rootOrder.length : rank;
+  };
+  return [...groups.values()]
+    .map((group) => ({
+      canonicalFolder: group.canonicalFolder,
+      titleKey: group.titleKey,
+      title: group.title,
+      year: group.year,
+      providerIds: group.providerIds,
+      seasons: [...group.seasons.values()]
         .map((season) => ({
-          canonicalFolder: `${canonicalFolder}/${season.seasonFolder}`,
+          canonicalFolder: season.seasonFolder ?? group.canonicalFolder,
           seasonNumber: season.seasonNumber,
           title:
             season.seasonNumber === 0
@@ -415,18 +563,21 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
               title: episodeTitle(episodeNumber, episode.end),
               versions: [...episode.versions.values()]
                 .map(
-                  (files): ShowVersionPathGroup => ({
-                    paths: files
+                  (versionFiles): ShowVersionPathGroup => ({
+                    rootId: versionFiles[0]?.rootId ?? "",
+                    paths: versionFiles
                       .sort(
                         (a, b) =>
                           (a.part ?? 0) - (b.part ?? 0) ||
                           a.path.localeCompare(b.path),
                       )
-                      .map((file) => file.path),
+                      .map((entry) => entry.path),
                   }),
                 )
-                .sort((a, b) =>
-                  (a.paths[0] ?? "").localeCompare(b.paths[0] ?? ""),
+                .sort(
+                  (a, b) =>
+                    (a.paths[0] ?? "").localeCompare(b.paths[0] ?? "") ||
+                    rootRank(a.rootId) - rootRank(b.rootId),
                 ),
             }))
             .sort(
@@ -442,5 +593,9 @@ export function groupShowPaths(paths: Iterable<string>): ShowPathGroup[] {
             a.canonicalFolder.localeCompare(b.canonicalFolder),
         ),
     }))
-    .sort((a, b) => a.canonicalFolder.localeCompare(b.canonicalFolder));
+    .sort(
+      (a, b) =>
+        a.canonicalFolder.localeCompare(b.canonicalFolder) ||
+        a.titleKey.localeCompare(b.titleKey),
+    );
 }

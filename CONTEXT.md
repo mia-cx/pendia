@@ -13,7 +13,7 @@ A kind of media with its own model, scanner, browser and translation layer: movi
 _Avoid_: media type, library type, content type, category
 
 **Library**:
-One medium's collection, reached through one or more roots.
+One medium's collection, reached through one or more roots. Its medium decides where its Items show up and how their metadata is fetched, not how its folders are laid out.
 _Avoid_: folder, source, collection
 
 **Root**:
@@ -23,6 +23,14 @@ _Avoid_: root folder, mount point
 **Item**:
 Any node in a library tree: a movie, show, season, episode, album, track, book, photo, channel. It has a kind, at most one parent, metadata, artwork, credits, provider ids and per-user progress.
 _Avoid_: title, entry, BaseItem, resource
+
+**Item folder**:
+The folder under a root that holds a show's or movie's files, or `.` when the root itself is the Item. Season, disc and episode folders below it belong to it. Colocated `.pendia` artwork and subtitles go there. Several Items can share one: loose movies, or loose episodes of several shows. In code: `canonicalFolder`.
+_Avoid_: canonical folder, media folder, item path
+
+**Title key**:
+The second half of an Item's identity next to its Item folder: empty when the folder below the root names one title, otherwise the normalised title and year, such as `breaking bad (2008)`.
+_Avoid_: slug, match key, name key
 
 **Kind**:
 The medium-specific type of an Item, such as movie, show, season, episode, album, track, book, photo, channel.
@@ -89,7 +97,7 @@ A user's score for an Item, 0 to 10 with one decimal, distinct from a provider's
 _Avoid_: score, stars
 
 **Scan**:
-A job that walks one directory subtree, probes the files that changed and hands the matches to the medium. It runs on the watcher when one sits next to the disks, otherwise on a worker over the network.
+A job that walks one Item folder, probes the files that changed and hands the matches to the medium, which reads what each file is from its name and the folders above it. A Library scan walks every root and queues one per Item folder. It runs on the watcher when one sits next to the disks, otherwise on a worker over the network.
 _Avoid_: refresh, index, crawl, import
 
 **Probe**:

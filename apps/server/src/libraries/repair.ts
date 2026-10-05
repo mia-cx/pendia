@@ -2,8 +2,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { items, jobs, libraries } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
-import { groupMoviePaths, moviesMedium } from "../mediums/movies.ts";
-import { groupShowPaths, showsScan } from "../mediums/shows.ts";
+import { moviesMedium } from "../mediums/movies.ts";
+import { showsScan } from "../mediums/shows.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { rootedKey, rootsOf } from "./roots.ts";
 import {
@@ -67,12 +67,10 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
         library.medium === "movies"
           ? {
               rules: moviesMedium.scan,
-              group: groupMoviePaths,
               itemKind: "movie" as const,
             }
           : {
               rules: showsScan,
-              group: groupShowPaths,
               itemKind: "show" as const,
             };
       // Snapshots key each directory by its root; scans name root-relative folders.
@@ -138,8 +136,6 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
           and(eq(items.libraryId, library.id), eq(items.kind, medium.itemKind)),
         );
       const itemFolders = new Set(existing.map((item) => item.canonicalFolder));
-      const topLevel = (path: string) =>
-        path === "." ? undefined : path.split("/")[0];
       const next = new Map<string, bigint>();
       const scans = new Map<string, Map<string, bigint | undefined>>();
       const addUpdate = (
@@ -160,27 +156,12 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
           next.set(key, directory.modifiedNs);
           continue;
         }
-        const folders = medium
-          .group(directory.files)
-          .map((group) => group.canonicalFolder);
-        for (const folder of folders) {
-          addUpdate(folder, key, directory.modifiedNs);
-        }
-        const top = topLevel(path);
-        let needsScan = folders.length > 0;
-        if (medium.itemKind === "movie" && itemFolders.has(path)) {
-          addUpdate(path, key, directory.modifiedNs);
-          needsScan = true;
-        }
-        if (
-          medium.itemKind === "show" &&
-          top !== undefined &&
-          itemFolders.has(top)
-        ) {
-          addUpdate(top, key, directory.modifiedNs);
-          needsScan = true;
-        }
-        if (!needsScan) {
+        // A changed directory scans its Item folder when it holds media or an Item.
+        const scanFolder = medium.rules.itemFolder(path);
+        const needsScan =
+          directory.files.length > 0 || itemFolders.has(scanFolder);
+        if (needsScan) addUpdate(scanFolder, key, directory.modifiedNs);
+        else {
           next.set(key, directory.modifiedNs);
           continue;
         }
@@ -191,14 +172,8 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
         if (walked.has(key)) continue;
         // Root ids hold no colon, so the path follows the first one.
         const path = key.slice(key.indexOf(":") + 1);
-        if (medium.itemKind === "movie") {
-          if (itemFolders.has(path)) addUpdate(path, key, undefined);
-        } else {
-          const top = topLevel(path);
-          if (top !== undefined && itemFolders.has(top)) {
-            addUpdate(top, key, undefined);
-          }
-        }
+        const scanFolder = medium.rules.itemFolder(path);
+        if (itemFolders.has(scanFolder)) addUpdate(scanFolder, key, undefined);
       }
       for (const folder of itemFolders) {
         if (!walkedPaths.has(folder)) addUpdate(folder, folder, undefined);

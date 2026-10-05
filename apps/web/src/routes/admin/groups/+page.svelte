@@ -94,12 +94,14 @@ async function saveEdit() {
   const perms = [...editPerms];
   try {
     await client.groups.setPermissions({ id: row.id, permissions: perms });
-    editOpen = false;
-    editing = undefined;
+    if (editing?.id === row.id && samePermissions(editPerms, perms)) {
+      editOpen = false;
+      editing = undefined;
+    }
     toast.success(`${row.name} saved`);
     await list.reload();
   } catch (error) {
-    editFailure = readFailure(error);
+    if (editing?.id === row.id) editFailure = readFailure(error);
   } finally {
     editBusy = false;
   }

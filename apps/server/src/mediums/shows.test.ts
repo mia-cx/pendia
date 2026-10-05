@@ -216,6 +216,13 @@ describe("isExtra", () => {
     expect(isExtra("extras/Season 01/extras S01E01.mkv")).toBe(true);
     expect(isExtra("Show/.pendia/cover.mkv")).toBe(true);
   });
+
+  test("flags a root-level sample file", () => {
+    expect(isExtra("Show S01E01.sample.mkv")).toBe(true);
+    expect(
+      groupShowPaths(rooted(["Show S01E01.sample.mkv"], "Show (2020)")),
+    ).toEqual([]);
+  });
 });
 
 describe("groupShowPaths", () => {

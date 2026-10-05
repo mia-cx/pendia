@@ -337,7 +337,7 @@ function isExtra(path: string): boolean {
   if (parts[0]?.toLowerCase() === "extras") {
     return true;
   }
-  return isVideoExtra(parts.slice(1).join("/"));
+  return isVideoExtra(parts.length === 1 ? path : parts.slice(1).join("/"));
 }
 
 function identify(

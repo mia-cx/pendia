@@ -2,11 +2,11 @@
 import { onDestroy } from "svelte";
 import { client } from "$lib/api.ts";
 import { cardLabel, itemHref } from "$lib/browse.ts";
+import Artwork from "$lib/components/Artwork.svelte";
 import AdminPage from "$lib/components/admin/AdminPage.svelte";
 import FormGroup from "$lib/components/admin/FormGroup.svelte";
 import FormRow from "$lib/components/admin/FormRow.svelte";
 import ListRow from "$lib/components/admin/ListRow.svelte";
-import Artwork from "$lib/components/Artwork.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import { followEvents } from "$lib/events.ts";
 import { resource } from "$lib/resource.svelte.ts";

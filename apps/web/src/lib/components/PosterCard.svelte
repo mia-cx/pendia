@@ -1,11 +1,11 @@
 <script lang="ts">
 import {
   type BrowseCard,
-  episodeCode,
+  cardLabel,
   type ItemCard,
   itemHref,
 } from "$lib/browse.ts";
-import Poster from "$lib/components/Poster.svelte";
+import Artwork from "$lib/components/Artwork.svelte";
 
 const {
   card,
@@ -21,37 +21,43 @@ const href = $derived(itemHref(card));
 const posterId = $derived(
   card.posterArtworkId ?? context?.show?.posterArtworkId ?? null,
 );
-// And its fallback names the Show, which reads in a frame; an Episode's own
+// Its fallback names the Show, which reads in a frame; an Episode's own
 // title is "Episode 1".
 const posterTitle = $derived(context?.show?.title ?? card.title);
-const caption = $derived.by(() => {
-  if (context?.kind === "episode") {
-    const code = episodeCode(context);
-    const show = context.show?.title;
-    return [show, code].filter(Boolean).join(" · ");
-  }
-  if (card.kind === "season") return null;
-  return card.year === null ? null : String(card.year);
-});
+const caption = $derived(card.year === null ? null : String(card.year));
 const fraction = $derived(
   progress === null || !progress.durationSeconds
     ? null
     : Math.min(1, progress.positionSeconds / progress.durationSeconds),
+);
+const name = $derived(
+  context !== null
+    ? cardLabel(context)
+    : card.year === null
+      ? card.title
+      : `${card.title} (${card.year})`,
+);
+const label = $derived(
+  fraction === null
+    ? name
+    : `${name}, ${Math.round(fraction * 100)}% watched`,
 );
 </script>
 
 <svelte:element
   this={href === null ? "div" : "a"}
   {href}
-  class="group grid min-w-0 content-start gap-0.5 text-label no-underline outline-none"
+  aria-label={label}
+  class="group block min-w-0 text-label no-underline outline-none"
 >
   <span
     class="relative block transition-[transform,box-shadow] duration-(--duration-fast) ease-smooth-out group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-tint group-focus-visible:outline-offset-2 motion-safe:group-hover:-translate-y-1 motion-safe:group-hover:scale-[1.03] motion-safe:group-hover:shadow-lift motion-safe:group-hover:duration-(--duration-fast) motion-safe:group-hover:ease-spring motion-safe:group-focus-visible:-translate-y-1 motion-safe:group-focus-visible:scale-[1.03] motion-safe:group-focus-visible:shadow-lift rounded-poster"
   >
-    <Poster
+    <Artwork
       artworkId={posterId}
       title={posterTitle}
       kind={card.kind}
+      {caption}
       sizes="(max-width: 640px) 33vw, 180px"
     >
       {#if fraction !== null && posterId !== null}
@@ -72,15 +78,6 @@ const fraction = $derived(
           ></span>
         </span>
       {/if}
-    </Poster>
+    </Artwork>
   </span>
-  <span class="mt-2 text-subheadline font-medium text-label line-clamp-2"
-    >{card.title}</span
-  >
-  {#if fraction !== null}
-    <span class="sr-only">{Math.round(fraction * 100)}% watched</span>
-  {/if}
-  {#if caption}
-    <span class="truncate text-footnote text-label-secondary">{caption}</span>
-  {/if}
 </svelte:element>

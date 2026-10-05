@@ -10,7 +10,7 @@ import {
   itemHref,
 } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
-import Poster from "$lib/components/Poster.svelte";
+import Artwork from "$lib/components/Artwork.svelte";
 import PosterCard from "$lib/components/PosterCard.svelte";
 import StoreRequest from "$lib/components/StoreRequest.svelte";
 import { resource } from "$lib/resource.svelte.ts";
@@ -88,11 +88,13 @@ const titleCase = (role: string) =>
 
     <div class="head" class:over={detail.backdropArtworkId !== null}>
       <div class="poster">
-        <Poster
+        <Artwork
           artworkId={detail.posterArtworkId ??
             detail.show?.posterArtworkId ??
             null}
           title={detail.title}
+          kind={detail.kind}
+          caption={detail.year === null ? null : String(detail.year)}
           sizes="(max-width: 640px) 120px, 220px"
           loading="eager"
         />

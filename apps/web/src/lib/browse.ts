@@ -199,3 +199,21 @@ export function formatBytes(bytes: number): string {
   const digits = unit === 0 || value >= 100 ? 0 : 1;
   return `${value.toFixed(digits)} ${byteUnits[unit]}`;
 }
+
+/** The Episode to play next, in watch order: the last one touched if unfinished, else the first unfinished after it, else the first. */
+export function upNextEpisode(
+  episodes: readonly DetailChild[],
+): DetailChild | undefined {
+  if (episodes.length === 0) return undefined;
+  let last = -1;
+  episodes.forEach((episode, index) => {
+    if (episode.progress !== null) last = index;
+  });
+  if (last === -1) return episodes[0];
+  const current = episodes[last];
+  if (!current.progress?.completed) return current;
+  return (
+    episodes.slice(last + 1).find((episode) => !episode.progress?.completed) ??
+    episodes[0]
+  );
+}

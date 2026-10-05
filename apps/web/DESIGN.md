@@ -111,7 +111,8 @@ Admin is a settings app laid out like System Settings. From 1024 px the same flo
 
 - **AdminPage** is the one section layout: a tinted back row (the parent on detail pages, or "Settings" back to `/admin` on phones), a `text-large-title` with its actions at the end of the row on desktop and below it on phone, then a `max-w-3xl` column of groups.
 - **FormGroup** is one grouped panel: an optional `text-headline` title, a `rounded-lg bg-elevated` panel, a footnote description and action buttons on the row below it. When its root is a `form` the actions hold the Save button. While it loads, skeleton rows hold the same height. A failure renders between the panel and the footnote.
-- **FormRow** is a label/control pair inside a panel, with an inset hairline between rows. From the panel's `@lg` container width up it is a `[12rem_minmax(0,1fr)]` grid; below it stacks. `inline` rows keep the label left and the control at the end on one line at every width, for switches, selects and read-only values.
+- **FormRow** is a label/control pair inside a panel, with an inset hairline between rows. From the panel's `@lg` container width up it is a `[12rem_minmax(0,1fr)]` grid; below it stacks. Below that width, `inline` rows keep the label left and the control at the end on one line instead, for switches, selects and read-only values.
+- **Poster** takes `compact` for thumbnails in rows: without artwork it shows only the medium's icon.
 - **ListRow** is a navigable row inside a panel: leading content, a title over a caption, trailing content and a chevron. With `href` the whole row is the link.
 - **AdminNav** renders the sections for the sidebar and the phone list from the one model in `$lib/admin.ts`, along with the search field.
 

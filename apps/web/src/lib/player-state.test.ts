@@ -286,6 +286,34 @@ describe("player state", () => {
     expect(requests[1]?.startAt).toBe(22);
   });
 
+  test("a switch clamps the position to the shorter Version", async () => {
+    const { media, requests, player, state, play } = setup({
+      versions: [
+        { id: "long", durationSeconds: 100 },
+        { id: "short", durationSeconds: 60 },
+      ],
+      versionId: "long",
+    });
+    play();
+    media.duration = 100;
+    media.fire("durationchange");
+    media.currentTime = 80;
+    media.fire("timeupdate");
+
+    await player.chooseVersion("short");
+    expect(state().position).toBe(60);
+    expect(requests[1]?.versionId).toBe("short");
+    expect(requests[1]?.startAt).toBe(60);
+
+    // The media ends at its own edge; switching back does not resume past it.
+    media.currentTime = 60;
+    media.paused = true;
+    media.fire("ended");
+    await player.chooseVersion("long");
+    expect(requests[2]?.versionId).toBe("long");
+    expect(requests[2]?.startAt).toBe(60);
+  });
+
   test("stillness hides playing controls; activity shows them again", async () => {
     const { media, player, state, play, timers } = setup();
     play();

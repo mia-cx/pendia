@@ -219,7 +219,14 @@ export function createPlayer(options: {
     [
       "ended",
       () => {
-        patch({ playing: false, ended: true, buffering: false });
+        // The media may end short of the metadata duration; release the hold.
+        positionHold = null;
+        patch({
+          playing: false,
+          ended: true,
+          buffering: false,
+          position: media.currentTime,
+        });
         settleControls();
       },
     ],
@@ -253,7 +260,11 @@ export function createPlayer(options: {
     nextStreams: StreamChoice,
   ): Promise<void> {
     if (current.switching || closed || suspended) return;
-    const at = positionHold ?? media.currentTime;
+    const target =
+      options.versions.find((version) => version.id === versionId)
+        ?.durationSeconds ?? 0;
+    const now = positionHold ?? media.currentTime;
+    const at = target > 0 ? Math.min(now, target) : now;
     const paused = media.paused;
     positionHold = at;
     patch({

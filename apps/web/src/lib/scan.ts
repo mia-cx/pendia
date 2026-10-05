@@ -64,6 +64,14 @@ export function scanState(status: ScanStatus | undefined): {
   return { label: "Not scanned", tone: "idle" };
 }
 
+/** The run's start time, decoded from its UUIDv7 id; null while no run is known. */
+export function scanStartedAt(status: ScanStatus | undefined): Date | null {
+  const runId = status?.runId;
+  if (runId == null) return null;
+  const ms = Number.parseInt(runId.replaceAll("-", "").slice(0, 12), 16);
+  return Number.isNaN(ms) ? null : new Date(ms);
+}
+
 /** The one call the scan poller makes, so a test can stand a reader in. */
 export type ScanReader = {
   libraries: {

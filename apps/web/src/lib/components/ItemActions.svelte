@@ -14,6 +14,7 @@ import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.ts";
 import * as Popover from "$lib/components/ui/popover/index.ts";
 import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
 import { followEvents } from "$lib/events.ts";
+import { pickVersion } from "$lib/playback.ts";
 import { resource } from "$lib/resource.svelte.ts";
 
 const {
@@ -31,9 +32,7 @@ const admin = $derived(page.data.me?.admin === true);
 // that Version picks up.
 const start = resource(async () => {
   const progress = await client.playback.getProgress({ itemId: detail.id });
-  const version =
-    detail.versions.find(({ id }) => id === progress?.versionId) ??
-    detail.versions[0];
+  const version = pickVersion(detail.versions, null, progress?.versionId);
   if (version === undefined) return null;
   if (progress === null || progress.completed)
     return { versionId: version.id, positionSeconds: 0 };
@@ -88,8 +87,10 @@ async function toggleFavourite() {
 }
 
 let hovered = $state(0);
+let focusStar = $state(0);
 let ratingOpen = $state(false);
 const preview = $derived(hovered > 0 ? hovered : stars);
+const tabStop = $derived(focusStar > 0 ? focusStar : Math.max(1, stars));
 
 async function pick(n: number) {
   rating = n * 2;
@@ -124,6 +125,7 @@ function moveStars(event: KeyboardEvent) {
   event.preventDefault();
   const next = Math.min(5, Math.max(1, preview + step));
   hovered = next;
+  focusStar = next;
   const star = document.querySelector<HTMLElement>(`[data-star="${next}"]`);
   star?.focus();
 }
@@ -132,7 +134,7 @@ let refreshAbort: AbortController | undefined;
 
 async function refreshMetadata() {
   try {
-    const { jobId } = await client.items.refresh({ id: detail.id });
+    await client.items.refresh({ id: detail.id });
     toast.success("Refreshing metadata");
     refreshAbort?.abort();
     refreshAbort = new AbortController();
@@ -140,11 +142,11 @@ async function refreshMetadata() {
     void followEvents(
       (signal) => client.events.stream(undefined, { signal }),
       (event) => {
-        if (event.kind !== "job.progress" || event.jobId !== jobId) return;
-        if (event.state !== "completed" && event.state !== "failed") return;
+        // The refresh job publishes library.changed when it settles.
+        if (event.kind !== "library.changed") return;
+        if (event.libraryId !== detail.libraryId) return;
         controller.abort();
-        if (event.state === "completed") reload();
-        else toast.error("Couldn't refresh metadata");
+        reload();
       },
       controller.signal,
     );
@@ -156,11 +158,11 @@ async function refreshMetadata() {
 onDestroy(() => refreshAbort?.abort());
 </script>
 
-<div class="flex min-h-11 items-center gap-3">
+<div class="flex min-h-11 items-center gap-2 sm:gap-3">
   {#if detail.kind === "movie" || detail.kind === "episode"}
     {#if choice}
       {#if choice.positionSeconds > 0}
-        <Button size="pill" href={href(choice.versionId)}>
+        <Button size="pill" class="max-sm:flex-1 max-sm:min-w-0" href={href(choice.versionId)}>
           <PlayIcon fill="currentColor" />
           Resume
         </Button>
@@ -182,14 +184,14 @@ onDestroy(() => refreshAbort?.abort());
           <Tooltip.Content>Play from start</Tooltip.Content>
         </Tooltip.Root>
       {:else}
-        <Button size="pill" href={href(choice.versionId)}>
+        <Button size="pill" class="max-sm:flex-1 max-sm:min-w-0" href={href(choice.versionId)}>
           <PlayIcon fill="currentColor" />
           Play
         </Button>
       {/if}
     {/if}
   {:else if upNext !== undefined}
-    <Button size="pill" href="/play/{upNext.id}">
+    <Button size="pill" class="max-sm:flex-1 max-sm:min-w-0" href="/play/{upNext.id}">
       <PlayIcon fill="currentColor" />
       {upNext.progress === null || upNext.progress.completed
         ? `Play ${episodeCode(upNext) ?? ""}`
@@ -244,10 +246,11 @@ onDestroy(() => refreshAbort?.abort());
           <button
             type="button"
             role="radio"
-            aria-checked={preview === n}
+            aria-checked={stars === n}
             aria-label="{n} {n === 1 ? 'star' : 'stars'}"
             data-star={n}
-            tabindex={n === Math.max(1, preview) ? 0 : -1}
+            tabindex={n === tabStop ? 0 : -1}
+            onfocus={() => (focusStar = n)}
             class="rounded-xs p-0.5 text-label-secondary outline-none hover:text-label focus-visible:text-label"
             onmouseenter={() => (hovered = n)}
             onmouseleave={() => (hovered = 0)}

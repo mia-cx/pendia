@@ -22,3 +22,16 @@ const displayOrder = {
 export const permissionNames = Object.keys(
   displayOrder,
 ) as (keyof typeof displayOrder)[];
+
+/** The readable name of each permission. */
+export const permissionLabels = {
+  view: "View",
+  play: "Play",
+  "manage-libraries": "Manage libraries",
+  "manage-metadata": "Edit metadata",
+  "manage-subtitles": "Manage subtitles",
+  "manage-users": "Manage users",
+  "manage-plugins": "Manage plugins",
+  "manage-transcoding": "Manage transcoding",
+  "manage-server": "Manage server",
+} satisfies Record<Permission, string>;

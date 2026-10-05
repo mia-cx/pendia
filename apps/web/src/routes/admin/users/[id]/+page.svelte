@@ -1,12 +1,26 @@
 <script lang="ts">
 import { untrack } from "svelte";
+import { toast } from "svelte-sonner";
 import { goto, invalidateAll } from "$app/navigation";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
 import { fromMbps, toMbps } from "$lib/bitrate.ts";
-import Failure from "$lib/components/Failure.svelte";
+import AdminPage from "$lib/components/admin/AdminPage.svelte";
+import FormGroup from "$lib/components/admin/FormGroup.svelte";
+import FormRow from "$lib/components/admin/FormRow.svelte";
+import ListRow from "$lib/components/admin/ListRow.svelte";
+import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+import { Badge } from "$lib/components/ui/badge/index.ts";
+import { Button } from "$lib/components/ui/button/index.ts";
+import { Input } from "$lib/components/ui/input/index.ts";
+import * as Select from "$lib/components/ui/select/index.ts";
+import { Switch } from "$lib/components/ui/switch/index.ts";
 import { readFailure } from "$lib/errors.ts";
-import { type Permission, permissionNames } from "$lib/permissions.ts";
+import {
+  type Permission,
+  permissionLabels,
+  permissionNames,
+} from "$lib/permissions.ts";
 import { resource } from "$lib/resource.svelte.ts";
 import type { PageProps } from "./$types";
 
@@ -37,8 +51,12 @@ $effect(() => {
 type FailureShape = ReturnType<typeof readFailure>;
 type SessionRow = NonNullable<typeof sessions.data>[number];
 
-const instant = (value: string | null) =>
-  value === null ? "Never" : new Date(value).toLocaleString();
+const instant = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+const at = (value: string | null) =>
+  value === null ? "Never" : instant.format(new Date(value));
 
 function sessionState(session: SessionRow): string {
   if (session.revokedAt !== null) return "Revoked";
@@ -46,6 +64,12 @@ function sessionState(session: SessionRow): string {
   if (expires !== null && new Date(expires).getTime() <= Date.now())
     return "Expired";
   return "Live";
+}
+
+function sessionTitle(session: SessionRow): string {
+  if (session.clientName === null) return "Unknown app";
+  if (session.deviceName === null) return session.clientName;
+  return `${session.clientName} on ${session.deviceName}`;
 }
 
 let capInput = $state<string | null>(null);
@@ -56,6 +80,9 @@ let settingsFailure = $state<FailureShape | undefined>(undefined);
 let groupSel = $state<Record<string, boolean>>({});
 let groupsBusy = $state(false);
 let groupsFailure = $state<FailureShape | undefined>(undefined);
+let leaveAdminsOpen = $state(false);
+let leaveConfirmed = $state(false);
+let leaveGroupId = $state("");
 
 let overrideSel = $state<Record<string, string>>({});
 let overrideBusy = $state<Record<string, boolean>>({});
@@ -95,6 +122,9 @@ function resetRouteState() {
   groupSel = {};
   groupsFailure = undefined;
   groupsBusy = false;
+  leaveAdminsOpen = false;
+  leaveConfirmed = false;
+  leaveGroupId = "";
   overrideSel = {};
   overrideBusy = {};
   overrideFailures = {};
@@ -118,6 +148,7 @@ const groupsLocked = $derived(
   access.data !== undefined && access.data.user.disabledAt !== null,
 );
 const adminLocked = $derived(!data.me.admin);
+const displayName = $derived(access.data?.user.displayName ?? "User");
 
 async function saveSettings(event: SubmitEvent) {
   const target = id;
@@ -148,6 +179,7 @@ async function saveSettings(event: SubmitEvent) {
     access.set(updated);
     if (capInput === submittedCap) capInput = null;
     if (ratingInput === submittedRating) ratingInput = null;
+    toast.success("Playback limits saved");
   } catch (error) {
     if (currentVisit(target, generation)) settingsFailure = readFailure(error);
   } finally {
@@ -155,29 +187,27 @@ async function saveSettings(event: SubmitEvent) {
   }
 }
 
-async function saveGroups() {
+async function saveGroups(
+  groupIds: string[],
+  groupName: string,
+  added: boolean,
+) {
   const target = id;
   const generation = routeGeneration;
   groupsBusy = true;
   groupsFailure = undefined;
   try {
-    const checked = (groups.data ?? [])
-      .filter(
-        (group) =>
-          groupSel[group.id] ??
-          access.data?.groupIds.includes(group.id) ??
-          false,
-      )
-      .map((group) => group.id);
     const updated = await serial(target, () =>
       client.users.setGroups({
         id: target,
-        groupIds: checked,
+        groupIds,
       }),
     );
     if (!currentVisit(target, generation)) return;
     access.set(updated);
-    groupSel = {};
+    toast.success(
+      `${updated.user.displayName} ${added ? "added to" : "removed from"} ${groupName}`,
+    );
     if (target === data.me.user.id) {
       await invalidateAll();
       await serial(target, async () => {
@@ -193,8 +223,48 @@ async function saveGroups() {
   } catch (error) {
     if (currentVisit(target, generation)) groupsFailure = readFailure(error);
   } finally {
-    if (currentVisit(target, generation)) groupsBusy = false;
+    if (currentVisit(target, generation)) {
+      groupSel = {};
+      groupsBusy = false;
+    }
   }
+}
+
+type GroupRow = NonNullable<typeof groups.data>[number];
+
+function groupChecked(group: GroupRow): boolean {
+  return (
+    groupSel[group.id] ?? access.data?.groupIds.includes(group.id) ?? false
+  );
+}
+
+function toggleGroup(group: GroupRow, checked: boolean) {
+  groupSel[group.id] = checked;
+  const self = id === data.me.user.id;
+  if (self && !checked && group.builtIn && group.name === "admins") {
+    leaveGroupId = group.id;
+    leaveAdminsOpen = true;
+    return;
+  }
+  const next = checked
+    ? [...(access.data?.groupIds ?? []), group.id]
+    : (access.data?.groupIds ?? []).filter((one) => one !== group.id);
+  void saveGroups(next, group.name, checked);
+}
+
+async function leaveAdmins() {
+  const admins = (groups.data ?? []).find(
+    (group) => group.builtIn && group.name === "admins",
+  );
+  if (!admins) return;
+  leaveConfirmed = true;
+  const next = (access.data?.groupIds ?? []).filter((one) => one !== admins.id);
+  await saveGroups(next, admins.name, false);
+  leaveConfirmed = false;
+}
+
+function revertLeave() {
+  if (!leaveConfirmed) delete groupSel[leaveGroupId];
 }
 
 function overrideValue(permission: string): string {
@@ -204,6 +274,12 @@ function overrideValue(permission: string): string {
   if (!row) return "inherit";
   return row.allowed ? "allow" : "deny";
 }
+
+const overrideOptions = [
+  { value: "inherit", label: "From groups" },
+  { value: "allow", label: "Allow" },
+  { value: "deny", label: "Deny" },
+];
 
 async function setOverride(permission: Permission, value: string) {
   const target = id;
@@ -222,6 +298,13 @@ async function setOverride(permission: Permission, value: string) {
     if (!currentVisit(target, generation)) return;
     access.set(updated);
     delete overrideSel[permission];
+    toast.success(
+      value === "allow"
+        ? `${permissionLabels[permission]} allowed`
+        : value === "deny"
+          ? `${permissionLabels[permission]} denied`
+          : `${permissionLabels[permission]} now follows groups`,
+    );
   } catch (error) {
     if (currentVisit(target, generation)) {
       overrideFailures[permission] = readFailure(error);
@@ -243,6 +326,9 @@ function accessValue(libraryId: string): string {
 async function setAccess(libraryId: string, value: string) {
   const target = id;
   const generation = routeGeneration;
+  const name =
+    (libs.data ?? []).find((library) => library.id === libraryId)?.name ??
+    "library";
   accessSel[libraryId] = value;
   libraryBusy[libraryId] = true;
   delete libraryFailures[libraryId];
@@ -257,6 +343,13 @@ async function setAccess(libraryId: string, value: string) {
     if (!currentVisit(target, generation)) return;
     access.set(updated);
     delete accessSel[libraryId];
+    toast.success(
+      value === "allow"
+        ? `${name} allowed`
+        : value === "deny"
+          ? `${name} denied`
+          : `${name} now follows groups`,
+    );
   } catch (error) {
     if (currentVisit(target, generation)) {
       libraryFailures[libraryId] = readFailure(error);
@@ -278,6 +371,7 @@ async function revoke(sessionId: string) {
     await sessions.reload();
     if (!currentVisit(target, generation)) return;
     if (sessions.failure?.code === "UNAUTHORIZED") await goto("/login");
+    else toast.success("Session revoked");
   } catch (error) {
     if (currentVisit(target, generation))
       revokeFailures[sessionId] = readFailure(error);
@@ -287,346 +381,265 @@ async function revoke(sessionId: string) {
 }
 </script>
 
-<svelte:head>
-  <title>{access.data?.user.displayName ?? "User"} · Pendia admin</title>
-</svelte:head>
-
-<p><a href="/admin/users">Users</a></p>
-<h2>{access.data?.user.displayName ?? "User"}</h2>
-
-<section>
-  <h3>Account</h3>
-  {#if access.failure}
-    <Failure failure={access.failure} />
-    <button
-      type="button"
-      onclick={() => access.reload()}
-      disabled={access.loading}>Retry</button
-    >
-  {:else if access.data}
-    <dl class="facts">
-      <div><dt>Username</dt><dd>{access.data.user.username}</dd></div>
-      <div>
-        <dt>Display name</dt><dd>{access.data.user.displayName}</dd>
-      </div>
-      <div>
-        <dt>Email</dt><dd>{access.data.user.email ?? "Not set"}</dd>
-      </div>
-      <div>
-        <dt>Created</dt><dd>{instant(access.data.user.createdAt)}</dd>
-      </div>
-      <div>
-        <dt>Status</dt><dd>
-          {access.data.user.disabledAt === null ? "Enabled" : "Disabled"}
-        </dd>
-      </div>
-    </dl>
-  {:else}
-    <p class="muted">Loading.</p>
-  {/if}
-</section>
-
-<section>
-  <h3>Sessions</h3>
-  {#if sessions.failure}
-    <Failure failure={sessions.failure} />
-    <button
-      type="button"
-      onclick={() => sessions.reload()}
-      disabled={sessions.loading}>Retry</button
-    >
-  {:else}
-    <table>
-      <thead>
-        <tr>
-          <th>Client</th>
-          <th>Device</th>
-          <th>Created</th>
-          <th>Last seen</th>
-          <th>Expires</th>
-          <th>State</th>
-          <th><span class="sr-only">Actions</span></th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each sessions.data ?? [] as session (session.id)}
-          <tr>
-            <td>{session.clientName}</td>
-            <td>{session.deviceName}</td>
-            <td>{instant(session.createdAt)}</td>
-            <td>{instant(session.lastSeenAt)}</td>
-            <td>{instant(session.expiresAt)}</td>
-            <td>{sessionState(session)}</td>
-            <td>
-              {#if sessionState(session) === "Live"}
-                <button
-                  type="button"
-                  onclick={() => revoke(session.id)}
-                  disabled={revoking[session.id] === true}>Revoke</button
-                >
-                {#if revokeFailures[session.id]}
-                  <Failure failure={revokeFailures[session.id]} />
-                {/if}
-              {/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</section>
-
-<section>
-  <h3>Playback caps</h3>
-  {#if access.failure}
-    <Failure failure={access.failure} />
-    <button
-      type="button"
-      onclick={() => access.reload()}
-      disabled={access.loading}>Retry</button
-    >
-  {:else}
-    <form onsubmit={saveSettings} class="settings">
-      {#if settingsFailure}
-        <Failure failure={settingsFailure} />
+<AdminPage
+  title={displayName}
+  parent={{ href: "/admin/users", label: "Users" }}
+>
+  <FormGroup
+    title="Account"
+    loading={access.data === undefined && !access.failure ? 4 : undefined}
+    failure={access.failure ?? undefined}
+  >
+    {#if access.data}
+      <FormRow label="Username" inline>
+        <span class="text-subheadline text-label-secondary"
+          >{access.data.user.username}</span
+        >
+      </FormRow>
+      <FormRow label="Email" inline>
+        <span class="text-subheadline text-label-secondary"
+          >{access.data.user.email ?? "Not set"}</span
+        >
+      </FormRow>
+      <FormRow label="Created" inline>
+        <span class="text-subheadline text-label-secondary"
+          >{at(access.data.user.createdAt)}</span
+        >
+      </FormRow>
+      <FormRow label="Status" inline>
+        <span class="text-subheadline text-label-secondary"
+          >{access.data.user.disabledAt === null ? "Active" : "Disabled"}</span
+        >
+      </FormRow>
+    {/if}
+    {#snippet actions()}
+      {#if access.failure}
+        <Button
+          variant="secondary"
+          onclick={() => access.reload()}
+          disabled={access.loading}>Try again</Button
+        >
       {/if}
-      <label for="bitrateCap">Bitrate cap in Mbit/s</label>
-      <input
-        id="bitrateCap"
-        name="bitrateCap"
-        type="number"
-        min="0"
-        step="any"
-        inputmode="decimal"
-        value={capValue}
-        oninput={(event) => (capInput = event.currentTarget.value)}
-        disabled={!access.data}
-      />
-      <p class="muted">Leave this empty for no cap.</p>
-      <label for="ratingCeiling">Content-rating ceiling</label>
-      <input
+    {/snippet}
+  </FormGroup>
+
+  <FormGroup
+    title="Sessions"
+    loading={sessions.data === undefined && !sessions.failure ? 2 : undefined}
+    failure={sessions.failure ??
+      (Object.values(revokeFailures).at(-1) || undefined)}
+  >
+    {#each sessions.data ?? [] as session (session.id)}
+      {@const state = sessionState(session)}
+      <ListRow
+        title={sessionTitle(session)}
+        caption="{session.lastSeenAt === null
+          ? 'Not seen yet'
+          : `Last seen ${at(session.lastSeenAt)}`} · {session.expiresAt ===
+        null
+          ? "Doesn't expire"
+          : `Expires ${at(session.expiresAt)}`}"
+      >
+        {#if state === "Live"}
+          <ConfirmDialog
+            title="Revoke this session?"
+            description="{sessionTitle(session)} is signed out and has to sign in again."
+            action="Revoke session"
+            onconfirm={() => revoke(session.id)}
+          >
+            {#snippet trigger(props)}
+              <Button
+                {...props}
+                variant="ghost"
+                size="sm"
+                class="text-destructive"
+                disabled={revoking[session.id] === true}>Revoke</Button
+              >
+            {/snippet}
+          </ConfirmDialog>
+        {:else}
+          <Badge>{state}</Badge>
+        {/if}
+      </ListRow>
+    {:else}
+      {#if sessions.data !== undefined}
+        <div class="relative min-h-12 px-4 py-2.5">
+          <span class="text-subheadline text-label-secondary"
+            >No sessions.</span
+          >
+        </div>
+      {/if}
+    {/each}
+    {#snippet actions()}
+      {#if sessions.failure}
+        <Button
+          variant="secondary"
+          onclick={() => sessions.reload()}
+          disabled={sessions.loading}>Try again</Button
+        >
+      {/if}
+    {/snippet}
+  </FormGroup>
+
+  <FormGroup
+    title="Playback limits"
+    onsubmit={saveSettings}
+    failure={settingsFailure}
+    description="Leave a field empty for no limit."
+  >
+    <FormRow label="Bitrate cap" for="bitrateCap">
+      <div class="flex items-center gap-3">
+        <Input
+          id="bitrateCap"
+          name="bitrateCap"
+          type="number"
+          min="0"
+          step="any"
+          inputmode="decimal"
+          class="w-32"
+          value={capValue}
+          oninput={(event) => (capInput = event.currentTarget.value)}
+          disabled={!access.data}
+        />
+        <span class="text-subheadline text-label-secondary">Mbit/s</span>
+      </div>
+    </FormRow>
+    <FormRow label="Content rating ceiling" for="ratingCeiling">
+      <Input
         id="ratingCeiling"
         name="ratingCeiling"
+        class="w-32"
         value={ratingValue}
         oninput={(event) => (ratingInput = event.currentTarget.value)}
         disabled={!access.data}
       />
-      <p class="muted">Leave this empty for no ceiling.</p>
-      <button type="submit" disabled={settingsBusy || !access.data}>Save</button
+    </FormRow>
+    {#snippet actions()}
+      <Button type="submit" disabled={settingsBusy || !access.data}>Save</Button
       >
-    </form>
-  {/if}
-</section>
+    {/snippet}
+  </FormGroup>
 
-<section>
-  <h3>Groups</h3>
-  {#if groups.failure}
-    <Failure failure={groups.failure} />
-    <button
-      type="button"
-      onclick={() => groups.reload()}
-      disabled={groups.loading}>Retry</button
-    >
-  {:else if access.failure}
-    <Failure failure={access.failure} />
-    <button
-      type="button"
-      onclick={() => access.reload()}
-      disabled={access.loading}>Retry</button
-    >
-  {:else}
+  <FormGroup
+    title="Groups"
+    loading={groups.data === undefined && !groups.failure ? 3 : undefined}
+    failure={groups.failure ?? groupsFailure}
+    description="{groupsLocked
+      ? "Group membership can't change while the account is disabled."
+      : ''}{adminLocked ? 'Only an admin can change this.' : ''}"
+  >
     {#each groups.data ?? [] as group (group.id)}
-      <div class="check">
-        <input
-          id={`group-${group.id}`}
-          type="checkbox"
-          checked={groupSel[group.id] ??
-          access.data?.groupIds.includes(group.id) ??
-          false}
-          onchange={(event) =>
-            (groupSel[group.id] = event.currentTarget.checked)}
+      <FormRow label={group.name} for="group-{group.id}" inline>
+        <Switch
+          id="group-{group.id}"
+          checked={groupChecked(group)}
+          onCheckedChange={(checked) => toggleGroup(group, checked)}
           disabled={groupsBusy || !access.data || groupsLocked || adminLocked}
         />
-        <label for={`group-${group.id}`}
-          >{group.name}{#if group.builtIn}
-            <span class="muted">built in</span>{/if}</label
-        >
-      </div>
+        {#if group.builtIn}
+          <Badge variant="outline">Built in</Badge>
+        {/if}
+      </FormRow>
     {/each}
-    {#if groupsFailure}
-      <Failure failure={groupsFailure} />
-    {/if}
-    {#if adminLocked}
-      <p class="muted">Only a built-in admin can change this.</p>
-    {/if}
-    {#if groupsLocked}
-      <p class="muted">
-        Group membership cannot change while the account is disabled.
-      </p>
-    {/if}
-    <button
-      type="button"
-      onclick={saveGroups}
-      disabled={groupsBusy ||
-      !groups.data ||
-      !access.data ||
-      groupsLocked ||
-      adminLocked}
-      >Save</button
-    >
-  {/if}
-</section>
+    {#snippet actions()}
+      {#if groups.failure}
+        <Button
+          variant="secondary"
+          onclick={() => groups.reload()}
+          disabled={groups.loading}>Try again</Button
+        >
+      {/if}
+    {/snippet}
+  </FormGroup>
 
-<section>
-  <h3>Permission overrides</h3>
-  <p class="muted">A group grant applies when the override is Inherit.</p>
-  {#if adminLocked}
-    <p class="muted">Only a built-in admin can change this.</p>
-  {/if}
-  {#if access.failure}
-    <Failure failure={access.failure} />
-    <button
-      type="button"
-      onclick={() => access.reload()}
-      disabled={access.loading}>Retry</button
-    >
-  {:else}
-    <table>
-      <tbody>
-        {#each permissionNames as permission (permission)}
-          <tr>
-            <td>{permission}</td>
-            <td>
-              <select
-                aria-label={`Override for ${permission}`}
-                value={overrideSel[permission] ?? overrideValue(permission)}
-                onchange={(event) =>
-                  setOverride(permission, event.currentTarget.value)}
-                disabled={overrideBusy[permission] === true ||
-                !access.data ||
-                adminLocked}
-              >
-                <option value="inherit">Inherit</option>
-                <option value="allow">Allow</option>
-                <option value="deny">Deny</option>
-              </select>
-              {#if overrideFailures[permission]}
-                <Failure failure={overrideFailures[permission]} />
-              {/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {/if}
-</section>
+  <FormGroup
+    title="Permissions"
+    failure={Object.values(overrideFailures).at(-1) || undefined}
+    description="From groups follows this user's groups. Allow and Deny override them.{adminLocked
+      ? ' Only an admin can change this.'
+      : ''}"
+  >
+    {#each permissionNames as permission (permission)}
+      {@const value = overrideSel[permission] ?? overrideValue(permission)}
+      <FormRow
+        label={permissionLabels[permission]}
+        for="override-{permission}"
+        inline
+      >
+        <Select.Root
+          type="single"
+          {value}
+          onValueChange={(next) => setOverride(permission, next)}
+          disabled={overrideBusy[permission] === true ||
+            !access.data ||
+            adminLocked}
+        >
+          <Select.Trigger id="override-{permission}">
+            <Select.Value
+              >{overrideOptions.find((o) => o.value === value)
+                ?.label}</Select.Value
+            >
+          </Select.Trigger>
+          <Select.Content>
+            {#each overrideOptions as option (option.value)}
+              <Select.Item value={option.value}>{option.label}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </FormRow>
+    {/each}
+  </FormGroup>
 
-<section>
-  <h3>Library access</h3>
-  <p class="muted">An explicit Deny wins over a group grant.</p>
-  {#if adminLocked}
-    <p class="muted">Only a built-in admin can change this.</p>
-  {/if}
-  {#if libs.failure}
-    <Failure failure={libs.failure} />
-    <button
-      type="button"
-      onclick={() => libs.reload()}
-      disabled={libs.loading}>Retry</button
-    >
-  {:else if access.failure}
-    <Failure failure={access.failure} />
-    <button
-      type="button"
-      onclick={() => access.reload()}
-      disabled={access.loading}>Retry</button
-    >
-  {:else}
-    <table>
-      <tbody>
-        {#each libs.data ?? [] as library (library.id)}
-          <tr>
-            <td>{library.name}</td>
-            <td>
-              <select
-                aria-label={`Access for ${library.name}`}
-                value={accessSel[library.id] ?? accessValue(library.id)}
-                onchange={(event) =>
-                  setAccess(library.id, event.currentTarget.value)}
-                disabled={libraryBusy[library.id] === true ||
-                !access.data ||
-                adminLocked}
-              >
-                <option value="inherit">Inherit</option>
-                <option value="allow">Allow</option>
-                <option value="deny">Deny</option>
-              </select>
-              {#if libraryFailures[library.id]}
-                <Failure failure={libraryFailures[library.id]} />
-              {/if}
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-    {#if (libs.data ?? []).length === 0}
-      <p class="muted">No libraries to permit.</p>
-    {/if}
-  {/if}
-</section>
+  <FormGroup
+    title="Library access"
+    loading={libs.data === undefined && !libs.failure ? 3 : undefined}
+    failure={libs.failure ??
+      (Object.values(libraryFailures).at(-1) || undefined)}
+    description="Deny wins over every group.{adminLocked
+      ? ' Only an admin can change this.'
+      : ''}"
+  >
+    {#each libs.data ?? [] as library (library.id)}
+      {@const value = accessSel[library.id] ?? accessValue(library.id)}
+      <FormRow label={library.name} for="access-{library.id}" inline>
+        <Select.Root
+          type="single"
+          {value}
+          onValueChange={(next) => setAccess(library.id, next)}
+          disabled={libraryBusy[library.id] === true ||
+            !access.data ||
+            adminLocked}
+        >
+          <Select.Trigger id="access-{library.id}">
+            <Select.Value
+              >{overrideOptions.find((o) => o.value === value)
+                ?.label}</Select.Value
+            >
+          </Select.Trigger>
+          <Select.Content>
+            {#each overrideOptions as option (option.value)}
+              <Select.Item value={option.value}>{option.label}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </FormRow>
+    {:else}
+      {#if libs.data !== undefined}
+        <div class="relative min-h-12 px-4 py-2.5">
+          <span class="text-subheadline text-label-secondary"
+            >No libraries yet.</span
+          >
+        </div>
+      {/if}
+    {/each}
+  </FormGroup>
+</AdminPage>
 
-<style>
-section {
-  max-width: 720px;
-  margin-bottom: 32px;
-}
-
-.facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 32px;
-  margin: 0;
-}
-
-.facts div {
-  display: grid;
-  gap: 2px;
-}
-
-.facts dt {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.facts dd {
-  margin: 0;
-}
-
-.settings {
-  display: grid;
-  max-width: 360px;
-  gap: 8px;
-}
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-}
-
-.check label {
-  font-weight: 400;
-}
-
-.check .muted {
-  font-size: 12px;
-}
-
-section :global(.failure) {
-  margin: 8px 0;
-}
-</style>
+<ConfirmDialog
+  bind:open={leaveAdminsOpen}
+  title="Leave the admins group?"
+  description="You lose access to these settings as soon as you leave."
+  action="Leave group"
+  onconfirm={leaveAdmins}
+  onclosed={revertLeave}
+/>

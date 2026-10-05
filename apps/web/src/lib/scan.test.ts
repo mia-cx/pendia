@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ScanReader, ScanStatus } from "./scan.ts";
-import { scanProgress, waitForScan } from "./scan.ts";
+import { scanProgress, scanState, waitForScan } from "./scan.ts";
 
 const libraryId = "11111111-1111-4111-8111-111111111111";
 
@@ -127,5 +127,59 @@ describe("scanProgress", () => {
 
   test("a settled scan with nothing completed still reads done", () => {
     expect(scanProgress(status({}))).toEqual({ state: "done" });
+  });
+});
+
+describe("scanState", () => {
+  function withLatest(counts: Partial<ScanStatus["counts"]>): ScanStatus {
+    return {
+      ...status(counts),
+      latest: { id: libraryId, state: "completed", error: null },
+    };
+  }
+
+  test("undefined or no finished scan is idle", () => {
+    expect(scanState(undefined)).toEqual({
+      label: "Not scanned",
+      tone: "idle",
+    });
+    expect(scanState(status({}))).toEqual({
+      label: "Not scanned",
+      tone: "idle",
+    });
+  });
+
+  test("running or queued scans are active", () => {
+    expect(scanState(withLatest({ running: 1 }))).toEqual({
+      label: "Scanning",
+      tone: "active",
+    });
+    expect(scanState(withLatest({ queued: 2 }))).toEqual({
+      label: "Queued",
+      tone: "active",
+    });
+  });
+
+  test("only failures read Scan failed", () => {
+    expect(scanState(withLatest({ failed: 2 }))).toEqual({
+      label: "Scan failed",
+      tone: "error",
+    });
+  });
+
+  test("failures beside completions read a real plural", () => {
+    expect(scanState(withLatest({ completed: 3, failed: 1 })).label).toBe(
+      "Scanned with 1 error",
+    );
+    expect(scanState(withLatest({ completed: 3, failed: 4 })).label).toBe(
+      "Scanned with 4 errors",
+    );
+  });
+
+  test("a clean scan reads Scanned", () => {
+    expect(scanState(withLatest({ completed: 9 }))).toEqual({
+      label: "Scanned",
+      tone: "done",
+    });
   });
 });

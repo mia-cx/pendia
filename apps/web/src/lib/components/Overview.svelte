@@ -28,12 +28,14 @@ onMount(() => {
 });
 </script>
 
-<p
-  bind:this={paragraph}
-  class:overflowed={overflows}
-  class="relative max-w-[36rem] text-callout text-white/90 line-clamp-3"
->
-  {text}
+<div class="relative max-w-[36rem]">
+  <p
+    bind:this={paragraph}
+    class:overflowed={overflows}
+    class="text-callout text-white/90 line-clamp-3"
+  >
+    {text}
+  </p>
   {#if overflows}
     <button
       type="button"
@@ -43,7 +45,7 @@ onMount(() => {
       More
     </button>
   {/if}
-</p>
+</div>
 
 <Dialog.Root bind:open>
   <Dialog.Content>

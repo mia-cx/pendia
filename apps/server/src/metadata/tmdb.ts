@@ -129,6 +129,8 @@ function readArtwork(
   const artwork: Artwork[] = [];
   const seen = new Set<string>();
   const add = (type: Artwork["type"], path: string) => {
+    // Vector files cannot be rasterized and stored, so they are not offered.
+    if (path.toLowerCase().endsWith(".svg")) return;
     const url = `${imageBaseUrl}${path}`;
     const key = `${type}|${url}`;
     if (seen.has(key)) return;

@@ -548,7 +548,7 @@ describe("TMDB metadata provider", () => {
       images: {
         posters: [{ file_path: "/poster.jpg" }, { file_path: "/poster2.jpg" }],
         backdrops: [{ file_path: "/backdrop2.jpg" }],
-        logos: [{ file_path: "/logo.png" }],
+        logos: [{ file_path: "/logo.svg" }, { file_path: "/logo.png" }],
       },
     });
     const provider = createTmdbMetadataProvider(apiKey, request);

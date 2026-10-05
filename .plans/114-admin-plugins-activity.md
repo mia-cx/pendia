@@ -42,4 +42,11 @@ Plugins and Activity move into the System Settings shell from #112. Plugins show
   - `bun run build`: 6 of 6 tasks.
   - `bun test` with `DATABASE_URL`: 1439 pass, 3 skip, 0 fail.
   - `bun test` without it: 857 pass, 603 skip, 0 fail.
+- Round 2 gate on the tree committed as `5f48891`, 2026-10-05:
+  - `bun install --frozen-lockfile`: no changes.
+  - `bun run lint`: clean, apart from the same 9 warnings in `app.css`.
+  - `bun run check`: 0 errors, 0 warnings.
+  - `bun run build`: 4 of 4 tasks.
+  - `bun test` with `DATABASE_URL`: 1605 pass, 3 skip, 0 fail.
+  - `bun test` without it: 999 pass, 627 skip, 0 fail.
 - Accessibility, on the rendered app: tab order runs the nav, Add plugin, then each card's switch, Configure and Remove. Escape closes dialogs and returns focus. The card switch is named by the plugin, the Available and registry buttons carry the plugin or registry name, and the progress bars expose role, name, value and max. High contrast rings the cards and panels; reduced motion drops the dialog zoom and the bar easing is the only movement left.

@@ -27,9 +27,14 @@ let current = $state(0);
 // Detail rows arrive after the cards; the meta line reflows without jumping.
 let details = $state<Record<string, ItemDetail | undefined>>({});
 
+// Plain Set, not state: reading `details` here would rerun the effect on
+// every answer and re-request the slides still in flight.
+const requested = new Set<string>();
+
 $effect(() => {
   for (const slide of slides) {
-    if (slide.card.id in details) continue;
+    if (requested.has(slide.card.id)) continue;
+    requested.add(slide.card.id);
     client.items
       .get({ id: slide.card.id })
       .then((detail) => {

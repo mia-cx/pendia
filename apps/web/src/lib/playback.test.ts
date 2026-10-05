@@ -4,6 +4,7 @@ import {
   clientProfile,
   formatPosition,
   type MediaSupport,
+  pickVersion,
   subtitleNames,
   withToken,
 } from "./playback.ts";
@@ -130,6 +131,16 @@ describe("playback helpers", () => {
         },
       ]),
     ).toEqual(["Dutch · Forced", "Subtitles 2", "Signs"]);
+  });
+
+  test("a link's Version wins, then the one progress was made on", () => {
+    const versions = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    expect(pickVersion(versions, "c", "b")).toBe(versions[2]);
+    expect(pickVersion(versions, null, "b")).toBe(versions[1]);
+    // Progress on a Version this Item no longer has falls back to the first.
+    expect(pickVersion(versions, null, "x")).toBe(versions[0]);
+    expect(pickVersion(versions, null, null)).toBe(versions[0]);
+    expect(pickVersion([], null, null)).toBeUndefined();
   });
 
   test("positions read as minutes or hours", () => {

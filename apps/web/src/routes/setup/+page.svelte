@@ -338,6 +338,7 @@ const title = $derived(
           {:else if progress.state === "running"}
             <Progress
               value={progress.fraction}
+              max={1}
               aria-label="Scan progress"
               class="w-full"
             />

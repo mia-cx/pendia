@@ -1,5 +1,10 @@
 import { lstat } from "node:fs/promises";
 import { isAbsolute, posix } from "node:path";
+import type { Schema } from "effect";
+import type {
+  ScanPreviewExample as ScanPreviewExampleSchema,
+  ScanPreview as ScanPreviewSchema,
+} from "../api/schema.ts";
 import type { libraries } from "../db/schema/index.ts";
 import { groupMoviePaths } from "../mediums/movies.ts";
 import { groupShowPaths } from "../mediums/shows.ts";
@@ -7,33 +12,14 @@ import { isVideoPath } from "../mediums/video-common/paths.ts";
 import { scanScope } from "./scan.ts";
 import { walkLibrary } from "./walker.ts";
 
+// The preview types are the decoded wire schema, so the API and the walker cannot drift.
 /** A recognised Item a preview shows as an example. */
-export type ScanPreviewExample =
-  | {
-      kind: "movie";
-      title: string;
-      year: number | null;
-      folder: string;
-      files: number;
-    }
-  | {
-      kind: "show";
-      title: string;
-      year: number | null;
-      folder: string;
-      seasons: number[];
-      episodes: number;
-    };
+export type ScanPreviewExample = Schema.Schema.Type<
+  typeof ScanPreviewExampleSchema
+>;
 
 /** What a scan of one folder would find. */
-export type ScanPreview = {
-  counts: { movie: number } | { show: number; season: number; episode: number };
-  /** Video files that are neither recognised nor extras. */
-  unrecognised: number;
-  examples: ScanPreviewExample[];
-  /** Why the preview found nothing, or null when it found something. */
-  reason: "missing" | "not-a-folder" | "empty" | "unrecognised" | null;
-};
+export type ScanPreview = Schema.Schema.Type<typeof ScanPreviewSchema>;
 
 /** The default number of recognised Items listed as examples. */
 const DEFAULT_EXAMPLES = 5;
@@ -69,11 +55,15 @@ const byTitleThenFolder = (
 const found = (items: number, unrecognised: number): ScanPreview["reason"] =>
   items > 0 ? null : unrecognised > 0 ? "unrecognised" : "empty";
 
-/** Reports what a scan of this absolute folder would find, as a root of its own, without writing anything. */
+/**
+ * Reports what a scan of this absolute folder would find, as a root of its
+ * own, without writing anything. Passing `signal` stops the walk as soon as
+ * the caller aborts.
+ */
 export async function previewScan(
   folder: string,
   medium: Medium,
-  options: { examples?: number } = {},
+  options: { examples?: number; signal?: AbortSignal } = {},
 ): Promise<ScanPreview> {
   if (!isAbsolute(folder)) {
     throw new Error("Preview folder must be an absolute path.");
@@ -92,8 +82,12 @@ export async function previewScan(
   for await (const file of walkLibrary(folder, rules, {
     path: ".",
     recursive: true,
-    onSkipped: (path) => skipped.push(path),
+    onSkipped: (path) => {
+      options.signal?.throwIfAborted();
+      skipped.push(path);
+    },
   })) {
+    options.signal?.throwIfAborted();
     walked.push({ rootId: "preview", rootName, path: file.path });
   }
   const unrecognised = skipped.filter(

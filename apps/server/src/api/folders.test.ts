@@ -86,17 +86,22 @@ describe.skipIf(!databaseUrl)("folders api", () => {
       }
     }));
 
-  test("a viewer cannot list folders", () =>
+  test("a viewer cannot list folders or preview a scan", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { viewerToken } = await seed(db);
       const server = await startPendia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const denied = await fetch(`${base}/api/folders?path=/`, {
-          headers: bearer(viewerToken),
-        });
-        expect(denied.status).toBe(403);
+        for (const path of [
+          "/api/folders?path=/",
+          "/api/folders/preview?folder=/&medium=movies",
+        ]) {
+          const denied = await fetch(`${base}${path}`, {
+            headers: bearer(viewerToken),
+          });
+          expect(denied.status).toBe(403);
+        }
       } finally {
         await server.stop();
       }
@@ -156,4 +161,49 @@ describe.skipIf(!databaseUrl)("folders api", () => {
         }
       }),
   );
+
+  test("previews a folder's scan and honours the example count", () =>
+    withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const { token } = await seed(db);
+      const root = await mkdtemp(join(tmpdir(), "pendia-folders-"));
+      const show = join(root, "Breaking Bad (2008)");
+      await mkdir(join(show, "Season 01"), { recursive: true });
+      await mkdir(join(show, "Season 02"));
+      await writeFile(
+        join(show, "Season 01", "Breaking.Bad.S01E01.1080p.mkv"),
+        "",
+      );
+      await writeFile(
+        join(show, "Season 01", "Breaking.Bad.S01E02.1080p.mkv"),
+        "",
+      );
+      await writeFile(join(show, "Season 02", "Breaking.Bad.S02E01.mkv"), "");
+      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      try {
+        const base = `http://127.0.0.1:${server.apiServer?.port}`;
+        const preview = await fetch(
+          `${base}/api/folders/preview?folder=${encodeURIComponent(root)}&medium=shows&examples=1`,
+          { headers: bearer(token) },
+        );
+        expect(preview.status).toBe(200);
+        expect(await preview.json()).toEqual({
+          counts: { show: 1, season: 2, episode: 3 },
+          unrecognised: 0,
+          examples: [
+            {
+              kind: "show",
+              title: "Breaking Bad",
+              year: 2008,
+              folder: "Breaking Bad (2008)",
+              seasons: [1, 2],
+              episodes: 3,
+            },
+          ],
+          reason: null,
+        });
+      } finally {
+        await server.stop();
+      }
+    }));
 });

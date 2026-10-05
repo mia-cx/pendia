@@ -3,8 +3,11 @@ import { lstat, readdir } from "node:fs/promises";
 import { posix } from "node:path";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
+import type { libraries } from "../db/schema/index.ts";
+import { previewScan, type ScanPreview } from "./preview.ts";
 
 type Queryable = Pick<Database, "select">;
+type Medium = (typeof libraries.$inferSelect)["medium"];
 
 /** A folder browse failure that maps onto an API error code. */
 export class FolderError extends Error {
@@ -92,4 +95,21 @@ export async function listFolders(
     path: folder,
     folders: names.map((name) => ({ name, path: posix.join(folder, name) })),
   };
+}
+
+/** Runs a scan preview of one folder for an admin, translating unreadable roots. */
+export async function previewFolder(
+  db: Queryable,
+  actorId: string,
+  folder: string,
+  medium: Medium,
+  options: { examples?: number; signal?: AbortSignal } = {},
+): Promise<ScanPreview> {
+  await requirePermission(db, actorId, "manage-libraries");
+  try {
+    return await previewScan(folder, medium, options);
+  } catch (error) {
+    if (isUnreadable(error)) throw unreadable();
+    throw error;
+  }
 }

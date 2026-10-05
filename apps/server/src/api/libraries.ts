@@ -1,5 +1,9 @@
 import { Effect, Schema } from "effect";
-import { FolderError, listFolders } from "../libraries/folders.ts";
+import {
+  FolderError,
+  listFolders,
+  previewFolder,
+} from "../libraries/folders.ts";
 import {
   createLibrary,
   deleteLibrary,
@@ -23,6 +27,8 @@ import {
   Library,
   LibraryInput,
   LibraryUpdate,
+  PreviewExamples,
+  ScanPreview,
   ScanStatus,
 } from "./schema.ts";
 
@@ -198,11 +204,38 @@ const folders = authenticated
     ),
   );
 
+const preview = authenticated
+  .route({ method: "GET", path: "/folders/preview" })
+  .input(
+    Schema.standardSchemaV1(
+      Schema.Struct({
+        folder: AbsolutePath,
+        medium: Schema.Literal("movies", "shows"),
+        examples: Schema.optional(PreviewExamples),
+      }),
+    ),
+  )
+  .output(Schema.standardSchemaV1(ScanPreview))
+  .handler(async ({ context, input, signal }) =>
+    runApi(
+      libraryHost(() =>
+        previewFolder(
+          context.db,
+          context.caller.user.id,
+          input.folder,
+          input.medium,
+          { examples: input.examples, signal },
+        ),
+      ),
+    ),
+  );
+
 /** The library administration procedures mounted under `libraries`. */
 export const libraryProcedures = {
   list,
   get,
   folders,
+  preview,
   create,
   update,
   delete: remove,

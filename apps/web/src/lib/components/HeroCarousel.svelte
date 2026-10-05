@@ -97,7 +97,7 @@ const multiple = $derived(slides.length > 1);
         aria-roledescription="slide"
         aria-label="{i + 1} of {slides.length}"
         inert={i !== current}
-        class="w-full shrink-0 snap-start"
+        class="grid w-full shrink-0 snap-start"
       >
         <Hero
           backdropId={landscapeArtwork(card)}

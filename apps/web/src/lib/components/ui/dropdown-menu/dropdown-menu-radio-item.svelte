@@ -24,7 +24,7 @@ let {
 >
   {#snippet children({ checked })}
     <span
-      class="absolute right-2 flex items-center justify-center pointer-events-none"
+      class="absolute left-2 flex size-4 items-center justify-center pointer-events-none"
       data-slot="dropdown-menu-radio-item-indicator"
     >
       {#if checked}

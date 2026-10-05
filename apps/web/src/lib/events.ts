@@ -34,3 +34,22 @@ export async function followEvents(
     });
   }
 }
+
+/** Calls `onChange` for every `library.changed` on the given Library until the signal aborts. */
+export async function followLibrary(
+  open: (signal: AbortSignal) => Promise<AsyncIterable<ServerEvent>>,
+  libraryId: string,
+  onChange: () => void,
+  signal: AbortSignal,
+  retryMs?: number,
+) {
+  return followEvents(
+    open,
+    (event) => {
+      if (event.kind === "library.changed" && event.libraryId === libraryId)
+        onChange();
+    },
+    signal,
+    retryMs,
+  );
+}

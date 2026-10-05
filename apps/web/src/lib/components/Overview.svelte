@@ -30,25 +30,18 @@ onMount(() => {
 
 <p
   bind:this={paragraph}
+  class:overflowed={overflows}
   class="relative max-w-[36rem] text-callout text-white/90 line-clamp-3"
 >
   {text}
   {#if overflows}
-    <span
-      class="absolute right-0 bottom-0 flex items-center"
+    <button
+      type="button"
+      class="material absolute right-0 bottom-0 rounded-full px-2.5 py-1 text-caption-1 font-semibold tracking-wide uppercase text-white"
+      onclick={() => (open = true)}
     >
-      <span
-        class="pointer-events-none absolute inset-y-0 right-full w-10 bg-linear-to-l from-black/85 to-transparent"
-        aria-hidden="true"
-      ></span>
-      <button
-        type="button"
-        class="material rounded-full bg-black/85 px-2.5 py-1 text-caption-1 font-semibold tracking-wide uppercase text-white"
-        onclick={() => (open = true)}
-      >
-        More
-      </button>
-    </span>
+      More
+    </button>
   {/if}
 </p>
 
@@ -60,3 +53,17 @@ onMount(() => {
     <p class="text-callout text-label whitespace-pre-line">{text}</p>
   </Dialog.Content>
 </Dialog.Root>
+
+<style>
+  /* Fade the last line's tail under the More pill. */
+  .overflowed {
+    mask-image:
+      linear-gradient(#000, #000),
+      linear-gradient(to left, transparent 4.5rem, #000 7rem);
+    mask-size:
+      100% calc(100% - 1lh),
+      100% 1lh;
+    mask-position: top, bottom;
+    mask-repeat: no-repeat;
+  }
+</style>

@@ -72,7 +72,7 @@ async function request() {
       >
     </p>
   {:else}
-    <div class="flex max-w-[30rem] items-center gap-3">
+    <div class="mt-3 flex max-w-[30rem] items-center gap-3">
       <span class="shrink-0 text-subheadline">Store a Version</span>
       <Select.Root
         type="single"

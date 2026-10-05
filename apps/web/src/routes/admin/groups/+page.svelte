@@ -93,7 +93,14 @@ async function saveEdit() {
   editFailure = undefined;
   const perms = [...editPerms];
   try {
-    await client.groups.setPermissions({ id: row.id, permissions: perms });
+    const saved = await client.groups.setPermissions({
+      id: row.id,
+      permissions: perms,
+    });
+    if (list.data)
+      list.set(
+        list.data.map((group) => (group.id === saved.id ? saved : group)),
+      );
     if (editing?.id === row.id && samePermissions(editPerms, perms)) {
       editOpen = false;
       editing = undefined;

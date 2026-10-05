@@ -9,11 +9,12 @@ import FormGroup from "$lib/components/admin/FormGroup.svelte";
 import FormRow from "$lib/components/admin/FormRow.svelte";
 import ScanState from "$lib/components/admin/ScanState.svelte";
 import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+import Failure from "$lib/components/Failure.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import { Input } from "$lib/components/ui/input/index.ts";
 import { readFailure } from "$lib/errors.ts";
 import { resource } from "$lib/resource.svelte.ts";
-import { queuesScan, type RootDraft, refusedRoot } from "$lib/roots.ts";
+import { queuesScan, type RootDraft } from "$lib/roots.ts";
 import { type ScanStatus, waitForScan } from "$lib/scan.ts";
 import PolicyEditor from "./PolicyEditor.svelte";
 
@@ -58,7 +59,6 @@ async function saveName(event: SubmitEvent) {
   }
 }
 
-let refusal = $state<{ index: number; message: string } | undefined>(undefined);
 let folderFailure = $state<FailureShape | undefined>(undefined);
 
 /** Saves one folder change at once; throws so the folder browser stays open on failure. */
@@ -67,13 +67,11 @@ async function sendRoots(sent: RootDraft[]) {
   if (!saved) return;
   try {
     const answer = await client.libraries.update({ id, roots: sent });
-    refusal = undefined;
     folderFailure = undefined;
     library.set(answer);
     return { answer, queued: queuesScan(saved, sent) };
   } catch (error) {
-    const refused = refusedRoot(error);
-    if (refused !== undefined && refused.index < sent.length) refusal = refused;
+    // A refusal shows inside the open browser; the rows stay clean.
     throw error;
   }
 }
@@ -169,8 +167,8 @@ async function deleteLibrary() {
     toast.success(`${current.name} deleted`);
     await goto("/admin/libraries");
   } catch (error) {
+    // ConfirmDialog has no error state; let it close and show the failure instead.
     deleteFailure = readFailure(error);
-    throw error;
   }
 }
 </script>
@@ -214,7 +212,6 @@ async function deleteLibrary() {
     <FolderFields
       rows={library.data.roots}
       medium={library.data.medium}
-      refusal={refusal ?? undefined}
       onadd={addFolder}
       onrepoint={repointFolder}
       onremove={removeFolder}
@@ -228,7 +225,7 @@ async function deleteLibrary() {
     >
       {#if status !== undefined}
         <FormRow label="Status" inline>
-          <ScanState {status} withTime />
+          <ScanState {status} withTime class="items-end @lg:items-start" />
         </FormRow>
       {/if}
       {#snippet actions()}
@@ -240,13 +237,14 @@ async function deleteLibrary() {
 
     <PolicyEditor {id} />
 
-    <FormGroup failure={deleteFailure ?? undefined}>
-      <div class="flex min-h-12 items-center px-4 py-2.5">
-        <Button variant="destructive" onclick={() => (deleteOpen = true)}
-          >Delete library</Button
-        >
-      </div>
-    </FormGroup>
+    <div class="flex flex-col items-start gap-2">
+      <Button variant="destructive" onclick={() => (deleteOpen = true)}
+        >Delete library</Button
+      >
+      {#if deleteFailure}
+        <Failure inline failure={deleteFailure} />
+      {/if}
+    </div>
   {/if}
 
   <ConfirmDialog

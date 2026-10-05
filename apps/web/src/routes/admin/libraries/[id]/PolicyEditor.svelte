@@ -62,7 +62,6 @@ function submit(event: SubmitEvent) {
 
 async function save() {
   if (draft === null) return;
-  confirming = null;
   busy = true;
   failure = undefined;
   const next: StoredPolicy = fromDraft(draft);
@@ -205,6 +204,7 @@ async function save() {
     description="Every Item in this library loses these stored versions."
     action="Save and delete"
     onconfirm={save}
+    onclosed={() => (confirming = null)}
   />
 {:else}
   <FormGroup

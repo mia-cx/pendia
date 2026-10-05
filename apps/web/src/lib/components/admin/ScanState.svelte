@@ -1,11 +1,17 @@
 <script lang="ts">
+import { cn } from "$lib/utils.ts";
 import { type ScanStatus, scanStartedAt, scanState } from "$lib/scan.ts";
 
 /** A library's scan state as a dot and label; `withTime` adds a "Last scan" line. */
 const {
   status,
   withTime = false,
-}: { status: ScanStatus | undefined | null; withTime?: boolean } = $props();
+  class: className,
+}: {
+  status: ScanStatus | undefined | null;
+  withTime?: boolean;
+  class?: string;
+} = $props();
 
 const scanTones = {
   active: "bg-tint",
@@ -29,8 +35,8 @@ const lastScan = $derived(
 );
 </script>
 
-<span class="flex flex-col items-end gap-0.5">
-  <span class="flex items-center gap-2">
+<span class={cn("flex flex-col items-end gap-0.5", className)}>
+  <span class={cn("flex items-center gap-2", className)}>
     <span class="size-2 rounded-full {scanTones[state.tone]}"></span>
     <span class="text-footnote text-label-secondary">{state.label}</span>
   </span>

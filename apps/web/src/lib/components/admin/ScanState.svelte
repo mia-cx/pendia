@@ -38,7 +38,7 @@ const lastScan = $derived(
 </script>
 
 <span class={cn("flex flex-col items-end gap-0.5", className)}>
-  <span class={cn("flex items-center gap-2", className)}>
+  <span class="flex items-center gap-2">
     <span class="size-2 rounded-full {scanTones[state.tone]}"></span>
     <span class="text-footnote text-label-secondary">{state.label}</span>
   </span>

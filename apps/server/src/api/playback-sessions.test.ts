@@ -212,6 +212,30 @@ const burnDecision = decidePlayback(
   { isLan: true },
 );
 
+// HDR10 HEVC with a bitmap subtitle on an SDR H.264 client tone maps and burns in one transcode; its aac audio copies.
+const hdrBurnDecision = decidePlayback(
+  {
+    container: "mkv",
+    video: {
+      codec: "hevc",
+      width: 3840,
+      height: 2160,
+      bitrate: 20_000_000,
+      hdr: "hdr10",
+    },
+    audio: [{ codec: "aac", channels: 2 }],
+    subtitles: [{ format: "pgs", kind: "bitmap" }],
+  },
+  {
+    containers: ["mkv"],
+    videoCodecs: [{ codec: "h264" }],
+    audioCodecs: [{ codec: "aac", maxChannels: 2 }],
+    subtitleFormats: ["srt"],
+    hdr: ["sdr"],
+  },
+  { isLan: true },
+);
+
 describe("transcodeReasons", () => {
   test("direct play, remux and stored Versions convert nothing", () => {
     expect(directDecision.method).toBe("direct-play");
@@ -239,6 +263,14 @@ describe("transcodeReasons", () => {
   test("a burned-in bitmap subtitle names subtitles", () => {
     expect(burnDecision.method).toBe("transcode");
     expect(transcodeReasons(burnDecision)).toContain("subtitles");
+  });
+
+  test("tone mapping and burn-in name hdr and subtitles together", () => {
+    expect(hdrBurnDecision.method).toBe("transcode");
+    if (hdrBurnDecision.method !== "transcode") return;
+    expect(hdrBurnDecision.video.toneMap).not.toBeNull();
+    expect(hdrBurnDecision.video.burnSubtitles).toBe(true);
+    expect(transcodeReasons(hdrBurnDecision)).toEqual(["subtitles", "hdr"]);
   });
 });
 

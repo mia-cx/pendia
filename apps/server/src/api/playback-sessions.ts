@@ -34,7 +34,7 @@ function rungsOf(
   return ["source"];
 }
 
-/** What a session's transcode converts: video, subtitles or HDR first, audio last; empty when nothing is re-encoded. */
+/** What a session's transcode converts: burn-in and tone mapping each count, plain video only when neither applies, audio last; empty when nothing is re-encoded. */
 export function transcodeReasons(
   decision: SessionDecision | null,
 ): ("video" | "audio" | "subtitles" | "hdr")[] {
@@ -42,8 +42,8 @@ export function transcodeReasons(
   const reasons: ("video" | "subtitles" | "hdr")[] = [];
   if (decision.video.action === "transcode") {
     if (decision.video.burnSubtitles) reasons.push("subtitles");
-    else if (decision.video.toneMap !== null) reasons.push("hdr");
-    else reasons.push("video");
+    if (decision.video.toneMap !== null) reasons.push("hdr");
+    if (reasons.length === 0) reasons.push("video");
   }
   return decision.audio?.action === "transcode"
     ? [...reasons, "audio"]

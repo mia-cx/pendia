@@ -8,10 +8,11 @@ import AdminPage from "$lib/components/admin/AdminPage.svelte";
 import FormGroup from "$lib/components/admin/FormGroup.svelte";
 import FormRow from "$lib/components/admin/FormRow.svelte";
 import ListRow from "$lib/components/admin/ListRow.svelte";
+import ScanState from "$lib/components/admin/ScanState.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import { followEvents } from "$lib/events.ts";
 import { resource } from "$lib/resource.svelte.ts";
-import { type ScanStatus, scanState } from "$lib/scan.ts";
+import type { ScanStatus } from "$lib/scan.ts";
 
 type Session = NonNullable<
   Awaited<ReturnType<typeof client.playback.sessions>>
@@ -61,12 +62,6 @@ async function loadScans() {
 }
 
 const mediumLabels = { movies: "Movies", shows: "Shows" } as const;
-const scanTones = {
-  active: "bg-tint",
-  done: "bg-success",
-  error: "bg-destructive",
-  idle: "bg-label-tertiary",
-} as const;
 
 const stateLabels: Record<Session["state"], string> = {
   queued: "Queued",
@@ -137,22 +132,12 @@ onDestroy(() => {
   >
     {#if libraries.data !== undefined}
       {#each libraries.data as library (library.id)}
-        {@const status = scans[library.id]}
-        {@const state =
-          status === null
-            ? { label: "Status unavailable", tone: "idle" as const }
-            : scanState(status)}
         <ListRow
           title={library.name}
           caption={mediumLabels[library.medium]}
           href="/admin/libraries/{library.id}"
         >
-          <span class="flex items-center gap-2">
-            <span class="size-2 rounded-full {scanTones[state.tone]}"></span>
-            <span class="text-footnote text-label-secondary"
-              >{state.label}</span
-            >
-          </span>
+          <ScanState status={scans[library.id]} />
         </ListRow>
       {:else}
         <div class="relative min-h-12 px-4 py-2.5">

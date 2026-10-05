@@ -9,13 +9,14 @@ import AdminBackLink from "$lib/components/admin/AdminBackLink.svelte";
 import AdminNav from "$lib/components/admin/AdminNav.svelte";
 import TabBar from "$lib/components/TabBar.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
+import * as Tooltip from "$lib/components/ui/tooltip/index.ts";
 import type { LayoutProps } from "./$types";
 
 const { data, children }: LayoutProps = $props();
 
 // Sections not yet redesigned keep the old element styles under .legacy.
 const legacy = $derived(
-  ["/admin/libraries", "/admin/plugins", "/admin/activity"].some(
+  ["/admin/plugins", "/admin/activity"].some(
     (path) =>
       page.url.pathname === path || page.url.pathname.startsWith(`${path}/`),
   ),
@@ -52,6 +53,7 @@ onNavigate((nav) => {
   <title>Pendia admin</title>
 </svelte:head>
 
+<Tooltip.Provider>
 <div class="shell">
   <a
     href="#content"
@@ -136,6 +138,7 @@ onNavigate((nav) => {
     </main>
   </div>
 </div>
+</Tooltip.Provider>
 
 <style>
   .shell {

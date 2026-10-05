@@ -284,16 +284,45 @@
   margin-inline: calc(-1 * var(--shell-start)) calc(-1 * var(--gutter));
 }
 
-/* The surface behind missing or failed artwork: an elevated fill with a soft sheen. */
+/* The surface behind missing or failed artwork: a quiet hue from the title under a soft sheen. High contrast drops the hue so text contrast stays maximal. */
 @utility artwork-fallback {
-  background-color: var(--background-elevated);
   background-image:
     radial-gradient(
       120% 90% at 15% 0%,
       light-dark(oklch(100% 0 0deg / 70%), oklch(100% 0 0deg / 8%)) 0%,
       transparent 60%
     ),
-    linear-gradient(160deg, var(--fill) 0%, var(--fill-strong) 100%);
+    linear-gradient(
+      160deg,
+      light-dark(
+        oklch(93% 0.035 var(--fallback-hue, 0deg)),
+        oklch(36% 0.06 var(--fallback-hue, 0deg))
+      ),
+      light-dark(
+        oklch(85% 0.05 calc(var(--fallback-hue, 0deg) + 35)),
+        oklch(22% 0.045 calc(var(--fallback-hue, 0deg) + 35))
+      )
+    );
+
+  @media (prefers-contrast: more) {
+    background-image:
+      radial-gradient(
+        120% 90% at 15% 0%,
+        light-dark(oklch(100% 0 0deg / 70%), oklch(100% 0 0deg / 8%)) 0%,
+        transparent 60%
+      ),
+      linear-gradient(
+        160deg,
+        light-dark(
+          oklch(93% 0 var(--fallback-hue, 0deg)),
+          oklch(36% 0 var(--fallback-hue, 0deg))
+        ),
+        light-dark(
+          oklch(85% 0 var(--fallback-hue, 0deg)),
+          oklch(22% 0 var(--fallback-hue, 0deg))
+        )
+      );
+  }
 }
 
 /* The denser material for menus, toasts and tooltips. */

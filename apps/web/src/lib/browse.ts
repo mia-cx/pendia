@@ -46,9 +46,14 @@ export const landscapeWidths = [320, 480, 640, 960, 1280] as const;
 /** The widths heroes and detail backdrops render at. */
 export const backdropWidths = [960, 1440, 1920, 2560] as const;
 
-/** A `srcset` over the widths a poster renders at on any screen density. */
-export const posterSrcset = (id: string): string =>
-  artworkSrcset(id, posterWidths);
+const hueRange = 360;
+
+/** A quiet, stable hue per title for the fallback surface behind missing artwork. */
+export function fallbackHue(title: string): number {
+  let hash = 0;
+  for (const char of title) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) | 0;
+  return ((hash % hueRange) + hueRange) % hueRange;
+}
 
 /** The landscape artwork a card leads with: an Episode's thumb, else its backdrop. */
 export function landscapeArtwork(card: BrowseCard): string | null {
@@ -110,15 +115,41 @@ export function episodeCode(card: BrowseCard): string | null {
 }
 
 /** A card's full name on one line: the Show and code before an Episode, the year after a Movie. */
-export function cardLabel(card: BrowseCard): string {
-  const code = episodeCode(card);
-  if (card.show !== null && card.kind === "episode")
-    return [card.show.title, code, card.title]
-      .filter((part) => part !== null)
-      .join(" · ");
-  if (card.show !== null && card.kind === "season")
-    return `${card.show.title} · ${card.title}`;
+export function cardLabel(card: ItemCard | BrowseCard): string {
+  if ("show" in card) {
+    const code = episodeCode(card);
+    if (card.show !== null && card.kind === "episode")
+      return [card.show.title, code, card.title]
+        .filter((part) => part !== null)
+        .join(" · ");
+    if (card.show !== null && card.kind === "season")
+      return `${card.show.title} · ${card.title}`;
+  }
   return card.year === null ? card.title : `${card.title} (${card.year})`;
+}
+
+const kindHeadings = { movie: "Movies", show: "Shows" } as const;
+
+/** Search results grouped by medium, in the order each kind first ranks. */
+export function groupByKind(cards: readonly ItemCard[]): {
+  kind: "movie" | "show";
+  heading: "Movies" | "Shows";
+  cards: ItemCard[];
+}[] {
+  const groups = new Map<
+    "movie" | "show",
+    { kind: "movie" | "show"; heading: "Movies" | "Shows"; cards: ItemCard[] }
+  >();
+  for (const card of cards) {
+    if (card.kind !== "movie" && card.kind !== "show") continue;
+    let group = groups.get(card.kind);
+    if (group === undefined) {
+      group = { kind: card.kind, heading: kindHeadings[card.kind], cards: [] };
+      groups.set(card.kind, group);
+    }
+    group.cards.push(card);
+  }
+  return [...groups.values()];
 }
 
 /** A running time in compact hours and minutes, such as `2h 46m` or `55m`. */

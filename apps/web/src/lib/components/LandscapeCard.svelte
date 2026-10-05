@@ -55,7 +55,8 @@ const artworkId = $derived(landscapeArtwork(card));
     class="relative transition-[transform,box-shadow] duration-(--duration-fast) ease-smooth-out motion-safe:group-hover:-translate-y-1 motion-safe:group-hover:scale-[1.02] motion-safe:group-hover:shadow-lift motion-safe:group-hover:duration-(--duration-fast) motion-safe:group-hover:ease-spring motion-safe:group-has-[a:focus-visible]:-translate-y-1 motion-safe:group-has-[a:focus-visible]:scale-[1.02] motion-safe:group-has-[a:focus-visible]:shadow-lift rounded-poster"
   >
     {#if href === null}
-      <div aria-label={label} class="block rounded-poster outline-none">
+      <div class="block rounded-poster">
+        <span class="sr-only">{label}</span>
         {@render inner()}
       </div>
     {:else}

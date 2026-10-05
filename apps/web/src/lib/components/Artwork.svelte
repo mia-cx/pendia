@@ -5,6 +5,7 @@ import type { Snippet } from "svelte";
 import {
   artworkSrcset,
   artworkUrl,
+  fallbackHue,
   landscapeWidths,
   posterWidths,
 } from "$lib/browse.ts";
@@ -61,7 +62,11 @@ const showsTitle = $derived(shape === "poster" && fallbackTitle);
         : "size-full object-cover opacity-0 transition-opacity duration-(--duration-slow)"}
     />
   {:else}
-    <span class="absolute inset-0 artwork-fallback" aria-hidden="true">
+    <span
+      class="absolute inset-0 artwork-fallback"
+      style:--fallback-hue={fallbackHue(title)}
+      aria-hidden="true"
+    >
       {#if showsTitle}
         <Icon class="absolute top-3.5 left-3.5 size-5 text-label-tertiary" />
         <span
@@ -75,10 +80,6 @@ const showsTitle = $derived(shape === "poster" && fallbackTitle);
             <span class="text-footnote text-label-secondary">{caption}</span>
           {/if}
         </span>
-      {:else}
-        <Icon
-          class="absolute top-1/2 left-1/2 size-8 -translate-x-1/2 -translate-y-1/2 text-label-tertiary"
-        />
       {/if}
     </span>
   {/if}

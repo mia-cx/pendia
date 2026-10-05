@@ -81,9 +81,9 @@ let loaded = $state(false);
     class="absolute inset-x-0 bottom-0 ps-(--shell-start) pe-(--gutter) pb-16 lg:pb-20"
   >
     <div class="flex max-w-[36rem] flex-col gap-3">
-      <svelte:element this={heading} class="contents">
+      <svelte:element this={heading}>
         {#if logoId}
-          <span class="block h-[clamp(4.5rem,9vw,8rem)]">
+          <span class="flex items-end h-[clamp(4rem,8vw,7rem)]">
             <img
               src={artworkUrl(logoId, 960)}
               alt={title}
@@ -92,7 +92,7 @@ let loaded = $state(false);
             />
           </span>
         {:else}
-          <span class="text-display text-white text-balance">{title}</span>
+          <span class="block text-display text-white text-balance">{title}</span>
         {/if}
       </svelte:element>
       {@render children()}

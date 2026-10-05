@@ -1,3 +1,12 @@
+<script module lang="ts">
+/** The grid track columns a Shelf and its skeleton share. */
+export const shelfColumns = {
+  poster: "auto-cols-[clamp(7.5rem,30vw,10.5rem)] lg:auto-cols-[11.5rem]",
+  landscape:
+    "auto-cols-[min(80vw,19rem)] lg:auto-cols-[clamp(15rem,21vw,19rem)]",
+} as const;
+</script>
+
 <script lang="ts">
 import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
 import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
@@ -45,6 +54,10 @@ function scroll(direction: 1 | -1) {
       : "smooth",
   });
 }
+
+// With both top and bottom set, `my-auto` centres a paddle over the cards.
+const paddle =
+  "absolute top-3 bottom-6 my-auto hidden h-16 w-9 items-center justify-center rounded-full material shadow-float text-label opacity-0 transition-opacity duration-(--duration-fast) ease-smooth-out pointer-fine:flex group-hover/shelf:enabled:opacity-100 focus-visible:opacity-100 disabled:pointer-events-none";
 </script>
 
 <section aria-labelledby={id}>
@@ -69,10 +82,9 @@ function scroll(direction: 1 | -1) {
     <ul
       bind:this={track}
       onscroll={measure}
-      class="row-scroll mt-2 -mb-4 grid grid-flow-col gap-4 overflow-x-auto overscroll-x-contain pt-3 pb-6 [scrollbar-width:none] snap-x snap-mandatory lg:gap-5 [&::-webkit-scrollbar]:hidden {size ===
-      'landscape'
-        ? 'auto-cols-[min(80vw,19rem)] lg:auto-cols-[clamp(15rem,21vw,19rem)]'
-        : 'auto-cols-[clamp(7.5rem,30vw,10.5rem)] lg:auto-cols-[11.5rem]'}"
+      class="row-scroll bleed mt-2 -mb-4 grid grid-flow-col gap-4 overflow-x-auto overscroll-x-contain pt-3 pb-6 ps-(--shell-start) pe-(--gutter) [scrollbar-width:none] snap-x snap-mandatory lg:gap-5 [&::-webkit-scrollbar]:hidden {shelfColumns[
+        size
+      ]}"
     >
       {@render children()}
     </ul>
@@ -82,7 +94,7 @@ function scroll(direction: 1 | -1) {
         aria-label="Scroll left"
         disabled={!canLeft}
         onclick={() => scroll(-1)}
-        class="paddle top-3 bottom-6 -left-5 hidden pointer-fine:flex"
+        class="{paddle} -left-5"
       >
         <ChevronLeftIcon class="size-6" />
       </button>
@@ -91,7 +103,7 @@ function scroll(direction: 1 | -1) {
         aria-label="Scroll right"
         disabled={!canRight}
         onclick={() => scroll(1)}
-        class="paddle top-3 bottom-6 -right-[calc(var(--gutter)-0.5rem)] hidden pointer-fine:flex"
+        class="{paddle} -right-[calc(var(--gutter)-0.5rem)]"
       >
         <ChevronRightIcon class="size-6" />
       </button>
@@ -101,38 +113,9 @@ function scroll(direction: 1 | -1) {
 
 <style>
   .row-scroll {
-    margin-inline: calc(-1 * var(--shell-start)) calc(-1 * var(--gutter));
-    padding-inline: var(--shell-start) var(--gutter);
     scroll-padding-inline: var(--shell-start) var(--gutter);
   }
   .row-scroll :global(li) {
     scroll-snap-align: start;
-  }
-  .paddle {
-    position: absolute;
-    /* With both top and bottom set, auto margins centre it over the cards. */
-    margin-block: auto;
-    width: 2.25rem;
-    height: 4rem;
-    align-items: center;
-    justify-content: center;
-    border-radius: 9999px;
-    color: var(--label);
-    background-color: var(--material);
-    -webkit-backdrop-filter: blur(var(--material-blur)) saturate(180%);
-    backdrop-filter: blur(var(--material-blur)) saturate(180%);
-    box-shadow:
-      inset 0 0 0 0.5px var(--material-edge),
-      var(--elevation-float);
-    opacity: 0;
-    transition: opacity var(--duration-fast) var(--ease-smooth-out);
-  }
-  .group\/shelf:hover .paddle:not(:disabled),
-  .paddle:focus-visible {
-    opacity: 1;
-  }
-  .paddle:disabled {
-    opacity: 0;
-    pointer-events: none;
   }
 </style>

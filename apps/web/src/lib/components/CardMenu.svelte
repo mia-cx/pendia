@@ -19,6 +19,14 @@ const showHref = $derived(
     ? `/shows/${card.id}`
     : (card.show && `/shows/${card.show.id}`) || null,
 );
+// The pages a card can open: its own, then its Show's.
+const items = $derived.by(() => {
+  const list: { label: string; href: string }[] = [];
+  if (href !== null) list.push({ label: `Go to ${card.kind}`, href });
+  if ((card.kind === "episode" || card.kind === "season") && showHref !== null)
+    list.push({ label: "Go to show", href: showHref });
+  return list;
+});
 </script>
 
 <DropdownMenu.Root>
@@ -35,40 +43,14 @@ const showHref = $derived(
     {/snippet}
   </DropdownMenu.Trigger>
   <DropdownMenu.Content align="end">
-    {#if card.kind === "movie" && href}
-      <DropdownMenu.Item onclick={() => goto(href)}>
-        Go to movie
+    {#each items as item (item.href)}
+      <DropdownMenu.Item onSelect={() => goto(item.href)}>
+        {item.label}
       </DropdownMenu.Item>
-    {:else if card.kind === "episode"}
-      {#if href}
-        <DropdownMenu.Item onclick={() => goto(href)}>
-          Go to episode
-        </DropdownMenu.Item>
-      {/if}
-      {#if showHref}
-        <DropdownMenu.Item onclick={() => goto(showHref)}>
-          Go to show
-        </DropdownMenu.Item>
-      {/if}
-    {:else if card.kind === "season"}
-      {#if href}
-        <DropdownMenu.Item onclick={() => goto(href)}>
-          Go to season
-        </DropdownMenu.Item>
-      {/if}
-      {#if showHref}
-        <DropdownMenu.Item onclick={() => goto(showHref)}>
-          Go to show
-        </DropdownMenu.Item>
-      {/if}
-    {:else if card.kind === "show"}
-      <DropdownMenu.Item onclick={() => goto(`/shows/${card.id}`)}>
-        Go to show
-      </DropdownMenu.Item>
-    {/if}
+    {/each}
     {#if progress !== null}
       <DropdownMenu.Separator />
-      <DropdownMenu.Item onclick={() => goto(`/play/${card.id}?t=0`)}>
+      <DropdownMenu.Item onSelect={() => goto(`/play/${card.id}?t=0`)}>
         Play from start
       </DropdownMenu.Item>
     {/if}

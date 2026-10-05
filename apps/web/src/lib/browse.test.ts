@@ -4,9 +4,12 @@ import {
   type BrowseCard,
   cardLabel,
   episodeCode,
+  fallbackHue,
   formatBytes,
   formatDuration,
+  groupByKind,
   heroSlides,
+  type ItemCard,
   isFresh,
   itemHref,
   landscapeArtwork,
@@ -87,6 +90,38 @@ describe("browse helpers", () => {
     expect(cardLabel(card({ kind: "season", title: "Season 1", show }))).toBe(
       "Severance · Season 1",
     );
+    const item = { ...card({}) } as unknown as ItemCard;
+    delete (item as { show?: unknown }).show;
+    expect(cardLabel(item)).toBe("Arrival (2016)");
+  });
+
+  test("a fallback hue is stable for a title and varies across titles", () => {
+    expect(fallbackHue("Her")).toBe(fallbackHue("Her"));
+    expect(fallbackHue("")).toBe(0);
+    const hues = new Set(
+      ["Her", "Dune", "Severance", "Past Lives", "The Bear"].map(fallbackHue),
+    );
+    expect(hues.size).toBe(5);
+    for (const hue of hues) {
+      expect(hue).toBeGreaterThanOrEqual(0);
+      expect(hue).toBeLessThan(360);
+    }
+  });
+
+  test("search groups order by each kind's first rank", () => {
+    const item = (kind: "movie" | "show", id: string) =>
+      ({ ...card({ kind, id }) }) as unknown as ItemCard;
+    const groups = groupByKind([
+      item("show", "s1"),
+      item("movie", "m1"),
+      item("show", "s2"),
+      item("movie", "m2"),
+    ]);
+    expect(groups.map((group) => group.heading)).toEqual(["Shows", "Movies"]);
+    expect(groups[0]?.cards.map((c) => c.id)).toEqual(["s1", "s2"]);
+    expect(groups[1]?.cards.map((c) => c.id)).toEqual(["m1", "m2"]);
+    expect(groupByKind([])).toEqual([]);
+    expect(groupByKind([item("movie", "m1")])).toHaveLength(1);
   });
 
   test("durations and sizes read as people say them", () => {

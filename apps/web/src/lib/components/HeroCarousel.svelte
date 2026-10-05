@@ -35,6 +35,7 @@ $effect(() => {
       .then((detail) => {
         details[slide.card.id] = detail;
       })
+      // The overview is optional; its space stays reserved on failure.
       .catch(() => {});
   }
 });
@@ -57,14 +58,14 @@ function goTo(index: number) {
 
 function metaLine(card: (typeof slides)[number]["card"]): string {
   const detail = details[card.id];
-  const genres = (detail?.genres ?? []).slice(0, 2).join(", ");
+  const genres = (detail?.genres ?? []).slice(0, 2);
   if (card.kind === "episode") {
     return [episodeCode(card), card.title]
       .filter((part) => part !== null)
       .join(" · ");
   }
   const medium = card.kind === "movie" ? "Movie" : "TV show";
-  return [medium, genres, card.year]
+  return [medium, ...genres, card.year]
     .filter((part) => part !== null && part !== "")
     .join(" · ");
 }

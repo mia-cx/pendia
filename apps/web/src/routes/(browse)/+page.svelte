@@ -7,7 +7,7 @@ import Failure from "$lib/components/Failure.svelte";
 import HeroCarousel from "$lib/components/HeroCarousel.svelte";
 import LandscapeCard from "$lib/components/LandscapeCard.svelte";
 import PosterCard from "$lib/components/PosterCard.svelte";
-import Shelf from "$lib/components/Shelf.svelte";
+import Shelf, { shelfColumns } from "$lib/components/Shelf.svelte";
 import { Button } from "$lib/components/ui/button/index.ts";
 import { Skeleton } from "$lib/components/ui/skeleton/index.ts";
 import { resource } from "$lib/resource.svelte.ts";
@@ -17,6 +17,7 @@ const now = new Date();
 const slides = $derived(home.data === undefined ? [] : heroSlides(home.data));
 
 const landscapeShelves = new Set(["continue-watching", "next-up"]);
+const skeletonSizes = ["landscape", "poster"] as const;
 </script>
 
 <svelte:head>
@@ -36,16 +37,15 @@ const landscapeShelves = new Set(["continue-watching", "next-up"]);
     />
   </div>
   <div class="flex flex-col gap-10 pt-8 lg:gap-12 lg:pt-10" aria-hidden="true">
-    {#each ["landscape", "poster"] as size (size)}
+    {#each skeletonSizes as size (size)}
       <section>
         <div class="flex h-8 items-center">
           <Skeleton class="h-6 w-40" />
         </div>
         <ul
-          class="mt-2 -mb-4 mr-[calc(-1*var(--gutter))] ml-[calc(-1*var(--shell-start))] grid grid-flow-col gap-4 overflow-hidden pt-3 pb-6 pr-(--gutter) pl-(--shell-start) lg:gap-5 {size ===
-          'landscape'
-            ? 'auto-cols-[min(80vw,19rem)] lg:auto-cols-[clamp(15rem,21vw,19rem)]'
-            : 'auto-cols-[clamp(7.5rem,30vw,10.5rem)] lg:auto-cols-[11.5rem]'}"
+          class="bleed mt-2 -mb-4 grid grid-flow-col gap-4 overflow-hidden pt-3 pb-6 ps-(--shell-start) pe-(--gutter) lg:gap-5 {shelfColumns[
+            size
+          ]}"
         >
           {#each { length: 7 } as _, j (j)}
             <li>

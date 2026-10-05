@@ -30,22 +30,17 @@ const fraction = $derived(
     ? null
     : Math.min(1, progress.positionSeconds / progress.durationSeconds),
 );
-const name = $derived(
-  context !== null
-    ? cardLabel(context)
-    : card.year === null
-      ? card.title
-      : `${card.title} (${card.year})`,
-);
 const label = $derived(
-  fraction === null ? name : `${name}, ${Math.round(fraction * 100)}% watched`,
+  fraction === null
+    ? cardLabel(card)
+    : `${cardLabel(card)}, ${Math.round(fraction * 100)}% watched`,
 );
 </script>
 
 <svelte:element
   this={href === null ? "div" : "a"}
   {href}
-  aria-label={label}
+  aria-label={href === null ? undefined : label}
   class="group block min-w-0 text-label no-underline outline-none"
 >
   <span
@@ -78,4 +73,7 @@ const label = $derived(
       {/if}
     </Artwork>
   </span>
+  {#if href === null}
+    <span class="sr-only">{label}</span>
+  {/if}
 </svelte:element>

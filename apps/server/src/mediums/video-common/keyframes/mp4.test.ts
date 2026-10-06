@@ -552,7 +552,8 @@ describe("readKeyframeIndex MP4", () => {
       const probe = await probeVideo(patched);
       expect(probe.streams[0]?.disposition.attached_pic).toBe(true);
       expect(probe.streams[1]?.disposition.attached_pic).toBe(false);
-      expect(probe.keyframesSeconds).toEqual([0, 2, 4, 6, 8, 10]);
+      const indexed = await readKeyframeIndex(patched);
+      expect(indexed.keyframesSeconds).toEqual([0, 2, 4, 6, 8, 10]);
     });
   });
 

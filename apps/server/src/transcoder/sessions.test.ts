@@ -14,7 +14,11 @@ import {
   sessionRegistry,
   versions,
 } from "../db/schema/index.ts";
-import { databaseUrl, withDatabase } from "../db/testing.ts";
+import {
+  databaseUrl,
+  runQueuedKeyframeIndexes,
+  withDatabase,
+} from "../db/testing.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
@@ -134,6 +138,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         roots: [libraryRoot],
       });
       const scanned = await scanDirectory(db, library.id, "Movie (2026)");
+      await runQueuedKeyframeIndexes(db);
       const versionId = scanned.versionIds[0];
       if (scanned.itemId === null || versionId === undefined) {
         throw new Error("Expected exactly one scanned item and version.");

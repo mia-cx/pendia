@@ -1,6 +1,7 @@
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
+import { runQueuedKeyframeIndexes } from "../db/testing.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import fixture from "./fixtures/openapi-10.11.11.json";
@@ -31,6 +32,7 @@ export async function seedMovies(
   const movies = new Map<string, { itemId: string; versionId: string }>();
   for (const title of titles) {
     const scanned = await scanDirectory(db, library.id, `${title} (2026)`);
+    await runQueuedKeyframeIndexes(db);
     const versionId = scanned.versionIds[0];
     if (scanned.itemId === null || versionId === undefined)
       throw new Error(`Expected one Item and Version in ${title}.`);

@@ -12,7 +12,11 @@ import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { sessionRegistry, transcoderCapabilities } from "../db/schema/index.ts";
-import { databaseUrl, withDatabase } from "../db/testing.ts";
+import {
+  databaseUrl,
+  runQueuedKeyframeIndexes,
+  withDatabase,
+} from "../db/testing.ts";
 import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
@@ -118,6 +122,7 @@ describe.skipIf(!databaseUrl)("hls proxy", () => {
           roots: [libraryRoot],
         });
         const scanned = await scanDirectory(db, library.id, "Movie (2026)");
+        await runQueuedKeyframeIndexes(db);
         const versionId = scanned.versionIds[0];
         if (scanned.itemId === null || versionId === undefined) {
           throw new Error("Expected exactly one scanned item and version.");

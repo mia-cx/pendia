@@ -88,7 +88,7 @@ export async function drain(db: Database) {
   registerStoreJobs(db, registry, { now: () => new Date(2026, 9, 4, 2, 0) });
   const queue = createJobQueue(db);
   for (;;) {
-    const job = await queue.claim(["scan", "store"]);
+    const job = await queue.claim(["scan", "store", "keyframe-index"]);
     if (job === undefined) return;
     await registry.run(job);
     await queue.complete(job);

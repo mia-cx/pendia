@@ -6,14 +6,14 @@ One image, one binary. Movies, series, music, photos, ebooks, audiobooks, live T
 
 ## Status
 
-Planning. The architecture is decided ticket by ticket on the [Thalia v1 map](https://github.com/mia-cx/pendia/issues?q=label%3Awayfinder%3Amap). The glossary is [CONTEXT.md](./CONTEXT.md), decisions live in [docs/adr](./docs/adr).
+Planning. The architecture is decided ticket by ticket on the [Thalia v1 map](https://github.com/mia-cx/thalia/issues?q=label%3Awayfinder%3Amap). The glossary is [CONTEXT.md](./CONTEXT.md), decisions live in [docs/adr](./docs/adr).
 
 ## Run
 
 You need git and Docker with Compose. The image is private: log in to GHCR with a GitHub token that has `read:packages`.
 
 ```sh
-git clone https://github.com/mia-cx/pendia.git
+git clone https://github.com/mia-cx/thalia.git
 cd thalia
 docker login ghcr.io
 docker compose up -d

@@ -85,7 +85,7 @@ Other fields belong to the event, such as `port` on `api.listening` or `backends
 
 ## Releases
 
-A release is a `vX.Y.Z` tag on `main`. Pushing it runs CI: the checks, the image build, then the publish job. That job pushes `ghcr.io/mia-cx/pendia` as `X.Y.Z`, `X.Y` and `latest`. A pre-release tag such as `v1.0.0-rc.1` publishes only its own version. Every CI run prints the image size in its summary.
+A release is a `vX.Y.Z` tag on `main`. Pushing it runs CI: the checks, the image build, then the publish job. That job pushes `ghcr.io/mia-cx/thalia` as `X.Y.Z`, `X.Y` and `latest`. A pre-release tag such as `v1.0.0-rc.1` publishes only its own version. Every CI run prints the image size in its summary.
 
 The image is private. Log in before you pull, with a GitHub token that has `read:packages`:
 

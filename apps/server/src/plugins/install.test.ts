@@ -161,8 +161,8 @@ describe("plugin sources", () => {
 
 describe("registries", () => {
   test("maps a GitHub repo to the manifest at its root", () => {
-    expect(registryManifestUrl("https://github.com/mia-cx/pendia")).toBe(
-      "https://raw.githubusercontent.com/mia-cx/pendia/HEAD/thalia-registry.json",
+    expect(registryManifestUrl("https://github.com/mia-cx/thalia")).toBe(
+      "https://raw.githubusercontent.com/mia-cx/thalia/HEAD/thalia-registry.json",
     );
     expect(registryManifestUrl("https://plugins.example/")).toBe(
       "https://plugins.example/thalia-registry.json",

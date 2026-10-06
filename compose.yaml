@@ -16,7 +16,7 @@ services:
 
   thalia:
     # A published release. compose.build.yaml builds this checkout instead.
-    image: ghcr.io/mia-cx/pendia:${THALIA_VERSION:-latest}
+    image: ghcr.io/mia-cx/thalia:${THALIA_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy

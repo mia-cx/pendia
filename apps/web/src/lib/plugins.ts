@@ -1,7 +1,7 @@
 import type { ThaliaClient } from "./api.ts";
 
 // Mirrors the server's default registry.
-export const officialRegistry = "https://github.com/mia-cx/pendia";
+export const officialRegistry = "https://github.com/mia-cx/thalia";
 
 /** An installed plugin as the admin list returns it. */
 export type InstalledPlugin = Awaited<

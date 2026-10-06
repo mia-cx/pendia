@@ -12,7 +12,7 @@ const pluginSettingsKey = "plugins";
 export const pluginChannel = "thalia_plugins";
 
 /** The registry Thalia ships with, where the first-party plugins live. */
-export const officialRegistry = "https://github.com/mia-cx/pendia";
+export const officialRegistry = "https://github.com/mia-cx/thalia";
 
 /** A files switch that is off: for good when `until` is null, otherwise until that instant. */
 export type FilesOff = { until: string | null };

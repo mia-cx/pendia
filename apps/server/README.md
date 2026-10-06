@@ -70,7 +70,7 @@ Plugin cron scheduling belongs to the plugin host, not this queue.
 
 The api, worker and all roles each run a plugin runtime. At startup it listens on `thalia_plugins` and installs every plugin in the lockfile into `THALIA_PLUGIN_DIR`, default `thalia-plugins` under the OS temp dir, in the background. Use local disk. Each package lands in a folder named after its integrity, written to a staging folder and renamed, so two versions never share a folder and a half-written install is never imported. A fresh process with an empty folder refetches each source and refuses one whose bytes no longer match the lockfile.
 
-The official registry, `https://github.com/mia-cx/pendia`, reads `thalia-registry.json` at the repo root. It lists the first-party plugins in `plugins/`.
+The official registry, `https://github.com/mia-cx/thalia`, reads `thalia-registry.json` at the repo root. It lists the first-party plugins in `plugins/`.
 
 A source is an absolute folder path, an http(s) tarball URL or an npm spec such as `thalia-plugin-prunarr@^1`. Npm specs resolve through `THALIA_NPM_REGISTRY`, default `https://registry.npmjs.org`, and the lockfile records the exact version served. Integrity is SRI sha512 of the tarball, which matches npm's own, or of the sorted file listing for a folder. A folder skips `node_modules` and `.git`, so a plugin ships a bundled entry. Tarballs are capped at 64 MiB.
 
@@ -79,7 +79,7 @@ The `plugin_lockfile` table holds name, pinned source, version and integrity. Th
 ```json
 {
   "filesOff": null,
-  "registries": ["https://github.com/mia-cx/pendia"],
+  "registries": ["https://github.com/mia-cx/thalia"],
   "plugins": {
     "thalia-plugin-prunarr": {
       "capabilities": ["items:read", "progress:read", "shelves", "jobs", "network"],

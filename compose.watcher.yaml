@@ -2,7 +2,7 @@
 # It reaches the api over HTTP and needs no database.
 services:
   watcher:
-    image: ghcr.io/mia-cx/pendia:${THALIA_VERSION:-latest}
+    image: ghcr.io/mia-cx/thalia:${THALIA_VERSION:-latest}
     command: ["--role", "watcher"]
     environment:
       THALIA_API_URL: ${THALIA_API_URL:?set the api origin, such as http://thalia.lan:3000}

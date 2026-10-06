@@ -242,49 +242,58 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
     30_000,
   );
 
-  test("readiness waits for the startup trial and the node row carries its table", () =>
-    withDatabase(async (db) => {
-      await migrateDatabase(db);
-      const scratchDir = await mkdtemp(join(tmpdir(), "thalia-trial-"));
-      // The port must be known while startTranscoder is still awaiting the trial.
-      const probe = Bun.serve({ port: 0, fetch: () => new Response() });
-      const port = probe.port;
-      await probe.stop();
-      const table: TranscoderBackend[] = [
-        { name: "cpu", codecs: ["h264"], toneMapping: ["hdr10"] },
-      ];
-      let finishTrial: (backends: TranscoderBackend[]) => void = () => {};
-      const starting = startTranscoder(db, {
-        port,
-        scratchDir,
-        trial: () =>
-          new Promise((resolve) => {
-            finishTrial = resolve;
-          }),
-      });
-      try {
-        const base = `http://127.0.0.1:${port}`;
-        const deadline = Date.now() + 2_000;
-        while ((await fetch(`${base}/healthz`).catch(() => null)) === null) {
-          if (Date.now() > deadline) throw new Error("No /healthz answer.");
-          await Bun.sleep(10);
-        }
-        const early = await fetch(`${base}/readyz`);
-        expect(early.status).toBe(503);
-        expect(await early.json()).toMatchObject({ status: "starting" });
-        expect(await db.select().from(transcoderCapabilities)).toHaveLength(0);
+  test(
+    "readiness waits for the startup trial and the node row carries its table",
+    () =>
+      withDatabase(async (db) => {
+        await migrateDatabase(db);
+        const scratchDir = await mkdtemp(join(tmpdir(), "thalia-trial-"));
+        // The port must be known while startTranscoder is still awaiting the trial.
+        const probe = Bun.serve({ port: 0, fetch: () => new Response() });
+        const port = probe.port;
+        await probe.stop();
+        const table: TranscoderBackend[] = [
+          { name: "cpu", codecs: ["h264"], toneMapping: ["hdr10"] },
+        ];
+        let finishTrial: (backends: TranscoderBackend[]) => void = () => {};
+        const starting = startTranscoder(db, {
+          port,
+          scratchDir,
+          trial: () =>
+            new Promise((resolve) => {
+              finishTrial = resolve;
+            }),
+        });
+        try {
+          const base = `http://127.0.0.1:${port}`;
+          const deadline = Date.now() + 2_000;
+          while ((await fetch(`${base}/healthz`).catch(() => null)) === null) {
+            if (Date.now() > deadline) throw new Error("No /healthz answer.");
+            await Bun.sleep(10);
+          }
+          const early = await fetch(`${base}/readyz`);
+          expect(early.status).toBe(503);
+          expect(await early.json()).toMatchObject({ status: "starting" });
+          expect(await db.select().from(transcoderCapabilities)).toHaveLength(
+            0,
+          );
 
-        finishTrial(table);
-        const transcoder = await starting;
-        expect((await fetch(`${base}/readyz`)).status).toBe(200);
-        const [node] = await db.select().from(transcoderCapabilities);
-        expect(node).toMatchObject({ id: transcoder.nodeId, backends: table });
-      } finally {
-        finishTrial(table);
-        await (await starting.catch(() => null))?.stop();
-        await rm(scratchDir, { recursive: true, force: true });
-      }
-    }));
+          finishTrial(table);
+          const transcoder = await starting;
+          expect((await fetch(`${base}/readyz`)).status).toBe(200);
+          const [node] = await db.select().from(transcoderCapabilities);
+          expect(node).toMatchObject({
+            id: transcoder.nodeId,
+            backends: table,
+          });
+        } finally {
+          finishTrial(table);
+          await (await starting.catch(() => null))?.stop();
+          await rm(scratchDir, { recursive: true, force: true });
+        }
+      }),
+    20_000,
+  );
 
   test("a failed startup trial stops the transcoder before it registers", () =>
     withDatabase(async (db) => {

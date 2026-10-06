@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
@@ -972,6 +979,39 @@ describe.skipIf(!databaseUrl)("scan-queued keyframe-index jobs", () => {
           keyframesSeconds: null,
           lazyIndexPending: false,
         });
+      });
+    }));
+
+  test("an existing split Version rescanned through one File queues no job", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const showDir = join(root, "Show", "Season 01");
+        await mkdir(showDir, { recursive: true });
+        await createVideoFixture(join(showDir, "Show S01E01 - part1.mkv"));
+        await createVideoFixture(join(showDir, "Show S01E01 - part2.mkv"));
+        const library = await insertLibrary(db, "Shows", root, "shows");
+        await scanShowDirectory(db, library.id, "Show");
+        const renamed = "Show/Season 01/Show S01E01 1080p.mkv";
+        await rename(
+          join(showDir, "Show S01E01 - part2.mkv"),
+          join(root, renamed),
+        );
+        await scanShowDirectory(db, library.id, "Show", {
+          reconcileMissing: true,
+          changes: [
+            {
+              kind: "move",
+              rootId: library.rootId,
+              path: renamed,
+              previousPath: "Show/Season 01/Show S01E01 - part2.mkv",
+              providerIds: {},
+            },
+          ],
+        });
+        expect(
+          (await listJobs(db)).filter((job) => job.type === "keyframe-index"),
+        ).toHaveLength(0);
       });
     }));
 });

@@ -799,10 +799,6 @@ async function findGroupItem(
   });
 }
 
-/**
- * Scan one Item folder of a movies library into Items, Versions, Files
- * and Streams. `itemId` is the first written Item, as before.
- */
 /** One structured timing line per directory scan, in the server's JSON log shape. */
 function logScanTiming(
   data: Record<string, unknown> & { libraryId: string; path: string },
@@ -817,6 +813,10 @@ function logScanTiming(
   );
 }
 
+/**
+ * Scan one Item folder of a movies library into Items, Versions, Files
+ * and Streams. `itemId` is the first written Item, as before.
+ */
 export async function scanDirectory(
   db: Database,
   libraryId: string,
@@ -1453,6 +1453,7 @@ export async function scanShowDirectory(
             let versionId: string;
             let versionFiles: (RootedPath & { id: string; order: number })[] =
               [];
+            let retained = 0;
             if (existingFile) {
               for (const file of existingFiles) {
                 if (
@@ -1485,7 +1486,7 @@ export async function scanShowDirectory(
                 .from(files)
                 .where(eq(files.versionId, versionId));
               // Reconciliation deletes only Files the walk missed; the rest stay.
-              const retained = versionFiles.filter(
+              retained = versionFiles.filter(
                 (file) =>
                   !versionGroup.paths.includes(file.path) &&
                   (options.reconcileMissing !== true ||
@@ -1500,15 +1501,6 @@ export async function scanShowDirectory(
                   ...indexFor(members.length + retained),
                 })
                 .where(eq(versions.id, versionId));
-              if (
-                members.length + retained === 1 &&
-                first.probe.keyframesSeconds === undefined
-              )
-                await queueKeyframeIndex(tx, {
-                  libraryId,
-                  rootId: first.rootId,
-                  path: first.path,
-                });
             } else {
               const [version] = await tx
                 .insert(versions)
@@ -1530,7 +1522,7 @@ export async function scanShowDirectory(
             }
             versionIds.push(versionId);
             if (
-              members.length === 1 &&
+              members.length + retained === 1 &&
               first.probe.keyframesSeconds === undefined
             )
               await queueKeyframeIndex(tx, {

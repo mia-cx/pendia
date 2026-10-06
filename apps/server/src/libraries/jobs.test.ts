@@ -1,17 +1,33 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { events, items } from "../db/schema/index.ts";
+import {
+  events,
+  items,
+  libraries,
+  probeCache,
+  segmentTimelines,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJobQueue, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
+import { startJobWorker } from "../jobs/worker.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
-import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
+import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
+import {
+  keyframesConcurrencyKey,
+  libraryConcurrencyKey,
+  registerLibraryJobs,
+  runKeyframeIndexJob,
+} from "./jobs.ts";
+import { scanDirectory } from "./scan.ts";
 import { insertLibraries } from "./testing.ts";
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
@@ -32,6 +48,16 @@ async function insertLibrary(
   const [library] = await insertLibraries(db, { name, medium, rootPath });
   if (!library) throw new Error("Library insert returned no row.");
   return library;
+}
+
+async function waitForJobState(db: Database, id: string, state: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const job = (await listJobs(db)).find((row) => row.id === id);
+    if (job?.state === state) return job;
+    await Bun.sleep(10);
+  }
+  throw new Error(`Job ${id} did not reach state ${state}.`);
 }
 
 async function expectHandlerError(
@@ -603,6 +629,183 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
           titleKey: "breaking bad (2008)",
         });
         expect(await queue.claim(["scan"])).toBeUndefined();
+      });
+    }));
+});
+
+describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
+  const folder = "Movie (2020)";
+  const path = `${folder}/Movie (2020).mp4`;
+
+  async function scannedMovie(db: Database, root: string) {
+    await mkdir(join(root, folder), { recursive: true });
+    await createKeyframeFixture(join(root, path));
+    const library = await insertLibrary(db, "Movies", root);
+    await scanDirectory(db, library.id, folder);
+    const [version] = await db.select().from(versions);
+    if (!version) throw new Error("Fixture scan wrote no Version.");
+    expect(version).toMatchObject({
+      keyframesSeconds: null,
+      lazyIndexPending: true,
+    });
+    return {
+      library,
+      version,
+      job: {
+        type: "keyframe-index" as const,
+        libraryId: library.id,
+        rootId: library.rootId,
+        path,
+      },
+    };
+  }
+
+  test("stores the index on the cache entry and Version and derives the timeline", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { version, job } = await scannedMovie(db, root);
+        await runKeyframeIndexJob(db, job);
+        const [entry] = await db.select().from(probeCache);
+        expect(entry?.result.keyframesSeconds).toEqual([0, 2, 4, 6, 8, 10]);
+        const [after] = await db.select().from(versions);
+        expect(after).toMatchObject({
+          id: version.id,
+          keyframesSeconds: [0, 2, 4, 6, 8, 10],
+          lazyIndexPending: false,
+          timelineAligned: true,
+        });
+        const [timeline] = await db.select().from(segmentTimelines);
+        expect(timeline?.boundariesSeconds).toEqual([0, 4, 8, 12]);
+        expect(after?.segmentTimelineId).toBe(timeline?.id);
+      });
+    }));
+
+  test("a changed file completes as a no-op", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { version, job } = await scannedMovie(db, root);
+        await appendFile(join(root, path), "mutated");
+        await runKeyframeIndexJob(db, job);
+        const [after] = await db.select().from(versions);
+        expect(after).toMatchObject({
+          id: version.id,
+          keyframesSeconds: null,
+          lazyIndexPending: true,
+        });
+        const [entry] = await db.select().from(probeCache);
+        expect("keyframesSeconds" in (entry?.result ?? {})).toBe(false);
+      });
+    }));
+
+  test("a file that changes during the read completes as a no-op", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { version, job } = await scannedMovie(db, root);
+        await runKeyframeIndexJob(db, job, async (absolute) => {
+          const index = await readKeyframeIndex(absolute);
+          await appendFile(absolute, "mutated");
+          return index;
+        });
+        const [after] = await db.select().from(versions);
+        expect(after).toMatchObject({
+          id: version.id,
+          keyframesSeconds: null,
+          lazyIndexPending: true,
+        });
+      });
+    }));
+
+  test("a missing file completes as a no-op", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { version, job } = await scannedMovie(db, root);
+        await rm(join(root, path));
+        await runKeyframeIndexJob(db, job);
+        const [after] = await db.select().from(versions);
+        expect(after).toMatchObject({
+          id: version.id,
+          keyframesSeconds: null,
+          lazyIndexPending: true,
+        });
+      });
+    }));
+
+  test("a removed root or library completes as a no-op", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { library, job } = await scannedMovie(db, root);
+        await db.delete(libraries).where(eq(libraries.id, library.id));
+        await expect(runKeyframeIndexJob(db, job)).resolves.toBeUndefined();
+      });
+    }));
+
+  test("an already-indexed file completes without reading again", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { job } = await scannedMovie(db, root);
+        let reads = 0;
+        const readIndex = async (absolute: string) => {
+          reads++;
+          return readKeyframeIndex(absolute);
+        };
+        await runKeyframeIndexJob(db, job, readIndex);
+        await runKeyframeIndexJob(db, job, readIndex);
+        expect(reads).toBe(1);
+      });
+    }));
+
+  test("a slow read under a short lease completes through the worker", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { job } = await scannedMovie(db, root);
+        const registry = createJobRegistry();
+        registry.register("keyframe-index", (payload) =>
+          runKeyframeIndexJob(db, payload, async (absolute) => {
+            await Bun.sleep(1_000);
+            return readKeyframeIndex(absolute);
+          }),
+        );
+        const worker = await startJobWorker(db, registry, {
+          pollIntervalMs: 50,
+          queueOptions: { leaseMs: 300, renewMs: 100 },
+          onError: () => {},
+        });
+        try {
+          const queued = await createJobQueue(db).enqueue(job);
+          const done = await waitForJobState(db, queued.id, "completed");
+          expect(done.error).toBeNull();
+          const [after] = await db.select().from(versions);
+          expect(after?.lazyIndexPending).toBe(false);
+        } finally {
+          await worker.stop();
+        }
+      });
+    }));
+
+  test("a library scan claims while that library's index job runs", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { library, job } = await scannedMovie(db, root);
+        const queue = createJobQueue(db);
+        await queue.enqueue(job, {
+          concurrencyKey: keyframesConcurrencyKey(library.id),
+        });
+        const running = await queue.claim(["keyframe-index"]);
+        expect(running?.payload).toEqual(job);
+        const scan = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const claimed = await queue.claim(["scan"]);
+        expect(claimed?.id).toBe(scan.id);
       });
     }));
 });

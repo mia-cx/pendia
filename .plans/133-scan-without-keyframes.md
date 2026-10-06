@@ -10,15 +10,15 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 
 ## Acceptance criteria
 
-- [ ] A directory scan runs ffprobe and never calls the keyframe reader
-- [ ] Each imported single-File Version without an index gets one queued `keyframe-index` job; a rescan queues no duplicate
-- [ ] The job stores the index on the probe cache entry and the Version, and derives the segment timeline as the scan did
-- [ ] A File that already has an index keeps it across rescans and is not re-read
-- [ ] A File that changed or vanished before the job runs is skipped without error
-- [ ] Index jobs never hold the Library's scan concurrency key, so scans don't wait behind them
-- [ ] A slow index read under a short lease completes without losing its lease
-- [ ] Each directory scan logs its walk, probe and write times
-- [ ] Before and after timings on the Radarr NFS library in the PR
+- [x] A directory scan runs ffprobe and never calls the keyframe reader
+- [x] Each imported single-File Version without an index gets one queued `keyframe-index` job; a rescan queues no duplicate
+- [x] The job stores the index on the probe cache entry and the Version, and derives the segment timeline as the scan did
+- [x] A File that already has an index keeps it across rescans and is not re-read
+- [x] A File that changed or vanished before the job runs is skipped without error
+- [x] Index jobs never hold the Library's scan concurrency key, so scans don't wait behind them
+- [x] A slow index read under a short lease completes without losing its lease
+- [x] Each directory scan logs its walk, probe and write times
+- [x] Before and after timings on the Radarr NFS library in the PR
 - [x] The repository gate is green
 
 ## Design
@@ -38,7 +38,7 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 - [x] Queue index jobs from the scan, deduplicated; tests
 - [x] Log walk, probe and write time per directory scan
 - [x] Update the scan and keyframe docs
-- [ ] Full gate
+- [x] Full gate
 
 ## Notes
 
@@ -49,3 +49,4 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 - TODO 4: `scan.directory` JSON line (libraryId, path, files, probeCacheHits, walkMs, probeMs, writeMs) after both scan writers; a scan.test.ts case asserts the shape.
 - TODO 5: updated CONTEXT.md (Scan/Probe/Job entries), topology.md job list, operations.md worker row, server README probe-cache + timeline paragraphs.
 - TODO 6: gate green on the fast suite — `bun run lint` clean, `bun run check` 6/6, `bun run build` 4/4, `bun run test` 1475 pass / 3 skip / 0 fail in ~124 s (DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55580/pendia_dev).
+- After: fresh database on the dev server (`thalia-demo`, built from this branch, `/mnt/media` mounted read-only). The Radarr scan was triggered at 22:09:31Z and its last directory scan logged at 22:11:12Z: 462 folders and 495 files in about 101 s, with no failed jobs and no lost leases. Folder p50 154 ms, p95 382 ms, max 1.2 s. Index jobs then ran in the background at about 4 files a minute.

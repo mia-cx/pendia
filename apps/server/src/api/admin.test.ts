@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ORPCError } from "@orpc/client";
 import { eq } from "drizzle-orm";
-import { createPendiaClient } from "../../../web/src/lib/api.ts";
+import { createThaliaClient } from "../../../web/src/lib/api.ts";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import {
   checkPermission,
@@ -14,7 +14,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { groups, jobs, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import {
   artworkStoreConfig,
@@ -64,10 +64,10 @@ describe.skipIf(!databaseUrl)("admin api", () => {
   test("setup.status answers before and after the first admin", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({ origin: base });
+        const client = createThaliaClient({ origin: base });
         const closed = { oidcConfigured: false, oidcName: null };
         expect(await client.setup.status()).toEqual({
           complete: false,
@@ -88,8 +88,8 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           key: "auth",
           value: {
             oidc: {
-              issuer: "https://id.mia.cx/application/o/pendia",
-              clientId: "pendia",
+              issuer: "https://id.mia.cx/application/o/thalia",
+              clientId: "thalia",
               scopes: ["openid"],
             },
           },
@@ -106,8 +106,8 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           .set({
             value: {
               oidc: {
-                issuer: "https://id.mia.cx/application/o/pendia",
-                clientId: "pendia",
+                issuer: "https://id.mia.cx/application/o/thalia",
+                clientId: "thalia",
                 clientSecret: "secret",
                 scopes: ["openid"],
                 name: "Authentik",
@@ -146,14 +146,14 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         { username: "manager", password: "manager-pass", ...device },
         "127.0.0.1",
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const adminClient = createPendiaClient({
+        const adminClient = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${token}` },
         });
-        const managerClient = createPendiaClient({
+        const managerClient = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${managerToken}` },
         });
@@ -177,12 +177,12 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         viewer.id,
         "viewer-key",
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         for (const path of ["/api/users", "/api/groups", "/api/settings"])
           expect((await fetch(`${base}${path}`)).status).toBe(401);
-        const viewerClient = createPendiaClient({
+        const viewerClient = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${viewerToken}` },
         });
@@ -226,11 +226,11 @@ describe.skipIf(!databaseUrl)("admin api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const headers = { authorization: `Bearer ${token}` };
-        const client = createPendiaClient({ origin: base, headers });
+        const client = createThaliaClient({ origin: base, headers });
         const created = await client.users.create({
           username: " Alice ",
           password: "alice-pass",
@@ -293,10 +293,10 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         username: "viewer",
         password: "viewer-pass",
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({
+        const client = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${token}` },
         });
@@ -336,10 +336,10 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         name: "editors",
         permissions: ["manage-metadata"],
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({
+        const client = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${token}` },
         });
@@ -389,10 +389,10 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         { username: "viewer", password: "viewer-pass", ...device },
         "127.0.0.1",
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({
+        const client = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${token}` },
         });
@@ -430,10 +430,10 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         rootPath: "/srv/movies",
       });
       if (!library) throw new Error("Library insert returned no row.");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({
+        const client = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${token}` },
         });
@@ -466,11 +466,11 @@ describe.skipIf(!databaseUrl)("admin api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const headers = { authorization: `Bearer ${token}` };
-        const client = createPendiaClient({ origin: base, headers });
+        const client = createThaliaClient({ origin: base, headers });
         const created = await client.groups.create({
           name: "editors",
           permissions: ["manage-metadata"],
@@ -512,15 +512,15 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         key: "auth",
         value: {
           oidc: {
-            issuer: "https://id.mia.cx/application/o/pendia",
-            clientId: "pendia",
+            issuer: "https://id.mia.cx/application/o/thalia",
+            clientId: "thalia",
             clientSecret: "oidc-secret-value",
             scopes: ["openid"],
           },
         },
       });
       await setProviderKey(db, admin.id, "tmdb", "provider-secret-value");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const headers = { authorization: `Bearer ${token}` };
@@ -537,7 +537,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           providerKeys: ["tmdb"],
           ...serverDefaults,
         });
-        const client = createPendiaClient({ origin: base, headers });
+        const client = createThaliaClient({ origin: base, headers });
         expect((await client.settings.get()).oidcConfigured).toBe(true);
       } finally {
         await server.stop();
@@ -548,14 +548,14 @@ describe.skipIf(!databaseUrl)("admin api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const headers = {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
         };
-        const client = createPendiaClient({ origin: base, headers });
+        const client = createThaliaClient({ origin: base, headers });
         const updated = await client.settings.update({
           trustedProxyAddresses: ["10.0.0.2", "::ffff:10.0.0.3"],
           artworkRequiresAuth: true,
@@ -619,10 +619,10 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         { sourceFileId: Bun.randomUUIDv7(), rung: "source" },
         tomorrow,
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({
+        const client = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${token}` },
         });
@@ -661,7 +661,7 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           expect(bad.status).toBe(400);
         }
         const denied = await capture(
-          createPendiaClient({
+          createThaliaClient({
             origin: base,
             headers: { authorization: `Bearer ${viewerToken}` },
           }).settings.update({ bitrateCapBps: 1_000_000 }),
@@ -677,11 +677,11 @@ describe.skipIf(!databaseUrl)("admin api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const headers = { authorization: `Bearer ${token}` };
-        const client = createPendiaClient({ origin: base, headers });
+        const client = createThaliaClient({ origin: base, headers });
         const library = await client.libraries.create({
           name: "Movies",
           medium: "movies",
@@ -730,10 +730,10 @@ describe.skipIf(!databaseUrl)("admin api", () => {
         throw new Error("Seeded groups missing; run migrations first.");
       await setUserGroups(db, admin.id, other.id, [admins.id, usersGroup.id]);
       const { token: otherToken } = await createApiKey(db, other.id, "other");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({
+        const client = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${otherToken}` },
         });

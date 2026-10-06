@@ -1,16 +1,16 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
 /** One Item as the detail pages read it. */
-export type ItemDetail = Awaited<ReturnType<PendiaClient["items"]["get"]>>;
+export type ItemDetail = Awaited<ReturnType<ThaliaClient["items"]["get"]>>;
 
 /** A grid or search card: a Movie or Show. */
 export type ItemCard = Awaited<
-  ReturnType<PendiaClient["items"]["list"]>
+  ReturnType<ThaliaClient["items"]["list"]>
 >["items"][number];
 
 /** One Home shelf with its entries. */
 export type Shelf = Awaited<
-  ReturnType<PendiaClient["shelves"]["home"]>
+  ReturnType<ThaliaClient["shelves"]["home"]>
 >[number];
 
 /** A card that also knows its Season, Episode numbers and Show. */

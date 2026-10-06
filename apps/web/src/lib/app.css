@@ -75,7 +75,7 @@
     oklch(97% 0.002 275deg / 18%)
   );
 
-  /* The one accent: Pendia indigo. */
+  /* The one accent: Thalia indigo. */
   --tint: light-dark(oklch(53% 0.21 272deg), oklch(70% 0.16 272deg));
   --tint-foreground: light-dark(oklch(100% 0 0deg), oklch(16% 0.03 272deg));
   --tint-fill: light-dark(
@@ -251,7 +251,7 @@
   --ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
 }
 
-/* Tailwind colour names. Pendia's own roles first, then the names shadcn-svelte components use. */
+/* Tailwind colour names. Thalia's own roles first, then the names shadcn-svelte components use. */
 @theme inline {
   --color-white: oklch(100% 0 0deg);
   --color-black: oklch(0% 0 0deg);

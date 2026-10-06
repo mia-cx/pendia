@@ -38,13 +38,13 @@ async function populate(root: string) {
     await writeFile(join(root, "Alien (1979)", folder, "clip.mkv"), "extra");
   }
   await writeFile(join(root, "Alien (1979)", "Alien-trailer.mkv"), "trailer");
-  await mkdir(join(root, "Alien (1979)", "movie.mkv.pendia"));
+  await mkdir(join(root, "Alien (1979)", "movie.mkv.thalia"));
   await writeFile(
-    join(root, "Alien (1979)", "movie.mkv.pendia", "init.mp4"),
+    join(root, "Alien (1979)", "movie.mkv.thalia", "init.mp4"),
     "store",
   );
-  await mkdir(join(root, "Alien (1979)", ".pendia"));
-  await writeFile(join(root, "Alien (1979)", ".pendia", "art.mp4"), "art");
+  await mkdir(join(root, "Alien (1979)", ".thalia"));
+  await writeFile(join(root, "Alien (1979)", ".thalia", "art.mp4"), "art");
   await mkdir(join(root, "Collection", "Alien (1979)"), { recursive: true });
   await writeFile(join(root, "Collection", "Alien (1979)", "copy.mkv"), "copy");
   await writeFile(join(root, "loose.mkv"), "loose");
@@ -113,8 +113,8 @@ describe("walkLibrary", () => {
       await writeFile(join(root, "Shorts", "extras", "making-of.mkv"), "extra");
       await mkdir(join(root, "extras"));
       await writeFile(join(root, "extras", "clip.mkv"), "extra");
-      await mkdir(join(root, ".pendia"));
-      await writeFile(join(root, ".pendia", ".pendia.mkv"), "store");
+      await mkdir(join(root, ".thalia"));
+      await writeFile(join(root, ".thalia", ".thalia.mkv"), "store");
       const files = await collect(root);
       expect(files.map((file) => file.path)).toEqual(["Shorts/Shorts.mkv"]);
       expect(
@@ -160,11 +160,11 @@ describe("walkLibrary", () => {
         join(root, "Alien (1979)", "extras", "extras.mkv"),
         "extra",
       );
-      await mkdir(join(root, "Collection", ".pendia", "Shorts"), {
+      await mkdir(join(root, "Collection", ".thalia", "Shorts"), {
         recursive: true,
       });
       await writeFile(
-        join(root, "Collection", ".pendia", "Shorts", "Shorts.mkv"),
+        join(root, "Collection", ".thalia", "Shorts", "Shorts.mkv"),
         "store",
       );
       const files = await collect(root);
@@ -203,10 +203,43 @@ describe("walkLibrary", () => {
     withVideoFixture(async (root) => {
       await populate(root);
       expect(await collect(root, { path: "Alien (1979)/extras" })).toEqual([]);
-      expect(await collect(root, { path: "Alien (1979)/.pendia" })).toEqual([]);
+      expect(await collect(root, { path: "Alien (1979)/.thalia" })).toEqual([]);
+      expect(
+        await collect(root, { path: "Alien (1979)/movie.mkv.thalia" }),
+      ).toEqual([]);
+    }));
+
+  // Libraries written before the Pendia rename carry ".pendia" stores on disk;
+  // their contents must never come back as Versions.
+  test("still ignores legacy .pendia store folders", () =>
+    withVideoFixture(async (root) => {
+      await populate(root);
+      await mkdir(join(root, "Alien (1979)", "movie.mkv.pendia", "1080p"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(root, "Alien (1979)", "movie.mkv.pendia", "1080p", "init.mp4"),
+        "store",
+      );
+      await mkdir(join(root, "Alien (1979)", ".pendia", "artwork"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(root, "Alien (1979)", ".pendia", "artwork", "poster.mp4"),
+        "art",
+      );
+      expect((await collect(root)).map((file) => file.path).sort()).toEqual(
+        [
+          "Alien (1979)/Alien.1979.1080p.mkv",
+          "Alien (1979)/Alien.1979.2160p.mkv",
+          "Collection/Alien (1979)/copy.mkv",
+          "loose.mkv",
+        ].sort(),
+      );
       expect(
         await collect(root, { path: "Alien (1979)/movie.mkv.pendia" }),
       ).toEqual([]);
+      expect(await collect(root, { path: "Alien (1979)/.pendia" })).toEqual([]);
     }));
 
   test("rejects symlink, absolute and escaping subtree paths", () =>
@@ -343,8 +376,8 @@ describe("walkLibrary", () => {
       );
       await writeFile(join(root, "Alien (1979)", "Alien-trailer.mkv"), "extra");
       await writeFile(join(root, "notes.txt"), "notes");
-      await mkdir(join(root, ".pendia"));
-      await writeFile(join(root, ".pendia", "art.mp4"), "art");
+      await mkdir(join(root, ".thalia"));
+      await writeFile(join(root, ".thalia", "art.mp4"), "art");
       const skipped: string[] = [];
       const yielded: string[] = [];
       for await (const file of walkLibrary(root, moviesMedium.scan, {

@@ -1,19 +1,19 @@
-# Pendia server
+# Thalia server
 
 ## Database
 
 Run these commands from the repository root. This separate Compose project starts only disposable Postgres on port 55433.
 
 ```sh
-docker compose -p pendia-db-test -f compose.yaml -f compose.test.yaml up -d --wait postgres
-DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55433/pendia bun test
-docker compose -p pendia-db-test -f compose.yaml -f compose.test.yaml down -v
+docker compose -p thalia-db-test -f compose.yaml -f compose.test.yaml up -d --wait postgres
+DATABASE_URL=postgresql://thalia:thalia@127.0.0.1:55433/thalia bun test
+docker compose -p thalia-db-test -f compose.yaml -f compose.test.yaml down -v
 ```
 
 Tests create and drop unique databases on that server. They leave the database named in DATABASE_URL intact.
 The test role needs CREATEDB and permission to install pg_trgm and btree_gist. The Compose role has these permissions.
 Missing DATABASE_URL skips database tests locally and fails in CI. Connection errors always fail.
-The browser playback tests run when a Chromium binary is on PATH or PENDIA_BROWSER points at one, and skip otherwise. The web player test also needs `apps/web/build`, which `bun run build` writes.
+The browser playback tests run when a Chromium binary is on PATH or THALIA_BROWSER points at one, and skip otherwise. The web player test also needs `apps/web/build`, which `bun run build` writes.
 
 After changing the Drizzle schema, generate the next migration:
 
@@ -61,18 +61,18 @@ Renewal runs under the claim lock and refuses an expired lease, so a lease that 
 Enqueue commits the row and NOTIFY together. LISTEN wakes idle workers; a five-second poll catches missed notifications and future jobs.
 A local timer wakes the worker when its failed job becomes eligible again.
 `startJobWorker` accepts concurrency, pollIntervalMs, queueOptions, and onError options.
-`startPendia` accepts workerOptions and an optional registry for an embedded server.
+`startThalia` accepts workerOptions and an optional registry for an embedded server.
 On SIGTERM, shutdown stops new claim loops and drains active handlers before closing Postgres.
 After abrupt process loss, another claim takes the job back once its lease expires. Handlers must be safe to retry after a reported failure or a lost lease.
 Plugin cron scheduling belongs to the plugin host, not this queue.
 
 ## Plugins
 
-The api, worker and all roles each run a plugin runtime. At startup it listens on `pendia_plugins` and installs every plugin in the lockfile into `PENDIA_PLUGIN_DIR`, default `pendia-plugins` under the OS temp dir, in the background. Use local disk. Each package lands in a folder named after its integrity, written to a staging folder and renamed, so two versions never share a folder and a half-written install is never imported. A fresh process with an empty folder refetches each source and refuses one whose bytes no longer match the lockfile.
+The api, worker and all roles each run a plugin runtime. At startup it listens on `thalia_plugins` and installs every plugin in the lockfile into `THALIA_PLUGIN_DIR`, default `thalia-plugins` under the OS temp dir, in the background. Use local disk. Each package lands in a folder named after its integrity, written to a staging folder and renamed, so two versions never share a folder and a half-written install is never imported. A fresh process with an empty folder refetches each source and refuses one whose bytes no longer match the lockfile.
 
-The official registry, `https://github.com/mia-cx/pendia`, reads `pendia-registry.json` at the repo root. It lists the first-party plugins in `plugins/`.
+The official registry, `https://github.com/mia-cx/pendia`, reads `thalia-registry.json` at the repo root. It lists the first-party plugins in `plugins/`.
 
-A source is an absolute folder path, an http(s) tarball URL or an npm spec such as `pendia-plugin-prunarr@^1`. Npm specs resolve through `PENDIA_NPM_REGISTRY`, default `https://registry.npmjs.org`, and the lockfile records the exact version served. Integrity is SRI sha512 of the tarball, which matches npm's own, or of the sorted file listing for a folder. A folder skips `node_modules` and `.git`, so a plugin ships a bundled entry. Tarballs are capped at 64 MiB.
+A source is an absolute folder path, an http(s) tarball URL or an npm spec such as `thalia-plugin-prunarr@^1`. Npm specs resolve through `THALIA_NPM_REGISTRY`, default `https://registry.npmjs.org`, and the lockfile records the exact version served. Integrity is SRI sha512 of the tarball, which matches npm's own, or of the sorted file listing for a folder. A folder skips `node_modules` and `.git`, so a plugin ships a bundled entry. Tarballs are capped at 64 MiB.
 
 The `plugin_lockfile` table holds name, pinned source, version and integrity. The `settings` row with key `plugins` holds the rest:
 
@@ -81,7 +81,7 @@ The `plugin_lockfile` table holds name, pinned source, version and integrity. Th
   "filesOff": null,
   "registries": ["https://github.com/mia-cx/pendia"],
   "plugins": {
-    "pendia-plugin-prunarr": {
+    "thalia-plugin-prunarr": {
       "capabilities": ["items:read", "progress:read", "shelves", "jobs", "network"],
       "enabled": true,
       "failure": null,
@@ -92,7 +92,7 @@ The `plugin_lockfile` table holds name, pinned source, version and integrity. Th
 }
 ```
 
-`capabilities` are the approved ones: the manifest's at the installed integrity. A files switch is `null` when on, `{ "until": null }` when off for good, or off until an instant. Every write takes the settings lock and NOTIFYs `pendia_plugins`, and every process then rebuilds the hosts whose state changed. A config change instead calls the plugin's `config.onChange` handlers.
+`capabilities` are the approved ones: the manifest's at the installed integrity. A files switch is `null` when on, `{ "until": null }` when off for good, or off until an instant. Every write takes the settings lock and NOTIFYs `thalia_plugins`, and every process then rebuilds the hosts whose state changed. A config change instead calls the plugin's `config.onChange` handlers.
 
 A plugin is imported on first use: a route request, a provider-fetch, a shelf, or a plugin job. Workers also import plugins with `jobs` at startup, because their schedules live in setup. Every call into plugin code is guarded. A throw, a bad default export, or a result that is not plain data marks the plugin failed in its settings, logs `plugin.failed` with the error, and unloads it in every process. Re-enabling it in the admin is the restart.
 
@@ -107,15 +107,15 @@ Routes are served at `/plugins/<name>/<path>`, a scoped name taking two segments
 The transcoder and all roles run live HLS sessions. When the playback engine decides remux or transcode, `playback.plan` returns `/api/playback/{sessionId}/{itemId}/hls/master.m3u8?token=...`. The api serves `media.m3u8`, `init.mp4`, `N.m4s`, and per text subtitle Stream `subs-N.m3u8` and `subs-N.vtt`, under the same path. Every HLS URL carries the playback token.
 One ffmpeg runs each session into transcoder-local scratch, cutting segments on the Item's segment timeline. Remux copies every Stream. Transcode uses the fast live profile on the CPU: video re-encodes to the engine's ladder rung with keyframes forced on the timeline, tone mapped to SDR when the client lacks the HDR flavour; audio copies, encodes EAC3 5.1 or downmixes to AAC stereo. Text subtitles become WebVTT renditions in the master playlist, converted on first request. A bitmap subtitle the client cannot draw is burned into the video.
 A segment that is not ready yet waits up to twenty seconds, then answers 503. A seek restarts ffmpeg at that segment; segments already in scratch serve without a restart. Sixty seconds idle stops ffmpeg and deletes scratch while the session row stays live; the next request revives it.
-Each transcoder runs at most `PENDIA_TRANSCODE_SLOTS` sessions that re-encode video, default 2. Later ones queue in arrival order: their session state reads `queued` with a `session.state` event, playlists still answer, and init or segment requests wait up to twenty seconds, then answer 503 `SESSION_QUEUED`. A slot frees when a session stops, idles out or the transcoder shuts down.
+Each transcoder runs at most `THALIA_TRANSCODE_SLOTS` sessions that re-encode video, default 2. Later ones queue in arrival order: their session state reads `queued` with a `session.state` event, playlists still answer, and init or segment requests wait up to twenty seconds, then answer 503 `SESSION_QUEUED`. A slot frees when a session stops, idles out or the transcoder shuts down.
 At startup a transcoder runs a 2 s trial encode per CPU codec, a tone map per transfer function, and a 2 s encode per codec on each hardware backend whose device exists. It records the passing ones on its node row and answers `/readyz` only after that. A CPU that encodes nothing stops startup. Planning uses the CPU entries every node shares; hardware backends are recorded, not used yet.
-`PENDIA_SCRATCH_DIR` chooses the scratch root, default `pendia-scratch` under the OS temp dir. Use local disk, never NFS. `PENDIA_TRANSCODER_PORT` defaults to 3001. `PENDIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
-The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `PENDIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
+`THALIA_SCRATCH_DIR` chooses the scratch root, default `thalia-scratch` under the OS temp dir. Use local disk, never NFS. `THALIA_TRANSCODER_PORT` defaults to 3001. `THALIA_TRANSCODER_URL` is the address other api processes reach this transcoder at, default `http://127.0.0.1:<port>`; set it when api and transcoder run on different hosts.
+The session registry maps a session to its owning transcoder. An api that is not the owner proxies to the owner's `THALIA_TRANSCODER_URL`. A standalone transcoder needs an already migrated database. Stopping a transcoder removes its node row and releases its sessions.
 Stored Versions are below; they need a transcoder only for their WebVTT tracks. A transcoder that dies without stopping leaves its node row, and requests for its sessions answer 503 until the row is removed.
 
 ## Stored Versions
 
-A library's policy names the rungs Pendia stores next to each source and an optional condition. It lives in the library configuration under `storedVersions`:
+A library's policy names the rungs Thalia stores next to each source and an optional condition. It lives in the library configuration under `storedVersions`:
 
 ```json
 {
@@ -134,9 +134,9 @@ A library's policy names the rungs Pendia stores next to each source and an opti
 
 All three need `manage-transcoding`. A manual request names a rung the policy defines and skips only its condition. An unknown rung answers 400, a rung the source cannot make answers 409.
 
-Every folder scan queues the wanted rungs of each Item's best aligned source and deletes the rows of rungs the policy no longer names. A low-priority `store` sweep job on a worker then removes their folders and any `<file>.pendia` folder whose source left the disk, because the api, which runs a watcher's scans, may only read the share. Replacing a policy reconciles the whole library at once.
+Every folder scan queues the wanted rungs of each Item's best aligned source and deletes the rows of rungs the policy no longer names. A low-priority `store` sweep job on a worker then removes their folders and any `<file>.thalia` folder whose source left the disk, because the api, which runs a watcher's scans, may only read the share. Replacing a policy reconciles the whole library at once.
 
-A `store` job writes `<source file>.pendia/<rung>/`: `rung.json` with the rung definition, `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Editing a rung's height or bitrate under the same name stores it again. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
+A `store` job writes `<source file>.thalia/<rung>/`: `rung.json` with the rung definition, `init.mp4`, numbered `.m4s` segments cut on the Item's segment timeline, and `manifest.json` last. Editing a rung's height or bitrate under the same name stores it again. Store jobs run on workers one at a time across the cluster, at priority -10, with ffmpeg under `nice -n 19`. They run only inside the idle window, 01:00 to 07:00 server local time unless the `store` settings row says otherwise (`{ "idleWindow": { "start": "23:00", "end": "05:30" } }`; equal ends mean all day). A job claimed outside the window books itself for the next one; at the window end or on shutdown ffmpeg stops and the job resumes at the first missing segment next time.
 
 When a plan is not direct play, the complete stored rungs that pass the client become the variants of one master playlist. A remux plan takes them only when they include the source rung. The api serves `hls/<versionId>/media.m3u8`, `init.mp4` and `N.m4s` from the library share, so every api needs read access to the libraries. The master lists the same WebVTT tracks a live session would, and a transcoder converts them. A plan that must burn a bitmap subtitle in skips stored rungs, which carry none. The live session answers only when no stored rung passes.
 
@@ -180,7 +180,7 @@ Usernames use ASCII letters, digits, dots, underscores and hyphens, start with a
 Usernames ignore surrounding whitespace and case. Passwords retain whitespace and allow 1 to 1024 characters.
 Display names, client names and device names have at most 128 characters. Device IDs allow 1 to 128 characters.
 
-Send credentials as `Authorization: Bearer <token>` or the `pendia_session` cookie. Query-string account tokens are ignored.
+Send credentials as `Authorization: Bearer <token>` or the `thalia_session` cookie. Query-string account tokens are ignored.
 An invalid Authorization header never falls back to cookies. Auth responses use `Cache-Control: no-store`.
 Errors return `{ "error": { "code": "...", "message": "..." } }`. Login failures use `INVALID_CREDENTIALS`; invalid sessions use `UNAUTHENTICATED`.
 Rate-limited requests return 429 `RATE_LIMITED` and `Retry-After` in seconds.
@@ -222,7 +222,7 @@ To enable OIDC, set `oidc` to an object:
 ```json
 {
   "oidc": {
-    "issuer": "https://id.mia.cx/application/o/pendia/",
+    "issuer": "https://id.mia.cx/application/o/thalia/",
     "clientId": "<client-id>",
     "clientSecret": "<client-secret>",
     "scopes": ["openid", "profile", "email"],
@@ -246,20 +246,20 @@ Expired counters under `auth.login.*` are removed on a later attempt. Configurat
 ### Authentik at id.mia.cx
 
 In authentik Admin, go to Applications > Applications > New Application.
-Application name: `Pendia`. Application slug: `pendia`.
+Application name: `Thalia`. Application slug: `thalia`.
 Provider type: `OAuth2/OpenID Connect`.
 Authorization flow: `default-provider-authorization-implicit-consent`.
-Client type: `Confidential`. Copy the generated Client ID and Client Secret into Pendia's auth setting.
+Client type: `Confidential`. Copy the generated Client ID and Client Secret into Thalia's auth setting.
 Redirect URI type: `Strict`, purpose `Authorization`.
-Redirect URI: `<pendia-public-origin>/api/auth/oidc/callback`, where `<pendia-public-origin>` is Pendia's public scheme and host with no trailing slash, such as `https://pendia.example.com`.
+Redirect URI: `<thalia-public-origin>/api/auth/oidc/callback`, where `<thalia-public-origin>` is Thalia's public scheme and host with no trailing slash, such as `https://thalia.example.com`.
 Signing key: select an available signing key.
 Selected scopes/property mappings: `openid`, `profile`, `email`.
 Allowed grant type: `authorization_code`.
 Issuer mode: `Each provider has a different issuer, based on the application slug`, the default.
-Pendia issuer: `https://id.mia.cx/application/o/pendia/`.
-Discovery document: `https://id.mia.cx/application/o/pendia/.well-known/openid-configuration`.
-Authentik must emit `email` and `email_verified`. Only verified email links an existing Pendia account.
-Reverse proxies and firewalls must allow server-side discovery, token, JWKS, and UserInfo requests between Pendia and id.mia.cx.
+Thalia issuer: `https://id.mia.cx/application/o/thalia/`.
+Discovery document: `https://id.mia.cx/application/o/thalia/.well-known/openid-configuration`.
+Authentik must emit `email` and `email_verified`. Only verified email links an existing Thalia account.
+Reverse proxies and firewalls must allow server-side discovery, token, JWKS, and UserInfo requests between Thalia and id.mia.cx.
 
 Write the issuer, client ID, scopes and button name with this PostgreSQL 18 upsert:
 
@@ -271,7 +271,7 @@ VALUES (
   jsonb_build_object(
     'oidc',
     jsonb_build_object(
-      'issuer', 'https://id.mia.cx/application/o/pendia/',
+      'issuer', 'https://id.mia.cx/application/o/thalia/',
       'clientId', '<client-id>',
       'scopes', jsonb_build_array('openid', 'profile', 'email'),
       'name', 'Authentik'
@@ -330,7 +330,7 @@ The api and all roles serve one procedure router on two transports. `/rpc` carri
 | `settings.setProviderKey` | PUT `/api/settings/providers/{name}` | `name`, `value` | `ServerSettings` |
 | `settings.deleteProviderKey` | DELETE `/api/settings/providers/{name}` | `name` | `ServerSettings` |
 
-Procedures accept the same `Authorization: Bearer <token>` or `pendia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
+Procedures accept the same `Authorization: Bearer <token>` or `thalia_session` cookie as the auth routes, and the generated document declares both under `securitySchemes` as root alternatives.
 `me` is the only auth route wrapped as a procedure. Setup, login and logout stay on the auth handler because they set cookies, check Origin and consume login windows.
 
 `setup.status` is the only unauthenticated procedure. The first-run wizard asks it before any account exists, and it leaks one boolean that `POST /api/auth/setup` already leaks through its 409. The login page also reads whether OIDC is configured and its button name, which `GET /api/auth/oidc/login` already reveals.
@@ -346,7 +346,7 @@ Group permission edits apply to custom groups only. The built-in `admins` and `u
 `settings.get` answers the trusted proxy addresses, the artwork toggle, whether OIDC is configured, whether an OIDC client secret is stored, the provider key names, the global bitrate cap, the store idle window and the artwork store. No read returns a provider key value, the OIDC client secret or S3 credentials; provider keys are write-only over the API.
 `settings.update` writes `trustedProxyAddresses`, `artworkRequiresAuth`, `oidcClientSecret`, `bitrateCapBps` and `idleWindow`. `oidcClientSecret` sets or replaces the stored OIDC client secret and is never read back. The rest of the OIDC setting is written in the database.
 `bitrateCapBps` is the global default cap in bits per second, null for none; the next `playback.plan` reads it. `idleWindow` is `{ start, end }` as `HH:MM` server local time. A new window moves queued store jobs booked for a later start to the new window's start, or to now when the window is open.
-`artworkStore` is `{ backend, path, bucket, endpoint }`: the environment's choice (`PENDIA_ARTWORK_STORE`), read-only, because moving artwork between backends is unsupported.
+`artworkStore` is `{ backend, path, bucket, endpoint }`: the environment's choice (`THALIA_ARTWORK_STORE`), read-only, because moving artwork between backends is unsupported.
 
 Cards carry `id`, `kind` (`movie`, `show`, `season`, `episode`), `libraryId`, `title`, `year`, `addedAt` and `posterArtworkId`, which is the selected poster's artwork id for use with `/api/artwork/{id}?width=<pixels>`; `width` is required and accepts an integer from 1 through 4096.
 Browse cards add `parentId`, `seasonNumber`, `episodeNumber`, `episodeEndNumber` and `show`, which is `{ id, title, posterArtworkId }` for a Season or Episode and null otherwise. An Episode's `seasonNumber` is its Season's. Together they give every route a card needs.
@@ -379,7 +379,7 @@ Anything that is not a mapped failure is a defect. The response is a bare 500 an
 
 Every response from either transport carries `Cache-Control: no-store` and `Vary: Cookie, Authorization`, matching the auth routes, because the answers are personalised and a shared proxy caches on the URL. The generated document is identical for every caller, so `/api/openapi.json` stays cacheable.
 
-Events live in the durable `events` table. Publishing inserts the row, prunes rows older than the ten-minute retention window and notifies the new id on the `pendia_events` channel, all in one transaction.
+Events live in the durable `events` table. Publishing inserts the row, prunes rows older than the ten-minute retention window and notifies the new id on the `thalia_events` channel, all in one transaction.
 Each api process holds one LISTEN and wakes its subscribers; every subscriber then reads its own rows. Postgres sees one listener per process, not per client.
 
 Every event reaches only its audience, on live delivery and on replay alike: `library.changed` needs view on that library, `job.progress` needs `manage-server`, and `session.state` and `segment.ready` reach the session's owner or a `manage-server` caller. An unknown kind is denied.
@@ -425,7 +425,7 @@ An Item is found by its Item folder and its title key. The key is empty for a fo
 
 The literal `extras` directory is always reserved, case-insensitively, even for same-name videos. Use a dated folder such as `Extras (2005)` for a movie named Extras. Other extras-category names can identify movies when the filename matches the canonical title, including `Collection/Shorts/Shorts.mkv`.
 
-The walker skips symlinks, excluded extras directories, extra filename suffixes, `.pendia` folders and `<source>.pendia` stores. Probe results persist in Postgres by root and root-relative path, byte size and nanosecond mtime. Changed files get one ffprobe for streams, duration and chapters. Unchanged scans reuse the cache across processes.
+The walker skips symlinks, excluded extras directories, extra filename suffixes, `.thalia` folders and `<source>.thalia` stores. Probe results persist in Postgres by root and root-relative path, byte size and nanosecond mtime. Changed files get one ffprobe for streams, duration and chapters. Unchanged scans reuse the cache across processes.
 
 Directory writes preserve Item, Version, File and Stream identities and keep curated Item metadata. Completed directory scans publish `library.changed` through the existing permission-filtered SSE stream. An empty root scan publishes the event too. A root job completing means its directory jobs were queued, not that they finished.
 
@@ -435,7 +435,7 @@ Scan tests generate short MKV fixtures with ffmpeg and compare their stream list
 
 ### Change detection
 
-Sonarr and Radarr report file changes through webhook routes so scans stay current between manual runs. Create one API key per integration through the auth service's `createApiKey`. The token is shown once and becomes the secret URL segment. Point Sonarr at `<pendia-origin>/api/webhooks/sonarr/<secret>` and Radarr at `<pendia-origin>/api/webhooks/radarr/<secret>` with POST. Enable Download or import, Rename, Episode File Delete and Series Delete in Sonarr, and Download or import, Rename, Movie File Delete and Movie Delete in Radarr.
+Sonarr and Radarr report file changes through webhook routes so scans stay current between manual runs. Create one API key per integration through the auth service's `createApiKey`. The token is shown once and becomes the secret URL segment. Point Sonarr at `<thalia-origin>/api/webhooks/sonarr/<secret>` and Radarr at `<thalia-origin>/api/webhooks/radarr/<secret>` with POST. Enable Download or import, Rename, Episode File Delete and Series Delete in Sonarr, and Download or import, Rename, Movie File Delete and Movie Delete in Radarr.
 
 The secret must be a live API key owned by a caller with `manage-libraries`. Session tokens in the URL are rejected. Wrong, revoked or expired secrets answer 401. Treat the full webhook URL as a secret and redact it from logs. Accepted payloads answer 202 with the number of translated changes. Unknown Servarr event types are accepted with zero changes. Malformed payloads and paths outside the matching medium's Library answer 400. A change whose Item folder is the root queues a scan of `.`.
 
@@ -449,9 +449,9 @@ The `api` and `all` roles run a directory-mtime repair pass after startup and ev
 
 Media on NFS gives the api no inotify events, so `--role watcher` runs on the storage host instead. It needs no database. Configure it with three variables:
 
-- `PENDIA_API_URL`: the api origin, such as `http://pendia.lan:3000`.
-- `PENDIA_WATCHER_TOKEN`: an API key owned by a caller with `manage-libraries`.
-- `PENDIA_WATCH`: `<root-id>=<absolute local path>` pairs separated by commas. A root id is shown on the Library page in the admin UI. A local path is that root's folder as the storage host sees it, so mount points may differ from the api's.
+- `THALIA_API_URL`: the api origin, such as `http://thalia.lan:3000`.
+- `THALIA_WATCHER_TOKEN`: an API key owned by a caller with `manage-libraries`.
+- `THALIA_WATCH`: `<root-id>=<absolute local path>` pairs separated by commas. A root id is shown on the Library page in the admin UI. A local path is that root's folder as the storage host sees it, so mount points may differ from the api's.
 
 The watcher watches each root recursively. After a file stays quiet for 200 ms, it posts the add, move or delete to `POST /api/watcher/events` with a root-relative path. A path that appears with the inode of a vanished path is a move, so renames keep Item and Progress identity. The api keeps changes to the medium's own files and debounces them like webhook changes. A failed post is logged and dropped; the repair pass heals what it missed.
 
@@ -459,13 +459,13 @@ The watcher also runs its Libraries' scans on local disk. A watcher claims a Lib
 
 All watcher routes take the API key as `Authorization: Bearer <key>`. Missing, wrong and session tokens answer 401.
 
-On the storage host, run [compose.watcher.yaml](../../compose.watcher.yaml). It mounts `PENDIA_MEDIA` (default `/srv/media`) read-only at `/media`:
+On the storage host, run [compose.watcher.yaml](../../compose.watcher.yaml). It mounts `THALIA_MEDIA` (default `/srv/media`) read-only at `/media`:
 
 ```sh
-PENDIA_API_URL=http://pendia.lan:3000 \
-PENDIA_WATCHER_TOKEN=<api key> \
-PENDIA_MEDIA=/srv/media \
-PENDIA_WATCH=<movies-root-id>=/media/movies,<shows-root-id>=/media/shows \
+THALIA_API_URL=http://thalia.lan:3000 \
+THALIA_WATCHER_TOKEN=<api key> \
+THALIA_MEDIA=/srv/media \
+THALIA_WATCH=<movies-root-id>=/media/movies,<shows-root-id>=/media/shows \
 docker compose -f compose.watcher.yaml up -d
 ```
 
@@ -505,7 +505,7 @@ After every Show fetch, whether it succeeded or not, a `continuing` Show keeps e
 
 The TMDB API key lives in the separate `providers` settings row, written by the admin Provider keys screen or `settings.setProviderKey` with the name `tmdb`. Key values are write-only: `settings.get` returns names, never secrets. Storing or rotating `tmdb` marks every unmatched movie `pending`, so the next rescan queues a provider-fetch for each of them; a missing key means no TMDB provider, and scanned movies stay `pending` until a key arrives. A Library whose provider list is `[]` leaves its Items `pending` the same way. The embedded `metadata.tmdb.apiKey` field is still read as a backward-compatible fallback when no provider key is stored, but new deployments should use the provider key store.
 
-Without a stored key, Pendia reads `TMDB_API_KEY` from the environment. With Compose, put it in `.env` at the repository root: `TMDB_API_KEY=<key>`, or run `scripts/tmdb-key-wizard.sh`, which opens TMDB, checks the key and writes it there. Use TMDB's v3 API key, the 32-character one; Pendia does not use the Read Access Token.
+Without a stored key, Thalia reads `TMDB_API_KEY` from the environment. With Compose, put it in `.env` at the repository root: `TMDB_API_KEY=<key>`, or run `scripts/tmdb-key-wizard.sh`, which opens TMDB, checks the key and writes it there. Use TMDB's v3 API key, the 32-character one; Thalia does not use the Read Access Token.
 
 The TVDB API key lives in the same row under the name `tvdb`, and a subscriber PIN, when the key needs one, under `tvdb-pin`. Storing or rotating `tvdb` marks every unmatched Show, Season and Episode `pending`. Without a `tvdb` key there is no TVDB provider, and scanned Shows stay `pending` until one arrives.
 
@@ -542,7 +542,7 @@ Provider order, the confidence threshold and per-Library overrides remain indepe
 
 ### Subtitles
 
-`subtitleLanguages` in the `metadata` row lists the languages to fetch, as OpenSubtitles writes them: `["en", "nl", "pt-br"]`. It defaults to `[]`, which fetches nothing. When a movie or episode matches, its provider-fetch queues one `subtitle-fetch` job. That job asks every subtitle provider for the languages the Item has no track for, keeps the best match per language, skips forced-only and machine-translated matches, and writes the file to `<Item folder>/.pendia/subtitles/<item id>.<language>.<format>`. The Item folder must be writable.
+`subtitleLanguages` in the `metadata` row lists the languages to fetch, as OpenSubtitles writes them: `["en", "nl", "pt-br"]`. It defaults to `[]`, which fetches nothing. When a movie or episode matches, its provider-fetch queues one `subtitle-fetch` job. That job asks every subtitle provider for the languages the Item has no track for, keeps the best match per language, skips forced-only and machine-translated matches, and writes the file to `<Item folder>/.thalia/subtitles/<item id>.<language>.<format>`. The Item folder must be writable.
 
 OpenSubtitles joins when the `providers` row holds an `opensubtitles` key, an API consumer key from opensubtitles.com, set like the TMDB key. It searches by the OpenSubtitles hash of the Item's first video file, the title and year, or for an episode the Show title with season and episode numbers, plus IMDb and TMDB ids when the Item has them. Downloads without a user login count against OpenSubtitles' anonymous daily quota; a refused download fails the job, which retries.
 

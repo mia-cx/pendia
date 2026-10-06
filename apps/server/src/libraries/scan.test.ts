@@ -59,13 +59,13 @@ async function populate(root: string) {
     { width: 1920, height: 1080 },
   );
   await createVideoFixture(join(dir, "extras", "making-of.mkv"));
-  await mkdir(join(dir, ".pendia"));
-  await writeFile(join(dir, ".pendia", "art.mp4"), "tempting");
-  await mkdir(join(dir, "Alien.1080p.mkv.pendia", "720p"), {
+  await mkdir(join(dir, ".thalia"));
+  await writeFile(join(dir, ".thalia", "art.mp4"), "tempting");
+  await mkdir(join(dir, "Alien.1080p.mkv.thalia", "720p"), {
     recursive: true,
   });
   await writeFile(
-    join(dir, "Alien.1080p.mkv.pendia", "720p", "init.mp4"),
+    join(dir, "Alien.1080p.mkv.thalia", "720p", "init.mp4"),
     "tempting",
   );
 }

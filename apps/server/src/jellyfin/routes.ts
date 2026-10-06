@@ -9,7 +9,7 @@ import { quickConnectRoutes } from "./quick-connect.ts";
 import { systemRoutes } from "./system.ts";
 import { userRoutes } from "./users.ts";
 
-/** Every Jellyfin endpoint Pendia serves, in one table. Images and HLS reuse the handlers the api mounts. */
+/** Every Jellyfin endpoint Thalia serves, in one table. Images and HLS reuse the handlers the api mounts. */
 export function jellyfinRoutes(
   artwork: ReturnType<typeof createArtworkHandler>,
   hls: ReturnType<typeof createHlsHandler>,

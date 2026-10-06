@@ -1,8 +1,8 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
 /** A live or queued playback session as the dashboard lists it. */
 export type ActivitySession = Awaited<
-  ReturnType<PendiaClient["playback"]["sessions"]>
+  ReturnType<ThaliaClient["playback"]["sessions"]>
 >[number];
 
 /** Formats seconds as m:ss under an hour and h:mm:ss from an hour, flooring; negative or non-finite reads 0:00. */

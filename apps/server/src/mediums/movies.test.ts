@@ -41,9 +41,9 @@ describe("isVideoExtra", () => {
     }
   });
 
-  test("flags Pendia store paths", () => {
-    expect(isVideoExtra("Alien (1979)/.pendia/artwork.mkv")).toBe(true);
-    expect(isVideoExtra("Alien (1979)/file.mkv.pendia/init.mp4")).toBe(true);
+  test("flags Thalia store paths", () => {
+    expect(isVideoExtra("Alien (1979)/.thalia/artwork.mkv")).toBe(true);
+    expect(isVideoExtra("Alien (1979)/file.mkv.thalia/init.mp4")).toBe(true);
   });
 
   test("keeps regular versions", () => {
@@ -78,12 +78,12 @@ describe("identify", () => {
     });
   });
 
-  test("rejects extras and Pendia store paths", () => {
+  test("rejects extras and Thalia store paths", () => {
     expect(identify("Alien (1979)/extras/making-of.mkv")).toBeNull();
     expect(identify("Alien (1979)/Alien-trailer.mkv")).toBeNull();
     expect(identify("Alien (1979)/Alien-sample.mkv")).toBeNull();
-    expect(identify("Alien (1979)/.pendia/cover.mkv")).toBeNull();
-    expect(identify("Alien (1979)/file.mkv.pendia/init.mp4")).toBeNull();
+    expect(identify("Alien (1979)/.thalia/cover.mkv")).toBeNull();
+    expect(identify("Alien (1979)/file.mkv.thalia/init.mp4")).toBeNull();
   });
 
   test("rejects absolute and escaping paths", () => {
@@ -124,7 +124,7 @@ describe("identify", () => {
     });
     expect(identify("Alien (1979)/shorts/clip.mkv")).toBeNull();
     expect(identify("Alien (1979)/extras/Shorts/Shorts.mkv")).toBeNull();
-    expect(identify("Collection/.pendia/Shorts/Shorts.mkv")).toBeNull();
+    expect(identify("Collection/.thalia/Shorts/Shorts.mkv")).toBeNull();
   });
 
   test("reserves extras directories even when a file matches their name", () => {
@@ -165,9 +165,9 @@ describe("identify", () => {
     });
   });
 
-  test("never identifies Pendia store paths even under matching names", () => {
-    expect(identify(".pendia/.pendia.mkv")).toBeNull();
-    expect(identify("film.mkv.pendia/film.mkv.pendia.mkv")).toBeNull();
+  test("never identifies Thalia store paths even under matching names", () => {
+    expect(identify(".thalia/.thalia.mkv")).toBeNull();
+    expect(identify("film.mkv.thalia/film.mkv.thalia.mkv")).toBeNull();
   });
 
   test("identifies films whose titles end in extra words", () => {
@@ -376,8 +376,8 @@ describe("groupMoviePaths", () => {
         "Alien (1979)/Alien.1979.2160p.mkv",
         "Alien (1979)/extras/making-of.mkv",
         "Alien (1979)/Alien-trailer.mkv",
-        "Alien (1979)/.pendia/cover.mkv",
-        "Alien (1979)/file.mkv.pendia/init.mp4",
+        "Alien (1979)/.thalia/cover.mkv",
+        "Alien (1979)/file.mkv.thalia/init.mp4",
         "Alien (1979)/Alien.srt",
         "../escape/Alien (1979)/Alien.mkv",
         "/absolute/Alien (1979)/Alien.mkv",

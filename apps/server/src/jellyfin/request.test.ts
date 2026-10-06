@@ -36,7 +36,7 @@ describe("MediaBrowser header", () => {
   });
 
   test("reads Infuse's X-Emby-Authorization when Authorization is absent", () => {
-    const request = new Request("http://pendia.test/", {
+    const request = new Request("http://thalia.test/", {
       headers: {
         "X-Emby-Authorization":
           'MediaBrowser Token="t", Client="Infuse-Direct", Version="7.7", Device="Apple TV", DeviceId="d"',
@@ -49,7 +49,7 @@ describe("MediaBrowser header", () => {
   });
 
   test("prefers a MediaBrowser Authorization header", () => {
-    const request = new Request("http://pendia.test/", {
+    const request = new Request("http://thalia.test/", {
       headers: {
         Authorization: 'MediaBrowser Token="first"',
         "X-Emby-Authorization": 'MediaBrowser Token="second"',
@@ -61,7 +61,7 @@ describe("MediaBrowser header", () => {
   test("takes the token from the legacy token headers, never the query", () => {
     const read = (headers: Record<string, string>) =>
       readClient(
-        new Request("http://pendia.test/?ApiKey=query&api_key=query", {
+        new Request("http://thalia.test/?ApiKey=query&api_key=query", {
           headers,
         }),
       );
@@ -119,7 +119,7 @@ describe("query", () => {
 
 test("body keys match case-insensitively", async () => {
   const body = await readBody(
-    new Request("http://pendia.test/", {
+    new Request("http://thalia.test/", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ username: "mia", Pw: "secret" }),

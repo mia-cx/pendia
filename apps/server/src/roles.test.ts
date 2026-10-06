@@ -10,7 +10,7 @@ import {
   transcoderCapabilities,
 } from "./db/schema/index.ts";
 import { databaseUrl, withDatabase } from "./db/testing.ts";
-import { type Role, startPendia } from "./index.ts";
+import { type Role, startThalia } from "./index.ts";
 import { createJobQueue, type Job, listJobs } from "./jobs/queue.ts";
 import { createJobRegistry } from "./jobs/registry.ts";
 import { startTranscoder } from "./transcoder/index.ts";
@@ -45,7 +45,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
       const queue = createJobQueue(db);
       const payload = probePayload();
       const job = await queue.enqueue(payload);
-      const server = await startPendia("worker", {
+      const server = await startThalia("worker", {
         databaseUrl: url,
         registry,
         workerOptions: { pollIntervalMs: 20 },
@@ -69,7 +69,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
         registry.register("probe", async (payload) => {
           seen.push(payload.fileId);
         });
-        const server = await startPendia("all", {
+        const server = await startThalia("all", {
           databaseUrl: url,
           port: 0,
           registry,
@@ -108,7 +108,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
         await lock`select pg_advisory_unlock(${migrationLockKey})`;
         lock.release();
       };
-      // The port must be known while startPendia is still starting.
+      // The port must be known while startThalia is still starting.
       const probe = Bun.serve({ port: 0, fetch: () => new Response() });
       const port = probe.port;
       await probe.stop();
@@ -126,7 +126,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
         startTrial = resolve;
       });
       let finishTrial: (backends: TranscoderBackend[]) => void = () => {};
-      const starting = startPendia("all", {
+      const starting = startThalia("all", {
         databaseUrl: url,
         port,
         transcoderOptions: {
@@ -166,7 +166,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
     () =>
       withDatabase(async (db, url) => {
         await migrateDatabase(db);
-        const server = await startPendia("transcoder", {
+        const server = await startThalia("transcoder", {
           databaseUrl: url,
           transcoderOptions: { port: 0 },
         });
@@ -222,7 +222,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
     () =>
       withDatabase(async (db) => {
         await migrateDatabase(db);
-        const scratchDir = await mkdtemp(join(tmpdir(), "pendia-readyz-"));
+        const scratchDir = await mkdtemp(join(tmpdir(), "thalia-readyz-"));
         const transcoder = await startTranscoder(db, {
           port: 0,
           scratchDir,
@@ -245,7 +245,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
   test("readiness waits for the startup trial and the node row carries its table", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      const scratchDir = await mkdtemp(join(tmpdir(), "pendia-trial-"));
+      const scratchDir = await mkdtemp(join(tmpdir(), "thalia-trial-"));
       // The port must be known while startTranscoder is still awaiting the trial.
       const probe = Bun.serve({ port: 0, fetch: () => new Response() });
       const port = probe.port;
@@ -289,7 +289,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
   test("a failed startup trial stops the transcoder before it registers", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      const scratchDir = await mkdtemp(join(tmpdir(), "pendia-trial-"));
+      const scratchDir = await mkdtemp(join(tmpdir(), "thalia-trial-"));
       try {
         await expect(
           startTranscoder(db, {
@@ -311,7 +311,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
     () =>
       withDatabase(async (db, url) => {
         await migrateDatabase(db);
-        const server = await startPendia("transcoder", {
+        const server = await startThalia("transcoder", {
           databaseUrl: url,
           transcoderOptions: { port: 0, address: "http://127.0.0.1:9/" },
         });
@@ -345,7 +345,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
           });
           const queue = createJobQueue(db);
           const job = await queue.enqueue(probePayload());
-          const server = await startPendia(role, {
+          const server = await startThalia(role, {
             databaseUrl: url,
             port: 0,
             registry,
@@ -384,7 +384,7 @@ describe.skipIf(!databaseUrl)("Role startup", () => {
       });
       const queue = createJobQueue(db);
       const job = await queue.enqueue(probePayload());
-      const server = await startPendia("worker", {
+      const server = await startThalia("worker", {
         databaseUrl: url,
         registry,
         workerOptions: { concurrency: 1, pollIntervalMs: 20 },

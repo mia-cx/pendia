@@ -34,27 +34,27 @@ type Job = NonNullable<WatcherClaim["job"]>;
 /** Report answers after which the api has failed or finished the job itself. */
 const settledStatuses = [400, 404, 409];
 
-/** Reads PENDIA_API_URL, PENDIA_WATCHER_TOKEN and PENDIA_WATCH (`<root-id>=<path>,...`). */
+/** Reads THALIA_API_URL, THALIA_WATCHER_TOKEN and THALIA_WATCH (`<root-id>=<path>,...`). */
 export function readWatcherConfig(
   env: Record<string, string | undefined>,
 ): WatcherConfig {
-  const { PENDIA_API_URL, PENDIA_WATCHER_TOKEN, PENDIA_WATCH } = env;
-  if (!PENDIA_API_URL || !URL.canParse(PENDIA_API_URL))
-    throw new Error("PENDIA_API_URL must be the api's URL.");
-  if (!PENDIA_WATCHER_TOKEN)
-    throw new Error("PENDIA_WATCHER_TOKEN must be an API key.");
+  const { THALIA_API_URL, THALIA_WATCHER_TOKEN, THALIA_WATCH } = env;
+  if (!THALIA_API_URL || !URL.canParse(THALIA_API_URL))
+    throw new Error("THALIA_API_URL must be the api's URL.");
+  if (!THALIA_WATCHER_TOKEN)
+    throw new Error("THALIA_WATCHER_TOKEN must be an API key.");
   const roots = new Map<string, string>();
-  for (const pair of (PENDIA_WATCH ?? "").split(",")) {
+  for (const pair of (THALIA_WATCH ?? "").split(",")) {
     const [rootId, path] = pair.trim().split(/=(.*)/s, 2);
     if (!rootId || !path || !isAbsolute(path))
       throw new Error(
-        "PENDIA_WATCH must list <root-id>=<absolute path> pairs, separated by commas.",
+        "THALIA_WATCH must list <root-id>=<absolute path> pairs, separated by commas.",
       );
     roots.set(rootId, path);
   }
   return {
-    apiUrl: new URL(PENDIA_API_URL),
-    token: PENDIA_WATCHER_TOKEN,
+    apiUrl: new URL(THALIA_API_URL),
+    token: THALIA_WATCHER_TOKEN,
     roots,
   };
 }

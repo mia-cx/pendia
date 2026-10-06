@@ -47,7 +47,7 @@ describe("remux", () => {
   let boundaries: number[];
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "pendia-remux-"));
+    dir = await mkdtemp(join(tmpdir(), "thalia-remux-"));
     inputPath = join(dir, "input.mkv");
     await createVideoFixture(inputPath, {
       width: 1920,

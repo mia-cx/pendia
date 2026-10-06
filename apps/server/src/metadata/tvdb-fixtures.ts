@@ -1,4 +1,4 @@
-/** A TVDB v4 series extended record for tests, trimmed to the fields Pendia reads. */
+/** A TVDB v4 series extended record for tests, trimmed to the fields Thalia reads. */
 export const tvdbSeries = {
   id: 81189,
   name: "Breaking Bad",

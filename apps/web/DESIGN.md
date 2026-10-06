@@ -1,6 +1,6 @@
-# Pendia web design
+# Thalia web design
 
-Pendia should feel like Apple built a self-hosted media player. Artwork leads, the chrome is translucent and quiet, titles are large and confident, and one accent marks what matters. This file is the system's source of truth. Each redesign slice extends it rather than repeating it.
+Thalia should feel like Apple built a self-hosted media player. Artwork leads, the chrome is translucent and quiet, titles are large and confident, and one accent marks what matters. This file is the system's source of truth. Each redesign slice extends it rather than repeating it.
 
 ## Principles
 
@@ -29,7 +29,7 @@ Tailwind's default palette, type scale and radii are reset. Only these tokens ex
 | `--fill`, `--fill-strong` | `bg-fill`, `bg-fill-strong` | Control fills, hover and pressed states. |
 | `--separator` | `border-separator`, `bg-separator` | Hairlines between groups. |
 | `--border-control` | `border-input` | Field borders where a fill alone is not enough. |
-| `--tint`, `--tint-fill` | `text-tint`, `bg-tint`, `bg-tint-fill` | The accent, Pendia indigo, and its translucent wash. |
+| `--tint`, `--tint-fill` | `text-tint`, `bg-tint`, `bg-tint-fill` | The accent, Thalia indigo, and its translucent wash. |
 | `--destructive` | `text-destructive`, `bg-destructive` | Destructive actions and errors. |
 | `--success` | `text-success` | Confirmations. |
 | `--scrim` | `bg-scrim` | Behind dialogs and sheets. |
@@ -42,7 +42,7 @@ High contrast (`prefers-contrast: more`) swaps in pure black and white labels, s
 
 ### Type
 
-The stack is `-apple-system, BlinkMacSystemFont, InterVariable, sans-serif`. Apple devices render SF Pro and never download Inter. Everywhere else renders Inter 4.1 variable, served by Pendia from `static/fonts` under the SIL Open Font License (`static/fonts/LICENSE.txt`), so it works offline. Inter's optical sizes switch to its display cut at large sizes on their own.
+The stack is `-apple-system, BlinkMacSystemFont, InterVariable, sans-serif`. Apple devices render SF Pro and never download Inter. Everywhere else renders Inter 4.1 variable, served by Thalia from `static/fonts` under the SIL Open Font License (`static/fonts/LICENSE.txt`), so it works offline. Inter's optical sizes switch to its display cut at large sizes on their own.
 
 One scale, Apple's platform sizes. Weight and tracking travel with the size, so `text-title-2` alone sets all three.
 
@@ -102,7 +102,7 @@ Artwork leads every one of these. Titles come from the art itself where it has t
 - **Artwork** is the one frame for every image: 2:3 (`poster`) or 16:9 (`landscape`), reserved before the image loads, with a hairline so light art does not bleed into a light page, and a fade-in. A missing or failed image shows `artwork-fallback`. A poster fallback carries the medium's icon at the top-left and the title in `text-title-3` with the year under it at the bottom-left, so the title prints once. A landscape fallback is the bare surface, because its card draws the title. A Season or Episode without its own poster borrows its Show's, and its fallback names the Show.
 - **Poster card** is the frame alone, like the posters in the Apple TV app's shelves: nothing under it. The link's accessible name is the title and year, or the Show and code for an Episode. Hover and keyboard focus lift the frame 4 px and scale it to 103% on a spring, with `shadow-lift`, and the focus ring sits on the frame. A card with progress draws a tint bar, over a soft scrim when there is artwork, and adds the percentage watched to its name.
 - **Landscape card** is for Continue Watching and Next Up. It is always dark inside, like a hero. The art is an Episode's still, else its Show's backdrop, else a Movie's backdrop. Over a bottom scrim sit the logo (the Show's for an Episode) or the title in `text-headline`, then one line: `38m left` for a Movie, `S1, E2 · 22m left` for an Episode, or `S1, E3 · Episode title` in Next Up. Progress is a tint bar under it. A Next Up Episode added in the last week wears a `New` badge. Clicking plays: Resume with progress, Play without. The lift matches the poster card's at 102%, and carries the menu button with it.
-- **Card menu** is the `…` glass button at a landscape card's bottom-right. It holds only actions Pendia has: Go to movie, Go to episode, Go to season or Go to show, and Play from start when there is progress. Mark as watched, the watchlist and Share join it with #106.
+- **Card menu** is the `…` glass button at a landscape card's bottom-right. It holds only actions Thalia has: Go to movie, Go to episode, Go to season or Go to show, and Play from start when there is progress. Mark as watched, the watchlist and Share join it with #106.
 - **Shelf** is one row that scrolls sideways and snaps to cards, in three sizes: posters (176 px wide from 1024 px), landscape cards (240 to 304 px) and small person tiles. The track bleeds under the sidebar, so cards slide beneath its material. On pointer devices, when the row overflows, glass paddles sit at both edges, centred on the cards; they show while the pointer is over the row or when focused, and hide at the ends. The title carries a `›` only when the shelf has a page to open, so a chevron always leads somewhere.
 - **Hero** is a full-bleed image at least the height of most of the window (78% on phones, up to 82% from 1024 px), always dark inside. Taller content grows it, so a short window never clips the title. The backdrop fills it under a bottom scrim, a left scrim from 1024 px and a thin top scrim for the phone's profile button. Without a backdrop, the poster fills it as a blurred, darkened wash; without either, a dark gradient or, when a page passes a hue, the title's `artwork-fallback`. A hero with no art at all renders shorter, so art-free pages reach their content sooner. At the bottom-left, in the content column: the logo, bottom-aligned in a reserved box, or the title in `text-display`; then the content the page gives it. Detail pages add an eyebrow line above the title (the owning Show's name, as links) and may place an aside at the bottom-right from 1024 px. Home's carousel uses it, and the detail pages share it.
 - **Ambient backdrop** is the page's fixed underlay on detail screens: the hero's art stretched, blurred and saturated under a scheme wash, or the title's `artwork-fallback` hue when there is none. Reduced transparency swaps it for the plain background.

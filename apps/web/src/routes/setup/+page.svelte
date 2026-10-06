@@ -160,7 +160,7 @@ const title = $derived(
 </script>
 
 <svelte:head>
-  <title>Set up Pendia</title>
+  <title>Set up Thalia</title>
 </svelte:head>
 
 <FocusScreen {title} bind:heading>

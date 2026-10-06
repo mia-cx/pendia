@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  createPendiaClient,
-  type PendiaClient,
+  createThaliaClient,
+  type ThaliaClient,
 } from "../../../web/src/lib/api.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { login } from "../auth/sessions.ts";
@@ -9,7 +9,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { items } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 
 const device = {
@@ -20,8 +20,8 @@ const device = {
 
 type Extends<A, B> = A extends B ? true : false;
 
-type ListOutput = Awaited<ReturnType<PendiaClient["items"]["list"]>>;
-type MeOutput = Awaited<ReturnType<PendiaClient["me"]>>;
+type ListOutput = Awaited<ReturnType<ThaliaClient["items"]["list"]>>;
+type MeOutput = Awaited<ReturnType<ThaliaClient["me"]>>;
 
 type PlainCard = {
   id: string;
@@ -80,10 +80,10 @@ describe.skipIf(!databaseUrl)("api client", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { admin, token, rows } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const client = createPendiaClient({
+        const client = createThaliaClient({
           origin: base,
           headers: { authorization: `Bearer ${token}` },
         });

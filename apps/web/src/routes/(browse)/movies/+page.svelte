@@ -6,7 +6,7 @@ const { data }: PageProps = $props();
 </script>
 
 <svelte:head>
-  <title>Movies · Pendia</title>
+  <title>Movies · Thalia</title>
 </svelte:head>
 
 <ItemGrid

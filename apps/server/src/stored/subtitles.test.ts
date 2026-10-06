@@ -7,14 +7,14 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { and, eq } from "drizzle-orm";
 import * as HLS from "hls-parser";
-import type { pendiaRouter } from "../api/router.ts";
+import type { thaliaRouter } from "../api/router.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { sessionRegistry, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import type { VideoFixtureOptions } from "../mediums/video-common/fixtures.ts";
 import {
   drain,
@@ -25,7 +25,7 @@ import {
 
 HLS.setOptions({ strictMode: true });
 
-type Client = RouterClient<typeof pendiaRouter>;
+type Client = RouterClient<typeof thaliaRouter>;
 
 // A browser: mkv is not a container it plays, and WebVTT is its only subtitle format.
 const browser = {
@@ -43,7 +43,7 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
     run: (context: {
       db: Database;
       base: string;
-      server: Awaited<ReturnType<typeof startPendia>>;
+      server: Awaited<ReturnType<typeof startThalia>>;
       plan: (
         profile: Parameters<Client["playback"]["plan"]>[0]["profile"],
       ) => ReturnType<Client["playback"]["plan"]>;
@@ -70,9 +70,9 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
             );
           expect(complete).toHaveLength(2);
           const scratchDir = await mkdtemp(
-            join(tmpdir(), "pendia-stored-subtitles-"),
+            join(tmpdir(), "thalia-stored-subtitles-"),
           );
-          const server = await startPendia("all", {
+          const server = await startThalia("all", {
             databaseUrl: url,
             port: 0,
             transcoderOptions: { port: 0, scratchDir },

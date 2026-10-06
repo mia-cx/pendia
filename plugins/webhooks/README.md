@@ -1,6 +1,6 @@
-# @pendia/plugin-webhooks
+# @thalia/plugin-webhooks
 
-Sends Pendia server events to an HTTP endpoint. First-party, listed in the official registry.
+Sends Thalia server events to an HTTP endpoint. First-party, listed in the official registry.
 
 ## Settings
 

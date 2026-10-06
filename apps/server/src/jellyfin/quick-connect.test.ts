@@ -43,7 +43,7 @@ async function setup(db: Database) {
     body?: object,
   ) => {
     const response = await handle(
-      new Request(`http://pendia.test${path}`, {
+      new Request(`http://thalia.test${path}`, {
         method,
         headers: { "content-type": "application/json", Authorization: header },
         body: body === undefined ? undefined : JSON.stringify(body),

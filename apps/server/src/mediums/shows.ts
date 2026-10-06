@@ -331,7 +331,7 @@ function analyze(rootName: string, path: string): AcceptedPath | null {
 
 function isExtra(path: string): boolean {
   const parts = path.split("/");
-  if (parts.some((part) => part.toLowerCase().endsWith(".pendia"))) {
+  if (parts.some((part) => part.toLowerCase().endsWith(".thalia"))) {
     return true;
   }
   if (parts[0]?.toLowerCase() === "extras") {

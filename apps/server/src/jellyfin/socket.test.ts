@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { runScanJob } from "../libraries/jobs.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { toGuid } from "./request.ts";
@@ -61,7 +61,7 @@ describe.skipIf(!databaseUrl)("jellyfin socket", () => {
   let root: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "pendia-jellyfin-socket-"));
+    root = await mkdtemp(join(tmpdir(), "thalia-jellyfin-socket-"));
     await mkdir(join(root, "Clip (2026)"));
     await createVideoFixture(join(root, "Clip (2026)", "Clip.mkv"), {
       width: 160,
@@ -77,14 +77,14 @@ describe.skipIf(!databaseUrl)("jellyfin socket", () => {
     withDatabase(async (db, url) => {
       const { library, movies } = await seedMovies(db, root, ["Clip"]);
       const itemId = movies.get("Clip")?.itemId ?? "";
-      const pendia = await startPendia("api", {
+      const thalia = await startThalia("api", {
         databaseUrl: url,
         port: 0,
         brokerOptions: { pollIntervalMs: 200 },
       });
       const sockets: WebSocket[] = [];
       try {
-        const base = `http://127.0.0.1:${pendia.apiServer?.port}`;
+        const base = `http://127.0.0.1:${thalia.apiServer?.port}`;
         const send = (request: Request) =>
           fetch(new URL(new URL(request.url).pathname, base), request);
         const viewerToken = await jellyfinLogin(send, androidTv);
@@ -170,7 +170,7 @@ describe.skipIf(!databaseUrl)("jellyfin socket", () => {
         ).toBe(400);
       } finally {
         for (const socket of sockets) socket.close();
-        await pendia.stop();
+        await thalia.stop();
       }
     }));
 });

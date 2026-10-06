@@ -36,7 +36,7 @@ describe("openapi document", () => {
   test("reports the OpenAPI version, title and API paths", async () => {
     const doc = await openApiDocument();
     expect(doc.openapi).toStartWith("3.1");
-    expect(doc.info?.title).toBe("Pendia");
+    expect(doc.info?.title).toBe("Thalia");
     expect(Object.keys(doc.paths ?? {})).toEqual(
       expect.arrayContaining([
         "/me",
@@ -198,7 +198,7 @@ describe("openapi document", () => {
     expect(components?.securitySchemes?.cookieAuth).toEqual({
       type: "apiKey",
       in: "cookie",
-      name: "pendia_session",
+      name: "thalia_session",
     });
     expect(doc.security).toEqual([{ bearerAuth: [] }, { cookieAuth: [] }]);
   });

@@ -2,14 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { ORPCError } from "@orpc/client";
 import { eq } from "drizzle-orm";
-import { createPendiaClient } from "../../../web/src/lib/api.ts";
+import { createThaliaClient } from "../../../web/src/lib/api.ts";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { pluginLockfile } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { officialRegistry } from "../plugins/settings.ts";
 import {
   type FixturePlugin,
@@ -19,7 +19,7 @@ import {
 } from "../plugins/testing.ts";
 
 const greeter: FixturePlugin = {
-  name: "pendia-plugin-greeter",
+  name: "thalia-plugin-greeter",
   capabilities: ["http", "files"],
   config: {
     type: "object",
@@ -55,10 +55,10 @@ async function withServer(
   directory: string,
   run: (
     base: string,
-    client: (token: string) => ReturnType<typeof createPendiaClient>,
+    client: (token: string) => ReturnType<typeof createThaliaClient>,
   ) => Promise<void>,
 ) {
-  const server = await startPendia("api", {
+  const server = await startThalia("api", {
     databaseUrl: url,
     port: 0,
     pluginOptions: { directory },
@@ -66,7 +66,7 @@ async function withServer(
   try {
     const base = `http://127.0.0.1:${server.apiServer?.port}`;
     await run(base, (token) =>
-      createPendiaClient({
+      createThaliaClient({
         origin: base,
         headers: { authorization: `Bearer ${token}` },
       }),
@@ -102,7 +102,7 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
           const preview = await admin.plugins.preview({ source });
           expect(preview).toMatchObject({
             source,
-            name: "pendia-plugin-greeter",
+            name: "thalia-plugin-greeter",
             version: "1.0.0",
             capabilities: ["http", "files"],
             installedVersion: null,
@@ -113,7 +113,7 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
           });
           expect(installed.plugins).toEqual([
             expect.objectContaining({
-              name: "pendia-plugin-greeter",
+              name: "thalia-plugin-greeter",
               enabled: true,
               failure: null,
               filesOff: null,
@@ -134,7 +134,7 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
 
           const invalid = await capture(
             admin.plugins.setConfig({
-              name: "pendia-plugin-greeter",
+              name: "thalia-plugin-greeter",
               config: { loud: "yes" },
             }),
           );
@@ -143,11 +143,11 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
             "config.greeting is required. config.loud must be boolean.",
           );
           await admin.plugins.setConfig({
-            name: "pendia-plugin-greeter",
+            name: "thalia-plugin-greeter",
             config: { greeting: "hi" },
           });
           const hello = await fetch(
-            `${base}/plugins/pendia-plugin-greeter/hello`,
+            `${base}/plugins/thalia-plugin-greeter/hello`,
           );
           expect(await hello.json()).toEqual({ greeting: "hi", loud: false });
 
@@ -162,7 +162,7 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
           expect(switched.filesOff).toEqual({ until: null });
           const until = new Date(Date.now() + 3_600_000).toISOString();
           const own = await admin.plugins.setFiles({
-            name: "pendia-plugin-greeter",
+            name: "thalia-plugin-greeter",
             off: { until },
           });
           expect(own.plugins[0]?.filesOff).toEqual({ until });
@@ -187,7 +187,7 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
             const { integrity } = await admin.plugins.preview({ source });
             await admin.plugins.install({ source, integrity });
             const boom = await fetch(
-              `${base}/plugins/pendia-plugin-greeter/boom`,
+              `${base}/plugins/thalia-plugin-greeter/boom`,
             );
             expect(boom.status).toBe(500);
             expect((await admin.me()).admin).toBe(true);
@@ -197,12 +197,12 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
               failure: { message: "greeter broke" },
             });
             const gone = await fetch(
-              `${base}/plugins/pendia-plugin-greeter/hello`,
+              `${base}/plugins/thalia-plugin-greeter/hello`,
             );
             expect(gone.status).toBe(404);
             const [restarted] = (
               await admin.plugins.setEnabled({
-                name: "pendia-plugin-greeter",
+                name: "thalia-plugin-greeter",
                 enabled: true,
               })
             ).plugins;
@@ -210,7 +210,7 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
           });
           await withServer(url, join(folder, "fresh"), async (base) => {
             const hello = await fetch(
-              `${base}/plugins/pendia-plugin-greeter/hello`,
+              `${base}/plugins/thalia-plugin-greeter/hello`,
             );
             expect(hello.status).toBe(200);
           });
@@ -239,21 +239,21 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
             (
               await capture(
                 client(tokens.viewer).plugins.remove({
-                  name: "pendia-plugin-greeter",
+                  name: "thalia-plugin-greeter",
                 }),
               )
             ).code,
           ).toBe("FORBIDDEN");
 
           const removed = await admin.plugins.remove({
-            name: "pendia-plugin-greeter",
+            name: "thalia-plugin-greeter",
           });
           expect(removed.plugins).toEqual([]);
           expect(
             await db
               .select({ name: pluginLockfile.name })
               .from(pluginLockfile)
-              .where(eq(pluginLockfile.name, "pendia-plugin-greeter")),
+              .where(eq(pluginLockfile.name, "thalia-plugin-greeter")),
           ).toEqual([]);
           expect((await admin.plugins.list()).plugins).toEqual([]);
         });
@@ -270,9 +270,9 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
           Response.json({
             plugins: [
               {
-                name: "pendia-plugin-greeter",
+                name: "thalia-plugin-greeter",
                 versions: [
-                  { version: "1.0.0", source: "pendia-plugin-greeter@1.0.0" },
+                  { version: "1.0.0", source: "thalia-plugin-greeter@1.0.0" },
                 ],
               },
             ],
@@ -292,12 +292,12 @@ describe.skipIf(!databaseUrl)("plugin admin api", () => {
                 url: local,
                 entries: [
                   {
-                    name: "pendia-plugin-greeter",
+                    name: "thalia-plugin-greeter",
                     description: null,
                     versions: [
                       {
                         version: "1.0.0",
-                        source: "pendia-plugin-greeter@1.0.0",
+                        source: "thalia-plugin-greeter@1.0.0",
                       },
                     ],
                   },

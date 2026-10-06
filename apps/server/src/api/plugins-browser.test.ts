@@ -4,13 +4,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPendiaClient } from "../../../web/src/lib/api.ts";
+import { createThaliaClient } from "../../../web/src/lib/api.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { sessionCookieName } from "../auth/http.ts";
 import { login } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import {
   type FixturePlugin,
   withFolder,
@@ -19,7 +19,7 @@ import {
 
 // Google Chrome comes first: Chromium builds without proprietary codecs.
 const browser =
-  Bun.env.PENDIA_BROWSER ??
+  Bun.env.THALIA_BROWSER ??
   ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
     .map((name) => Bun.which(name))
     .find((path) => path !== null) ??
@@ -30,12 +30,12 @@ const webBuild = fileURLToPath(
 );
 
 const older: FixturePlugin = {
-  name: "pendia-plugin-older",
+  name: "thalia-plugin-older",
   capabilities: [],
   source: "export default () => {};",
 };
 const fresher: FixturePlugin = {
-  name: "pendia-plugin-fresher",
+  name: "thalia-plugin-fresher",
   capabilities: [],
   source: "export default () => {};",
 };
@@ -125,7 +125,7 @@ class Page {
 }
 
 async function openPage(): Promise<Page> {
-  const profileDir = await mkdtemp(join(tmpdir(), "pendia-admin-browser-"));
+  const profileDir = await mkdtemp(join(tmpdir(), "thalia-admin-browser-"));
   const proc = Bun.spawn(
     [
       browser as string,
@@ -232,7 +232,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               {
                 username: "admin",
                 password: "admin-pass",
-                clientName: "Pendia Web",
+                clientName: "Thalia Web",
                 deviceId: "plugins-browser",
                 deviceName: "Chromium",
               },
@@ -242,13 +242,13 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               join(folder, "sources", "older"),
               older,
             );
-            const server = await startPendia("api", {
+            const server = await startThalia("api", {
               databaseUrl: url,
               port: 0,
               pluginOptions: { directory: join(folder, "installed") },
             });
             const base = `http://127.0.0.1:${server.apiServer?.port}`;
-            const api = createPendiaClient({
+            const api = createThaliaClient({
               origin: base,
               headers: { authorization: `Bearer ${token}` },
             });
@@ -335,7 +335,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               {
                 username: "admin",
                 password: "admin-pass",
-                clientName: "Pendia Web",
+                clientName: "Thalia Web",
                 deviceId: "plugins-browser-2",
                 deviceName: "Chromium",
               },
@@ -353,7 +353,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             const registry = Bun.serve({
               port: 0,
               fetch(request) {
-                if (request.url.endsWith("/pendia-registry.json"))
+                if (request.url.endsWith("/thalia-registry.json"))
                   return Response.json({
                     plugins: [
                       {
@@ -366,13 +366,13 @@ describe.skipIf(!databaseUrl || browser === undefined)(
                 return new Response(null, { status: 404 });
               },
             });
-            const server = await startPendia("api", {
+            const server = await startThalia("api", {
               databaseUrl: url,
               port: 0,
               pluginOptions: { directory: join(folder, "installed") },
             });
             const base = `http://127.0.0.1:${server.apiServer?.port}`;
-            const api = createPendiaClient({
+            const api = createThaliaClient({
               origin: base,
               headers: { authorization: `Bearer ${token}` },
             });

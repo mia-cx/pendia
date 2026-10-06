@@ -10,11 +10,11 @@ import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 const device = {
   clientName: "Test Client",
@@ -40,7 +40,7 @@ function rpcClient(base: string, token?: string) {
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function seed(db: Database) {
@@ -64,7 +64,7 @@ async function seed(db: Database) {
 // Google Chrome comes first: Chromium builds without proprietary codecs cannot
 // decode the H.264 and AAC fixture and fail with manifestIncompatibleCodecsError.
 const browser =
-  Bun.env.PENDIA_BROWSER ??
+  Bun.env.THALIA_BROWSER ??
   ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
     .map((name) => Bun.which(name))
     .find((path) => path !== null) ??
@@ -72,7 +72,7 @@ const browser =
 
 if (databaseUrl && browser === undefined)
   console.info(
-    "Skipping browser playback test: no Chromium found; set PENDIA_BROWSER.",
+    "Skipping browser playback test: no Chromium found; set THALIA_BROWSER.",
   );
 if (databaseUrl && browser !== undefined)
   console.info(`Browser playback test uses ${browser}.`);
@@ -154,7 +154,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
 
     beforeAll(async () => {
       libraryRoot = await mkdtemp(
-        join(tmpdir(), "pendia-hls-browser-library-"),
+        join(tmpdir(), "thalia-hls-browser-library-"),
       );
       for (const [title, videoCodec, width, height] of [
         ["Movie", "h264", 1920, 1080],
@@ -217,12 +217,12 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             throw new Error("Expected exactly one scanned item and version.");
           }
           const scratchDir = await mkdtemp(
-            join(tmpdir(), "pendia-hls-browser-scratch-"),
+            join(tmpdir(), "thalia-hls-browser-scratch-"),
           );
           const profileDir = await mkdtemp(
-            join(tmpdir(), "pendia-hls-browser-profile-"),
+            join(tmpdir(), "thalia-hls-browser-profile-"),
           );
-          const server = await startPendia("all", {
+          const server = await startThalia("all", {
             databaseUrl: url,
             port: 0,
             transcoderOptions: {

@@ -7,7 +7,7 @@ import { createApiKey } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { jobs, probeCache, streams } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { libraryConcurrencyKey } from "../libraries/jobs.ts";
 import { insertLibraries } from "../libraries/testing.ts";
@@ -43,11 +43,11 @@ async function waitForChange(
 describe("readWatcherConfig", () => {
   test("maps root ids to absolute local paths", () => {
     const config = readWatcherConfig({
-      PENDIA_API_URL: "http://pendia:3000",
-      PENDIA_WATCHER_TOKEN: "token",
-      PENDIA_WATCH: `${rootId}=/srv/movies,other=/srv/a=b`,
+      THALIA_API_URL: "http://thalia:3000",
+      THALIA_WATCHER_TOKEN: "token",
+      THALIA_WATCH: `${rootId}=/srv/movies,other=/srv/a=b`,
     });
-    expect(config.apiUrl.href).toBe("http://pendia:3000/");
+    expect(config.apiUrl.href).toBe("http://thalia:3000/");
     expect([...config.roots]).toEqual([
       [rootId, "/srv/movies"],
       ["other", "/srv/a=b"],
@@ -57,16 +57,16 @@ describe("readWatcherConfig", () => {
   test("rejects a relative root", () => {
     expect(() =>
       readWatcherConfig({
-        PENDIA_API_URL: "http://pendia:3000",
-        PENDIA_WATCHER_TOKEN: "token",
-        PENDIA_WATCH: `${rootId}=movies`,
+        THALIA_API_URL: "http://thalia:3000",
+        THALIA_WATCHER_TOKEN: "token",
+        THALIA_WATCH: `${rootId}=movies`,
       }),
-    ).toThrow("PENDIA_WATCH");
+    ).toThrow("THALIA_WATCH");
   });
 });
 
 test("pushes adds, moves and deletes within 1 s with root-relative paths", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pendia-watch-"));
+  const root = await mkdtemp(join(tmpdir(), "thalia-watch-"));
   const seen: WatchedChange[] = [];
   const authorizations = new Set<string | null>();
   const api = Bun.serve({
@@ -131,7 +131,7 @@ test("pushes adds, moves and deletes within 1 s with root-relative paths", async
 });
 
 test("retries a scan report the api refused with 403", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pendia-watch-"));
+  const root = await mkdtemp(join(tmpdir(), "thalia-watch-"));
   const jobId = "0199a000-0000-7000-8000-000000000002";
   const claimToken = crypto.randomUUID();
   let claims = 0;
@@ -237,7 +237,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
             return response ?? new Response(null, { status: 404 });
           },
         });
-        const root = await mkdtemp(join(tmpdir(), "pendia-watch-retry-"));
+        const root = await mkdtemp(join(tmpdir(), "thalia-watch-retry-"));
         const watcher = await startWatcher(
           {
             apiUrl: new URL(api.url),
@@ -286,7 +286,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
       withDatabase(async (db, url) => {
         await mkdir(join(dir, "Alien (1979)"));
         await createVideoFixture(join(dir, "Alien (1979)/Alien (1979).mkv"));
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const admin = await setupAdmin(db, {
           username: "admin",

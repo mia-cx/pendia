@@ -1,5 +1,5 @@
 {
-  "name": "@pendia/web",
+  "name": "@thalia/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@orpc/server": "1.15.0",
-    "@pendia/server": "workspace:*",
+    "@thalia/server": "workspace:*",
     "@sveltejs/adapter-static": "3.0.10",
     "@sveltejs/kit": "2.70.3",
     "@sveltejs/vite-plugin-svelte": "7.3.0",

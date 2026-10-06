@@ -549,7 +549,7 @@ describe("live runs", () => {
   let boundaries: number[];
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "pendia-live-run-"));
+    dir = await mkdtemp(join(tmpdir(), "thalia-live-run-"));
     inputPath = join(dir, "input.mkv");
     await createVideoFixture(inputPath, {
       width: 1920,

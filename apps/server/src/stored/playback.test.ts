@@ -6,14 +6,14 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { and, eq } from "drizzle-orm";
 import * as HLS from "hls-parser";
-import type { pendiaRouter } from "../api/router.ts";
+import type { thaliaRouter } from "../api/router.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import type { JsonObject } from "../db/schema/common.ts";
 import { sessionRegistry, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import {
   drain,
@@ -73,14 +73,14 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
             const idOf = (rung: string) =>
               rungs.find((row) => row.rung === rung)?.id ?? "";
 
-            const server = await startPendia("api", {
+            const server = await startThalia("api", {
               databaseUrl: url,
               port: 0,
             });
             try {
               const base = `http://127.0.0.1:${server.apiServer?.port}`;
               const client = createORPCClient<
-                RouterClient<typeof pendiaRouter>
+                RouterClient<typeof thaliaRouter>
               >(
                 new RPCLink({
                   url: `${base}/rpc`,
@@ -161,12 +161,12 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
               const sentinel = join(root, "..", `sentinel-${itemId}`);
               await writeFile(sentinel, "outside the library");
               try {
-                const p360 = join(root, `${fixturePath}.pendia`, "360p");
+                const p360 = join(root, `${fixturePath}.thalia`, "360p");
                 await rm(join(p360, "init.mp4"));
                 await symlink(sentinel, join(p360, "init.mp4"));
                 const sourceRung = join(
                   root,
-                  `${fixturePath}.pendia`,
+                  `${fixturePath}.thalia`,
                   "source",
                 );
                 await rename(sourceRung, `${sourceRung}.moved`);

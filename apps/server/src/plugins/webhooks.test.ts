@@ -14,7 +14,7 @@ import { withFolder } from "./testing.ts";
 
 const repoRoot = join(import.meta.dir, "../../../..");
 const webhooksRoot = join(repoRoot, "plugins/webhooks");
-const webhooksName = "@pendia/plugin-webhooks";
+const webhooksName = "@thalia/plugin-webhooks";
 
 /** Bundles the in-repo webhooks plugin into `folder` as its published package: package.json and dist. */
 async function packWebhooks(folder: string): Promise<string> {
@@ -159,7 +159,7 @@ describe.skipIf(!databaseUrl)("webhooks plugin", () => {
     withFolder((folder) =>
       withDatabase(async (db) => {
         const entries = readRegistry(
-          await Bun.file(join(repoRoot, "pendia-registry.json")).json(),
+          await Bun.file(join(repoRoot, "thalia-registry.json")).json(),
         );
         const entry = entries.find((plugin) => plugin.name === webhooksName);
         const { version } = await Bun.file(

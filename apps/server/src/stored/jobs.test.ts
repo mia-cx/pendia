@@ -66,7 +66,7 @@ describe.skipIf(!databaseUrl)("store job", () => {
               itemId: version.itemId,
               origin: "stored",
               sourceFileId: file.id,
-              storedFolder: `${file.path}.pendia/360p`,
+              storedFolder: `${file.path}.thalia/360p`,
               rung: "360p",
               complete: true,
               segmentTimelineId: version.segmentTimelineId,

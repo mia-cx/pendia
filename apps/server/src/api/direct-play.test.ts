@@ -10,14 +10,14 @@ import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 const device = {
   clientName: "Test Client",
@@ -38,7 +38,7 @@ function rpcClient(base: string, token?: string) {
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function capture(promise: Promise<unknown>) {
@@ -103,7 +103,7 @@ describe.skipIf(!databaseUrl)("direct-play end to end", () => {
       await migrateDatabase(db);
       const fx = await seed(db);
       await withScannedLibrary(db, fx.admin.id, async (scanned) => {
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const client = rpcClient(base, fx.keyToken);
@@ -222,7 +222,7 @@ describe.skipIf(!databaseUrl)("direct-play end to end", () => {
       await migrateDatabase(db);
       const fx = await seed(db);
       await withScannedLibrary(db, fx.admin.id, async (scanned) => {
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const client = rpcClient(base, fx.keyToken);

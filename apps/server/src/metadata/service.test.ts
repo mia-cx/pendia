@@ -4,7 +4,7 @@ import type {
   MetadataMatch,
   MetadataProvider,
   MetadataResult,
-} from "@pendia/plugin-api";
+} from "@thalia/plugin-api";
 import { and, eq, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { createDatabase, type Database } from "../db/client.ts";

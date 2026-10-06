@@ -1,8 +1,8 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
 /** What the folder scan preview endpoint answers, as the client decodes it. */
 export type FolderPreview = Awaited<
-  ReturnType<PendiaClient["libraries"]["preview"]>
+  ReturnType<ThaliaClient["libraries"]["preview"]>
 >;
 
 type Medium = "movies" | "shows";

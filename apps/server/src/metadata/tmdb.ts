@@ -1,4 +1,4 @@
-import type { MetadataProvider } from "@pendia/plugin-api";
+import type { MetadataProvider } from "@thalia/plugin-api";
 import {
   assertRequestLimits,
   dateYear,

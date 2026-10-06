@@ -59,7 +59,7 @@ async function setup(db: Database) {
 }
 
 function post(path: string, body: unknown, token?: string) {
-  return new Request(`http://pendia.test/api/watcher/${path}`, {
+  return new Request(`http://thalia.test/api/watcher/${path}`, {
     method: "POST",
     headers:
       token === undefined
@@ -631,7 +631,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         { highWaterMark: 0 },
       );
       const response = handler(
-        new Request(`http://pendia.test/api/watcher/jobs/${job.id}`, {
+        new Request(`http://thalia.test/api/watcher/jobs/${job.id}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

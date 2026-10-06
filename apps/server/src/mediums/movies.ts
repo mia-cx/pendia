@@ -54,7 +54,7 @@ function isExtra(path: string): boolean {
       .some(
         (part) =>
           part.toLowerCase() === "extras" ||
-          part.toLowerCase().endsWith(".pendia"),
+          part.toLowerCase().endsWith(".thalia"),
       )
   ) {
     return true;

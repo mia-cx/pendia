@@ -16,12 +16,12 @@ import { runStartupTrial } from "./trial.ts";
 
 /** Options for the transcoder role; env fills the gaps. */
 export type TranscoderOptions = {
-  scratchDir?: string; // PENDIA_SCRATCH_DIR, else join(tmpdir(), "pendia-scratch")
-  port?: number; // PENDIA_TRANSCODER_PORT, else 3001
-  address?: string; // PENDIA_TRANSCODER_URL, else `http://127.0.0.1:${server.port}`
-  ready?: () => Promise<boolean>; // answers the Postgres half of /readyz; startPendia passes probeDatabase
+  scratchDir?: string; // THALIA_SCRATCH_DIR, else join(tmpdir(), "thalia-scratch")
+  port?: number; // THALIA_TRANSCODER_PORT, else 3001
+  address?: string; // THALIA_TRANSCODER_URL, else `http://127.0.0.1:${server.port}`
+  ready?: () => Promise<boolean>; // answers the Postgres half of /readyz; startThalia passes probeDatabase
   trial?: typeof runStartupTrial; // the startup trial; tests replace it
-  transcodeSlots?: number; // PENDIA_TRANSCODE_SLOTS, else 2: video re-encodes at once
+  transcodeSlots?: number; // THALIA_TRANSCODE_SLOTS, else 2: video re-encodes at once
   idleMs?: number;
   waitMs?: number;
   readRate?: SessionManagerOptions["readRate"];
@@ -29,14 +29,14 @@ export type TranscoderOptions = {
 
 const defaultTranscodeSlots = 2; // the spec's cap for a 12 vCPU node
 
-/** Reads PENDIA_TRANSCODE_SLOTS, the per-node cap on concurrent video re-encodes. */
+/** Reads THALIA_TRANSCODE_SLOTS, the per-node cap on concurrent video re-encodes. */
 export function readTranscodeSlots() {
-  const value = Bun.env.PENDIA_TRANSCODE_SLOTS;
+  const value = Bun.env.THALIA_TRANSCODE_SLOTS;
   if (value === undefined) return defaultTranscodeSlots;
   const slots = Number(value);
   if (!Number.isInteger(slots) || slots < 1) {
     throw new Error(
-      `PENDIA_TRANSCODE_SLOTS must be a positive integer. Found "${value}".`,
+      `THALIA_TRANSCODE_SLOTS must be a positive integer. Found "${value}".`,
     );
   }
   return slots;
@@ -52,8 +52,8 @@ export async function startTranscoder(
 ) {
   const scratchDir =
     options.scratchDir ??
-    Bun.env.PENDIA_SCRATCH_DIR ??
-    join(tmpdir(), "pendia-scratch");
+    Bun.env.THALIA_SCRATCH_DIR ??
+    join(tmpdir(), "thalia-scratch");
   await mkdir(scratchDir, { recursive: true });
   const sessions = createSessionManager(db, {
     scratchDir,
@@ -62,7 +62,7 @@ export async function startTranscoder(
     readRate: options.readRate,
     transcodeSlots: options.transcodeSlots ?? readTranscodeSlots(),
   });
-  const port = options.port ?? readPort("PENDIA_TRANSCODER_PORT", 3001);
+  const port = options.port ?? readPort("THALIA_TRANSCODER_PORT", 3001);
   let nodeId: string | null = null;
   let stopping: Promise<void> | undefined;
 
@@ -162,7 +162,7 @@ export async function startTranscoder(
 
   const address = (
     options.address ??
-    Bun.env.PENDIA_TRANSCODER_URL ??
+    Bun.env.THALIA_TRANSCODER_URL ??
     `http://127.0.0.1:${server.port}`
   ).replace(/\/+$/, "");
   // A client's stop frees its transcode slot at once rather than at the idle

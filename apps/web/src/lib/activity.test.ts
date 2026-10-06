@@ -17,7 +17,7 @@ const session: Pick<
   | "reasons"
 > & { version: { label: string } } = {
   playMethod: "direct-play",
-  clientName: "Pendia Web",
+  clientName: "Thalia Web",
   deviceName: "iPad",
   version: { label: "1080p · H.264 · AC3" },
   rungs: ["source"],
@@ -81,8 +81,8 @@ describe("transcodeLine", () => {
 
 describe("clientLabel", () => {
   test("names the app, the device, or Unknown app", () => {
-    expect(clientLabel(session)).toBe("Pendia Web on iPad");
-    expect(clientLabel({ ...session, deviceName: null })).toBe("Pendia Web");
+    expect(clientLabel(session)).toBe("Thalia Web on iPad");
+    expect(clientLabel({ ...session, deviceName: null })).toBe("Thalia Web");
     expect(clientLabel({ ...session, clientName: null })).toBe("Unknown app");
   });
 });

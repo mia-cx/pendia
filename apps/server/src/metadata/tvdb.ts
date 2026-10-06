@@ -1,4 +1,4 @@
-import type { MetadataProvider } from "@pendia/plugin-api";
+import type { MetadataProvider } from "@thalia/plugin-api";
 import {
   assertRequestLimits,
   dateYear,
@@ -362,7 +362,7 @@ export function createTvdbMetadataProvider(
     const data = readData(body);
     if (requiredId(data.id) !== id) invalid();
     await loadSeries(requiredId(data.seriesId));
-    // Outside the official order the record is not one Pendia can place.
+    // Outside the official order the record is not one Thalia can place.
     return cache.get(id) ?? null;
   };
 

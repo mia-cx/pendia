@@ -186,7 +186,7 @@ export const userRoutes: Route[] = [
     handle: async ({ db, caller }) =>
       json(await userDto(db, caller.user, await readServerId(db))),
   },
-  // Login screens list public users first. Pendia shows none, so clients ask for a name.
+  // Login screens list public users first. Thalia shows none, so clients ask for a name.
   {
     method: "GET",
     path: "/Users/Public",

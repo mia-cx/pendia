@@ -129,13 +129,13 @@ describe("identify", () => {
     expect(identify("Show/Season 01/Show trailer.mkv")).toBeNull();
   });
 
-  test("rejects extras directories, suffixes and Pendia store paths", () => {
+  test("rejects extras directories, suffixes and Thalia store paths", () => {
     expect(identify("Show/Season 01/extras/clip S01E01.mkv")).toBeNull();
     expect(identify("Show/Season 01/Show S01E01-trailer.mkv")).toBeNull();
     expect(identify("Show/Season 01/Show S01E01.sample.mkv")).toBeNull();
-    expect(identify("Show/.pendia/cover S01E01.mkv")).toBeNull();
+    expect(identify("Show/.thalia/cover S01E01.mkv")).toBeNull();
     expect(
-      identify("Show/Season 01/file.mkv.pendia/init S01E01.mp4"),
+      identify("Show/Season 01/file.mkv.thalia/init S01E01.mp4"),
     ).toBeNull();
     expect(identify("extras/Season 01/extras S01E01.mkv")).toBeNull();
   });
@@ -214,7 +214,7 @@ describe("isExtra", () => {
     expect(isExtra("Show/Season 01/Show S01E01.mkv")).toBe(false);
     expect(isExtra("Shorts/Season 01/Shorts S01E01.mkv")).toBe(false);
     expect(isExtra("extras/Season 01/extras S01E01.mkv")).toBe(true);
-    expect(isExtra("Show/.pendia/cover.mkv")).toBe(true);
+    expect(isExtra("Show/.thalia/cover.mkv")).toBe(true);
   });
 
   test("flags a root-level sample file", () => {
@@ -362,7 +362,7 @@ describe("groupShowPaths", () => {
         "Show/Season 01/Show S01E01.mkv",
         "Show/Season 01/extras/clip S01E02.mkv",
         "Show/Season 01/Show S01E02-trailer.mkv",
-        "Show/.pendia/cover S01E02.mkv",
+        "Show/.thalia/cover S01E02.mkv",
         "extras/Season 01/extras S01E01.mkv",
         "Show/Season 01/Show S01E02.srt",
         "../escape/Season 01/Show S01E02.mkv",
@@ -637,8 +637,8 @@ describe("groupShowPaths", () => {
       "Show/Season 1/extras/x S01E01.mkv",
       "Show/Featurettes/Show S01E01.mkv",
       "Show/Season 01/Show S01E01.sample.mkv",
-      "Show/.pendia/cover S01E01.mkv",
-      "Show/Season 01/file.mkv.pendia/init S01E01.mp4",
+      "Show/.thalia/cover S01E01.mkv",
+      "Show/Season 01/file.mkv.thalia/init S01E01.mp4",
       "Show/Show - 012.mkv",
     ]) {
       expect(groupShowPaths(rooted([path]))).toEqual([]);

@@ -1,4 +1,4 @@
-import type { PluginEvents } from "@pendia/plugin-api";
+import type { PluginEvents } from "@thalia/plugin-api";
 import { sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { jobs } from "../db/schema/index.ts";

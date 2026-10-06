@@ -21,7 +21,7 @@ const skeletonSizes = ["landscape", "poster"] as const;
 </script>
 
 <svelte:head>
-  <title>Pendia</title>
+  <title>Thalia</title>
 </svelte:head>
 
 <h1

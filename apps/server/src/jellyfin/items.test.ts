@@ -38,7 +38,7 @@ async function signIn(db: Database, username: string, password: string) {
   );
   const send = async (path: string, header: string, body?: object) => {
     const response = await handle(
-      new Request(`http://pendia.test${path}`, {
+      new Request(`http://thalia.test${path}`, {
         method: body === undefined ? "GET" : "POST",
         headers: { Authorization: header, "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -188,7 +188,7 @@ describe.skipIf(!databaseUrl)("jellyfin browse", () => {
         "Arrival",
       ]);
 
-      // Android TV's Continue Listening row asks for audio, which Pendia has none of.
+      // Android TV's Continue Listening row asks for audio, which Thalia has none of.
       expect(conforms(await get("/UserItems/Resume?mediaTypes=Audio"))).toEqual(
         [],
       );

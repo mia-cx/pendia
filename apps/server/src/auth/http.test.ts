@@ -3,7 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import { migrateDatabase } from "../db/migrate.ts";
 import { invites, settings, users } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { setupAdmin } from "./accounts.ts";
 import { createAuthHandler } from "./http.ts";
 import { createApiKey } from "./sessions.ts";
@@ -29,8 +29,8 @@ function post(
 describe.skipIf(!databaseUrl)("auth http", () => {
   test("setup once across two servers, then login/me/logout over HTTP", () =>
     withDatabase(async (db, url) => {
-      const first = await startPendia("api", { databaseUrl: url, port: 0 });
-      const second = await startPendia("api", { databaseUrl: url, port: 0 });
+      const first = await startThalia("api", { databaseUrl: url, port: 0 });
+      const second = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base1 = `http://127.0.0.1:${first.apiServer?.port}`;
         const base2 = `http://127.0.0.1:${second.apiServer?.port}`;
@@ -80,7 +80,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         });
         expect(login.headers.get("cache-control")).toBe("no-store");
         const cookie = login.headers.get("set-cookie") ?? "";
-        expect(cookie).toContain("pendia_session=");
+        expect(cookie).toContain("thalia_session=");
         expect(cookie).toContain("HttpOnly");
         expect(cookie).toContain("SameSite=Lax");
         expect(cookie).not.toContain("Secure");
@@ -95,7 +95,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         };
         expect(me.credential.kind).toBe("session");
         const viaCookie = await fetch(`${base1}/api/auth/me`, {
-          headers: { cookie: `pendia_session=${loginBody.token}` },
+          headers: { cookie: `thalia_session=${loginBody.token}` },
         });
         expect(viaCookie.status).toBe(200);
 
@@ -111,13 +111,13 @@ describe.skipIf(!databaseUrl)("auth http", () => {
           `${base1}/api/auth/logout`,
           {},
           {
-            cookie: `pendia_session=${loginBody.token}`,
+            cookie: `thalia_session=${loginBody.token}`,
           },
         );
         expect(logout.status).toBe(200);
         expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
         const after = await fetch(`${base1}/api/auth/me`, {
-          headers: { cookie: `pendia_session=${loginBody.token}` },
+          headers: { cookie: `thalia_session=${loginBody.token}` },
         });
         expect(after.status).toBe(401);
         expect(
@@ -143,7 +143,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         key: "auth",
         value: sql`jsonb_build_object('loginMaxAttempts', 2)`,
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const spoofed = {
@@ -195,9 +195,9 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         });
 
       const trusted = await handler(
-        init("http://pendia.local/api/auth/login", {
+        init("http://thalia.local/api/auth/login", {
           "x-forwarded-proto": "https",
-          origin: "https://pendia.local",
+          origin: "https://thalia.local",
         }),
         "10.0.0.2",
       );
@@ -205,9 +205,9 @@ describe.skipIf(!databaseUrl)("auth http", () => {
       expect(trusted.headers.get("set-cookie")).toContain("Secure");
 
       const untrusted = await handler(
-        init("http://pendia.local/api/auth/login", {
+        init("http://thalia.local/api/auth/login", {
           "x-forwarded-proto": "https",
-          origin: "http://pendia.local",
+          origin: "http://thalia.local",
         }),
         "10.0.0.9",
       );
@@ -215,8 +215,8 @@ describe.skipIf(!databaseUrl)("auth http", () => {
       expect(untrusted.headers.get("set-cookie")).not.toContain("Secure");
 
       const direct = await handler(
-        init("https://pendia.local/api/auth/login", {
-          origin: "https://pendia.local",
+        init("https://thalia.local/api/auth/login", {
+          origin: "https://thalia.local",
         }),
         "10.0.0.9",
       );
@@ -228,7 +228,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       await setupAdmin(db, { username: "admin", password: "secret" });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const loginUrl = `${base}/api/auth/login`;
@@ -282,7 +282,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         const badAuth = await fetch(`${base}/api/auth/me`, {
           headers: {
             authorization: "Bearer garbage",
-            cookie: `pendia_session=${token}`,
+            cookie: `thalia_session=${token}`,
           },
         });
         expect(badAuth.status).toBe(401);
@@ -312,7 +312,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
 
   test("invites create and accept local accounts over HTTP", () =>
     withDatabase(async (db, url) => {
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const setup = await post(`${base}/api/auth/setup`, {
@@ -405,7 +405,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
         });
         expect(acceptedBody.session).toMatchObject(device);
         const cookie = accepted.headers.get("set-cookie") ?? "";
-        expect(cookie).toContain(`pendia_session=${acceptedBody.token}`);
+        expect(cookie).toContain(`thalia_session=${acceptedBody.token}`);
         expect(cookie).toContain("HttpOnly");
         expect(cookie).toContain("SameSite=Lax");
         expect(cookie).toContain("Path=/");
@@ -458,7 +458,7 @@ describe.skipIf(!databaseUrl)("auth http", () => {
 
   test("API keys authenticate at me and logout revokes only the key", () =>
     withDatabase(async (db, url) => {
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const setup = await post(`${base}/api/auth/setup`, {

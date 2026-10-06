@@ -68,7 +68,7 @@ async function serveWeb(pathname: string, root: string): Promise<Response> {
  */
 export function startApiServer(
   ready: () => Promise<boolean>,
-  port = readPort("PENDIA_PORT", 3000),
+  port = readPort("THALIA_PORT", 3000),
   handlers: {
     auth?: ReturnType<typeof createAuthHandler>;
     api?: ReturnType<typeof createApiHandler>;
@@ -81,7 +81,7 @@ export function startApiServer(
     socket?: ReturnType<typeof createJellyfinSocket>;
   } = {},
 ): Bun.Server<SocketData> {
-  const webRoot = Bun.env.PENDIA_WEB_ROOT ?? defaultWebRoot;
+  const webRoot = Bun.env.THALIA_WEB_ROOT ?? defaultWebRoot;
 
   return Bun.serve<SocketData>({
     port,

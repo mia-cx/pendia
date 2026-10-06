@@ -20,7 +20,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import {
   type Event,
@@ -165,7 +165,7 @@ async function insertLibrary(db: Database, name: string) {
 // Publishes one event from a genuinely separate process so the test
 // exercises Postgres NOTIFY crossing process boundaries.
 async function publishFromProcess(url: string, event: object) {
-  const dir = mkdtempSync(join(tmpdir(), "pendia-event-"));
+  const dir = mkdtempSync(join(tmpdir(), "thalia-event-"));
   const file = join(dir, "publish.ts");
   try {
     writeFileSync(
@@ -173,7 +173,7 @@ async function publishFromProcess(url: string, event: object) {
       `import { createDatabase } from "${import.meta.dir}/../db/client.ts";
 import { publishEvent } from "${import.meta.dir}/events.ts";
 const database = createDatabase(process.env.DATABASE_URL);
-await publishEvent(database.db, JSON.parse(process.env.PENDIA_EVENT ?? "{}"));
+await publishEvent(database.db, JSON.parse(process.env.THALIA_EVENT ?? "{}"));
 await database.close();
 `,
     );
@@ -182,7 +182,7 @@ await database.close();
       env: {
         ...process.env,
         DATABASE_URL: url,
-        PENDIA_EVENT: JSON.stringify(event),
+        THALIA_EVENT: JSON.stringify(event),
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -270,7 +270,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const stream = await openEvents(base, token);
@@ -300,7 +300,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const first = await openEvents(base, token);
@@ -346,7 +346,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await publishEvent(db, {
@@ -423,7 +423,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
       });
       const { token: movieToken } = await createApiKey(db, movieFan.id, "m");
       const { token: showToken } = await createApiKey(db, showFan.id, "s");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const moviesEvent: Event = {
@@ -482,7 +482,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
         viewer.id,
         "viewer-key",
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const adminStream = await openEvents(base, adminToken);
@@ -558,7 +558,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
         })
         .returning();
       if (!session) throw new Error("Session insert returned no row.");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const adminStream = await openEvents(base, adminToken);
@@ -596,7 +596,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token, user, session } = await seed(db);
-      const server = await startPendia("api", {
+      const server = await startThalia("api", {
         databaseUrl: url,
         port: 0,
         brokerOptions: { pollIntervalMs: 50, revalidateIntervalMs: 100 },
@@ -688,7 +688,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
         return { kind: payload.kind, payload };
       });
       await db.insert(events).values(rows);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const stream = await openEvents(base, token, "0");
@@ -708,7 +708,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const response = await fetch(`${base}/api/events`, {
@@ -751,7 +751,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
         libraryId: Bun.randomUUIDv7(),
       };
       await publishEvent(db, earlier);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         // Past the signed bigint range: the stream must open cleanly, replay
@@ -778,7 +778,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
 
   test("an unauthenticated request to the stream answers 401", () =>
     withDatabase(async (_db, url) => {
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const response = await fetch(`${base}/api/events`);
@@ -793,7 +793,7 @@ describe.skipIf(!databaseUrl)("api events", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       const base = `http://127.0.0.1:${server.apiServer?.port}`;
       const stream = await openEvents(base, token);
       // The broker must stop before the server's graceful stop: an open

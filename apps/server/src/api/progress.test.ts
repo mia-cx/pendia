@@ -18,16 +18,16 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 function rpcClient(base: string, token?: string) {
   const link = new RPCLink({
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function capture(promise: Promise<unknown>) {
@@ -113,7 +113,7 @@ describe.skipIf(!databaseUrl)("playback progress", () => {
       const fx = await seed(db);
       const version = await addVersion(db, fx);
       const session = await addSession(db, fx.owner.id, fx.item.id, version.id);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -245,7 +245,7 @@ describe.skipIf(!databaseUrl)("playback progress", () => {
         fx.item.id,
         versionB.id,
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -323,7 +323,7 @@ describe.skipIf(!databaseUrl)("playback progress", () => {
           version.id,
           state,
         );
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const client = rpcClient(base, fx.keyToken);
@@ -362,7 +362,7 @@ describe.skipIf(!databaseUrl)("playback progress", () => {
       const version = await addVersion(db, fx);
       const first = await addSession(db, fx.owner.id, fx.item.id, version.id);
       const second = await addSession(db, fx.owner.id, fx.item.id, version.id);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -413,7 +413,7 @@ describe.skipIf(!databaseUrl)("playback progress", () => {
       const { token: otherToken } = await createApiKey(db, other.id, "other");
       const version = await addVersion(db, fx);
       const session = await addSession(db, fx.owner.id, fx.item.id, version.id);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -582,7 +582,7 @@ describe.skipIf(!databaseUrl)("playback progress", () => {
       });
       const sessionD = await addSession(db, fx.owner.id, item2.id, version2.id);
       const sessionE = await addSession(db, fx.owner.id, item2.id, version2.id);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);

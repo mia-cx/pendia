@@ -315,7 +315,7 @@ export async function createVideoFixture(
 export async function withVideoFixture<T>(
   run: (dir: string) => Promise<T>,
 ): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "pendia-video-"));
+  const dir = await mkdtemp(join(tmpdir(), "thalia-video-"));
   try {
     return await run(dir);
   } finally {

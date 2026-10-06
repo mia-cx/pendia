@@ -45,7 +45,7 @@ export const storePriority = -10;
 
 /** The library-relative folder a rung of a source File lives in. */
 export function storedFolderOf(sourcePath: string, rung: string) {
-  return `${sourcePath}.pendia/${rung}`;
+  return `${sourcePath}.thalia/${rung}`;
 }
 
 /** Enqueues one store job for a rung of a source File, optionally for later. */
@@ -222,7 +222,7 @@ async function completeStoredVersion(
   target: StoreTarget,
 ) {
   const { run, video, audio, file } = target;
-  const scratch = await mkdtemp(join(tmpdir(), "pendia-store-probe-"));
+  const scratch = await mkdtemp(join(tmpdir(), "thalia-store-probe-"));
   let probed: Awaited<ReturnType<typeof probeVideo>>;
   try {
     // An init segment alone carries no profile or level, so probe it with segment 0.

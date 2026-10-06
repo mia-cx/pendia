@@ -13,11 +13,11 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { sessionRegistry, transcoderCapabilities } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 HLS.setOptions({ strictMode: true });
 
@@ -43,7 +43,7 @@ function rpcClient(base: string, token?: string) {
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function seed(db: Database) {
@@ -89,7 +89,7 @@ describe.skipIf(!databaseUrl)("hls proxy", () => {
   let libraryRoot: string;
 
   beforeAll(async () => {
-    libraryRoot = await mkdtemp(join(tmpdir(), "pendia-hls-proxy-library-"));
+    libraryRoot = await mkdtemp(join(tmpdir(), "thalia-hls-proxy-library-"));
     const folder = join(libraryRoot, "Movie (2026)");
     await mkdir(folder);
     await createVideoFixture(join(folder, "Movie.mkv"), {
@@ -124,15 +124,15 @@ describe.skipIf(!databaseUrl)("hls proxy", () => {
         }
         const itemId = scanned.itemId;
         const scratchDir = await mkdtemp(
-          join(tmpdir(), "pendia-hls-proxy-scratch-"),
+          join(tmpdir(), "thalia-hls-proxy-scratch-"),
         );
         const env: Record<string, string | undefined> = {
           ...process.env,
           DATABASE_URL: url,
-          PENDIA_TRANSCODER_PORT: String(freePort()),
-          PENDIA_SCRATCH_DIR: scratchDir,
+          THALIA_TRANSCODER_PORT: String(freePort()),
+          THALIA_SCRATCH_DIR: scratchDir,
         };
-        delete env.PENDIA_TRANSCODER_URL;
+        delete env.THALIA_TRANSCODER_URL;
         const child = Bun.spawn(
           [process.execPath, "src/index.ts", "--role", "transcoder"],
           {
@@ -145,7 +145,7 @@ describe.skipIf(!databaseUrl)("hls proxy", () => {
         );
         const stdoutText = new Response(child.stdout).text();
         const stderrText = new Response(child.stderr).text();
-        let server: Awaited<ReturnType<typeof startPendia>> | undefined;
+        let server: Awaited<ReturnType<typeof startThalia>> | undefined;
         try {
           let node: { id: string; address: string } | undefined;
           const registeredBy = Date.now() + 15_000;
@@ -175,7 +175,7 @@ describe.skipIf(!databaseUrl)("hls proxy", () => {
           expect(health.status).toBe(200);
           await health.body?.cancel();
 
-          server = await startPendia("api", { databaseUrl: url, port: 0 });
+          server = await startThalia("api", { databaseUrl: url, port: 0 });
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const client = rpcClient(base, fx.keyToken);
           const planned = await client.playback.plan({

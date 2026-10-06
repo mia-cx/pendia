@@ -32,7 +32,7 @@ async function client(db: Database, header: string) {
   const token = await jellyfinLogin(send, header);
   return (method: string, path: string, body?: object) =>
     send(
-      new Request(`http://pendia.test${path}`, {
+      new Request(`http://thalia.test${path}`, {
         method,
         headers: {
           authorization: `${header}, Token="${token}"`,

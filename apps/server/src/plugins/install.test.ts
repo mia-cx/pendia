@@ -25,7 +25,7 @@ import {
 } from "./testing.ts";
 
 const hello: FixturePlugin = {
-  name: "pendia-plugin-hello",
+  name: "thalia-plugin-hello",
   capabilities: ["items:read", "files"],
   source: "export default () => {};",
 };
@@ -54,7 +54,7 @@ async function withPackageServer(
       if (pathname === "/hello.tgz") return new Response(tarball);
       if (pathname === "/evil.tgz") return new Response(evil);
       if (pathname === "/two.tgz") return new Response(twoTops);
-      if (pathname === "/npm/pendia-plugin-hello")
+      if (pathname === "/npm/thalia-plugin-hello")
         return Response.json({
           "dist-tags": { latest: "1.0.0" },
           versions: {
@@ -64,11 +64,11 @@ async function withPackageServer(
             },
           },
         });
-      if (pathname === "/registry/pendia-registry.json")
+      if (pathname === "/registry/thalia-registry.json")
         return Response.json({
           plugins: [
             {
-              name: "pendia-plugin-hello",
+              name: "thalia-plugin-hello",
               description: "Says hello.",
               versions: [{ version: "1.0.0", source: `${origin}/hello.tgz` }],
             },
@@ -91,7 +91,7 @@ describe("plugin sources", () => {
       await Bun.write(join(folder, "node_modules/dep/index.js"), "ignored");
       const first = await fetchPlugin(folder);
       expect(first.source).toBe(folder);
-      expect(first.package.name).toBe("pendia-plugin-hello");
+      expect(first.package.name).toBe("thalia-plugin-hello");
       expect([...first.files.keys()].sort()).toEqual([
         "index.js",
         "package.json",
@@ -118,14 +118,14 @@ describe("plugin sources", () => {
   test("resolves an npm spec through the registry and pins its version", () =>
     withPackageServer(async (origin, tarball) => {
       const options = { npmRegistry: `${origin}/npm` };
-      const latest = await fetchPlugin("pendia-plugin-hello", options);
-      expect(latest.source).toBe("pendia-plugin-hello@1.0.0");
+      const latest = await fetchPlugin("thalia-plugin-hello", options);
+      expect(latest.source).toBe("thalia-plugin-hello@1.0.0");
       expect(latest.integrity).toBe(sri(tarball));
-      const ranged = await fetchPlugin("pendia-plugin-hello@^1", options);
-      expect(ranged.source).toBe("pendia-plugin-hello@1.0.0");
+      const ranged = await fetchPlugin("thalia-plugin-hello@^1", options);
+      expect(ranged.source).toBe("thalia-plugin-hello@1.0.0");
       await expect(
-        fetchPlugin("pendia-plugin-hello@^2", options),
-      ).rejects.toThrow("npm has no pendia-plugin-hello@^2.");
+        fetchPlugin("thalia-plugin-hello@^2", options),
+      ).rejects.toThrow("npm has no thalia-plugin-hello@^2.");
     }));
 
   test("rejects a tarball entry that escapes the package", () =>
@@ -162,10 +162,10 @@ describe("plugin sources", () => {
 describe("registries", () => {
   test("maps a GitHub repo to the manifest at its root", () => {
     expect(registryManifestUrl("https://github.com/mia-cx/pendia")).toBe(
-      "https://raw.githubusercontent.com/mia-cx/pendia/HEAD/pendia-registry.json",
+      "https://raw.githubusercontent.com/mia-cx/pendia/HEAD/thalia-registry.json",
     );
     expect(registryManifestUrl("https://plugins.example/")).toBe(
-      "https://plugins.example/pendia-registry.json",
+      "https://plugins.example/thalia-registry.json",
     );
     expect(registryManifestUrl("https://plugins.example/list.json")).toBe(
       "https://plugins.example/list.json",
@@ -177,7 +177,7 @@ describe("registries", () => {
     withPackageServer(async (origin) => {
       expect(await fetchRegistry(`${origin}/registry`)).toEqual([
         {
-          name: "pendia-plugin-hello",
+          name: "thalia-plugin-hello",
           description: "Says hello.",
           versions: [{ version: "1.0.0", source: `${origin}/hello.tgz` }],
         },
@@ -205,13 +205,13 @@ describe.skipIf(!databaseUrl)("lockfile", () => {
           );
           const [locked] = await db.select().from(pluginLockfile);
           expect(locked).toMatchObject({
-            name: "pendia-plugin-hello",
+            name: "thalia-plugin-hello",
             version: "1.0.0",
             source,
             integrity: sri(tarball),
           });
           expect(
-            (await readPluginSettings(db)).plugins["pendia-plugin-hello"],
+            (await readPluginSettings(db)).plugins["thalia-plugin-hello"],
           ).toEqual({
             capabilities: ["items:read", "files"],
             enabled: true,

@@ -60,7 +60,7 @@ const tmdbDetail = {
 };
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "pendia-library-"));
+  const dir = await mkdtemp(join(tmpdir(), "thalia-library-"));
   try {
     return await run(dir);
   } finally {
@@ -279,7 +279,7 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
         for (const row of rows) {
           expect(row.storageKey).toMatch(
             new RegExp(
-              `^Alien \\(1979\\) \\{tmdb-550\\}/\\.pendia/artwork/${row.id}\\.[0-9a-f-]{36}$`,
+              `^Alien \\(1979\\) \\{tmdb-550\\}/\\.thalia/artwork/${row.id}\\.[0-9a-f-]{36}$`,
             ),
           );
           expect(await readFile(join(root, row.storageKey))).toEqual(png);

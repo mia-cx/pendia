@@ -325,7 +325,7 @@ const VolumeIcon = $derived(
 </script>
 
 <svelte:head>
-  <title>{detail ? `${detail.title} · Pendia` : "Pendia"}</title>
+  <title>{detail ? `${detail.title} · Thalia` : "Thalia"}</title>
 </svelte:head>
 
 <svelte:window

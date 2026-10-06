@@ -6,7 +6,7 @@ import type {
   PluginRequest,
   PluginResponse,
   SubtitleProvider,
-} from "@pendia/plugin-api";
+} from "@thalia/plugin-api";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { type JobPayload, jobs, pluginLockfile } from "../db/schema/index.ts";

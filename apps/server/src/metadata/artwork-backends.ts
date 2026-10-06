@@ -40,17 +40,17 @@ export type ArtworkBackendName = (typeof artwork.$inferSelect)["backend"];
 export function readArtworkStoreConfig(
   env: Record<string, string | undefined>,
 ): ArtworkStoreConfig {
-  const path = env.PENDIA_ARTWORK_PATH?.trim() || undefined;
+  const path = env.THALIA_ARTWORK_PATH?.trim() || undefined;
   if (path !== undefined && !isAbsolute(path))
-    throw new Error("PENDIA_ARTWORK_PATH must be an absolute path.");
-  const store = env.PENDIA_ARTWORK_STORE?.trim() || "colocated";
+    throw new Error("THALIA_ARTWORK_PATH must be an absolute path.");
+  const store = env.THALIA_ARTWORK_STORE?.trim() || "colocated";
   if (store === "colocated")
     return path === undefined
       ? { backend: "colocated" }
       : { backend: "colocated", path };
   if (store === "path") {
     if (path === undefined)
-      throw new Error("PENDIA_ARTWORK_STORE=path needs PENDIA_ARTWORK_PATH.");
+      throw new Error("THALIA_ARTWORK_STORE=path needs THALIA_ARTWORK_PATH.");
     return { backend: "configured-path", path };
   }
   if (store === "s3") {
@@ -59,12 +59,12 @@ export function readArtworkStoreConfig(
       env[`S3_${name}`]?.trim() || env[`AWS_${name}`]?.trim() || undefined;
     const bucket = s3("BUCKET");
     if (bucket === undefined)
-      throw new Error("PENDIA_ARTWORK_STORE=s3 needs S3_BUCKET.");
+      throw new Error("THALIA_ARTWORK_STORE=s3 needs S3_BUCKET.");
     const accessKeyId = s3("ACCESS_KEY_ID");
     const secretAccessKey = s3("SECRET_ACCESS_KEY");
     if (accessKeyId === undefined || secretAccessKey === undefined)
       throw new Error(
-        "PENDIA_ARTWORK_STORE=s3 needs S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).",
+        "THALIA_ARTWORK_STORE=s3 needs S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).",
       );
     const endpoint = s3("ENDPOINT");
     return {
@@ -81,7 +81,7 @@ export function readArtworkStoreConfig(
     };
   }
   throw new Error(
-    `PENDIA_ARTWORK_STORE must be colocated, path or s3. Found "${store}".`,
+    `THALIA_ARTWORK_STORE must be colocated, path or s3. Found "${store}".`,
   );
 }
 
@@ -161,9 +161,9 @@ export async function writeArtworkOriginal(
     await directoryBackend(store.path, open, true).write(name, bytes);
     return { backend: "configured-path", storageKey: name };
   }
-  const storageKey = posix.join(itemFolder, ".pendia/artwork", name);
+  const storageKey = posix.join(itemFolder, ".thalia/artwork", name);
   const { root } = resolveStoragePath(libraryRoot, storageKey);
-  // The Item folder must exist already; only .pendia/artwork is created.
+  // The Item folder must exist already; only .thalia/artwork is created.
   await walkStorageDirectory(root, join(root, itemFolder), false);
   try {
     await directoryBackend(root).write(storageKey, bytes);

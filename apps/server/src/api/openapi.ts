@@ -6,7 +6,7 @@ import {
 } from "@orpc/openapi";
 import { JSONSchema as EffectJSONSchema, Schema } from "effect";
 import { sessionCookieName } from "../auth/http.ts";
-import { pendiaRouter } from "./router.ts";
+import { thaliaRouter } from "./router.ts";
 
 /** The API version reported in the generated OpenAPI document. */
 export const apiVersion = "0.1.0";
@@ -70,8 +70,8 @@ let documentPromise: ReturnType<OpenAPIGenerator["generate"]> | undefined;
 export function openApiDocument() {
   documentPromise ??= new OpenAPIGenerator({
     schemaConverters: [new EffectSchemaConverter()],
-  }).generate(pendiaRouter, {
-    info: { title: "Pendia", version: apiVersion },
+  }).generate(thaliaRouter, {
+    info: { title: "Thalia", version: apiVersion },
     servers: [{ url: "/api" }],
     components: {
       securitySchemes: {

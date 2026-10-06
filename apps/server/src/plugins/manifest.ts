@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import type { Capability } from "@pendia/plugin-api";
+import type { Capability } from "@thalia/plugin-api";
 import { type ConfigSchema, readConfigSchema } from "./config.ts";
 
 /** The host API version plugins declare a semver range against. */
@@ -74,22 +74,22 @@ export function readPluginPackage(json: unknown): PluginPackage {
     throw new Error(`Invalid plugin package: ${reason}`);
   };
   if (!isRecord(json)) return fail("package.json must be an object.");
-  const { name, version, pendia } = json;
+  const { name, version, thalia } = json;
   if (typeof name !== "string" || !isPackageName(name))
     return fail("name must be an npm package name.");
   if (typeof version !== "string" || !versionPattern.test(version))
     return fail("version must be a semver version.");
-  if (!isRecord(pendia)) return fail("the pendia block is missing.");
-  const { api, network = [], config, entry } = pendia;
+  if (!isRecord(thalia)) return fail("the thalia block is missing.");
+  const { api, network = [], config, entry } = thalia;
   if (typeof api !== "string" || api.trim().length === 0)
-    return fail("pendia.api must be a semver range.");
+    return fail("thalia.api must be a semver range.");
   if (!Bun.semver.satisfies(hostApiVersion, api))
     return fail(
-      `pendia.api ${api} does not accept host API ${hostApiVersion}.`,
+      `thalia.api ${api} does not accept host API ${hostApiVersion}.`,
     );
-  if (!Array.isArray(pendia.capabilities))
-    return fail("pendia.capabilities must be an array.");
-  const declared = pendia.capabilities.map((value: unknown) => {
+  if (!Array.isArray(thalia.capabilities))
+    return fail("thalia.capabilities must be an array.");
+  const declared = thalia.capabilities.map((value: unknown) => {
     const known = capabilities.find((capability) => capability === value);
     return known ?? fail(`unknown capability ${String(value)}.`);
   });
@@ -102,16 +102,16 @@ export function readPluginPackage(json: unknown): PluginPackage {
         typeof host === "string" && (host === anyHost || isHostname(host)),
     )
   )
-    return fail('pendia.network must list lowercase hostnames or "*".');
+    return fail('thalia.network must list lowercase hostnames or "*".');
   if (typeof entry !== "string" || entry.length === 0)
-    return fail("pendia.entry must be a path.");
+    return fail("thalia.entry must be a path.");
   const normalized = posix.normalize(entry);
   if (
     posix.isAbsolute(normalized) ||
     normalized.startsWith("../") ||
     normalized === ".."
   )
-    return fail("pendia.entry must stay inside the package.");
+    return fail("thalia.entry must stay inside the package.");
   let schema: ConfigSchema | null = null;
   if (config !== undefined) {
     try {

@@ -29,8 +29,8 @@ let collapsed = $state(
 function toggle() {
   collapsed = !collapsed;
   try {
-    if (collapsed) localStorage.setItem("pendia.sidebar", "collapsed");
-    else localStorage.removeItem("pendia.sidebar");
+    if (collapsed) localStorage.setItem("thalia.sidebar", "collapsed");
+    else localStorage.removeItem("thalia.sidebar");
   } catch {
     // Storage can be blocked; the sidebar simply reverts on the next load.
   }
@@ -57,7 +57,7 @@ onNavigate((nav) => {
 </script>
 
 <svelte:head>
-  <title>Pendia</title>
+  <title>Thalia</title>
 </svelte:head>
 
 {#snippet navRow(entry: NavEntry, children: boolean)}
@@ -133,7 +133,7 @@ onNavigate((nav) => {
       class:px-2={!collapsed}
     >
       {#if !collapsed}
-        <a href="/" class="text-title-3 font-bold tracking-tight text-label">Pendia</a>
+        <a href="/" class="text-title-3 font-bold tracking-tight text-label">Thalia</a>
       {/if}
       <Tooltip.Root>
         <Tooltip.Trigger>

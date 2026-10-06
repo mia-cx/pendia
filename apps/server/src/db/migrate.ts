@@ -19,7 +19,7 @@ function migrationsFolder() {
   );
   if (!folder)
     throw new Error(
-      "Migration assets are missing. Ship drizzle beside the Pendia binary.",
+      "Migration assets are missing. Ship drizzle beside the Thalia binary.",
     );
   return folder;
 }

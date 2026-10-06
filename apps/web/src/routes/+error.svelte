@@ -29,15 +29,15 @@ const title = $derived(
 );
 const line = $derived(
   state === "unreachable"
-    ? "Pendia cannot reach its server. Check your connection."
+    ? "Thalia cannot reach its server. Check your connection."
     : state === "not-found"
       ? "This page does not exist."
-      : "Pendia could not load this screen.",
+      : "Thalia could not load this screen.",
 );
 </script>
 
 <svelte:head>
-  <title>Pendia</title>
+  <title>Thalia</title>
 </svelte:head>
 
 <FocusScreen {title} {icon}>

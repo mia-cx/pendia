@@ -5,7 +5,7 @@ import { createTV } from "tailwind-variants";
 const twMergeConfig = {
   extend: {
     classGroups: {
-      // Pendia's Apple type scale, so text-footnote + text-label merge cleanly.
+      // Thalia's Apple type scale, so text-footnote + text-label merge cleanly.
       "font-size": [
         "text-large-title",
         "text-title-1",
@@ -25,10 +25,10 @@ const twMergeConfig = {
 
 const twMerge = extendTailwindMerge(twMergeConfig);
 
-/** `tailwind-variants` factory wired to Pendia's type scale. */
+/** `tailwind-variants` factory wired to Thalia's type scale. */
 export const tv = createTV({ twMerge: true, twMergeConfig });
 
-/** Merges class lists; Tailwind classes and Pendia's type scale dedupe by role. */
+/** Merges class lists; Tailwind classes and Thalia's type scale dedupe by role. */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }

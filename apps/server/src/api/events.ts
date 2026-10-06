@@ -8,7 +8,7 @@ import type { Caller } from "./items.ts";
 import { ApiEvent } from "./schema.ts";
 
 /** The Postgres NOTIFY channel that carries new event ids. */
-export const eventChannel = "pendia_events";
+export const eventChannel = "thalia_events";
 
 /** The number of seconds an event stays replayable. */
 export const retentionSeconds = 600;

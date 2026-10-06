@@ -19,19 +19,19 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { homeShelves } from "./browse.ts";
 import { fromHost, runApi } from "./errors.ts";
 import { getItemDetail, type ListItemsInput, listItemCards } from "./items.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 function rpcClient(base: string, token: string) {
   const link = new RPCLink({
     url: `${base}/rpc`,
     headers: { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function capture(promise: Promise<unknown>) {
@@ -125,7 +125,7 @@ describe.skipIf(!databaseUrl)("browse grids", () => {
           sql`select title from items order by title, id`,
         )
       ).map((row) => row.title);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const client = rpcClient(
           `http://127.0.0.1:${server.apiServer?.port}`,
@@ -634,7 +634,7 @@ describe.skipIf(!databaseUrl)("browse search", () => {
       await db
         .insert(libraryAccess)
         .values({ libraryId: hidden.id, userId: viewer.id, allowed: false });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const client = rpcClient(
           `http://127.0.0.1:${server.apiServer?.port}`,

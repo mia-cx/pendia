@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import type { pendiaRouter } from "../api/router.ts";
+import type { thaliaRouter } from "../api/router.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import {
   drain,
   scanFolder,
@@ -29,7 +29,7 @@ const profile = {
 
 // Chromium builds without proprietary codecs cannot decode H.264; prefer Chrome.
 const browser =
-  Bun.env.PENDIA_BROWSER ??
+  Bun.env.THALIA_BROWSER ??
   ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
     .map((name) => Bun.which(name))
     .find((path) => path !== null) ??
@@ -106,13 +106,13 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               await scanFolder(db, library.id);
               await drain(db);
               // The api alone serves stored rungs; no transcoder runs.
-              const server = await startPendia("api", {
+              const server = await startThalia("api", {
                 databaseUrl: url,
                 port: 0,
               });
               const apiBase = `http://127.0.0.1:${server.apiServer?.port}`;
               const client = createORPCClient<
-                RouterClient<typeof pendiaRouter>
+                RouterClient<typeof thaliaRouter>
               >(
                 new RPCLink({
                   url: `${apiBase}/rpc`,
@@ -166,7 +166,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
                 },
               });
               const profileDir = await mkdtemp(
-                join(tmpdir(), "pendia-stored-browser-"),
+                join(tmpdir(), "thalia-stored-browser-"),
               );
               const proc = Bun.spawn(
                 [

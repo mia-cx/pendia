@@ -12,7 +12,7 @@ import {
   users,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { createLocalUser, setupAdmin } from "./accounts.ts";
 import { createInvite } from "./invites.ts";
 
@@ -54,7 +54,7 @@ async function startProvider(
   ]);
   const rogue = await crypto.subtle.generateKey(rsa, true, ["sign", "verify"]);
   const exported = await crypto.subtle.exportKey("jwk", signing.publicKey);
-  const jwk = { ...exported, kid: "pendia-test", alg: "RS256", use: "sig" };
+  const jwk = { ...exported, kid: "thalia-test", alg: "RS256", use: "sig" };
   const pending = new Map<
     string,
     {
@@ -89,7 +89,7 @@ async function startProvider(
   };
   const sign = async (payload: Record<string, unknown>) => {
     const header = b64url(
-      JSON.stringify({ alg: "RS256", typ: "JWT", kid: "pendia-test" }),
+      JSON.stringify({ alg: "RS256", typ: "JWT", kid: "thalia-test" }),
     );
     const body = b64url(JSON.stringify(payload));
     const key = provider.rogueSign ? rogue.privateKey : signing.privateKey;
@@ -141,7 +141,7 @@ async function startProvider(
         const nonce = q.get("nonce");
         const challenge = q.get("code_challenge");
         if (
-          q.get("client_id") !== "pendia" ||
+          q.get("client_id") !== "thalia" ||
           redirect === null ||
           q.get("response_type") !== "code" ||
           !(q.get("scope") ?? "").split(" ").includes("openid") ||
@@ -173,7 +173,7 @@ async function startProvider(
         provider.observed.tokenClient = authorization.startsWith("Basic ")
           ? Buffer.from(authorization.slice(6), "base64").toString()
           : "";
-        if (provider.observed.tokenClient !== "pendia:secret")
+        if (provider.observed.tokenClient !== "thalia:secret")
           return json({ error: "invalid_client" }, 401);
         const params = new URLSearchParams(await request.text());
         const grant = pending.get(params.get("code") ?? "");
@@ -197,7 +197,7 @@ async function startProvider(
         const idToken = await sign({
           iss: issuer,
           sub: current.sub,
-          aud: "pendia",
+          aud: "thalia",
           iat: Math.floor(Date.now() / 1000),
           exp: Math.floor(Date.now() / 1000) + 600,
           nonce: grant.nonce,
@@ -288,7 +288,7 @@ async function signedIn(base: string, callback: Response) {
   expect(callback.headers.get("location")).toBe("/");
   const session = callback.headers
     .getSetCookie()
-    .find((cookie) => cookie.startsWith("pendia_session="));
+    .find((cookie) => cookie.startsWith("thalia_session="));
   expect(session).toContain("HttpOnly");
   const me = await fetch(`${base}/api/auth/me`, {
     headers: { cookie: session?.split(";")[0] ?? "" },
@@ -316,7 +316,7 @@ async function configureOidc(
       trustedProxyAddresses,
       oidc: {
         issuer,
-        clientId: "pendia",
+        clientId: "thalia",
         clientSecret: "secret",
         scopes: ["openid", "profile", "email"],
       },
@@ -335,7 +335,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         preferredUsername: "linked",
         name: "Linked User",
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -372,7 +372,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         expect(
           cookies.some(
             (c) =>
-              c.startsWith("pendia_oidc_flow=;") && c.includes("Max-Age=0"),
+              c.startsWith("thalia_oidc_flow=;") && c.includes("Max-Age=0"),
           ),
         ).toBe(true);
 
@@ -387,10 +387,10 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         expect(provider.observed.token).toBe(1);
         expect(provider.observed.jwks).toBeGreaterThanOrEqual(1);
         expect(provider.observed.userinfo).toBe(1);
-        expect(provider.observed.tokenClient).toBe("pendia:secret");
+        expect(provider.observed.tokenClient).toBe("thalia:secret");
         expect(provider.observed.verifierOk).toBe(true);
         const seen = provider.observed.authorize;
-        expect(seen.client_id).toBe("pendia");
+        expect(seen.client_id).toBe("thalia");
         expect(seen.response_type).toBe("code");
         expect(seen.scope).toBe("openid profile email");
         expect(seen.code_challenge_method).toBe("S256");
@@ -415,7 +415,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         },
         { omitUserInfo: true },
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -456,7 +456,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         email: "linked@example.com",
         emailVerified: true,
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -495,7 +495,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         },
         { userInfoBarrier: 2 },
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -544,7 +544,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         emailVerified: true,
         preferredUsername: "Invited Person",
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -609,7 +609,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         email: "Pending@Example.com",
         emailVerified: false,
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -660,7 +660,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         email: "LINKED@example.com",
         emailVerified: false,
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -702,7 +702,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         emailVerified: true,
         preferredUsername: "fresh",
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -728,7 +728,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         emailVerified: true,
       });
       provider.signWithRogue();
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -752,7 +752,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         email: "linked@example.com",
         emailVerified: true,
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -772,7 +772,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         const expectFailure = async (response: Response) => {
           expectLoginError(response, "oidc_failed");
           expect(response.headers.get("set-cookie")).toContain(
-            "pendia_oidc_flow=;",
+            "thalia_oidc_flow=;",
           );
           expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
         };
@@ -799,7 +799,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         await expectFailure(
           await fetch(malformed.callbackUrl ?? "", {
             redirect: "manual",
-            headers: { cookie: "pendia_oidc_flow=!!!" },
+            headers: { cookie: "thalia_oidc_flow=!!!" },
           }),
         );
 
@@ -832,7 +832,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           },
         },
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);
@@ -874,7 +874,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
   test("login and callback failures send the browser back to the login page", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const params = new URLSearchParams(device);
@@ -906,7 +906,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         email: "proxied@example.com",
         emailVerified: true,
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer, ["127.0.0.1"]);
@@ -927,7 +927,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
           `https://127.0.0.1:${server.apiServer?.port}/api/auth/oidc/callback`,
         );
         const cookie = start.headers.get("set-cookie") ?? "";
-        expect(cookie).toContain("pendia_oidc_flow=");
+        expect(cookie).toContain("thalia_oidc_flow=");
         expect(cookie).toContain("Secure");
       } finally {
         await server.stop();
@@ -944,7 +944,7 @@ describe.skipIf(!databaseUrl)("auth oidc", () => {
         emailVerified: true,
         preferredUsername: "Same Name",
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         await configureOidc(db, provider.issuer);

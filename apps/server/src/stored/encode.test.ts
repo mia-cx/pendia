@@ -25,7 +25,7 @@ describe("storeArguments", () => {
     inputPath: "/media/movie.mkv",
     boundariesSeconds: [0, 3, 6, 9.5],
     timelineId: "timeline",
-    folder: "/media/movie.mkv.pendia/source",
+    folder: "/media/movie.mkv.thalia/source",
   };
 
   test("the source rung copies video and fMP4-safe audio", () => {
@@ -95,7 +95,7 @@ describe("runStore", () => {
   const never = new AbortController().signal;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "pendia-store-"));
+    dir = await mkdtemp(join(tmpdir(), "thalia-store-"));
     inputPath = join(dir, "movie.mkv");
     await createVideoFixture(inputPath, {
       width: 1280,
@@ -125,7 +125,7 @@ describe("runStore", () => {
     timelineId: "timeline-1",
     rung,
     source: sdr,
-    folder: join(dir, "movie.mkv.pendia", rung.name),
+    folder: join(dir, "movie.mkv.thalia", rung.name),
   });
 
   const joined = async (folder: string, indexes: number[], name: string) => {
@@ -297,7 +297,7 @@ describe("runStore on a nonuniform timeline", () => {
   const never = new AbortController().signal;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "pendia-store-uneven-"));
+    dir = await mkdtemp(join(tmpdir(), "thalia-store-uneven-"));
     // Segments of 5, 3, 4 and 4 s; the keyframe at 14 s sits inside the
     // last one, where a stray cut would split it.
     const encode = Bun.spawnSync([
@@ -396,7 +396,7 @@ describe("runStore on a nonuniform timeline", () => {
         timelineId: "uneven",
         rung,
         source: sdr,
-        folder: join(dir, "uneven.mkv.pendia", rung.name),
+        folder: join(dir, "uneven.mkv.thalia", rung.name),
       };
       expect(await runStore(run, never)).toBe("complete");
       await expectIntervals(run.folder);

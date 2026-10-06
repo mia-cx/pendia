@@ -1,4 +1,4 @@
-import type { MetadataProvider, MetadataResult } from "@pendia/plugin-api";
+import type { MetadataProvider, MetadataResult } from "@thalia/plugin-api";
 import { and, eq, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";

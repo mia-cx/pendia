@@ -15,7 +15,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { runScanJob } from "../libraries/jobs.ts";
 import { libraryScanSource } from "../libraries/scan.ts";
 import { insertLibraries } from "../libraries/testing.ts";
@@ -63,7 +63,7 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
           when: { minHeight: 2160 },
         };
         await withStoredLibrary(db, policy, async ({ root, library }) => {
-          const orphan = join(root, fixtureFolder, "Gone.mkv.pendia");
+          const orphan = join(root, fixtureFolder, "Gone.mkv.thalia");
           await mkdir(join(orphan, "source"), { recursive: true });
           await Bun.write(join(orphan, "source", "init.mp4"), "stale");
           // The api reads the share but may not write it.
@@ -129,8 +129,8 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
               ["360p", true],
               ["source", true],
             ]);
-            const pendia = join(root, `${fixturePath}.pendia`);
-            expect((await readdir(pendia)).sort()).toEqual(["360p", "source"]);
+            const thalia = join(root, `${fixturePath}.thalia`);
+            expect((await readdir(thalia)).sort()).toEqual(["360p", "source"]);
             for (const row of rungs)
               expect(
                 await readStoreManifest(join(root, row.storedFolder ?? "")),
@@ -178,19 +178,19 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
               "source",
             ]);
             // The folder goes in a sweep on a worker, not in the api call.
-            expect((await readdir(pendia)).sort()).toEqual(["360p", "source"]);
+            expect((await readdir(thalia)).sort()).toEqual(["360p", "source"]);
             await drain(db);
-            expect(await readdir(pendia)).toEqual(["source"]);
+            expect(await readdir(thalia)).toEqual(["source"]);
 
             await rm(join(root, fixturePath));
             // While its File row stands, the rungs of a complete Version stay.
             await sweepStoredFolders(db, library.id, fixtureFolder);
-            expect(await readdir(pendia)).toEqual(["source"]);
+            expect(await readdir(thalia)).toEqual(["source"]);
             await scanFolder(db, library.id);
             await drain(db);
             expect(await stored(db)).toEqual([]);
             expect(
-              await Bun.file(join(pendia, "source", "init.mp4")).exists(),
+              await Bun.file(join(thalia, "source", "init.mp4")).exists(),
             ).toBe(false);
             expect(await readdir(join(root, fixtureFolder))).toEqual([]);
           },
@@ -285,7 +285,7 @@ describe.skipIf(!databaseUrl)("stored-version reconciliation", () => {
           rootPath: "/srv/movies",
           configuration: { keep: true },
         });
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const route = `http://127.0.0.1:${server.apiServer?.port}/api/libraries/${library?.id}/stored-versions`;
           const call = (

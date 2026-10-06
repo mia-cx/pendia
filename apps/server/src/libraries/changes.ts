@@ -239,7 +239,7 @@ export async function updateItemCanonicalFolder(
 ): Promise<void> {
   if (item.canonicalFolder === canonicalFolder && item.titleKey === titleKey)
     return;
-  const tailPattern = /(?:^|\/)(\.pendia\/artwork\/.+)$/;
+  const tailPattern = /(?:^|\/)(\.thalia\/artwork\/.+)$/;
   const roots = await assetRoots(db, item.id);
   const inRoot = (rootId: string, storageKey: string) =>
     absolutePath(db, { rootId, path: storageKey });

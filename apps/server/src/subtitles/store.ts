@@ -40,7 +40,7 @@ export function trackName(track: StoredSubtitle): string {
 
 /**
  * The subtitle folders an Item's tracks may sit in, home root first:
- * `.pendia/subtitles` in its canonical folder under each asset root.
+ * `.thalia/subtitles` in its canonical folder under each asset root.
  * Episodes share a Season folder, so each file starts with the Item id.
  */
 export async function subtitleFolders(db: Database, itemId: string) {
@@ -57,9 +57,9 @@ export async function subtitleFolders(db: Database, itemId: string) {
     return {
       libraryId: row.libraryId,
       itemFolder: folder,
-      path: join(folder, ".pendia", "subtitles"),
+      path: join(folder, ".thalia", "subtitles"),
       file: (track: StoredSubtitle) =>
-        join(folder, ".pendia", "subtitles", `${itemId}.${trackName(track)}`),
+        join(folder, ".thalia", "subtitles", `${itemId}.${trackName(track)}`),
     };
   });
 }
@@ -106,7 +106,7 @@ export async function listSubtitles(
   );
 }
 
-/** Writes one track atomically. The Item folder must exist; only `.pendia/subtitles` is created. */
+/** Writes one track atomically. The Item folder must exist; only `.thalia/subtitles` is created. */
 export async function writeSubtitle(
   db: Database,
   itemId: string,

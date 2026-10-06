@@ -15,7 +15,7 @@ export async function withDatabase(
   run: (db: Database, url: string) => Promise<void>,
 ) {
   const admin = createDatabase(databaseUrl);
-  const name = `pendia_test_${Bun.randomUUIDv7().replaceAll("-", "")}`;
+  const name = `thalia_test_${Bun.randomUUIDv7().replaceAll("-", "")}`;
   const url = new URL(databaseUrl ?? "");
   url.pathname = `/${name}`;
   const database = createDatabase(url.href);

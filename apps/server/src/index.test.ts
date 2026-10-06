@@ -13,7 +13,7 @@ import {
   parseRole,
   type Role,
   requireSupportedBunVersion,
-  startPendia,
+  startThalia,
 } from "./index.ts";
 import { createJobQueue, type Job, listJobs } from "./jobs/queue.ts";
 import { createJobRegistry } from "./jobs/registry.ts";
@@ -39,7 +39,7 @@ describe("parseRole", () => {
 describe("requireSupportedBunVersion", () => {
   test("rejects Bun 1.3.11", () => {
     expect(() => requireSupportedBunVersion("1.3.11")).toThrow(
-      "Pendia requires Bun 1.4.0 or later.",
+      "Thalia requires Bun 1.4.0 or later.",
     );
   });
 
@@ -58,7 +58,7 @@ async function waitForJobState(db: Database, id: string, state: Job["state"]) {
   throw new Error(`Job ${id} did not reach state ${state}.`);
 }
 
-describe.skipIf(!databaseUrl)("startPendia job registration", () => {
+describe.skipIf(!databaseUrl)("startThalia job registration", () => {
   test("a supplied scan handler wins while provider-fetch stays built in", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
@@ -81,7 +81,7 @@ describe.skipIf(!databaseUrl)("startPendia job registration", () => {
         canonicalFolder: "Alien (1979)",
         extension: {},
       });
-      const server = await startPendia("worker", {
+      const server = await startThalia("worker", {
         databaseUrl: url,
         registry,
         workerOptions: {
@@ -120,7 +120,7 @@ describe.skipIf(!databaseUrl)("startPendia job registration", () => {
   test("a supplied provider-fetch handler wins while scan stays built in", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
-      const root = await mkdtemp(join(tmpdir(), "pendia-library-"));
+      const root = await mkdtemp(join(tmpdir(), "thalia-library-"));
       try {
         const folder = "Alien (1979) {tmdb-348}";
         await mkdir(join(root, folder));
@@ -139,7 +139,7 @@ describe.skipIf(!databaseUrl)("startPendia job registration", () => {
           rootPath: root,
         });
         if (!library) throw new Error("Fixture library missing.");
-        const server = await startPendia("worker", {
+        const server = await startThalia("worker", {
           databaseUrl: url,
           registry,
           workerOptions: { concurrency: 1, pollIntervalMs: 20 },

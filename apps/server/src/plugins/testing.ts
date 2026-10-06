@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Capability, PluginHost } from "@pendia/plugin-api";
+import type { Capability, PluginHost } from "@thalia/plugin-api";
 import type { Database } from "../db/client.ts";
 import { fetchPlugin, installPlugin } from "./install.ts";
 
@@ -22,7 +22,7 @@ export function fixtureFiles(plugin: FixturePlugin): Record<string, string> {
     "package.json": JSON.stringify({
       name: plugin.name,
       version: plugin.version ?? "1.0.0",
-      pendia: {
+      thalia: {
         api: "^1.0.0",
         capabilities: plugin.capabilities ?? [],
         network: plugin.network,
@@ -47,7 +47,7 @@ export async function fixtureTarball(plugin: FixturePlugin) {
 
 /** Runs a test with a fresh temporary folder that is removed afterwards. */
 export async function withFolder(run: (folder: string) => Promise<void>) {
-  const folder = await mkdtemp(join(tmpdir(), "pendia-plugin-test-"));
+  const folder = await mkdtemp(join(tmpdir(), "thalia-plugin-test-"));
   try {
     await run(folder);
   } finally {
@@ -78,19 +78,19 @@ export async function installFixture(
 
 /** The hosts fixture plugins stash on globalThis so tests can inspect them. */
 export function stashedHosts(): Record<string, PluginHost> {
-  globalThis.pendiaHosts ??= {};
-  return globalThis.pendiaHosts;
+  globalThis.thaliaHosts ??= {};
+  return globalThis.thaliaHosts;
 }
 
 declare global {
-  var pendiaHosts: Record<string, PluginHost> | undefined;
+  var thaliaHosts: Record<string, PluginHost> | undefined;
 }
 
 /** A fixture entry that stashes its host under `key` and then runs `body`. */
 export function stashingSource(key: string, body = "") {
   return `export default async (host) => {
-  globalThis.pendiaHosts ??= {};
-  globalThis.pendiaHosts[${JSON.stringify(key)}] = host;
+  globalThis.thaliaHosts ??= {};
+  globalThis.thaliaHosts[${JSON.stringify(key)}] = host;
   ${body}
 };`;
 }

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPendiaClient } from "../../../web/src/lib/api.ts";
+import { createThaliaClient } from "../../../web/src/lib/api.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { sessionCookieName } from "../auth/http.ts";
 import { login } from "../auth/sessions.ts";
@@ -12,13 +12,13 @@ import { migrateDatabase } from "../db/migrate.ts";
 import { artwork } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { addRoot, insertLibraries } from "../libraries/testing.ts";
 import { withFolder } from "../plugins/testing.ts";
 
 // Google Chrome comes first: Chromium builds without proprietary codecs.
 const browser =
-  Bun.env.PENDIA_BROWSER ??
+  Bun.env.THALIA_BROWSER ??
   ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
     .map((name) => Bun.which(name))
     .find((path) => path !== null) ??
@@ -115,7 +115,7 @@ class Page {
 }
 
 async function openPage(): Promise<Page> {
-  const profileDir = await mkdtemp(join(tmpdir(), "pendia-admin-browser-"));
+  const profileDir = await mkdtemp(join(tmpdir(), "thalia-admin-browser-"));
   const proc = Bun.spawn(
     [
       browser as string,
@@ -226,7 +226,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               {
                 username: "admin",
                 password: "admin-pass",
-                clientName: "Pendia Web",
+                clientName: "Thalia Web",
                 deviceId: "libraries-browser",
                 deviceName: "Chromium",
               },
@@ -246,13 +246,13 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             if (library === undefined) throw new Error("Fixture missing.");
             const rootB = await addRoot(db, library.id, dirB);
             const rootC = await addRoot(db, library.id, dirC);
-            const server = await startPendia("api", {
+            const server = await startThalia("api", {
               databaseUrl: url,
               port: 0,
               pluginOptions: { directory: join(folder, "installed") },
             });
             const base = `http://127.0.0.1:${server.apiServer?.port}`;
-            const api = createPendiaClient({
+            const api = createThaliaClient({
               origin: base,
               headers: { authorization: `Bearer ${token}` },
             });
@@ -388,7 +388,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               {
                 username: "admin",
                 password: "admin-pass",
-                clientName: "Pendia Web",
+                clientName: "Thalia Web",
                 deviceId: "libraries-browser-2",
                 deviceName: "Chromium",
               },
@@ -403,7 +403,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               rootPath: root,
             });
             if (library === undefined) throw new Error("Fixture missing.");
-            const server = await startPendia("api", {
+            const server = await startThalia("api", {
               databaseUrl: url,
               port: 0,
               pluginOptions: { directory: join(folder, "installed") },
@@ -490,7 +490,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             {
               username: "admin",
               password: "admin-pass",
-              clientName: "Pendia Web",
+              clientName: "Thalia Web",
               deviceId: "libraries-browser-3",
               deviceName: "Chromium",
             },
@@ -517,7 +517,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             storageKey: "Poster Fails/poster.jpg",
             selected: true,
           });
-          const server = await startPendia("api", {
+          const server = await startThalia("api", {
             databaseUrl: url,
             port: 0,
           });

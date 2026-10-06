@@ -18,13 +18,13 @@ jobs:
       postgres:
         image: postgres:18
         env:
-          POSTGRES_USER: pendia
-          POSTGRES_PASSWORD: pendia
-          POSTGRES_DB: pendia
+          POSTGRES_USER: thalia
+          POSTGRES_PASSWORD: thalia
+          POSTGRES_DB: thalia
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U pendia -d pendia"
+          --health-cmd "pg_isready -U thalia -d thalia"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -33,10 +33,10 @@ jobs:
       - name: Start S3-compatible server
         # versitygw serves each directory under /data as a bucket.
         run: |
-          mkdir -p "$RUNNER_TEMP/s3/pendia"
+          mkdir -p "$RUNNER_TEMP/s3/thalia"
           docker run --detach --rm --publish 127.0.0.1:7070:7070 \
             --volume "$RUNNER_TEMP/s3:/data" \
-            --env ROOT_ACCESS_KEY=pendia --env ROOT_SECRET_KEY=pendia-secret \
+            --env ROOT_ACCESS_KEY=thalia --env ROOT_SECRET_KEY=thalia-secret \
             --env VGW_BACKEND=posix --env VGW_BACKEND_ARG=/data \
             versity/versitygw:v1.8.0
       - uses: oven-sh/setup-bun@v2
@@ -53,18 +53,18 @@ jobs:
       - run: bun run build
       - run: bun test
         env:
-          DATABASE_URL: postgresql://pendia:pendia@127.0.0.1:5432/pendia
-          TEST_S3_URL: http://pendia:pendia-secret@127.0.0.1:7070/pendia
+          DATABASE_URL: postgresql://thalia:thalia@127.0.0.1:5432/thalia
+          TEST_S3_URL: http://thalia:thalia-secret@127.0.0.1:7070/thalia
 
   image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build --tag pendia:ci .
+      - run: docker build --tag thalia:ci .
       - name: Record the image size and ffmpeg version
         run: |
-          size="$(docker image ls pendia:ci --format '{{.Size}}')"
-          ffmpeg="$(docker run --rm --entrypoint ffmpeg pendia:ci -version | head -n 1)"
+          size="$(docker image ls thalia:ci --format '{{.Size}}')"
+          ffmpeg="$(docker run --rm --entrypoint ffmpeg thalia:ci -version | head -n 1)"
           echo "Image size: $size. $ffmpeg"
           {
             echo "| Image size | ffmpeg |"

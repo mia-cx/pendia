@@ -10,7 +10,7 @@ export type RegistryEntry = {
   versions: { version: string; source: string }[];
 };
 
-const registryFile = "pendia-registry.json";
+const registryFile = "thalia-registry.json";
 const maxRegistryBytes = 4 * 1024 * 1024;
 
 function httpUrl(value: string): URL {
@@ -25,7 +25,7 @@ function httpUrl(value: string): URL {
   return url;
 }
 
-/** Maps a registry URL to its manifest: a GitHub repo serves `pendia-registry.json` at its root. */
+/** Maps a registry URL to its manifest: a GitHub repo serves `thalia-registry.json` at its root. */
 export function registryManifestUrl(registry: string): string {
   const url = httpUrl(registry);
   const [owner, repo] = url.pathname.split("/").filter(Boolean);

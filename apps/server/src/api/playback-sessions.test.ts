@@ -17,11 +17,11 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { decidePlayback } from "../playback/decisions.ts";
 import { listPlaybackSessions, transcodeReasons } from "./playback-sessions.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 async function seed(db: Database) {
   const admin = await setupAdmin(db, { username: "admin", password: "secret" });
@@ -90,7 +90,7 @@ async function seed(db: Database) {
       bytes: 1n,
       origin: "stored",
       sourceFileId: file.id,
-      storedFolder: "alien/alien.mkv.pendia/360p",
+      storedFolder: "alien/alien.mkv.thalia/360p",
       rung: "360p",
       complete: true,
       segmentTimelineId: timeline.id,
@@ -290,7 +290,7 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
         .returning();
       if (!node) throw new Error("Node insert returned no row.");
       const direct = await fx.open({
-        clientName: "Pendia Web",
+        clientName: "Thalia Web",
         deviceName: "Firefox",
       });
       const stored = await fx.open({
@@ -338,7 +338,7 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
         state: "playing",
         playMethod: "direct-play",
         user: { id: fx.viewer.id, displayName: "Viewer" },
-        clientName: "Pendia Web",
+        clientName: "Thalia Web",
         deviceName: "Firefox",
         item: { id: fx.item.id, title: "Alien", kind: "movie" },
         version: {
@@ -388,11 +388,11 @@ describe.skipIf(!databaseUrl)("playback sessions", () => {
       const { token: adminToken } = await createApiKey(db, fx.admin.id, "a");
       const { token: viewerToken } = await createApiKey(db, fx.viewer.id, "v");
       await fx.open({});
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = (token: string) =>
-          createORPCClient<RouterClient<typeof pendiaRouter>>(
+          createORPCClient<RouterClient<typeof thaliaRouter>>(
             new RPCLink({
               url: `${base}/rpc`,
               headers: { authorization: `Bearer ${token}` },

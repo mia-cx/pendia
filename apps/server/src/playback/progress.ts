@@ -236,9 +236,9 @@ async function touchSession(tx: LifecycleDb, sessionId: string) {
 
 /**
  * Finds the play session a client reports against, for clients that play
- * without asking Pendia to plan. The named session wins when it is the
+ * without asking Thalia to plan. The named session wins when it is the
  * caller's and on this Item, in any state, so a repeated or late report
- * changes only its own play. A client may name a session Pendia never
+ * changes only its own play. A client may name a session Thalia never
  * issued, or none, so next comes the newest live session the same device
  * opened on the Item and Version; else a new direct-play session on the
  * named Version, or the Item's first.

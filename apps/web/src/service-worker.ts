@@ -3,7 +3,7 @@
 /// <reference lib="esnext" />
 /// <reference lib="webworker" />
 
-// Caches the app shell so Pendia opens without its server. API calls and
+// Caches the app shell so Thalia opens without its server. API calls and
 // media never pass through here: the worker answers only shell requests.
 
 import { build, files, prerendered, version } from "$service-worker";

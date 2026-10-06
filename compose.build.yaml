@@ -1,7 +1,7 @@
 # Builds the image from this checkout instead of pulling a release.
 # The local tag keeps a source build from posing as a published version.
 services:
-  pendia:
-    image: pendia:local
+  thalia:
+    image: thalia:local
     build:
       context: .

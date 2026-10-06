@@ -72,12 +72,12 @@ export function readClient(request: Request): ClientInfo {
 /** Jellyfin counts time in ticks of 100 ns. */
 export const ticksPerSecond = 10_000_000;
 
-/** Formats a Pendia UUID as a Jellyfin GUID: the same UUID without dashes. */
+/** Formats a Thalia UUID as a Jellyfin GUID: the same UUID without dashes. */
 export function toGuid(id: string): string {
   return id.replaceAll("-", "");
 }
 
-/** Reads a Jellyfin GUID, with or without dashes, as a Pendia UUID. */
+/** Reads a Jellyfin GUID, with or without dashes, as a Thalia UUID. */
 export function parseGuid(text: string): string | undefined {
   if (uuidPattern.test(text)) return text.toLowerCase();
   if (!guidPattern.test(text)) return undefined;

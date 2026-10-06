@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { setupAdmin } from "../auth/accounts.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { toGuid } from "./request.ts";
 import { contractErrors } from "./testing.ts";
 
@@ -11,9 +11,9 @@ const infuse =
 describe.skipIf(!databaseUrl)("jellyfin auth", () => {
   test("logs in by name, reads the user and server, and logs out", () =>
     withDatabase(async (db, url) => {
-      const pendia = await startPendia("api", { databaseUrl: url, port: 0 });
+      const thalia = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
-        const base = `http://127.0.0.1:${pendia.apiServer?.port}`;
+        const base = `http://127.0.0.1:${thalia.apiServer?.port}`;
         const admin = await setupAdmin(db, {
           username: "mia",
           password: "secret-pass",
@@ -30,7 +30,7 @@ describe.skipIf(!databaseUrl)("jellyfin auth", () => {
         expect(publicBody).toMatchObject({
           ProductName: "Jellyfin Server",
           Version: "10.10.7",
-          ServerName: "Pendia",
+          ServerName: "Thalia",
         });
         expect(publicBody.Id).toMatch(/^[0-9a-f]{32}$/);
         expect(await (await call("/Users/Public")).json()).toEqual([]);
@@ -80,7 +80,7 @@ describe.skipIf(!databaseUrl)("jellyfin auth", () => {
         expect(contractErrors("SystemInfo", infoBody)).toEqual([]);
         expect(infoBody).toMatchObject({
           Id: publicBody.Id,
-          WebSocketPortNumber: pendia.apiServer?.port,
+          WebSocketPortNumber: thalia.apiServer?.port,
         });
 
         const me = await call("/Users/Me", { headers: withToken(token) });
@@ -111,7 +111,7 @@ describe.skipIf(!databaseUrl)("jellyfin auth", () => {
         const after = await call("/Users/Me", { headers: withToken(token) });
         expect(after.status).toBe(401);
       } finally {
-        await pendia.stop();
+        await thalia.stop();
       }
     }));
 });

@@ -32,7 +32,7 @@ const isMissing = (error: unknown) => hasCode(error, "ENOENT", "ENOTDIR");
 const unreadable = () =>
   new FolderError(
     "BAD_REQUEST",
-    "Pendia can't read this folder. Check its permissions.",
+    "Thalia can't read this folder. Check its permissions.",
   );
 
 /** lstat one component, translating the failures the browser names. */
@@ -75,7 +75,7 @@ export async function listFolders(
     if (stat.isSymbolicLink())
       throw new FolderError(
         "BAD_REQUEST",
-        "Pendia doesn't follow symbolic links.",
+        "Thalia doesn't follow symbolic links.",
       );
   }
   if (!stat.isDirectory())

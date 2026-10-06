@@ -18,10 +18,10 @@ import {
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { encodeCursor } from "./pagination.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 const device = {
   clientName: "Test Client",
@@ -34,7 +34,7 @@ function rpcClient(base: string, token?: string) {
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function capture(promise: Promise<unknown>) {
@@ -206,7 +206,7 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
       const fx = await seed(db);
       const library = await addLibrary(db, "movies");
       const item = await addItem(db, library.id, "Movie");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -250,7 +250,7 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
       const fx = await seed(db);
       const library = await addLibrary(db, "movies");
       const item = await addItem(db, library.id, "Movie");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -403,7 +403,7 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
         positionSeconds: 50,
       });
       await denyLibrary(db, denied.id, fx.owner.id, false);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -518,7 +518,7 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
       );
       await denyLibrary(db, denied.id, fx.owner.id, false);
       await denyLibrary(db, late.id, fx.owner.id, false);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -628,7 +628,7 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
         positionSeconds: 10,
       });
       await db.delete(versions).where(eq(versions.id, version.id));
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -698,7 +698,7 @@ describe.skipIf(!databaseUrl)("marks and shelves", () => {
         completed: true,
         playedAt: "2026-01-01T00:00:00Z",
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);

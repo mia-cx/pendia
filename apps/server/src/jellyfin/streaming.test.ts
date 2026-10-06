@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import * as HLS from "hls-parser";
 import { sessionRegistry } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { continueWatching } from "../playback/marks.ts";
 import { deviceProfiles } from "./profile-fixtures.ts";
@@ -30,7 +30,7 @@ describe.skipIf(!databaseUrl)("jellyfin streaming", () => {
   let path: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "pendia-jellyfin-streaming-"));
+    root = await mkdtemp(join(tmpdir(), "thalia-jellyfin-streaming-"));
     await mkdir(join(root, "Atmos (2026)"));
     path = join(root, "Atmos (2026)", "Atmos.mkv");
     await createVideoFixture(path, {
@@ -55,8 +55,8 @@ describe.skipIf(!databaseUrl)("jellyfin streaming", () => {
         const { movies, viewer } = await seedMovies(db, root, ["Atmos"]);
         const movie = movies.get("Atmos");
         if (movie === undefined) throw new Error("Expected the movie.");
-        const scratch = await mkdtemp(join(tmpdir(), "pendia-jellyfin-hls-"));
-        const pendia = await startPendia("all", {
+        const scratch = await mkdtemp(join(tmpdir(), "thalia-jellyfin-hls-"));
+        const thalia = await startThalia("all", {
           databaseUrl: url,
           port: 0,
           transcoderOptions: {
@@ -68,7 +68,7 @@ describe.skipIf(!databaseUrl)("jellyfin streaming", () => {
           },
         });
         try {
-          const base = `http://127.0.0.1:${pendia.apiServer?.port}`;
+          const base = `http://127.0.0.1:${thalia.apiServer?.port}`;
           const send = (request: Request) =>
             fetch(new URL(new URL(request.url).pathname, base), request);
           const itemGuid = toGuid(movie.itemId);
@@ -203,7 +203,7 @@ describe.skipIf(!databaseUrl)("jellyfin streaming", () => {
             completed: false,
           });
         } finally {
-          await pendia.stop();
+          await thalia.stop();
           await rm(scratch, { recursive: true, force: true });
         }
       }),

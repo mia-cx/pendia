@@ -1,11 +1,11 @@
-# Pendia
+# Thalia
 
 A self-hosted media server that replaces Jellyfin and Plex. This glossary holds the words the project uses, so that tickets, code and docs mean the same thing by them.
 
 ## Language
 
 **Core**:
-The medium-agnostic part of Pendia: libraries, items, users, playback, plugins and roles.
+The medium-agnostic part of Thalia: libraries, items, users, playback, plugins and roles.
 _Avoid_: kernel, engine, base, platform
 
 **Medium**:
@@ -25,7 +25,7 @@ Any node in a library tree: a movie, show, season, episode, album, track, book, 
 _Avoid_: title, entry, BaseItem, resource
 
 **Item folder**:
-The folder under a root that holds a show's or movie's files, or `.` when the root itself is the Item. Season, disc and episode folders below it belong to it. Colocated `.pendia` artwork and subtitles go there. Several Items can share one: loose movies, or loose episodes of several shows. In code: `canonicalFolder`.
+The folder under a root that holds a show's or movie's files, or `.` when the root itself is the Item. Season, disc and episode folders below it belong to it. Colocated `.thalia` artwork and subtitles go there. Several Items can share one: loose movies, or loose episodes of several shows. In code: `canonicalFolder`.
 _Avoid_: canonical folder, media folder, item path
 
 **Title key**:
@@ -109,7 +109,7 @@ How a session delivers a Version: direct play over range requests, remux to HLS 
 _Avoid_: stream mode, playback type
 
 **Segment timeline**:
-The segment boundary timestamps of an Item, derived once from its first Version and forced on every Version Pendia produces. One per cut.
+The segment boundary timestamps of an Item, derived once from its first Version and forced on every Version Thalia produces. One per cut.
 _Avoid_: GOP grid, chunk map
 
 **Adaptive group**:
@@ -117,7 +117,7 @@ The Versions of an Item that share a codec family and its segment timeline, list
 _Avoid_: ladder, rendition set, ABR set
 
 **Stored Version**:
-A Version Pendia transcoded with the quality profile and keeps next to its source file, so a session needs no live transcode.
+A Version Thalia transcoded with the quality profile and keeps next to its source file, so a session needs no live transcode.
 _Avoid_: pre-transcode, cache, optimized version, live transcode
 
 **Permission**:
@@ -145,19 +145,19 @@ A signed, short-lived token scoped to one session and one Item, carried in the q
 _Avoid_: api key, stream key, access token
 
 **Artwork store**:
-Where artwork originals live: colocated in the Item's `.pendia` folder, a configured path, or S3-compatible object storage.
+Where artwork originals live: colocated in the Item's `.thalia` folder, a configured path, or S3-compatible object storage.
 _Avoid_: image cache, media store, blob store
 
 **Translation layer**:
-An adapter that speaks a third-party protocol on top of Pendia's own API, so existing apps connect unchanged. One per medium: the Jellyfin API for video, OpenSubsonic for music, OPDS for books, HDHomeRun for live TV.
+An adapter that speaks a third-party protocol on top of Thalia's own API, so existing apps connect unchanged. One per medium: the Jellyfin API for video, OpenSubsonic for music, OPDS for books, HDHomeRun for live TV.
 _Avoid_: compat layer, shim, emulation, bridge
 
 **Role**:
-The job a running Pendia process performs: api, worker, transcoder, watcher, or all.
+The job a running Thalia process performs: api, worker, transcoder, watcher, or all.
 _Avoid_: service, microservice, mode, component
 
 **Plugin**:
-Trusted TypeScript code an admin installs to extend Pendia, reaching the core only through the host interface.
+Trusted TypeScript code an admin installs to extend Thalia, reaching the core only through the host interface.
 _Avoid_: extension, addon, module
 
 **Provider**:

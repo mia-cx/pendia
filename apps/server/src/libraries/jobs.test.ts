@@ -21,14 +21,20 @@ import { startJobWorker } from "../jobs/worker.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
 import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
+import { probeVideo } from "../mediums/video-common/probe.ts";
+import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import {
   keyframesConcurrencyKey,
-  libraryConcurrencyKey,
-  registerLibraryJobs,
   runKeyframeIndexJob,
-} from "./jobs.ts";
-import { scanDirectory } from "./scan.ts";
+} from "./keyframe-index.ts";
+import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { insertLibraries } from "./testing.ts";
+
+/** An ffprobe plus index read, like a watcher-reported probe carries. */
+const probeWithIndex = async (path: string) => ({
+  ...(await probeVideo(path)),
+  keyframesSeconds: (await readKeyframeIndex(path)).keyframesSeconds,
+});
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "thalia-library-"));
@@ -228,6 +234,12 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         const queued = await listJobs(db, { state: "queued" });
         expect(queued.map((job) => job.payload)).toEqual([
           { type: "provider-fetch", itemId: item.id },
+          {
+            type: "keyframe-index",
+            libraryId: library.id,
+            rootId: library.rootId,
+            path: `${folder}/Alien.mkv`,
+          },
         ]);
         expect(queued[0]?.concurrencyKey).toBe(`provider:${item.id}`);
         expect(await db.select().from(events)).toMatchObject([
@@ -275,7 +287,16 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         await registry.run(claimed);
         const [rescanned] = await db.select().from(items);
         expect(rescanned?.metadataState).toBe("matched");
-        expect(await listJobs(db, { state: "queued" })).toHaveLength(0);
+        expect(
+          (await listJobs(db, { state: "queued" })).map((job) => job.payload),
+        ).toEqual([
+          {
+            type: "keyframe-index",
+            libraryId: library.id,
+            rootId: library.rootId,
+            path: `${folder}/Alien.mkv`,
+          },
+        ]);
       });
     }));
 
@@ -329,7 +350,15 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         // fetch cannot suppress the queued successor.
         expect(
           (await listJobs(db, { state: "queued" })).map((job) => job.payload),
-        ).toEqual([{ type: "provider-fetch", itemId: item.id }]);
+        ).toEqual([
+          { type: "provider-fetch", itemId: item.id },
+          {
+            type: "keyframe-index",
+            libraryId: library.id,
+            rootId: library.rootId,
+            path: `${oldFolder}/Alien.mkv`,
+          },
+        ]);
 
         // A further pending scan coalesces onto the queued successor.
         await queue.enqueue(
@@ -341,7 +370,15 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         await registry.run(third);
         expect(
           (await listJobs(db, { state: "queued" })).map((job) => job.payload),
-        ).toEqual([{ type: "provider-fetch", itemId: item.id }]);
+        ).toEqual([
+          { type: "provider-fetch", itemId: item.id },
+          {
+            type: "keyframe-index",
+            libraryId: library.id,
+            rootId: library.rootId,
+            path: `${oldFolder}/Alien.mkv`,
+          },
+        ]);
       });
     }));
 
@@ -377,6 +414,12 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         const queued = await listJobs(db, { state: "queued" });
         expect(queued.map((job) => job.payload)).toEqual([
           { type: "provider-fetch", itemId: item.id },
+          {
+            type: "keyframe-index",
+            libraryId: library.id,
+            rootId: library.rootId,
+            path: `${folder}/Alien.mkv`,
+          },
         ]);
       });
     }));
@@ -434,6 +477,12 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         const queued = await listJobs(db, { state: "queued" });
         expect(queued.map((job) => job.payload)).toEqual([
           { type: "provider-fetch", itemId: item.id },
+          {
+            type: "keyframe-index",
+            libraryId: library.id,
+            rootId: library.rootId,
+            path: filePath,
+          },
         ]);
       });
     }));
@@ -806,6 +855,123 @@ describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
         );
         const claimed = await queue.claim(["scan"]);
         expect(claimed?.id).toBe(scan.id);
+      });
+    }));
+});
+
+describe.skipIf(!databaseUrl)("scan-queued keyframe-index jobs", () => {
+  const folder = "Movie (2020)";
+
+  test("a directory scan queues one job per unindexed single-File Version", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createKeyframeFixture(join(root, folder, "Movie (2020).mp4"));
+        await createKeyframeFixture(
+          join(root, folder, "Movie (2020) 1080p.mp4"),
+          { gop: 75 },
+        );
+        const library = await insertLibrary(db, "Movies", root);
+        await scanDirectory(db, library.id, folder);
+        const queued = await listJobs(db, { state: "queued" });
+        expect(
+          queued
+            .map((job) => job.payload)
+            .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+        ).toEqual(
+          [
+            {
+              type: "keyframe-index" as const,
+              libraryId: library.id,
+              rootId: library.rootId,
+              path: `${folder}/Movie (2020) 1080p.mp4`,
+            },
+            {
+              type: "keyframe-index" as const,
+              libraryId: library.id,
+              rootId: library.rootId,
+              path: `${folder}/Movie (2020).mp4`,
+            },
+          ].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+        );
+        for (const job of queued) {
+          expect(job.type).toBe("keyframe-index");
+          expect(job.priority).toBe(-5);
+          expect(job.concurrencyKey).toBe(keyframesConcurrencyKey(library.id));
+        }
+      });
+    }));
+
+  test("a rescan queues no duplicate and the stored index survives it", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        const file = join(root, folder, "Movie (2020).mp4");
+        await createKeyframeFixture(file);
+        const library = await insertLibrary(db, "Movies", root);
+        await scanDirectory(db, library.id, folder);
+        expect(
+          (await listJobs(db)).filter((job) => job.type === "keyframe-index"),
+        ).toHaveLength(1);
+        // The index landing makes a later rescan leave no pending work.
+        await runKeyframeIndexJob(db, {
+          type: "keyframe-index",
+          libraryId: library.id,
+          rootId: library.rootId,
+          path: `${folder}/Movie (2020).mp4`,
+        });
+        await createJobQueue(db).enqueue(
+          { type: "scan", libraryId: library.id, path: "." },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        await scanDirectory(db, library.id, folder);
+        expect(
+          (await listJobs(db)).filter((job) => job.type === "keyframe-index"),
+        ).toHaveLength(1);
+        const [version] = await db.select().from(versions);
+        expect(version?.keyframesSeconds).toEqual([0, 2, 4, 6, 8, 10]);
+        expect(version?.lazyIndexPending).toBe(false);
+      });
+    }));
+
+  test("an index-carrying probe queues no job", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createKeyframeFixture(join(root, folder, "Movie (2020).mp4"));
+        const library = await insertLibrary(db, "Movies", root);
+        await scanDirectory(db, library.id, folder, {
+          probe: probeWithIndex,
+        });
+        expect(
+          (await listJobs(db)).filter((job) => job.type === "keyframe-index"),
+        ).toHaveLength(0);
+        const [version] = await db.select().from(versions);
+        expect(version?.keyframesSeconds).toEqual([0, 2, 4, 6, 8, 10]);
+      });
+    }));
+
+  test("a split Episode Version queues no job", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const showDir = join(root, "Show", "Season 01");
+        await mkdir(showDir, { recursive: true });
+        await createVideoFixture(join(showDir, "Show S01E01 - part1.mkv"));
+        await createVideoFixture(join(showDir, "Show S01E01 - part2.mkv"));
+        const library = await insertLibrary(db, "Shows", root, "shows");
+        await scanShowDirectory(db, library.id, "Show");
+        expect(
+          (await listJobs(db)).filter((job) => job.type === "keyframe-index"),
+        ).toHaveLength(0);
+        const [version] = await db.select().from(versions);
+        expect(version).toMatchObject({
+          keyframesSeconds: null,
+          lazyIndexPending: false,
+        });
       });
     }));
 });

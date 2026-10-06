@@ -46,6 +46,7 @@ import {
   setItemProviderIds,
   updateItemCanonicalFolder,
 } from "./changes.ts";
+import { queueKeyframeIndex } from "./keyframe-index.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import {
   type LibraryRoot,
@@ -1002,6 +1003,13 @@ export async function scanDirectory(
         }
         versionIds.push(versionId);
         await upsertFileStreams(tx, versionId, fileId, member.probe);
+        // The keyframe index arrives from its own job after the scan.
+        if (member.probe.keyframesSeconds === undefined)
+          await queueKeyframeIndex(tx, {
+            libraryId,
+            rootId: member.rootId,
+            path: member.path,
+          });
       }
 
       timelineOwners.add(itemId);
@@ -1460,6 +1468,15 @@ export async function scanShowDirectory(
                   ...indexFor(members.length + retained),
                 })
                 .where(eq(versions.id, versionId));
+              if (
+                members.length + retained === 1 &&
+                first.probe.keyframesSeconds === undefined
+              )
+                await queueKeyframeIndex(tx, {
+                  libraryId,
+                  rootId: first.rootId,
+                  path: first.path,
+                });
             } else {
               const [version] = await tx
                 .insert(versions)
@@ -1480,6 +1497,15 @@ export async function scanShowDirectory(
               versionId = version.id;
             }
             versionIds.push(versionId);
+            if (
+              members.length === 1 &&
+              first.probe.keyframesSeconds === undefined
+            )
+              await queueKeyframeIndex(tx, {
+                libraryId,
+                rootId: first.rootId,
+                path: first.path,
+              });
 
             const maxOrder = versionFiles.reduce(
               (maximum, file) => Math.max(maximum, file.order),

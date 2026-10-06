@@ -399,6 +399,38 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
       });
     }));
 
+  test("logs one timing line per directory scan", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withVideoFixture(async (root) => {
+        await populate(root);
+        await withLibrary(db, root, async (library) => {
+          const lines: Record<string, unknown>[] = [];
+          const original = console.log;
+          console.log = (line: unknown) => {
+            if (typeof line === "string" && line.includes("scan.directory"))
+              lines.push(JSON.parse(line) as Record<string, unknown>);
+          };
+          try {
+            await scanDirectory(db, library.id, folder);
+          } finally {
+            console.log = original;
+          }
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toMatchObject({
+            message: "scan.directory",
+            level: "info",
+            libraryId: library.id,
+            path: folder,
+            files: 2,
+            probeCacheHits: 0,
+          });
+          for (const key of ["walkMs", "probeMs", "writeMs"])
+            expect(lines[0]?.[key]).toBeGreaterThanOrEqual(0);
+        });
+      });
+    }));
+
   test("aborts the directory write when a member has no video stream", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

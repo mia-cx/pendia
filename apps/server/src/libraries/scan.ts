@@ -803,6 +803,20 @@ async function findGroupItem(
  * Scan one Item folder of a movies library into Items, Versions, Files
  * and Streams. `itemId` is the first written Item, as before.
  */
+/** One structured timing line per directory scan, in the server's JSON log shape. */
+function logScanTiming(
+  data: Record<string, unknown> & { libraryId: string; path: string },
+) {
+  console.log(
+    JSON.stringify({
+      ...data,
+      timestamp: new Date().toISOString(),
+      level: "info",
+      message: "scan.directory",
+    }),
+  );
+}
+
 export async function scanDirectory(
   db: Database,
   libraryId: string,
@@ -814,6 +828,7 @@ export async function scanDirectory(
   versionIds: string[];
   probed: number;
 }> {
+  const startedAt = performance.now();
   const changes = options.changes ?? [];
   const [library] = await db
     .select()
@@ -828,6 +843,7 @@ export async function scanDirectory(
   // Grouping reads root-relative paths, so the same folder in two roots is
   // one Item; each root's file at a member path is its own Version.
   const walked = await source.walk(path, false);
+  const walkedAt = performance.now();
   const groups = groupMoviePaths(walked).filter(
     (group) => group.canonicalFolder === path,
   );
@@ -850,6 +866,8 @@ export async function scanDirectory(
       memberByKey.set(rootedKey(file), member);
     }
   }
+
+  const probedAt = performance.now();
 
   // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
@@ -1077,7 +1095,17 @@ export async function scanDirectory(
       versionIds,
     };
   });
+  const writtenAt = performance.now();
   await removeArtworkFiles(deletedArtwork);
+  logScanTiming({
+    libraryId,
+    path,
+    files: memberByKey.size,
+    probeCacheHits: memberByKey.size - probed,
+    walkMs: Math.round(walkedAt - startedAt),
+    probeMs: Math.round(probedAt - walkedAt),
+    writeMs: Math.round(writtenAt - probedAt),
+  });
   return { itemId: written.itemIds[0] ?? null, ...written, probed };
 }
 
@@ -1096,6 +1124,7 @@ export async function scanShowDirectory(
   versionIds: string[];
   probed: number;
 }> {
+  const startedAt = performance.now();
   const changes = options.changes ?? [];
   const [library] = await db
     .select()
@@ -1108,6 +1137,7 @@ export async function scanShowDirectory(
   const { rules } = scanScope("shows");
 
   const walked = await source.walk(path, false);
+  const walkedAt = performance.now();
   const groups = groupShowPaths(walked).filter(
     (candidate) => candidate.canonicalFolder === path,
   );
@@ -1139,6 +1169,8 @@ export async function scanShowDirectory(
       }
     }
   }
+
+  const probedAt = performance.now();
 
   // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
@@ -1631,6 +1663,16 @@ export async function scanShowDirectory(
 
     return { itemIds: [...new Set(itemIds)], versionIds };
   });
+  const writtenAt = performance.now();
   await removeArtworkFiles(deletedArtwork);
+  logScanTiming({
+    libraryId,
+    path,
+    files: memberByKey.size,
+    probeCacheHits: memberByKey.size - probed,
+    walkMs: Math.round(walkedAt - startedAt),
+    probeMs: Math.round(probedAt - walkedAt),
+    writeMs: Math.round(writtenAt - probedAt),
+  });
   return { itemId: written.itemIds[0] ?? null, ...written, probed };
 }

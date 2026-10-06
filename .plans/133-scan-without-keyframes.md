@@ -36,7 +36,7 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 - [x] Probe with ffprobe only: optional `keyframesSeconds`, cache hits without it, scan writes index state from it; tests
 - [x] Add the `keyframe-index` job type: enum migration, payload, handler, registration, admin label; tests, including the short-lease run
 - [x] Queue index jobs from the scan, deduplicated; tests
-- [ ] Log walk, probe and write time per directory scan
+- [x] Log walk, probe and write time per directory scan
 - [ ] Update the scan and keyframe docs
 - [ ] Full gate
 
@@ -46,3 +46,4 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 - TODO 1: probe.test, probe-cache.test, scan.test, timelines.test, watcher/http.test, adaptive.test, stored/jobs.test all green; tests that need an index inject a probe carrying `keyframesSeconds`.
 - TODO 2: handler lives in `libraries/keyframe-index.ts` (not jobs.ts) to avoid a scan↔jobs import cycle; no web job-label map exists, so no admin label added. jobs.test.ts green incl. short-lease worker run.
 - TODO 3: dedup keys on rootId+path in queued/running `keyframe-index` jobs; watcher never reaches this path (it writes the cache directly), covered by the index-carrying-probe test. jobs.test.ts, scan.test.ts, timelines.test.ts, probe-cache.test.ts green.
+- TODO 4: `scan.directory` JSON line (libraryId, path, files, probeCacheHits, walkMs, probeMs, writeMs) after both scan writers; a scan.test.ts case asserts the shape.

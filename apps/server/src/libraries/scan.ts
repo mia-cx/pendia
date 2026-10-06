@@ -946,8 +946,8 @@ export async function scanDirectory(
               label,
               bytes: member.bytes,
               durationSeconds: member.probe.durationSeconds,
-              keyframesSeconds: member.probe.keyframesSeconds,
-              lazyIndexPending: member.probe.keyframesSeconds === null,
+              keyframesSeconds: member.probe.keyframesSeconds ?? null,
+              lazyIndexPending: member.probe.keyframesSeconds === undefined,
             })
             .where(eq(versions.id, versionId));
           await tx
@@ -971,8 +971,8 @@ export async function scanDirectory(
               format: "video",
               bytes: member.bytes,
               durationSeconds: member.probe.durationSeconds,
-              keyframesSeconds: member.probe.keyframesSeconds,
-              lazyIndexPending: member.probe.keyframesSeconds === null,
+              keyframesSeconds: member.probe.keyframesSeconds ?? null,
+              lazyIndexPending: member.probe.keyframesSeconds === undefined,
             })
             .returning();
           if (!version) {
@@ -1392,10 +1392,11 @@ export async function scanShowDirectory(
             // Each split File has its own index, so only a lone File indexes the Version.
             const indexFor = (fileCount: number) => {
               const keyframesSeconds =
-                fileCount === 1 ? first.probe.keyframesSeconds : null;
+                fileCount === 1 ? (first.probe.keyframesSeconds ?? null) : null;
               return {
                 keyframesSeconds,
-                lazyIndexPending: keyframesSeconds === null,
+                lazyIndexPending:
+                  fileCount === 1 && first.probe.keyframesSeconds === undefined,
               };
             };
 

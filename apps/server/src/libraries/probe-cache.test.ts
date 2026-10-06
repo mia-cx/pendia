@@ -11,10 +11,17 @@ import {
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { probeLibraryFile } from "./probe-cache.ts";
 import type { LibraryRoot } from "./roots.ts";
 import { insertLibraries } from "./testing.ts";
+
+/** An ffprobe plus index read, like a watcher-reported probe carries. */
+const probeWithIndex = async (path: string) => ({
+  ...(await probeVideo(path)),
+  keyframesSeconds: (await readKeyframeIndex(path)).keyframesSeconds,
+});
 
 const relative = "Alien (1979)/Alien.mkv";
 const relativeMp4 = "Alien (1979)/Alien.mp4";
@@ -81,7 +88,7 @@ describe.skipIf(!databaseUrl)("probeLibraryFile", () => {
       });
     }));
 
-  test("re-probes a legacy cached result without keyframes once", () =>
+  test("serves a cached result without keyframes without re-probing", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withMovie(async (dir) => {
@@ -104,17 +111,10 @@ describe.skipIf(!databaseUrl)("probeLibraryFile", () => {
             seen.push(path);
             return probeVideo(path);
           };
-          const reprobed = await probeLibraryFile(db, root, relative, probe);
-          expect(reprobed.cached).toBe(false);
-          expect(reprobed.probe.keyframesSeconds).toEqual(
-            first.probe.keyframesSeconds,
-          );
           const hit = await probeLibraryFile(db, root, relative, probe);
           expect(hit.cached).toBe(true);
-          expect(hit.probe.keyframesSeconds).toEqual(
-            first.probe.keyframesSeconds,
-          );
-          expect(seen).toHaveLength(1);
+          expect(hit.probe.keyframesSeconds).toBeUndefined();
+          expect(seen).toHaveLength(0);
         });
       });
     }));
@@ -130,7 +130,7 @@ describe.skipIf(!databaseUrl)("probeLibraryFile", () => {
           const seen: string[] = [];
           const probe = async (path: string) => {
             seen.push(path);
-            return probeVideo(path);
+            return probeWithIndex(path);
           };
           const first = await probeLibraryFile(db, root, relativeMp4, probe);
           expect(first.cached).toBe(false);
@@ -157,7 +157,7 @@ describe.skipIf(!databaseUrl)("probeLibraryFile", () => {
           const seen: string[] = [];
           const probe = async (path: string) => {
             seen.push(path);
-            return probeVideo(path);
+            return probeWithIndex(path);
           };
           const first = await probeLibraryFile(db, root, relativeMp4, probe);
           expect(first.cached).toBe(false);

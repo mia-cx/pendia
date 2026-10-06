@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { ffprobeKeyframeTimes } from "../mediums/video-common/keyframe-fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { ladder } from "../playback/policy.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
@@ -560,11 +561,12 @@ describe("live runs", () => {
       pattern: "testsrc2",
     });
     const probe = await probeVideo(inputPath);
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
+    const { keyframesSeconds } = await readKeyframeIndex(inputPath);
+    if (probe.durationSeconds === null || keyframesSeconds === null) {
       throw new Error("Fixture probe returned no duration or keyframes.");
     }
     duration = probe.durationSeconds;
-    boundaries = deriveSegmentTimeline(probe.keyframesSeconds, duration);
+    boundaries = deriveSegmentTimeline(keyframesSeconds, duration);
     expect(boundaries.slice(0, 4)).toEqual([0, 3, 6, 9]);
     expect(boundaries.at(-1)).toBe(duration);
   }, 60_000);
@@ -582,13 +584,14 @@ describe("live runs", () => {
       await createVideoFixture(path, options);
     }
     const probe = await probeVideo(path);
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
+    const { keyframesSeconds } = await readKeyframeIndex(path);
+    if (probe.durationSeconds === null || keyframesSeconds === null) {
       throw new Error(`${name} probe returned no duration or keyframes.`);
     }
     return {
       path,
       boundaries: deriveSegmentTimeline(
-        probe.keyframesSeconds,
+        keyframesSeconds,
         probe.durationSeconds,
       ),
     };

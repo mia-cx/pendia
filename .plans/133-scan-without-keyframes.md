@@ -33,7 +33,7 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 
 ## TODOs
 
-- [ ] Probe with ffprobe only: optional `keyframesSeconds`, cache hits without it, scan writes index state from it; tests
+- [x] Probe with ffprobe only: optional `keyframesSeconds`, cache hits without it, scan writes index state from it; tests
 - [ ] Add the `keyframe-index` job type: enum migration, payload, handler, registration, admin label; tests, including the short-lease run
 - [ ] Queue index jobs from the scan, deduplicated; tests
 - [ ] Log walk, probe and write time per directory scan
@@ -43,3 +43,4 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 ## Notes
 
 - Baseline from the 8-movie NFS sample above, and the issue's figure of about 2 hours for 315 folders. The after run is a fresh scan of the Radarr library on the dev server.
+- TODO 1: probe.test, probe-cache.test, scan.test, timelines.test, watcher/http.test, adaptive.test, stored/jobs.test all green; tests that need an index inject a probe carrying `keyframesSeconds`.

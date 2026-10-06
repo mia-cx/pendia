@@ -15,6 +15,8 @@ import {
   type VideoFixtureOptions,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
+import { probeVideo } from "../mediums/video-common/probe.ts";
 import { registerStoreJobs } from "./jobs.ts";
 
 /** The folder and file of the scanned fixture movie. */
@@ -60,7 +62,13 @@ export async function withStoredLibrary(
       configuration: storedVersions === null ? {} : { storedVersions },
     });
     if (library === undefined) throw new Error("Fixture library missing.");
-    const { itemId } = await scanDirectory(db, library.id, fixtureFolder);
+    // Store jobs need an aligned timeline, which only an indexed Version gives.
+    const { itemId } = await scanDirectory(db, library.id, fixtureFolder, {
+      probe: async (path) => ({
+        ...(await probeVideo(path)),
+        keyframesSeconds: (await readKeyframeIndex(path)).keyframesSeconds,
+      }),
+    });
     if (itemId === null) throw new Error("Fixture scan found no Item.");
     const [row] = await db
       .select({ file: files, version: versions })

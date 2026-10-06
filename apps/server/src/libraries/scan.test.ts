@@ -33,6 +33,7 @@ import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { locateFile } from "./roots.ts";
 import {
@@ -42,6 +43,12 @@ import {
   scanShowDirectory,
 } from "./scan.ts";
 import { addRoot, insertLibraries } from "./testing.ts";
+
+/** An ffprobe plus index read, like a watcher-reported probe carries. */
+const probeWithIndex = async (path: string) => ({
+  ...(await probeVideo(path)),
+  keyframesSeconds: (await readKeyframeIndex(path)).keyframesSeconds,
+});
 
 const folder = "Alien (1979) {tmdb-348}";
 const file1080 = `${folder}/Alien.1080p.mkv`;
@@ -207,9 +214,12 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
               libraryId: library.id,
               format: "video",
               origin: "imported",
-              timelineAligned: true,
+              // The index arrives later via the keyframe-index job.
+              keyframesSeconds: null,
+              lazyIndexPending: true,
+              timelineAligned: false,
             });
-            expect(version.segmentTimelineId).not.toBeNull();
+            expect(version.segmentTimelineId).toBeNull();
           }
 
           const fileRows = await db
@@ -736,17 +746,17 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         );
         expect(splitVersion).toMatchObject({
           keyframesSeconds: null,
-          lazyIndexPending: true,
+          lazyIndexPending: false,
         });
         for (const single of [range, special]) {
           const version = versionRows.find(
             (row) => row.id === single.versionId,
           );
           const probed = await probeVideo(join(root, single.path));
-          expect(probed.keyframesSeconds).not.toBeNull();
+          expect(probed.keyframesSeconds).toBeUndefined();
           expect(version).toMatchObject({
-            keyframesSeconds: probed.keyframesSeconds,
-            lazyIndexPending: false,
+            keyframesSeconds: null,
+            lazyIndexPending: true,
           });
         }
 
@@ -1470,10 +1480,10 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         if (!firstVersion) throw new Error("Fixture Version missing.");
         expect(firstVersion).toMatchObject({
           keyframesSeconds: null,
-          lazyIndexPending: true,
+          lazyIndexPending: false,
         });
         const remainingProbe = await probeVideo(part1);
-        expect(remainingProbe.keyframesSeconds).not.toBeNull();
+        expect(remainingProbe.keyframesSeconds).toBeUndefined();
 
         await rm(part2);
 
@@ -1481,7 +1491,7 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(second.versionIds).toEqual([firstVersion.id]);
         expect(await db.select().from(files)).toHaveLength(2);
         expect(await db.select().from(versions)).toMatchObject([
-          { keyframesSeconds: null, lazyIndexPending: true },
+          { keyframesSeconds: null, lazyIndexPending: false },
         ]);
 
         const third = await scanShowDirectory(db, library.id, show, {
@@ -1499,8 +1509,8 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
         expect(keptVersion?.id).toBe(firstVersion.id);
         expect(keptVersion?.bytes).toBe(part1File.bytes);
         expect(keptVersion).toMatchObject({
-          keyframesSeconds: remainingProbe.keyframesSeconds,
-          lazyIndexPending: false,
+          keyframesSeconds: null,
+          lazyIndexPending: true,
         });
         const itemRows = await db.select().from(items);
         expect(itemRows.map((row) => row.kind).sort()).toEqual([
@@ -1548,7 +1558,7 @@ describe.skipIf(!databaseUrl)("scanShowDirectory", () => {
 
         expect(await db.select().from(files)).toHaveLength(2);
         expect(await db.select().from(versions)).toMatchObject([
-          { keyframesSeconds: null, lazyIndexPending: true },
+          { keyframesSeconds: null, lazyIndexPending: false },
         ]);
       });
     }));
@@ -2640,8 +2650,10 @@ describe.skipIf(!databaseUrl)("scans at any depth", () => {
       rootPath: root,
     });
     if (!library) throw new Error("Fixture library missing.");
-    await scanDirectory(db, library.id, "A (1979)");
-    await scanDirectory(db, library.id, "B (1980)");
+    // Seed with an index-carrying probe: these tests exercise Versions that
+    // already have their timelines.
+    await scanDirectory(db, library.id, "A (1979)", { probe: probeWithIndex });
+    await scanDirectory(db, library.id, "B (1980)", { probe: probeWithIndex });
     const oldItems = await db
       .select()
       .from(items)

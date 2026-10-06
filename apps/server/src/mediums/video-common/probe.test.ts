@@ -140,22 +140,22 @@ describe("probeVideo", () => {
     });
   });
 
-  test("attaches the container keyframe index to a real MP4", async () => {
+  test("leaves the keyframe index unread; ffprobe output only", async () => {
     await withVideoFixture(async (dir) => {
       const file = join(dir, "Fixture.mp4");
       await createKeyframeFixture(file);
       const result = await probeVideo(file);
-      expect(result.keyframesSeconds).toEqual([0, 2, 4, 6, 8, 10]);
+      expect("keyframesSeconds" in result).toBe(false);
       expect(result.container).toBe("mp4");
     });
   });
 
-  test("returns a null index for fragmented MP4 with valid metadata", async () => {
+  test("still probes fragmented MP4 with valid metadata", async () => {
     await withVideoFixture(async (dir) => {
       const file = join(dir, "Fixture.mp4");
       await createKeyframeFixture(file, { fragmented: true });
       const result = await probeVideo(file);
-      expect(result.keyframesSeconds).toBeNull();
+      expect("keyframesSeconds" in result).toBe(false);
       expect(result.durationSeconds).toBeGreaterThan(0);
       expect(result.streams[0]).toMatchObject({ kind: "video", codec: "h264" });
     });
@@ -210,7 +210,7 @@ describe("parseProbeOutput", () => {
     expect(stream?.hdr).toBe("hdr10");
     expect(result.container).toBe("mkv");
     expect(result.durationSeconds).toBeNull();
-    expect(result.keyframesSeconds).toBeNull();
+    expect(result.keyframesSeconds).toBeUndefined();
   });
 
   test("prefers Dolby Vision, then HDR10+, then transfer-based HDR", () => {

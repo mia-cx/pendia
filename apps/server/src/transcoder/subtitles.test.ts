@@ -6,6 +6,7 @@ import {
   createVideoFixture,
   pgsFixtureBox,
 } from "../mediums/video-common/fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { ladder } from "../playback/policy.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
@@ -94,7 +95,8 @@ describe("subtitle paths", () => {
 
   test("a PGS Stream burns into the picture inside its box only", async () => {
     const probe = await probeVideo(inputPath);
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
+    const { keyframesSeconds } = await readKeyframeIndex(inputPath);
+    if (probe.durationSeconds === null || keyframesSeconds === null) {
       throw new Error("Fixture probe returned no duration or keyframes.");
     }
     const directory = join(dir, "burn");
@@ -104,7 +106,7 @@ describe("subtitle paths", () => {
       {
         inputPath,
         boundariesSeconds: deriveSegmentTimeline(
-          probe.keyframesSeconds,
+          keyframesSeconds,
           probe.durationSeconds,
         ),
         startIndex: 0,

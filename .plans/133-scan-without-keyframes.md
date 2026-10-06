@@ -19,7 +19,7 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 - [ ] A slow index read under a short lease completes without losing its lease
 - [ ] Each directory scan logs its walk, probe and write times
 - [ ] Before and after timings on the Radarr NFS library in the PR
-- [ ] The repository gate is green
+- [x] The repository gate is green
 
 ## Design
 
@@ -48,3 +48,4 @@ This lands before the rest of #135. It keeps today's end state (every single-fil
 - TODO 3: dedup keys on rootId+path in queued/running `keyframe-index` jobs; watcher never reaches this path (it writes the cache directly), covered by the index-carrying-probe test. jobs.test.ts, scan.test.ts, timelines.test.ts, probe-cache.test.ts green.
 - TODO 4: `scan.directory` JSON line (libraryId, path, files, probeCacheHits, walkMs, probeMs, writeMs) after both scan writers; a scan.test.ts case asserts the shape.
 - TODO 5: updated CONTEXT.md (Scan/Probe/Job entries), topology.md job list, operations.md worker row, server README probe-cache + timeline paragraphs.
+- TODO 6: gate green on the fast suite — `bun run lint` clean, `bun run check` 6/6, `bun run build` 4/4, `bun run test` 1475 pass / 3 skip / 0 fail in ~124 s (DATABASE_URL=postgresql://pendia:pendia@127.0.0.1:55580/pendia_dev).

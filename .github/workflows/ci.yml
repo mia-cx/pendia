@@ -51,7 +51,7 @@ jobs:
       - run: bun run lint
       - run: bun run check
       - run: bun run build
-      - run: bun test
+      - run: bun run test
         env:
           DATABASE_URL: postgresql://thalia:thalia@127.0.0.1:5432/thalia
           TEST_S3_URL: http://thalia:thalia-secret@127.0.0.1:7070/thalia

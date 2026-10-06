@@ -6,7 +6,8 @@
   "scripts": {
     "build": "vite build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "dev": "vite dev"
+    "dev": "vite dev",
+    "test": "bun test"
   },
   "dependencies": {
     "@internationalized/date": "3.12.4",

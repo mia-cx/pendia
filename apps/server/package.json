@@ -13,7 +13,7 @@
     "build": "bun build src/index.ts --outdir dist --target bun",
     "check": "tsc --noEmit -p tsconfig.json",
     "dev": "bun --watch src/index.ts",
-    "test": "bun test"
+    "test": "bun scripts/test.ts"
   },
   "dependencies": {
     "@orpc/client": "1.15.0",

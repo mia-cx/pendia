@@ -176,66 +176,72 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
     }));
 
   test("migrates an empty database once and preserves the second run", () =>
-    withDatabase(async (db) => {
-      await migrateDatabase(db);
-      const before = await migrationState(db);
-      expect(before.journal).toHaveLength(18);
-      expect(before.tables).toHaveLength(36);
-      expect(before.extensions).toEqual([
-        { extname: "btree_gist" },
-        { extname: "pg_trgm" },
-      ]);
-      expect(before.groups).toMatchObject([
-        { name: "admins", builtIn: true, permissions: [...permissions] },
-        { name: "users", builtIn: true, permissions: ["view", "play"] },
-      ]);
-      expect(
-        Array.from(
-          await db.execute(
-            sql`select column_default from information_schema.columns where table_schema = 'public' and table_name = 'items' and column_name = 'metadata_state'`,
+    withDatabase(
+      async (db) => {
+        await migrateDatabase(db);
+        const before = await migrationState(db);
+        expect(before.journal).toHaveLength(18);
+        expect(before.tables).toHaveLength(36);
+        expect(before.extensions).toEqual([
+          { extname: "btree_gist" },
+          { extname: "pg_trgm" },
+        ]);
+        expect(before.groups).toMatchObject([
+          { name: "admins", builtIn: true, permissions: [...permissions] },
+          { name: "users", builtIn: true, permissions: ["view", "play"] },
+        ]);
+        expect(
+          Array.from(
+            await db.execute(
+              sql`select column_default from information_schema.columns where table_schema = 'public' and table_name = 'items' and column_name = 'metadata_state'`,
+            ),
           ),
-        ),
-      ).toEqual([{ column_default: "'pending'::metadata_state" }]);
-      await migrateDatabase(db);
-      expect(await migrationState(db)).toEqual(before);
-    }));
+        ).toEqual([{ column_default: "'pending'::metadata_state" }]);
+        await migrateDatabase(db);
+        expect(await migrationState(db)).toEqual(before);
+      },
+      { empty: true },
+    ));
 
   test(
     "two runner processes race and apply one migration set",
     () =>
-      withDatabase(async (db, url) => {
-        const runners = Array.from({ length: 2 }, () =>
-          Bun.spawn({
-            cmd: [
-              process.execPath,
-              new URL("./migrate.ts", import.meta.url).pathname,
-            ],
-            env: { ...process.env, DATABASE_URL: url },
-            stdout: "pipe",
-            stderr: "pipe",
-            timeout: 10_000,
-          }),
-        );
-        try {
-          const results = await Promise.all(
-            runners.map(async (runner) => ({
-              code: await runner.exited,
-              stderr: await new Response(runner.stderr).text(),
-            })),
+      withDatabase(
+        async (db, url) => {
+          const runners = Array.from({ length: 2 }, () =>
+            Bun.spawn({
+              cmd: [
+                process.execPath,
+                new URL("./migrate.ts", import.meta.url).pathname,
+              ],
+              env: { ...process.env, DATABASE_URL: url },
+              stdout: "pipe",
+              stderr: "pipe",
+              timeout: 10_000,
+            }),
           );
-          expect(results).toEqual([
-            { code: 0, stderr: "" },
-            { code: 0, stderr: "" },
-          ]);
-          const state = await migrationState(db);
-          expect(state.journal).toHaveLength(18);
-          expect(state.tables).toHaveLength(36);
-          expect(state.groups).toHaveLength(2);
-        } finally {
-          for (const runner of runners) runner.kill();
-          await Promise.all(runners.map((runner) => runner.exited));
-        }
-      }),
+          try {
+            const results = await Promise.all(
+              runners.map(async (runner) => ({
+                code: await runner.exited,
+                stderr: await new Response(runner.stderr).text(),
+              })),
+            );
+            expect(results).toEqual([
+              { code: 0, stderr: "" },
+              { code: 0, stderr: "" },
+            ]);
+            const state = await migrationState(db);
+            expect(state.journal).toHaveLength(18);
+            expect(state.tables).toHaveLength(36);
+            expect(state.groups).toHaveLength(2);
+          } finally {
+            for (const runner of runners) runner.kill();
+            await Promise.all(runners.map((runner) => runner.exited));
+          }
+        },
+        { empty: true },
+      ),
     15_000,
   );
 

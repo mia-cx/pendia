@@ -126,82 +126,90 @@ const count = async (db: Database, table: string) => {
 
 describe.skipIf(!databaseUrl)("The library roots migration", () => {
   test("gives each Library one root and points its Files and probes there", () =>
-    withDatabase(async (db) => {
-      await migrateBeforeRoots(db);
-      const ids = await seedSingleRoots(db);
-      const tables = [
-        "libraries",
-        "items",
-        "versions",
-        "files",
-        "progress",
-        "artwork",
-        "segment_timelines",
-        "probe_cache",
-        "jobs",
-      ];
-      const before = await Promise.all(tables.map((table) => count(db, table)));
+    withDatabase(
+      async (db) => {
+        await migrateBeforeRoots(db);
+        const ids = await seedSingleRoots(db);
+        const tables = [
+          "libraries",
+          "items",
+          "versions",
+          "files",
+          "progress",
+          "artwork",
+          "segment_timelines",
+          "probe_cache",
+          "jobs",
+        ];
+        const before = await Promise.all(
+          tables.map((table) => count(db, table)),
+        );
 
-      await migrateDatabase(db);
+        await migrateDatabase(db);
 
-      expect(
-        await Promise.all(tables.map((table) => count(db, table))),
-      ).toEqual(before);
-      const roots = await db.execute<{
-        id: string;
-        libraryId: string;
-        path: string;
-        position: number;
-      }>(
-        sql`select id, library_id as "libraryId", path, position from library_roots order by path`,
-      );
-      expect(roots.map(({ id: _, ...root }) => root)).toEqual([
-        { libraryId: ids.movies, path: "/srv/movies", position: 0 },
-        { libraryId: ids.shows, path: "/srv/shows", position: 0 },
-      ]);
-      const rootOf = new Map(roots.map((root) => [root.libraryId, root.id]));
-      const files = await db.execute<{ id: string; rootId: string }>(
-        sql`select id, root_id as "rootId" from files order by id`,
-      );
-      expect(new Map(files.map((file) => [file.id, file.rootId]))).toEqual(
-        new Map([
-          [ids.movieFile, rootOf.get(ids.movies)],
-          [ids.episodeFile, rootOf.get(ids.shows)],
-        ]),
-      );
-      const probes = await db.execute<{ path: string; rootId: string }>(
-        sql`select path, root_id as "rootId" from probe_cache order by path`,
-      );
-      expect(probes.map((probe) => probe.rootId)).toEqual([
-        rootOf.get(ids.movies),
-        rootOf.get(ids.shows),
-      ]);
-      const [stored] = await db.execute<{ sourceFileId: string }>(
-        sql`select source_file_id as "sourceFileId" from versions where id = ${ids.stored}`,
-      );
-      expect(stored?.sourceFileId).toBe(ids.movieFile);
-      const [job] = await db.execute<{ rootIds: string[] }>(
-        sql`select array(select change->>'rootId' from jsonb_array_elements(payload->'changes') as change) as "rootIds" from jobs where id = ${ids.job}`,
-      );
-      expect(job?.rootIds).toEqual([rootOf.get(ids.shows)]);
-    }));
+        expect(
+          await Promise.all(tables.map((table) => count(db, table))),
+        ).toEqual(before);
+        const roots = await db.execute<{
+          id: string;
+          libraryId: string;
+          path: string;
+          position: number;
+        }>(
+          sql`select id, library_id as "libraryId", path, position from library_roots order by path`,
+        );
+        expect(roots.map(({ id: _, ...root }) => root)).toEqual([
+          { libraryId: ids.movies, path: "/srv/movies", position: 0 },
+          { libraryId: ids.shows, path: "/srv/shows", position: 0 },
+        ]);
+        const rootOf = new Map(roots.map((root) => [root.libraryId, root.id]));
+        const files = await db.execute<{ id: string; rootId: string }>(
+          sql`select id, root_id as "rootId" from files order by id`,
+        );
+        expect(new Map(files.map((file) => [file.id, file.rootId]))).toEqual(
+          new Map([
+            [ids.movieFile, rootOf.get(ids.movies)],
+            [ids.episodeFile, rootOf.get(ids.shows)],
+          ]),
+        );
+        const probes = await db.execute<{ path: string; rootId: string }>(
+          sql`select path, root_id as "rootId" from probe_cache order by path`,
+        );
+        expect(probes.map((probe) => probe.rootId)).toEqual([
+          rootOf.get(ids.movies),
+          rootOf.get(ids.shows),
+        ]);
+        const [stored] = await db.execute<{ sourceFileId: string }>(
+          sql`select source_file_id as "sourceFileId" from versions where id = ${ids.stored}`,
+        );
+        expect(stored?.sourceFileId).toBe(ids.movieFile);
+        const [job] = await db.execute<{ rootIds: string[] }>(
+          sql`select array(select change->>'rootId' from jsonb_array_elements(payload->'changes') as change) as "rootIds" from jobs where id = ${ids.job}`,
+        );
+        expect(job?.rootIds).toEqual([rootOf.get(ids.shows)]);
+      },
+      { empty: true },
+    ));
 
   test("stops with the shared root when two Libraries use one root", () =>
-    withDatabase(async (db) => {
-      await migrateBeforeRoots(db);
-      await db.execute(sql`
+    withDatabase(
+      async (db) => {
+        await migrateBeforeRoots(db);
+        await db.execute(sql`
         insert into libraries (id, name, medium, root_path) values
           (${id()}, 'Movies', 'movies', '/srv/media'),
           (${id()}, 'Shows', 'shows', '/srv/media')`);
-      const failure = await migrateDatabase(db).catch(
-        (error: unknown) => error,
-      );
-      expect(failure).toMatchObject({
-        cause: {
-          message: expect.stringContaining(
-            "Several libraries use the root /srv/media.",
-          ),
-        },
-      });
-    }));
+        const failure = await migrateDatabase(db).catch(
+          (error: unknown) => error,
+        );
+        expect(failure).toMatchObject({
+          cause: {
+            message: expect.stringContaining(
+              "Several libraries use the root /srv/media.",
+            ),
+          },
+        });
+      },
+      { empty: true },
+    ));
 });

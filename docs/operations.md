@@ -10,7 +10,7 @@ One binary runs every role, chosen with `--role`. The image runs `all` unless yo
 | --- | --- | --- |
 | `all` | Every role below except `watcher`, in one process. | Postgres |
 | `api` | The web app, the API, auth, the Jellyfin layer, webhooks and the watcher routes on `THALIA_PORT`. Applies migrations at startup. | Postgres |
-| `worker` | Jobs: scans, probes, provider fetches, store encodes and plugin jobs. | A migrated Postgres |
+| `worker` | Jobs: scans, probes, provider fetches, keyframe indexes, store encodes and plugin jobs. | A migrated Postgres |
 | `transcoder` | The startup trial, then live HLS sessions on `THALIA_TRANSCODER_PORT`. | A migrated Postgres, local scratch disk |
 | `watcher` | File changes and scans for media on its own disks, pushed to the api. | The api's URL and an API key |
 

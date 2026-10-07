@@ -104,6 +104,7 @@ export function play(options: PlaybackOptions) {
   let progressive: { close(): void } | undefined;
   let subtitleTrack: HTMLTrackElement | undefined;
   let preparingTimer: ReturnType<typeof setTimeout> | undefined;
+  let preparingResolve: (() => void) | undefined;
   let giveUpAt = 0;
   let token: string | null = null;
   let started: Promise<boolean> | undefined;
@@ -198,13 +199,10 @@ export function play(options: PlaybackOptions) {
   }
 
   async function attach(
-    method: string,
-    url: string,
-    at: number,
-    delivery: "progressive" | "hls" | null,
     planned: Awaited<ReturnType<typeof client.playback.plan>>,
+    at: number,
   ) {
-    if (delivery === "progressive") {
+    if (planned.delivery === "progressive") {
       const mime = progressiveMime(planned.output);
       if (mime === null) {
         onNotice({
@@ -214,6 +212,7 @@ export function play(options: PlaybackOptions) {
         });
         return;
       }
+      const url = planned.url ?? "";
       progressive = attachProgressive(video, {
         streamUrl: (start) => {
           const base =
@@ -236,7 +235,7 @@ export function play(options: PlaybackOptions) {
       if (!options.paused) void resumePlaying();
       return;
     }
-    if (method !== "direct-play") {
+    if (planned.method !== "direct-play") {
       const { default: HlsPlayer } = await import("hls.js");
       if (closing !== undefined) return;
       if (HlsPlayer.isSupported()) {
@@ -256,7 +255,7 @@ export function play(options: PlaybackOptions) {
           console.error("hls.js stopped:", data.details, data.error);
           onNotice(stalled);
         });
-        hls.loadSource(url);
+        hls.loadSource(planned.url ?? "");
         hls.attachMedia(video);
         if (!options.paused) void resumePlaying();
         return;
@@ -271,7 +270,7 @@ export function play(options: PlaybackOptions) {
       }
     }
     seekOnLoad(at);
-    video.src = url;
+    video.src = planned.url ?? "";
     if (!options.paused) void resumePlaying();
   }
 
@@ -327,7 +326,7 @@ export function play(options: PlaybackOptions) {
     });
     schedule(planned.expiresAt);
     try {
-      await attach(planned.method, planned.url, at, planned.delivery, planned);
+      await attach(planned, at);
     } catch (error) {
       // hls.js is a lazy chunk; losing the server can fail its import.
       if (closing === undefined) onNotice(refusal(error));
@@ -345,6 +344,7 @@ export function play(options: PlaybackOptions) {
         clearInterval(heartbeat);
         clearTimeout(refreshTimer);
         clearTimeout(preparingTimer);
+        preparingResolve?.();
         hls?.destroy();
         progressive?.close();
         subtitleTrack?.remove();

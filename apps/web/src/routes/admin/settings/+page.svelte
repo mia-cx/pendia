@@ -121,7 +121,7 @@ async function saveCap(event: SubmitEvent) {
     );
     if (capInput === submitted) capInput = null;
     if (cpu4kChecked === allowCpu4k) cpu4kChecked = null;
-    toast.success("Bitrate cap saved");
+    toast.success("Playback settings saved");
   } catch (error) {
     capFailure = readFailure(error);
   } finally {

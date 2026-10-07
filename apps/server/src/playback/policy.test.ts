@@ -74,38 +74,43 @@ describe("effectiveCap", () => {
 });
 
 describe("selectLadderRung", () => {
-  test("ladder holds the five named rates and bounding boxes", () => {
+  test("ladder holds six named rates and bounding boxes", () => {
     expect(ladder).toEqual([
-      { bitrate: 20_000_000, width: 3840, height: 2160 },
-      { bitrate: 10_000_000, width: 1920, height: 1080 },
-      { bitrate: 6_000_000, width: 1920, height: 1080 },
-      { bitrate: 3_000_000, width: 1280, height: 720 },
-      { bitrate: 1_500_000, width: 854, height: 480 },
+      { name: "2160p", bitrate: 25_000_000, width: 3840, height: 2160 },
+      { name: "1080p", bitrate: 8_000_000, width: 1920, height: 1080 },
+      { name: "720p", bitrate: 4_000_000, width: 1280, height: 720 },
+      { name: "480p", bitrate: 2_000_000, width: 854, height: 480 },
+      { name: "360p", bitrate: 800_000, width: 640, height: 360 },
+      { name: "240p", bitrate: 300_000, width: 426, height: 240 },
     ]);
   });
 
   test("returns the top rung when uncapped", () => {
     expect(selectLadderRung(null)).toEqual({
-      bitrate: 20_000_000,
+      name: "2160p",
+      bitrate: 25_000_000,
       width: 3840,
       height: 2160,
     });
   });
 
-  const caps: [number, ReturnType<typeof selectLadderRung>][] = [
-    [20_000_000, { bitrate: 20_000_000, width: 3840, height: 2160 }],
-    [19_000_000, { bitrate: 10_000_000, width: 1920, height: 1080 }],
-    [10_000_000, { bitrate: 10_000_000, width: 1920, height: 1080 }],
-    [9_000_000, { bitrate: 6_000_000, width: 1920, height: 1080 }],
-    [6_000_000, { bitrate: 6_000_000, width: 1920, height: 1080 }],
-    [5_000_000, { bitrate: 3_000_000, width: 1280, height: 720 }],
-    [3_000_000, { bitrate: 3_000_000, width: 1280, height: 720 }],
-    [2_000_000, { bitrate: 1_500_000, width: 854, height: 480 }],
-    [1_500_000, { bitrate: 1_500_000, width: 854, height: 480 }],
-    [1_499_999, undefined],
+  const caps: [number, (typeof ladder)[number]["name"] | undefined][] = [
+    [25_000_000, "2160p"],
+    [24_999_999, "1080p"],
+    [8_000_000, "1080p"],
+    [7_999_999, "720p"],
+    [4_000_000, "720p"],
+    [3_999_999, "480p"],
+    [2_000_000, "480p"],
+    [1_999_999, "360p"],
+    [800_000, "360p"],
+    [799_999, "240p"],
+    [500_000, "240p"],
+    [300_000, "240p"],
+    [299_999, undefined],
   ];
   test.each(caps)("cap %i picks the first fitting rung", (cap, expected) => {
-    expect(selectLadderRung(cap)).toEqual(expected);
+    expect(selectLadderRung(cap)?.name).toBe(expected);
   });
 });
 

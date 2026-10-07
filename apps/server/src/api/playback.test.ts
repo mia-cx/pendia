@@ -30,7 +30,10 @@ import { startThalia } from "../index.ts";
 import { rootsOf } from "../libraries/roots.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { planPlayback, refreshPlayback } from "../playback/planning.ts";
-import { writeGlobalBitrateCap } from "../playback/settings.ts";
+import {
+  writeGlobalBitrateCap,
+  writePlaybackSettings,
+} from "../playback/settings.ts";
 import type { thaliaRouter } from "./router.ts";
 
 const device = {
@@ -1072,7 +1075,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         .from(sessionRegistry)
         .where(eq(sessionRegistry.id, planned.sessionId));
       expect(row?.decision).toMatchObject({
-        video: { action: "transcode", bitrate: 3_000_000 },
+        video: { action: "transcode", bitrate: 2_000_000 },
       });
     }));
 
@@ -1122,6 +1125,66 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       expect((await planPlayback(db, fx.keyCaller, input, wan)).method).toBe(
         "direct-play",
       );
+    }));
+
+  test("live plans read the CPU 4K opt-in and probed frame rate", () =>
+    withDatabase(async (db) => {
+      const fx = await seedPlayback(db);
+      await db
+        .update(streams)
+        .set({
+          codec: "hevc",
+          profile: "main10",
+          width: 3840,
+          height: 2160,
+          hdr: "hdr10",
+          bitrate: 40_000_000n,
+          frameRateNumerator: 24000,
+          frameRateDenominator: 1001,
+        })
+        .where(eq(streams.index, 0));
+      const input = {
+        itemId: fx.item.id,
+        versionId: fx.version.id,
+        profile: {
+          ...profile,
+          progressive: true,
+          videoCodecs: [{ codec: "h264" }],
+        },
+      };
+      const transport = { request: planRequest(), peerAddress: "203.0.113.8" };
+      const planVideo = async () => {
+        const planned = await planPlayback(db, fx.keyCaller, input, transport);
+        const [session] = await db
+          .select({ decision: sessionRegistry.decision })
+          .from(sessionRegistry)
+          .where(eq(sessionRegistry.id, planned.sessionId));
+        const decision = session?.decision;
+        if (!decision || decision.method === "stored")
+          throw new Error("Expected a live plan.");
+        return decision.video;
+      };
+      expect(await planVideo()).toMatchObject({
+        width: 1920,
+        height: 1080,
+        bitrate: 8_000_000,
+      });
+      await writePlaybackSettings(db, fx.admin.id, { allowCpu4k: true });
+      expect(await planVideo()).toMatchObject({
+        width: 3840,
+        height: 2160,
+        bitrate: 25_000_000,
+      });
+      await writePlaybackSettings(db, fx.admin.id, { allowCpu4k: false });
+      await db
+        .update(streams)
+        .set({ frameRateNumerator: 60000 })
+        .where(eq(streams.index, 0));
+      expect(await planVideo()).toMatchObject({
+        width: 1920,
+        height: 1080,
+        bitrate: 12_000_000,
+      });
     }));
 
   test("a planned session records its client and announces itself", () =>

@@ -190,6 +190,10 @@ export async function loadPlaybackSource(
       width: video.width,
       height: video.height,
       bitrate: videoBitrate(video, file, version),
+      frameRate:
+        video.frameRateNumerator === null || video.frameRateDenominator === null
+          ? null
+          : video.frameRateNumerator / video.frameRateDenominator,
       hdr: video.hdr,
       dvProfile: video.dvProfile,
     },
@@ -410,6 +414,7 @@ export async function planPlayback(
       input.profile,
       caps,
       await readCapabilityTable(db),
+      playbackSettings.allowCpu4k,
     );
   } catch {
     decision = null;

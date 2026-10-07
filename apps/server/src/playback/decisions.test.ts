@@ -86,8 +86,8 @@ const hevcFull: VideoTranscode = {
   maxFrameRate: 257,
   width: 1920,
   height: 1080,
-  bitrate: 20_000_000,
-  rung: { bitrate: 20_000_000, width: 3840, height: 2160 },
+  bitrate: 4_800_000,
+  rung: { name: "1080p", bitrate: 8_000_000, width: 1920, height: 1080 },
   hdr: "sdr",
   toneMap: null,
   backend: "cpu",
@@ -369,8 +369,8 @@ describe("decidePlayback video", () => {
       maxFrameRate: 30,
       width: 1920,
       height: 1080,
-      bitrate: 20_000_000,
-      rung: { bitrate: 20_000_000, width: 3840, height: 2160 },
+      bitrate: 8_000_000,
+      rung: { name: "1080p", bitrate: 8_000_000, width: 1920, height: 1080 },
       hdr: "sdr",
       toneMap: null,
       backend: "cpu",
@@ -812,15 +812,15 @@ describe("decidePlayback video", () => {
     ClientProfile["videoCodecs"][number],
   ][] = [
     [
-      { codec: "h264", profiles: ["high"], maxLevel: 30 },
+      { codec: "h264", profiles: ["high"], maxLevel: 19 },
       { codec: "hevc", profiles: ["main10"], maxLevel: 153 },
     ],
     [
-      { codec: "hevc", profiles: ["main"], maxLevel: 93 },
+      { codec: "hevc", profiles: ["main"], maxLevel: 59 },
       { codec: "h264", profiles: ["high"], maxLevel: 41 },
     ],
     [
-      { codec: "av1", profiles: ["main"], maxLevel: 8 },
+      { codec: "av1", profiles: ["main"], maxLevel: -1 },
       { codec: "hevc", profiles: ["main10"], maxLevel: 153 },
     ],
   ];
@@ -846,7 +846,7 @@ describe("decidePlayback video", () => {
         source,
         {
           ...client,
-          videoCodecs: [{ codec: "h264", profiles: ["high"], maxLevel: 30 }],
+          videoCodecs: [{ codec: "h264", profiles: ["high"], maxLevel: 19 }],
         },
         { isLan: false },
       ),
@@ -1360,6 +1360,139 @@ describe("decidePlayback stream selection", () => {
 });
 
 describe("decidePlayback caps and scaling", () => {
+  const hdr4k: PlaybackSource = {
+    ...source,
+    video: {
+      ...source.video,
+      codec: "hevc",
+      width: 3840,
+      height: 2160,
+      bitrate: 40_000_000,
+      hdr: "hdr10",
+      frameRate: 24,
+    },
+  };
+  const sdrClient: ClientProfile = {
+    ...client,
+    videoCodecs: [{ codec: "h264" }],
+    hdr: ["sdr"],
+  };
+
+  test("4K HDR on a CPU-only node plans 1080p", () => {
+    expect(
+      decidePlayback(hdr4k, sdrClient, { isLan: true }).video,
+    ).toMatchObject({
+      backend: "cpu",
+      width: 1920,
+      height: 1080,
+      bitrate: 8_000_000,
+      toneMap: "hdr10",
+      rung: { name: "1080p" },
+    });
+  });
+
+  test("the admin CPU 4K opt-in permits the 2160p rung", () => {
+    expect(
+      decidePlayback(hdr4k, sdrClient, { isLan: true }, cpuCapabilities, true)
+        .video,
+    ).toMatchObject({
+      backend: "cpu",
+      width: 3840,
+      height: 2160,
+      bitrate: 25_000_000,
+      rung: { name: "2160p" },
+    });
+  });
+
+  test("a 0.5 Mbit/s cap plans H.264 240p", () => {
+    expect(
+      decidePlayback(hdr4k, sdrClient, {
+        isLan: false,
+        sessionRequest: 500_000,
+      }).video,
+    ).toMatchObject({
+      width: 426,
+      height: 238,
+      bitrate: 300_000,
+      rung: { name: "240p" },
+    });
+  });
+
+  test.each(["hevc", "av1"])(
+    "%s output gets 0.6x the H.264 bitrate",
+    (codec) => {
+      const h264 = decidePlayback(hdr4k, sdrClient, { isLan: true }).video;
+      const efficient = decidePlayback(
+        hdr4k,
+        { ...sdrClient, videoCodecs: [{ codec }] },
+        { isLan: true },
+      ).video;
+      expect(h264.action).toBe("transcode");
+      expect(efficient.action).toBe("transcode");
+      if (h264.action !== "transcode" || efficient.action !== "transcode")
+        throw new Error("Expected transcodes.");
+      expect(efficient.rung.name).toBe(h264.rung.name);
+      expect(efficient.bitrate).toBe(h264.bitrate * 0.6);
+    },
+  );
+
+  test("hardware permits 4K without the CPU opt-in", () => {
+    expect(
+      decidePlayback(
+        hdr4k,
+        sdrClient,
+        { isLan: true },
+        {
+          ...cpuCapabilities,
+          qsv: { codecs: ["h264"], toneMapping: ["hdr10"] },
+        },
+      ).video,
+    ).toMatchObject({ backend: "qsv", rung: { name: "2160p" } });
+  });
+
+  test.each([
+    [30, undefined, 8_000_000, "1080p"],
+    [60, undefined, 12_000_000, "1080p"],
+    [60000 / 1001, 8_000_000, 6_000_000, "720p"],
+  ] as const)(
+    "%s fps under cap %s uses the adjusted bitrate",
+    (frameRate, sessionRequest, bitrate, name) => {
+      expect(
+        decidePlayback(
+          { ...hdr4k, video: { ...hdr4k.video, frameRate } },
+          sdrClient,
+          { isLan: false, sessionRequest },
+        ).video,
+      ).toMatchObject({ bitrate, rung: { name } });
+    },
+  );
+
+  test("a level-limited 30 fps output keeps the baseline bitrate", () => {
+    expect(
+      decidePlayback(
+        { ...hdr4k, video: { ...hdr4k.video, frameRate: 60 } },
+        {
+          ...sdrClient,
+          videoCodecs: [{ codec: "h264", maxLevel: 41 }],
+        },
+        { isLan: true },
+      ).video,
+    ).toMatchObject({ maxFrameRate: 30, bitrate: 8_000_000 });
+  });
+
+  test("codec and frame-rate factors compose before applying the cap", () => {
+    expect(
+      decidePlayback(
+        { ...hdr4k, video: { ...hdr4k.video, frameRate: 60 } },
+        {
+          ...sdrClient,
+          videoCodecs: [{ codec: "hevc" }],
+        },
+        { isLan: false, sessionRequest: 5_000_000 },
+      ).video,
+    ).toMatchObject({ bitrate: 3_600_000, rung: { name: "720p" } });
+  });
+
   test("the client decoder limit applies on lan", () => {
     const limited: ClientProfile = { ...client, maxBitrate: 3_000_000 };
     const result = decidePlayback(source, limited, { isLan: true });
@@ -1369,8 +1502,8 @@ describe("decidePlayback caps and scaling", () => {
       maxFrameRate: 580,
       width: 1280,
       height: 720,
-      bitrate: 3_000_000,
-      rung: { bitrate: 3_000_000, width: 1280, height: 720 },
+      bitrate: 2_400_000,
+      rung: { name: "720p", bitrate: 4_000_000, width: 1280, height: 720 },
     });
   });
 
@@ -1383,7 +1516,7 @@ describe("decidePlayback caps and scaling", () => {
     expect(result.video.action).toBe("copy");
   });
 
-  test("a wan 6 mbit cap selects the 6 mbit rung", () => {
+  test("a wan 6 mbit cap selects HEVC 1080p at 4.8 mbit", () => {
     const result = decidePlayback(
       { ...source, video: { ...source.video, bitrate: 10_000_000 } },
       client,
@@ -1391,41 +1524,39 @@ describe("decidePlayback caps and scaling", () => {
     );
     expect(result.video).toEqual({
       ...hevcFull,
-      bitrate: 6_000_000,
-      rung: { bitrate: 6_000_000, width: 1920, height: 1080 },
     });
   });
 
-  test("a wan 5 mbit cap selects the 3 mbit rung", () => {
+  test("a wan 4 mbit cap selects HEVC 720p at 2.4 mbit", () => {
     const result = decidePlayback(
       { ...source, video: { ...source.video, bitrate: 10_000_000 } },
       client,
-      { sessionRequest: 5_000_000, isLan: false },
+      { sessionRequest: 4_000_000, isLan: false },
     );
     expect(result.video).toEqual({
       ...hevcFull,
       maxFrameRate: 580,
       width: 1280,
       height: 720,
-      bitrate: 3_000_000,
-      rung: { bitrate: 3_000_000, width: 1280, height: 720 },
+      bitrate: 2_400_000,
+      rung: { name: "720p", bitrate: 4_000_000, width: 1280, height: 720 },
     });
   });
 
   test("throws when no ladder rung fits the cap", () => {
     expect(() =>
       decidePlayback(source, client, {
-        sessionRequest: 1_499_999,
+        sessionRequest: 179_999,
         isLan: false,
       }),
-    ).toThrow("No ladder rung fits the bitrate cap.");
+    ).toThrow("No backend supports the required video output.");
   });
 
   test("copies a fitting source below the ladder minimum", () => {
     const result = decidePlayback(
-      { ...source, video: { ...source.video, bitrate: 1_000_000 } },
+      { ...source, video: { ...source.video, bitrate: 100_000 } },
       client,
-      { sessionRequest: 1_499_999, isLan: false },
+      { sessionRequest: 179_999, isLan: false },
     );
     expect(result.method).toBe("direct-play");
     expect(result.video).toEqual({
@@ -1447,8 +1578,8 @@ describe("decidePlayback caps and scaling", () => {
       maxFrameRate: 785,
       width: 1280,
       height: 532,
-      bitrate: 3_000_000,
-      rung: { bitrate: 3_000_000, width: 1280, height: 720 },
+      bitrate: 2_400_000,
+      rung: { name: "720p", bitrate: 4_000_000, width: 1280, height: 720 },
     });
   });
 

@@ -270,6 +270,8 @@ describe("transcodeReasons", () => {
   test("tone mapping and burn-in name hdr and subtitles together", () => {
     expect(hdrBurnDecision.method).toBe("transcode");
     if (hdrBurnDecision.method !== "transcode") return;
+    expect(hdrBurnDecision.video.action).toBe("transcode");
+    if (hdrBurnDecision.video.action !== "transcode") return;
     expect(hdrBurnDecision.video.toneMap).not.toBeNull();
     expect(hdrBurnDecision.video.burnSubtitles).toBe(true);
     expect(transcodeReasons(hdrBurnDecision)).toEqual(["subtitles", "hdr"]);

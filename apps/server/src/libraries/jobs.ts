@@ -7,6 +7,8 @@ import {
   items,
   type JobPayload,
   libraries,
+  libraryRoots,
+  scanFailures,
 } from "../db/schema/index.ts";
 import { createJobQueue, type Job } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
@@ -104,6 +106,16 @@ export async function runScanJob(
       ),
     );
   for (const item of existing) paths.add(item.canonicalFolder);
+  // A failed-only folder has no Item to keep it in the fan-out after removal.
+  const failed = await db
+    .select({ path: scanFailures.path })
+    .from(scanFailures)
+    .innerJoin(libraryRoots, eq(libraryRoots.id, scanFailures.rootId))
+    .where(eq(libraryRoots.libraryId, library.id));
+  for (const file of failed) {
+    const folder = rules.identify(file.path)?.canonicalFolder;
+    if (folder !== undefined) paths.add(folder);
+  }
   if (paths.size === 0) {
     await publishEvent(db, {
       kind: "library.changed",

@@ -1,14 +1,24 @@
 <script lang="ts">
+import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 import SettingsIcon from "@lucide/svelte/icons/settings";
+import { tick } from "svelte";
 import { formatBytes } from "$lib/browse.ts";
 import { Button } from "$lib/components/ui/button/index.ts";
 import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.ts";
 import { audioNames, subtitleNames } from "$lib/playback.ts";
+import { boosts, speeds } from "$lib/player-prefs.ts";
 import type { createPlayer, PlayerState } from "$lib/player-state.ts";
+import {
+  boostLabel,
+  qualityEntries,
+  qualityValue,
+  speedLabel,
+} from "$lib/quality.ts";
 
 const {
   player,
-  state,
+  state: playerState,
   versions,
   portal,
 }: {
@@ -20,55 +30,60 @@ const {
   portal: HTMLElement | string | undefined;
 } = $props();
 
-type Option = { value: string; label: string; detail?: string };
-
-const subLimit = 5;
-
-const audioList = $derived(state.tracks?.audioStreams ?? []);
-const subtitleList = $derived(state.tracks?.subtitleStreams ?? []);
-
-/** One section's options; the value the RadioGroup binds. */
-type Section = {
-  heading: string;
-  options: Option[];
+type Option = {
   value: string;
-  current: string;
-  choose: (value: string) => void;
+  label: string;
+  detail?: string;
+  disabled?: boolean;
+  /** The Version a quality option opens, when the option names one. */
+  versionId?: string;
 };
 
-const sections = $derived.by((): Section[] => {
-  const list: Section[] = [];
-  if (versions.length > 1)
-    list.push({
-      heading: "Version",
-      options: versions.map((version) => ({
-        value: version.id,
-        label: version.label,
-        detail: formatBytes(version.bytes),
-      })),
-      value: state.versionId,
-      current:
-        versions.find((version) => version.id === state.versionId)?.label ?? "",
-      choose: (value) => void player.chooseVersion(value),
-    });
+/** One root row and the submenu it opens in place. */
+type Row = {
+  key: string;
+  heading: string;
+  /** Shown right on the root row; ` · ` reads as `, ` in the accessible name. */
+  value: string;
+  options: Option[];
+  current: string;
+  choose: (option: Option) => void;
+};
+
+const audioList = $derived(playerState.tracks?.audioStreams ?? []);
+const subtitleList = $derived(playerState.tracks?.subtitleStreams ?? []);
+
+const rows = $derived.by((): Row[] => {
+  const list: Row[] = [];
+  const quality = playerState.tracks?.quality;
+  list.push({
+    key: "quality",
+    heading: "Quality",
+    value: qualityValue(playerState, quality),
+    options: qualityEntries(quality, versions),
+    current: playerState.quality,
+    choose: (option) =>
+      void player.chooseQuality(option.value, option.versionId),
+  });
   if (audioList.length > 1) {
     const names = audioNames(audioList);
-    const current = state.tracks?.audioStreamIndex ?? null;
+    const current = playerState.tracks?.audioStreamIndex ?? null;
     list.push({
+      key: "audio",
       heading: "Audio",
+      value:
+        names[audioList.findIndex((stream) => stream.index === current)] ?? "",
       options: audioList.map((stream, index) => ({
         value: String(stream.index),
         label: names[index] ?? `Audio ${index + 1}`,
       })),
-      value: current === null ? "" : String(current),
-      current:
-        names[audioList.findIndex((stream) => stream.index === current)] ?? "",
-      choose: (value) => void player.chooseAudio(Number(value)),
+      current: current === null ? "" : String(current),
+      choose: (option) => void player.chooseAudio(Number(option.value)),
     });
   }
   if (subtitleList.length > 0) {
     const names = subtitleNames(subtitleList);
-    const current = state.tracks?.subtitleStreamIndex ?? null;
+    const current = playerState.tracks?.subtitleStreamIndex ?? null;
     const options: Option[] = [
       { value: "off", label: "Off" },
       ...subtitleList.map((stream, index) => ({
@@ -77,33 +92,107 @@ const sections = $derived.by((): Section[] => {
       })),
     ];
     list.push({
+      key: "subtitles",
       heading: "Subtitles",
-      options,
-      value: current === null ? "off" : String(current),
-      current:
+      value:
         options.find((option) =>
           current === null
             ? option.value === "off"
             : option.value === String(current),
         )?.label ?? "",
-      choose: (value) =>
-        void player.chooseSubtitles(value === "off" ? null : Number(value)),
+      options,
+      current: current === null ? "off" : String(current),
+      choose: (option) =>
+        void player.chooseSubtitles(
+          option.value === "off" ? null : Number(option.value),
+        ),
+    });
+  }
+  list.push({
+    key: "speed",
+    heading: "Playback speed",
+    value: speedLabel(playerState.speed),
+    options: speeds.map((speed) => ({
+      value: String(speed),
+      label: speedLabel(speed),
+    })),
+    current: String(playerState.speed),
+    choose: (option) => player.setSpeed(Number(option.value)),
+  });
+  list.push({
+    key: "boost",
+    heading: "Volume boost",
+    value: boostLabel(playerState.boost),
+    options: boosts.map((level) => ({
+      value: String(level),
+      label: boostLabel(level),
+    })),
+    current: String(playerState.boost),
+    choose: (option) => player.setBoost(Number(option.value)),
+  });
+  if (versions.length > 1) {
+    list.push({
+      key: "version",
+      heading: "Version",
+      value:
+        versions.find((version) => version.id === playerState.versionId)
+          ?.label ?? "",
+      options: versions.map((version) => ({
+        value: version.id,
+        label: version.label,
+        detail: formatBytes(version.bytes),
+      })),
+      current: playerState.versionId,
+      choose: (option) => void player.chooseVersion(option.value),
     });
   }
   return list;
 });
+
+let view = $state<string>("root");
+let contentEl = $state<HTMLElement | null>(null);
+
+const open = $derived(rows.find((row) => row.key === view));
+
+/** Opens a row's submenu and focuses its checked option. */
+async function show(key: string) {
+  view = key;
+  await tick();
+  contentEl?.querySelector<HTMLElement>('[data-state="checked"]')?.focus();
+}
+
+/** Returns to the root list and focuses the row just left. */
+async function back() {
+  const left = view;
+  view = "root";
+  await tick();
+  contentEl?.querySelector<HTMLElement>(`[data-row="${left}"]`)?.focus();
+}
 </script>
 
-{#snippet radioList(section: Section)}
-  <DropdownMenu.RadioGroup
-    value={section.value}
-    onValueChange={section.choose}
+{#snippet submenu(row: Row)}
+  <DropdownMenu.Item
+    closeOnSelect={false}
+    aria-label={`${row.heading}, back to settings`}
+    onSelect={() => void back()}
   >
-    {#each section.options as option (option.value)}
+    <ChevronLeftIcon aria-hidden="true" />
+    {row.heading}
+  </DropdownMenu.Item>
+  <DropdownMenu.Separator />
+  <DropdownMenu.RadioGroup
+    aria-label={row.heading}
+    value={row.current}
+    onValueChange={(value) => {
+      const option = row.options.find((entry) => entry.value === value);
+      if (option !== undefined) row.choose(option);
+    }}
+  >
+    {#each row.options as option (option.value)}
       <DropdownMenu.RadioItem
         value={option.value}
         closeOnSelect
-        disabled={state.switching}
+        disabled={option.disabled === true || playerState.switching}
       >
         {option.label}
         {#if option.detail}
@@ -114,45 +203,62 @@ const sections = $derived.by((): Section[] => {
   </DropdownMenu.RadioGroup>
 {/snippet}
 
-{#if sections.length > 0}
-  <DropdownMenu.Root
-    onOpenChange={(open) => player.hold("menu", open)}
+<DropdownMenu.Root
+  onOpenChange={(open) => {
+    player.hold("menu", open);
+    if (!open) view = "root";
+  }}
+>
+  <DropdownMenu.Trigger>
+    {#snippet child({ props })}
+      <Button {...props} variant="ghost" size="icon" aria-label="Settings" class="text-white hover:bg-white/12">
+        <SettingsIcon aria-hidden="true" />
+      </Button>
+    {/snippet}
+  </DropdownMenu.Trigger>
+  <DropdownMenu.Content
+    bind:ref={contentEl}
+    side="top"
+    align="end"
+    sideOffset={8}
+    class="w-80"
+    portalProps={{ to: portal }}
+    onEscapeKeydown={(event) => {
+      if (view !== "root") {
+        event.preventDefault();
+        void back();
+      }
+    }}
+    onkeydown={(event) => {
+      if (event.key === "ArrowLeft" && view !== "root") {
+        event.preventDefault();
+        event.stopPropagation();
+        void back();
+      }
+    }}
   >
-    <DropdownMenu.Trigger>
-      {#snippet child({ props })}
-        <Button {...props} variant="ghost" size="icon" aria-label="Settings" class="text-white hover:bg-white/12">
-          <SettingsIcon aria-hidden="true" />
-        </Button>
-      {/snippet}
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Content
-      side="top"
-      align="end"
-      sideOffset={8}
-      class="w-80"
-      portalProps={{ to: portal }}
-    >
-      {#each sections as section, index (section.heading)}
-        {#if index > 0}
-          <DropdownMenu.Separator />
-        {/if}
-        {#if section.options.length > subLimit}
-          <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger disabled={state.switching}>
-              {section.heading}
-              <span class="ml-auto text-footnote text-label-secondary">{section.current}</span>
-            </DropdownMenu.SubTrigger>
-            <DropdownMenu.SubContent portalProps={{ to: portal }}>
-              {@render radioList(section)}
-            </DropdownMenu.SubContent>
-          </DropdownMenu.Sub>
-        {:else}
-          <DropdownMenu.Group>
-            <DropdownMenu.GroupHeading>{section.heading}</DropdownMenu.GroupHeading>
-            {@render radioList(section)}
-          </DropdownMenu.Group>
-        {/if}
+    {#if view === "root"}
+      {#each rows as row (row.key)}
+        <DropdownMenu.Item
+          data-row={row.key}
+          closeOnSelect={false}
+          disabled={playerState.switching}
+          aria-label={`${row.heading}, ${row.value.replaceAll(" · ", ", ")}`}
+          onSelect={() => void show(row.key)}
+          onkeydown={(event) => {
+            if (event.key === "ArrowRight") {
+              event.preventDefault();
+              void show(row.key);
+            }
+          }}
+        >
+          {row.heading}
+          <span class="ml-auto truncate text-footnote text-label-secondary">{row.value}</span>
+          <ChevronRightIcon aria-hidden="true" />
+        </DropdownMenu.Item>
       {/each}
-    </DropdownMenu.Content>
-  </DropdownMenu.Root>
-{/if}
+    {:else if open !== undefined}
+      {@render submenu(open)}
+    {/if}
+  </DropdownMenu.Content>
+</DropdownMenu.Root>

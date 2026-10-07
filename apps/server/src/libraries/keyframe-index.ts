@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   files,

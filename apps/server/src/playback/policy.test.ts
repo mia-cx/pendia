@@ -58,16 +58,22 @@ describe("effectiveCap", () => {
     },
   );
 
+  test("applies a session cap on LAN while admin and user caps are ignored", () => {
+    expect(
+      effectiveCap({
+        globalDefault: 3_000_000,
+        userOverride: 1_500_000,
+        sessionRequest: 6_000_000,
+        isLan: true,
+      }),
+    ).toBe(6_000_000);
+  });
+
   const lan: Omit<PlaybackCaps, "isLan">[] = [
-    {
-      globalDefault: 3_000_000,
-      userOverride: 1_500_000,
-      sessionRequest: 6_000_000,
-    },
     { globalDefault: 1_500_000 },
     {},
   ];
-  test.each(lan)("returns null on LAN regardless of caps", (caps) => {
+  test.each(lan)("returns null on LAN without a session cap", (caps) => {
     expect(effectiveCap({ ...caps, isLan: true })).toBeNull();
   });
 });

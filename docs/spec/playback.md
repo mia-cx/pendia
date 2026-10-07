@@ -5,7 +5,7 @@ How Thalia decides what a client receives for an Item. Every rule here is meant 
 ## Inputs
 
 - The client profile: accepted containers, video codecs with profile, level and maximum resolution, audio codecs with maximum channels, subtitle formats, HDR flavours, maximum bitrate. Known clients that lie get an admin-editable override entry.
-- The effective cap: the lowest of the global default, the per-user override and the session request. No cap on the LAN.
+- The effective cap: the lowest of the global default, the per-user override and the session request. On the LAN only an explicit session request applies; the admin default and user caps are ignored.
 - The Item's Versions with their Streams and the flags the probe precomputed: codec, profile, level, resolution, HDR flavour, Dolby Vision profile, bitrate, audio channels and languages, subtitle formats, keyframe index.
 - The Item's segment timeline.
 

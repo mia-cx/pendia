@@ -49,6 +49,31 @@ export function attachProgressive(
 
   const bufferedAhead = () => bufferedEnd() - video.currentTime;
 
+  // A wait that a close or a new fetch cancels.
+  const interruptible = (ms: number, current?: AbortController) =>
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(() => resolve(), ms);
+      const stop = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      closed.signal.addEventListener("abort", stop, { once: true });
+      current?.signal.addEventListener("abort", stop, { once: true });
+    });
+
+  /** Wait for playback progress, a seek, or a second — whichever lands first. */
+  const waitForProgress = (current: AbortController) =>
+    new Promise<void>((resolve) => {
+      const events = ["timeupdate", "seeking"];
+      const done = () => {
+        for (const name of events) video.removeEventListener(name, done);
+        resolve();
+      };
+      for (const name of events)
+        video.addEventListener(name, done, { once: true });
+      void interruptible(1_000, current).then(done);
+    });
+
   const nextUpdate = () =>
     new Promise<void>((resolve) =>
       buffer?.addEventListener("updateend", () => resolve(), { once: true }),
@@ -65,24 +90,12 @@ export function attachProgressive(
     }
   };
 
-  const append = async (chunk: Uint8Array): Promise<boolean> => {
+  const append = async (
+    chunk: Uint8Array,
+    current: AbortController,
+  ): Promise<boolean> => {
     if (buffer === undefined) return false;
-    try {
-      buffer.appendBuffer(chunk as BufferSource);
-      await nextUpdate();
-      return true;
-    } catch (error) {
-      if (
-        !(error instanceof DOMException) ||
-        error.name !== "QuotaExceededError"
-      )
-        throw error;
-    }
-    // The buffer is full: drop old data and retry, then wait for playback.
-    const end = Math.max(0, video.currentTime - trimBehindSeconds);
-    if (end > 0) {
-      buffer.remove(0, end);
-      await nextUpdate();
+    for (;;) {
       try {
         buffer.appendBuffer(chunk as BufferSource);
         await nextUpdate();
@@ -94,9 +107,17 @@ export function attachProgressive(
         )
           throw error;
       }
+      if (current.signal.aborted || closed.signal.aborted) return false;
+      // The buffer is full: drop old data, or when nothing is evictable wait
+      // for playback to make room.
+      const end = Math.max(0, video.currentTime - trimBehindSeconds);
+      if (end > 0) {
+        buffer.remove(0, end);
+        await nextUpdate();
+        continue;
+      }
+      await waitForProgress(current);
     }
-    await waitWhileFull();
-    return append(chunk);
   };
 
   const fail = () => {
@@ -147,7 +168,7 @@ export function attachProgressive(
         const { done, value } = await reader.read();
         if (done) break;
         if (current.signal.aborted || closed.signal.aborted) return;
-        if (!(await append(value))) return;
+        if (!(await append(value, current))) return;
         if (bufferedAhead() > highWaterSeconds) await waitWhileFull();
       }
     } catch {

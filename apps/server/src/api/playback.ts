@@ -62,6 +62,8 @@ const StreamCodecs = Schema.Struct({
   video: Schema.Struct({
     codec: Schema.String,
     profile: Schema.NullOr(Schema.String),
+    /** The stream re-encodes video; its timestamps are relative to the start. */
+    transcode: Schema.Boolean,
   }),
   audio: Schema.NullOr(Schema.Struct({ codec: Schema.String })),
 });

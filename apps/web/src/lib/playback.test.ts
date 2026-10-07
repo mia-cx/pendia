@@ -28,6 +28,7 @@ const chromium: MediaSupport = {
   container: (mime) => mime !== "video/quicktime",
   codec: (mime) => decoded.some((type) => mime.includes(`"${type}"`)),
   hdr: false,
+  mse: true,
 };
 
 describe("client profile", () => {
@@ -60,6 +61,7 @@ describe("client profile", () => {
           mime.includes(`"${type}"`),
         ),
       hdr: true,
+      mse: true,
     });
     expect(profile.containers).toContain("mov");
     expect(profile.videoCodecs).toContainEqual({

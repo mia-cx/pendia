@@ -507,10 +507,12 @@ export async function planPlayback(
               ? {
                   codec: source.video.codec,
                   profile: source.video.profile ?? null,
+                  transcode: false,
                 }
               : {
                   codec: decision.video.codec,
                   profile: decision.video.profile ?? null,
+                  transcode: true,
                 },
           audio:
             decision.audio == null

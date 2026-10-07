@@ -1,7 +1,9 @@
+import { ORPCError } from "@orpc/client";
 import type Hls from "hls.js";
 import { client, createThaliaClient } from "./api.ts";
 import { readFailure } from "./errors.ts";
-import { browserProfile, withToken } from "./playback.ts";
+import { browserProfile, progressiveMime, withToken } from "./playback.ts";
+import { attachProgressive } from "./progressive.ts";
 
 /** A message the player draws over the video. */
 export type PlayerNotice = { title: string; message: string; retry: boolean };
@@ -56,6 +58,17 @@ const stalled: PlayerNotice = {
   retry: true,
 };
 
+const stillPreparing: PlayerNotice = {
+  title: "Still preparing",
+  message:
+    "Thalia is still getting this video ready. Try again in a few minutes.",
+  retry: true,
+};
+
+// A PREPARING plan retries on this cadence, for at most this long.
+const preparingRetryMs = 5_000;
+const preparingGiveUpMs = 5 * 60_000;
+
 function refusal(error: unknown): PlayerNotice {
   const failure = readFailure(error);
   if (failure.code === "UNREACHABLE")
@@ -88,6 +101,10 @@ export function play(options: PlaybackOptions) {
   let closing: Promise<void> | undefined;
   let scope: { sessionId: string; itemId: string } | undefined;
   let hls: Hls | undefined;
+  let progressive: { close(): void } | undefined;
+  let subtitleTrack: HTMLTrackElement | undefined;
+  let preparingTimer: ReturnType<typeof setTimeout> | undefined;
+  let giveUpAt = 0;
   let token: string | null = null;
   let started: Promise<boolean> | undefined;
   let reports = Promise.resolve();
@@ -165,9 +182,9 @@ export function play(options: PlaybackOptions) {
       const next = await client.playback.refresh(scope);
       if (closing !== undefined || next.url === null) return;
       token = tokenOf(next.url);
-      // hls.js picks the new token up per request; a video element needs
-      // the new URL, at the same position.
-      if (hls === undefined) {
+      // hls.js and a progressive stream pick the new token up per request; a
+      // video element needs the new URL, at the same position.
+      if (hls === undefined && progressive === undefined) {
         const playing = !video.paused;
         seekOnLoad(video.currentTime);
         video.src = next.url;
@@ -180,7 +197,46 @@ export function play(options: PlaybackOptions) {
     }
   }
 
-  async function attach(method: string, url: string, at: number) {
+  async function attach(
+    method: string,
+    url: string,
+    at: number,
+    delivery: "progressive" | "hls" | null,
+    planned: Awaited<ReturnType<typeof client.playback.plan>>,
+  ) {
+    if (delivery === "progressive") {
+      const mime = progressiveMime(planned.output);
+      if (mime === null) {
+        onNotice({
+          title: cannotPlay,
+          message: "This browser cannot play the planned stream.",
+          retry: false,
+        });
+        return;
+      }
+      progressive = attachProgressive(video, {
+        streamUrl: (start) => {
+          const base =
+            token === null ? url : withToken(url, token, location.href);
+          return `${base}&start=${Math.max(0, start)}`;
+        },
+        mime,
+        durationSeconds: options.durationSeconds,
+        startAt: at,
+        timestampsRelative: planned.output?.video.transcode === true,
+        onError: () => onNotice(stalled),
+      });
+      if (planned.subtitleUrl !== null) {
+        subtitleTrack = document.createElement("track");
+        subtitleTrack.kind = "subtitles";
+        subtitleTrack.src = planned.subtitleUrl;
+        subtitleTrack.default = true;
+        video.append(subtitleTrack);
+        subtitleTrack.track.mode = "showing";
+      }
+      if (!options.paused) void resumePlaying();
+      return;
+    }
     if (method !== "direct-play") {
       const { default: HlsPlayer } = await import("hls.js");
       if (closing !== undefined) return;
@@ -234,6 +290,18 @@ export function play(options: PlaybackOptions) {
         ...options.streams,
       });
     } catch (error) {
+      // The server is indexing the Version for streaming; keep the spinner up
+      // and retry until it gives up or the index lands.
+      if (error instanceof ORPCError && error.code === "SERVICE_UNAVAILABLE") {
+        if (giveUpAt === 0) giveUpAt = Date.now() + preparingGiveUpMs;
+        if (closing !== undefined) return;
+        if (Date.now() >= giveUpAt) {
+          onNotice(stillPreparing);
+          return;
+        }
+        preparingTimer = setTimeout(() => void open(), preparingRetryMs);
+        return;
+      }
       if (closing === undefined) onNotice(refusal(error));
       return;
     }
@@ -260,7 +328,7 @@ export function play(options: PlaybackOptions) {
     });
     schedule(planned.expiresAt);
     try {
-      await attach(planned.method, planned.url, at);
+      await attach(planned.method, planned.url, at, planned.delivery, planned);
     } catch (error) {
       // hls.js is a lazy chunk; losing the server can fail its import.
       if (closing === undefined) onNotice(refusal(error));
@@ -277,7 +345,10 @@ export function play(options: PlaybackOptions) {
         events.abort();
         clearInterval(heartbeat);
         clearTimeout(refreshTimer);
+        clearTimeout(preparingTimer);
         hls?.destroy();
+        progressive?.close();
+        subtitleTrack?.remove();
         video.removeAttribute("src");
         video.load();
         await opened;

@@ -1,6 +1,6 @@
 .git
 .turbo
-node_modules
+**/node_modules
 docs
 **/.svelte-kit
 **/build

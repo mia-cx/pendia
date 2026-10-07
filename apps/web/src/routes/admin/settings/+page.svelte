@@ -40,6 +40,7 @@ let removeBusy = $state<Record<string, boolean>>({});
 let removeFailures = $state<Record<string, FailureShape>>({});
 
 let capInput = $state<string | null>(null);
+let cpu4kChecked = $state<boolean | null>(null);
 let capBusy = $state(false);
 let capFailure = $state<FailureShape | undefined>(undefined);
 
@@ -114,8 +115,12 @@ async function saveCap(event: SubmitEvent) {
   }
   capBusy = true;
   try {
-    settings.set(await serial(() => client.settings.update({ bitrateCapBps })));
+    const allowCpu4k = cpu4kChecked ?? settings.data?.allowCpu4k ?? false;
+    settings.set(
+      await serial(() => client.settings.update({ bitrateCapBps, allowCpu4k })),
+    );
     if (capInput === submitted) capInput = null;
+    if (cpu4kChecked === allowCpu4k) cpu4kChecked = null;
     toast.success("Bitrate cap saved");
   } catch (error) {
     capFailure = readFailure(error);
@@ -241,7 +246,7 @@ async function removeKey(name: string) {
     <FormGroup title="Network" loading={1}>
       <span></span>
     </FormGroup>
-    <FormGroup title="Playback" loading={1}>
+    <FormGroup title="Playback" loading={2}>
       <span></span>
     </FormGroup>
     <FormGroup title="Store window" loading={2}>
@@ -301,6 +306,14 @@ async function removeKey(name: string) {
           />
           <span class="text-subheadline text-label-secondary">Mbit/s</span>
         </div>
+      </FormRow>
+      <FormRow label="Allow 4K transcodes on CPU" for="allowCpu4k">
+        <Switch
+          id="allowCpu4k"
+          checked={cpu4kChecked ?? settings.data.allowCpu4k}
+          onCheckedChange={(checked) => (cpu4kChecked = checked)}
+          disabled={capBusy}
+        />
       </FormRow>
       {#snippet actions()}
         <Button type="submit" disabled={capBusy}>Save</Button>

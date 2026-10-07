@@ -23,8 +23,8 @@ import {
   describeArtworkStore,
 } from "../metadata/artwork-backends.ts";
 import {
-  readGlobalBitrateCap,
-  writeGlobalBitrateCap,
+  readPlaybackSettings,
+  writePlaybackSettings,
 } from "../playback/settings.ts";
 import {
   readProviderKeyNames,
@@ -91,7 +91,7 @@ async function readServerSettings(db: Database) {
     oidcConfigured: config.oidc !== null,
     oidcClientSecretSet: config.oidcClientSecretSet,
     providerKeys,
-    bitrateCapBps: await readGlobalBitrateCap(db),
+    ...(await readPlaybackSettings(db)),
     idleWindow: (await readStoreSettings(db)).idleWindow,
     artworkStore: describeArtworkStore(artworkStoreConfig()),
   };
@@ -383,6 +383,7 @@ export const settingsProcedures = {
         Schema.Struct({
           trustedProxyAddresses: Schema.optional(Schema.Array(Schema.String)),
           artworkRequiresAuth: Schema.optional(Schema.Boolean),
+          allowCpu4k: Schema.optional(Schema.Boolean),
           oidcClientSecret: Schema.optional(Schema.String),
           // Null clears the global cap.
           bitrateCapBps: Schema.optional(
@@ -400,10 +401,13 @@ export const settingsProcedures = {
         fromHost(async () => {
           const { db } = context;
           const actorId = context.caller.user.id;
-          const { bitrateCapBps, idleWindow, ...auth } = input;
+          const { bitrateCapBps, allowCpu4k, idleWindow, ...auth } = input;
           await writeAuthSettings(db, actorId, auth);
-          if (bitrateCapBps !== undefined)
-            await writeGlobalBitrateCap(db, actorId, bitrateCapBps);
+          if (bitrateCapBps !== undefined || allowCpu4k !== undefined)
+            await writePlaybackSettings(db, actorId, {
+              ...(bitrateCapBps === undefined ? {} : { bitrateCapBps }),
+              ...(allowCpu4k === undefined ? {} : { allowCpu4k }),
+            });
           if (idleWindow !== undefined)
             await setIdleWindow(db, actorId, idleWindow);
           return readServerSettings(db);

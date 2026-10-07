@@ -43,7 +43,7 @@ import {
   type Hdr,
   type PlaybackCaps,
 } from "./policy.ts";
-import { readGlobalBitrateCap } from "./settings.ts";
+import { readPlaybackSettings } from "./settings.ts";
 
 /** The decoded input every playback planning call receives. */
 export type PlanInput = {
@@ -394,8 +394,9 @@ export async function planPlayback(
     transport.peerAddress,
     config.trustedProxyAddresses,
   );
+  const playbackSettings = await readPlaybackSettings(db);
   const caps: PlaybackCaps = {
-    globalDefault: await readGlobalBitrateCap(db),
+    globalDefault: playbackSettings.bitrateCapBps,
     userOverride: await userBitrateCap(db, caller.user.id),
     sessionRequest: input.bitrateCapBps ?? null,
     isLan: isLanAddress(identity.address),

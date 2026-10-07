@@ -1052,7 +1052,7 @@ export async function scanDirectory(
     );
     const claimed = new Set<string>();
     let candidates: Awaited<ReturnType<typeof rootItemCandidates>> | undefined;
-    const singleGroup = groups.length === 1;
+    const singleGroup = discovered.length === 1;
 
     const asserted = new Map<string, string>();
     const resolved = [];
@@ -1293,6 +1293,7 @@ export async function scanShowDirectory(
   const discovered = groupShowPaths(walked).filter(
     (candidate) => candidate.canonicalFolder === path,
   );
+  const walkedKeys = new Set(walked.map(rootedKey));
 
   const result = await probeScanMembers(
     db,
@@ -1365,7 +1366,7 @@ export async function scanShowDirectory(
     );
     const claimed = new Set<string>();
     let candidates: Awaited<ReturnType<typeof rootItemCandidates>> | undefined;
-    const singleGroup = groups.length === 1;
+    const singleGroup = discovered.length === 1;
 
     for (const group of groups) {
       const groupFiles = group.seasons.flatMap((season) =>
@@ -1652,9 +1653,7 @@ export async function scanShowDirectory(
                 (file) =>
                   !versionGroup.paths.includes(file.path) &&
                   (options.reconcileMissing !== true ||
-                    walked.some(
-                      (walkedFile) => rootedKey(walkedFile) === rootedKey(file),
-                    )),
+                    walkedKeys.has(rootedKey(file))),
               ).length;
               await tx
                 .update(versions)
@@ -1805,7 +1804,6 @@ export async function scanShowDirectory(
             eq(items.canonicalFolder, path),
           ),
         );
-      const walkedKeys = new Set(walked.map(rootedKey));
       const touched = await reconcileStaleFiles(
         tx,
         source,

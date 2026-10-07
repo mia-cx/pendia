@@ -310,6 +310,10 @@ export async function readFfprobe(path: string): Promise<unknown> {
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+  if (proc.signalCode)
+    throw new Error(
+      `ffprobe terminated (${proc.signalCode}): ${stderr.trim()}`,
+    );
   if (exitCode !== 0) {
     throw new UnreadableMediaError(
       `ffprobe failed (${exitCode}): ${stderr.trim()}`,

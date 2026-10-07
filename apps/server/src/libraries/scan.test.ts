@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   copyFile,
   mkdir,
@@ -400,6 +400,73 @@ describe.skipIf(!databaseUrl)("scan file failures", () => {
         expect(
           await db.select().from(versions).orderBy(asc(versions.id)),
         ).toEqual(beforeVersions);
+      }),
+    ));
+
+  test("a failed movie group cannot lend its webhook ids to its playable neighbour", () =>
+    withDatabase((db) =>
+      withVideoFixture(async (root) => {
+        await mkdir(join(root, "Movies"));
+        const good = "Movies/Alien.1979.mkv";
+        const bad = "Movies/Dune.2021.mkv";
+        for (const path of [good, bad]) await writeFile(join(root, path), "");
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        await scanDirectory(db, library.id, "Movies", {
+          probe: async (path) => {
+            if (path.endsWith(bad))
+              throw new UnreadableMediaError("broken Dune");
+            return video;
+          },
+          changes: [
+            {
+              kind: "add",
+              rootId: library.rootId,
+              path: bad,
+              providerIds: { tmdb: "438631" },
+            },
+          ],
+        });
+        expect(await db.select().from(items)).toMatchObject([
+          { title: "Alien" },
+        ]);
+        expect(await db.select().from(providerIds)).toEqual([]);
+      }),
+    ));
+
+  test("a killed ffprobe leaves a valid unchanged file retryable", () =>
+    withDatabase((db) =>
+      withVideoFixture(async (root) => {
+        await mkdir(join(root, "Movie (2020)"));
+        const path = "Movie (2020)/Movie.mkv";
+        await createVideoFixture(join(root, path));
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const killed = Bun.spawn(["/bin/sh", "-c", "kill -KILL $$"], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await killed.exited;
+        const spawn = spyOn(Bun, "spawn").mockReturnValueOnce(killed);
+        try {
+          await expect(
+            scanDirectory(db, library.id, "Movie (2020)"),
+          ).rejects.toThrow("ffprobe terminated (SIGKILL)");
+        } finally {
+          spawn.mockRestore();
+        }
+        expect(await db.select().from(scanFailures)).toEqual([]);
+        await scanDirectory(db, library.id, "Movie (2020)");
+        expect(await db.select().from(files)).toMatchObject([{ path }]);
       }),
     ));
 });

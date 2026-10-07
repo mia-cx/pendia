@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, rename, rm, utimes } from "node:fs/promises";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { files, items, jobs, streams, versions } from "../db/schema/index.ts";
@@ -88,6 +88,126 @@ async function waitForRepairScan(
 }
 
 describe.skipIf(!databaseUrl)("library repair", () => {
+  test("startup resumes an interrupted run without repeating completed or pending folders", () =>
+    withDatabase(async (db, url) => {
+      await withVideoFixture(async (root) => {
+        for (const path of [
+          "Loose (2000).mkv",
+          file1080,
+          "Heat (1995)/Heat.mkv",
+        ]) {
+          await mkdir(join(root, path, ".."), { recursive: true });
+          await createVideoFixture(join(root, path));
+        }
+        const library = await insertLibrary(db, root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        const parent = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: "." },
+          { concurrencyKey: libraryConcurrencyKey(library.id) },
+        );
+        const rootJob = await queue.claim(["scan"]);
+        if (!rootJob) throw new Error("Root scan was not claimed.");
+        await registry.run(rootJob);
+        await queue.complete(rootJob);
+        const completed = await queue.claim(["scan"]);
+        if (!completed)
+          throw new Error("First directory scan was not claimed.");
+        await registry.run(completed);
+        await queue.complete(completed);
+        const interrupted = await queue.claim(["scan"]);
+        if (!interrupted) throw new Error("Interrupted scan was not claimed.");
+        await db
+          .update(jobs)
+          .set({
+            leaseExpiresAt: sql`statement_timestamp() - interval '1 second'`,
+          })
+          .where(eq(jobs.id, interrupted.id));
+        const before = await listJobs(db, { type: "scan" });
+        expect(before).toHaveLength(4);
+        const errors: unknown[] = [];
+        const server = await startThalia("api", {
+          databaseUrl: url,
+          port: 0,
+          repairOptions: {
+            intervalMs: 40,
+            onError: (error) => errors.push(error),
+          },
+        });
+        try {
+          // Also await a fresh controller's pass so the assertion cannot beat startup repair.
+          const restartedRepair = createLibraryRepair(db);
+          expect(await restartedRepair.run()).toBe(0);
+          expect(await listJobs(db, { type: "scan" })).toEqual(before);
+          await drainScanJobs(db);
+          expect(await restartedRepair.run()).toBe(0);
+          const finished = await listJobs(db, { type: "scan" });
+          expect(finished.map((job) => job.id)).toEqual(
+            before.map((job) => job.id),
+          );
+          expect(finished.every((job) => job.state === "completed")).toBe(true);
+          expect(
+            finished
+              .filter((job) => job.id !== parent.id)
+              .map((job) =>
+                job.payload.type === "scan" ? job.payload.runId : undefined,
+              ),
+          ).toEqual([parent.id, parent.id, parent.id]);
+          expect(errors).toEqual([]);
+        } finally {
+          await server.stop();
+        }
+      });
+    }));
+
+  test.each(["queued", "running"] as const)(
+    "repair defers to a %s whole-library job before fan-out",
+    (state) =>
+      withDatabase(async (db) => {
+        await withVideoFixture(async (root) => {
+          await mkdir(join(root, folder));
+          await createVideoFixture(join(root, file1080));
+          const library = await insertLibrary(db, root);
+          const queue = createJobQueue(db);
+          const parent = await queue.enqueue({
+            type: "scan",
+            libraryId: library.id,
+            path: ".",
+          });
+          if (state === "running") await queue.claim(["scan"]);
+          expect(await createLibraryRepair(db).run()).toBe(0);
+          expect(
+            (await listJobs(db, { type: "scan" })).map((job) => job.id),
+          ).toEqual([parent.id]);
+        });
+      }),
+  );
+
+  test("a fresh repair reuses another producer's scan and retries it if it fails", () =>
+    withDatabase(async (db) => {
+      await withVideoFixture(async (root) => {
+        await mkdir(join(root, folder));
+        await createVideoFixture(join(root, file1080));
+        const library = await insertLibrary(db, root);
+        const queue = createJobQueue(db);
+        const original = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          { maxAttempts: 1 },
+        );
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(0);
+        const claimed = await queue.claim(["scan"]);
+        if (!claimed) throw new Error("Existing scan was not claimed.");
+        await queue.fail(claimed, new Error("Interrupted."));
+        expect(await repair.run()).toBe(1);
+        const scans = await listJobs(db, { type: "scan" });
+        expect(scans).toHaveLength(2);
+        expect(scans[0]?.id).not.toBe(original.id);
+        expect(scans[0]?.state).toBe("queued");
+      });
+    }));
+
   test("a directory change queues a scan that imports the new file", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

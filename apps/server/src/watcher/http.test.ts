@@ -255,6 +255,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
         libraryId: library.id,
         path: ".",
         reconcileMissing: true,
+        runId: Bun.randomUUIDv7(),
       });
       const claimed: WatcherClaim = await (
         await handler(post("claim", { rootIds: [library.rootId] }, token))

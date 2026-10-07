@@ -100,22 +100,6 @@ export type ScanDirectoryOptions = {
   reconcileMissing?: boolean;
 };
 
-/**
- * Whether a scan job is the Library scan that fans out. Every other scan
- * job is a directory scan, `.` included.
- */
-export function isLibraryScan(payload: {
-  path: string;
-  changes?: readonly unknown[];
-  reconcileMissing?: boolean;
-}): boolean {
-  return (
-    payload.path === "." &&
-    (payload.changes?.length ?? 0) === 0 &&
-    payload.reconcileMissing !== true
-  );
-}
-
 /** The scan rules one library-relative scope of a medium uses. */
 export function scanScope(medium: (typeof libraries.$inferSelect)["medium"]) {
   return {

@@ -74,6 +74,44 @@ test("rejects invalid retry delays and concurrency limits", async () => {
 });
 
 describe.skipIf(!databaseUrl)("Job queue", () => {
+  test("concurrent scan enqueues reuse the queued or running job until it settles", () =>
+    withDatabase(async (db, url) => {
+      const other = createDatabase(url);
+      const payload: JobPayload = {
+        type: "scan",
+        libraryId: Bun.randomUUIDv7(),
+        path: "Alien (1979)",
+      };
+      const queue = createJobQueue(db);
+      try {
+        const enqueued = await Promise.all([
+          queue.enqueue(payload),
+          createJobQueue(other.db).enqueue(payload),
+          queue.enqueue(payload),
+        ]);
+        expect(new Set(enqueued.map((job) => job.id)).size).toBe(1);
+        const claimed = await queue.claim(["scan"]);
+        if (!claimed) throw new Error("Scan was not claimed.");
+        expect((await queue.enqueue(payload)).id).toBe(claimed.id);
+        await expireLease(db, claimed.id);
+        expect((await queue.enqueue(payload)).id).toBe(claimed.id);
+        const recovered = await queue.claim(["scan"]);
+        if (!recovered) throw new Error("Expired scan was not recovered.");
+        await queue.complete(recovered);
+        expect((await queue.enqueue(payload)).id).not.toBe(claimed.id);
+        expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
+        expect(
+          (await queue.enqueue({ ...payload, path: "Heat (1995)" })).id,
+        ).not.toBe(claimed.id);
+        expect(
+          (await queue.enqueue({ ...payload, libraryId: Bun.randomUUIDv7() }))
+            .id,
+        ).not.toBe(claimed.id);
+      } finally {
+        await other.close();
+      }
+    }));
+
   test("enqueues typed payloads and lists them with filters and paging", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

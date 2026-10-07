@@ -436,6 +436,11 @@ describe.skipIf(!databaseUrl)("library service", () => {
         roots: ["/srv/movies"],
       });
       const first = await scanLibrary(db, admin.id, library.id);
+      // A second run starts only after the first root job finishes fan-out.
+      await db
+        .update(jobs)
+        .set({ state: "completed" })
+        .where(eq(jobs.id, first.jobId));
       const second = await scanLibrary(db, admin.id, library.id);
       const [child] = await db
         .insert(jobs)

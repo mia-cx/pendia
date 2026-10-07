@@ -1,11 +1,12 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { items, jobs, libraries } from "../db/schema/index.ts";
-import { createJobQueue } from "../jobs/queue.ts";
+import { createJobQueue, scanEnqueueLockClass } from "../jobs/queue.ts";
 import { moviesMedium } from "../mediums/movies.ts";
 import { showsScan } from "../mediums/shows.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { rootedKey, rootsOf } from "./roots.ts";
+import { isLibraryScan } from "./scan-payload.ts";
 import {
   type LibraryDirectory,
   MissingLibraryPathError,
@@ -197,16 +198,69 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
     await db.transaction(async (tx) => {
       const queue = createJobQueue(tx);
       for (const plan of planned) {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${scanEnqueueLockClass}, hashtext(${plan.libraryId}))`,
+        );
+        const libraryScans = and(
+          eq(jobs.type, "scan"),
+          sql`${jobs.payload}->>'libraryId' = ${plan.libraryId}`,
+        );
+        const pending = await tx
+          .select()
+          .from(jobs)
+          .where(and(libraryScans, inArray(jobs.state, ["queued", "running"])));
+        // A pending root job will discover the folders itself. After fan-out,
+        // reuse its children, including siblings completed before the restart.
+        if (
+          pending.some(
+            (job) => job.payload.type === "scan" && isLibraryScan(job.payload),
+          )
+        )
+          continue;
+        const runIds = [
+          ...new Set(
+            pending.flatMap((job) =>
+              job.payload.type === "scan" && job.payload.runId !== undefined
+                ? [job.payload.runId]
+                : [],
+            ),
+          ),
+        ];
+        const completed =
+          runIds.length === 0
+            ? []
+            : await tx
+                .select()
+                .from(jobs)
+                .where(
+                  and(
+                    libraryScans,
+                    eq(jobs.state, "completed"),
+                    inArray(sql`${jobs.payload}->>'runId'`, runIds),
+                  ),
+                );
+        const coverage = new Map(
+          [...completed, ...pending].flatMap((job) =>
+            job.payload.type === "scan"
+              ? [[job.payload.path, job] as const]
+              : [],
+          ),
+        );
         for (const [path, updates] of plan.scans) {
-          const job = await queue.enqueue(
-            {
-              type: "scan",
-              libraryId: plan.libraryId,
-              path,
-              reconcileMissing: true,
-            },
-            { concurrencyKey: libraryConcurrencyKey(plan.libraryId) },
-          );
+          const covered = coverage.get(path);
+          const job =
+            covered ??
+            (await queue.enqueue(
+              {
+                type: "scan",
+                libraryId: plan.libraryId,
+                path,
+                reconcileMissing: true,
+                // Repair names an Item folder; `.` can hold loose media.
+                ...(path === "." ? { changes: [] } : {}),
+              },
+              { concurrencyKey: libraryConcurrencyKey(plan.libraryId) },
+            ));
           recorded.push({
             libraryId: plan.libraryId,
             path,
@@ -220,7 +274,7 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
               ),
             },
           });
-          enqueued += 1;
+          if (covered === undefined) enqueued += 1;
         }
       }
     });

@@ -16,13 +16,13 @@ import { queueProviderFetch } from "../metadata/jobs.ts";
 import { reconcileStoredVersions } from "../stored/reconcile.ts";
 import { runKeyframeIndexJob } from "./keyframe-index.ts";
 import {
-  isLibraryScan,
   libraryScanSource,
   type ScanSource,
   scanDirectory,
   scanScope,
   scanShowDirectory,
 } from "./scan.ts";
+import { isLibraryScan } from "./scan-payload.ts";
 
 /** The concurrency key that serializes every job for one library. */
 export function libraryConcurrencyKey(libraryId: string) {

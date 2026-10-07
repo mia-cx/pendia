@@ -18,6 +18,7 @@ import {
   jobType,
   libraries,
 } from "../db/schema/index.ts";
+import { isLibraryScan } from "../libraries/scan-payload.ts";
 
 /** A persisted queue job. */
 export type Job = typeof jobs.$inferSelect;
@@ -33,6 +34,8 @@ type EnqueueOptions = Partial<
 >;
 
 const claimLockKey = 0x70656e646a6fn;
+/** Serializes scan insertion and repair coverage checks within one Library. */
+export const scanEnqueueLockClass = 0x7363616e;
 const maxRetryDelayMs = 60_000;
 
 /** How long a watcher's claim keeps its Libraries' scans away from workers. */
@@ -133,9 +136,33 @@ export function createJobQueue(
       }
     },
 
-    /** Enqueues a typed payload with its scheduling options. */
+    /** Enqueues a typed payload, reusing an unsettled scan of the same Library and scope. */
     async enqueue(payload: JobPayload, options: EnqueueOptions = {}) {
       return db.transaction(async (tx) => {
+        if (payload.type === "scan") {
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(${scanEnqueueLockClass}, hashtext(${payload.libraryId}))`,
+          );
+          const libraryScan = sql`(${jobs.payload}->>'path' = '.' and ${jobs.payload}->>'runId' is null and ${jobs.payload}->'changes' is null)`;
+          const [existing] = await tx
+            .select()
+            .from(jobs)
+            .where(
+              and(
+                eq(jobs.type, "scan"),
+                inArray(jobs.state, ["queued", "running"]),
+                sql`${jobs.payload}->>'libraryId' = ${payload.libraryId}`,
+                sql`${jobs.payload}->>'path' = ${payload.path}`,
+                // A root job must be able to queue its own `.` Item-folder child.
+                payload.path === "."
+                  ? sql`${libraryScan} = ${isLibraryScan(payload)}`
+                  : undefined,
+              ),
+            )
+            .orderBy(jobs.id)
+            .limit(1);
+          if (existing !== undefined) return existing;
+        }
         const [job] = await tx
           .insert(jobs)
           .values({

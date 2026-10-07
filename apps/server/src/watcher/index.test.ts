@@ -326,7 +326,7 @@ describe.skipIf(!databaseUrl)("watcher scans", () => {
           { concurrencyKey: libraryConcurrencyKey(library.id) },
         );
         const second = await queue.enqueue(
-          { type: "scan", libraryId: library.id, path: "Empty" },
+          { type: "scan", libraryId: library.id, path: "Other empty folder" },
           { concurrencyKey: libraryConcurrencyKey(library.id) },
         );
         const debouncer = createChangeDebouncer(db);

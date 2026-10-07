@@ -100,7 +100,7 @@ async function runScanJob(
   registerLibraryJobs(db, registry);
   await queue.enqueue(
     { type: "scan", libraryId, path, changes },
-    { concurrencyKey: libraryConcurrencyKey(libraryId) },
+    { concurrencyKey: libraryConcurrencyKey(libraryId), maxAttempts: 1 },
   );
   const claimed = await queue.claim();
   if (!claimed) throw new Error("Scan job was not claimed.");

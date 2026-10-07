@@ -777,7 +777,8 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             )
           ).status,
         ).toBe(202);
-        const all = await waitForScanJobs(db, 3);
+        const all = await waitForScanJobs(db, 2);
+        expect(all).toHaveLength(2);
         expect(
           all.some(
             (job) =>
@@ -850,6 +851,15 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
         });
         let debouncedJobId: string | undefined;
         try {
+          // Finish startup repair before testing a new webhook's change payload.
+          await waitForScanJobs(db, 1);
+          const startupQueue = createJobQueue(db);
+          const startupRegistry = createJobRegistry();
+          registerLibraryJobs(db, startupRegistry);
+          const startupJob = await startupQueue.claim(["scan"]);
+          if (!startupJob) throw new Error("Startup repair was not claimed.");
+          await startupRegistry.run(startupJob);
+          await startupQueue.complete(startupJob);
           const response = await fetch(
             `http://127.0.0.1:${server.apiServer?.port}/api/webhooks/sonarr/${token}`,
             {

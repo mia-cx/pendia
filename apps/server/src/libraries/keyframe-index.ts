@@ -1,8 +1,8 @@
-import { posix } from "node:path";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   files,
+  items,
   type JobPayload,
   jobs,
   libraries,
@@ -91,7 +91,11 @@ export async function runKeyframeIndexJob(
   readIndex: typeof readKeyframeIndex = readKeyframeIndex,
 ) {
   const target = await indexTarget(db, payload);
-  if (target === undefined) return;
+  if (target === undefined) {
+    // A retry after the index committed still owes the stored handoff.
+    if (await alreadyIndexed(db, payload)) await reconcileItems(db, payload);
+    return;
+  }
   const { keyframesSeconds } = await readIndex(target.absolute);
   const still = await indexTarget(db, payload);
   if (
@@ -149,16 +153,47 @@ export async function runKeyframeIndexJob(
     for (const itemId of itemIds) await persistScanTimelines(tx, itemId);
     indexed = true;
   });
-  if (!indexed) return;
-  // The index may make stored outputs eligible; run the same reconciliation
-  // the scan runs, scoped to the file's folder.
+  if (indexed) await reconcileItems(db, payload);
+}
+
+/** Whether the job's file already carries a read index (an array, or null for an unsupported container). */
+async function alreadyIndexed(
+  db: Database,
+  payload: Extract<JobPayload, { type: "keyframe-index" }>,
+) {
+  const [entry] = await db
+    .select({ result: probeCache.result })
+    .from(probeCache)
+    .where(
+      and(
+        eq(probeCache.rootId, payload.rootId),
+        eq(probeCache.path, payload.path),
+      ),
+    );
+  return entry !== undefined && entry.result.keyframesSeconds !== undefined;
+}
+
+/**
+ * Runs the scan's stored-policy reconciliation over every Item the file
+ * belongs to. A new timeline aligns every Version of the cut, including ones
+ * in sibling folders, so the Item's whole folder is in scope. Idempotent.
+ */
+async function reconcileItems(
+  db: Database,
+  payload: Extract<JobPayload, { type: "keyframe-index" }>,
+) {
   const [library] = await db
     .select()
     .from(libraries)
     .where(eq(libraries.id, payload.libraryId));
-  if (library !== undefined) {
-    await reconcileStoredVersions(db, library, posix.dirname(payload.path));
-  }
+  if (library === undefined) return;
+  const folders = await db
+    .selectDistinct({ folder: items.canonicalFolder })
+    .from(files)
+    .innerJoin(items, eq(items.id, files.itemId))
+    .where(and(eq(files.rootId, payload.rootId), eq(files.path, payload.path)));
+  for (const { folder } of folders)
+    await reconcileStoredVersions(db, library, folder);
 }
 
 /**

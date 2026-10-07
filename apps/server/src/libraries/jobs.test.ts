@@ -17,6 +17,7 @@ import {
   events,
   files,
   items,
+  jobs,
   libraries,
   probeCache,
   segmentTimelines,
@@ -852,6 +853,67 @@ describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
           keyframesSeconds: [0, 2, 4, 6, 8, 10],
           lazyIndexPending: false,
         });
+      });
+    }));
+
+  test("a rescan keeps an unsupported index that landed after its probe", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { library, version, job } = await scannedMovie(db, root);
+        const base = await libraryScanSource(db, library);
+        await scanDirectory(db, library.id, folder, {
+          source: {
+            ...base,
+            probe: async (file: RootedPath) => {
+              const member = await base.probe(file);
+              await runKeyframeIndexJob(db, job, async () => ({
+                keyframesSeconds: null,
+                bytesRead: 0,
+              }));
+              return member;
+            },
+          },
+        });
+        const [after] = await db.select().from(versions);
+        expect(after).toMatchObject({
+          id: version.id,
+          keyframesSeconds: null,
+          lazyIndexPending: false,
+        });
+      });
+    }));
+
+  test("a retry after the index committed still queues the stored outputs", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createKeyframeFixture(join(root, path));
+        const library = await insertLibrary(db, "Movies", root);
+        await db
+          .update(libraries)
+          .set({ configuration: { storedVersions: twoRungPolicy } })
+          .where(eq(libraries.id, library.id));
+        await scanDirectory(db, library.id, folder);
+        const job = {
+          type: "keyframe-index" as const,
+          libraryId: library.id,
+          rootId: library.rootId,
+          path,
+        };
+        await runKeyframeIndexJob(db, job);
+        // The first run's handoff is lost, as if it failed after the commit.
+        await db.delete(jobs).where(eq(jobs.type, "store"));
+        await runKeyframeIndexJob(db, job);
+        expect(
+          (await listJobs(db)).some(
+            (row) =>
+              row.type === "store" &&
+              (row.payload as { sourceFileId?: string }).sourceFileId !==
+                undefined,
+          ),
+        ).toBe(true);
       });
     }));
 

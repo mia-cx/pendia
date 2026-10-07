@@ -228,8 +228,11 @@ async function versionIndexState(
         eq(probeCache.path, member.path),
       ),
     );
+  // A cached null is a completed read of an unsupported container, not a
+  // missing one; only an unread cache falls back to the probe snapshot.
+  const cached = entry?.result.keyframesSeconds;
   const keyframesSeconds =
-    entry?.result.keyframesSeconds ?? member.probe.keyframesSeconds;
+    cached !== undefined ? cached : member.probe.keyframesSeconds;
   return {
     keyframesSeconds: keyframesSeconds ?? null,
     lazyIndexPending: keyframesSeconds === undefined,

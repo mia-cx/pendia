@@ -37,8 +37,8 @@ export type SubtitleStream = { format: string; kind: "text" | "bitmap" };
 /**
  * The audio and subtitle Streams a session plays, counted among Streams of
  * their kind as ffmpeg counts them. No audio plays the default-flagged audio
- * Stream, else the first. No subtitle keeps every subtitle Stream; null
- * turns subtitles off.
+ * Stream, else the first. No subtitle keeps only text subtitle Streams;
+ * null turns subtitles off.
  */
 export type StreamSelection = { audio?: number; subtitle?: number | null };
 
@@ -84,7 +84,9 @@ export function resolveSelection(source: PlaybackSource): ResolvedSelection {
 function selectedSubtitles(source: PlaybackSource) {
   const choice = source.selection?.subtitle;
   return source.subtitles.flatMap((subtitle, stream) =>
-    choice === undefined || choice === stream ? [{ stream, subtitle }] : [],
+    (choice === undefined && subtitle.kind === "text") || choice === stream
+      ? [{ stream, subtitle }]
+      : [],
   );
 }
 

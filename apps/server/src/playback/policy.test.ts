@@ -69,10 +69,7 @@ describe("effectiveCap", () => {
     ).toBe(6_000_000);
   });
 
-  const lan: Omit<PlaybackCaps, "isLan">[] = [
-    { globalDefault: 1_500_000 },
-    {},
-  ];
+  const lan: Omit<PlaybackCaps, "isLan">[] = [{ globalDefault: 1_500_000 }, {}];
   test.each(lan)("returns null on LAN without a session cap", (caps) => {
     expect(effectiveCap({ ...caps, isLan: true })).toBeNull();
   });

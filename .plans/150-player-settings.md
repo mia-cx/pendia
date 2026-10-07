@@ -111,7 +111,7 @@ Loading other Versions: imported video Versions of the Item except the current o
 ## TODOs
 
 - [x] Server: an explicit session cap applies on LAN in `effectiveCap`; spec line in `docs/spec/playback.md`. Validation: `policy.test.ts`.
-- [ ] Server: stored selection split into load + pick; quality module with options; plan input `quality` and output `quality`. Validation: `quality.test.ts`, existing stored/planning/playback tests, a DB test for a 720p pick on LAN.
+- [x] Server: stored selection split into load + pick; quality module with options; plan input `quality` and output `quality`. Validation: `quality.test.ts`, existing stored/planning/playback tests, a DB test for a 720p pick on LAN.
 - [ ] Web: prefs, boost and quality-label modules. Validation: `player-prefs.test.ts`, `audio-boost.test.ts`, `quality.test.ts`.
 - [ ] Web: player session `quality` + `capLevels`; player-state quality, speed, boost. Validation: `player-state.test.ts`.
 - [ ] Web: settings menu redesign and Player wiring. Validation: web check, browser run.

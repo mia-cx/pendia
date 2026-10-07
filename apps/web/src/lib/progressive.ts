@@ -229,6 +229,9 @@ export function attachProgressive(
   mediaSource.addEventListener(
     "sourceopen",
     () => {
+      // A reopen (after endOfStream, or a detach) reuses the buffer and keeps
+      // the user's position; only the first open initializes.
+      if (buffer !== undefined) return;
       if (options.durationSeconds !== null) {
         try {
           mediaSource.duration = options.durationSeconds;

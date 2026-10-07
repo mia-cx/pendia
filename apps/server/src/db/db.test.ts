@@ -3,6 +3,7 @@ import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { and, eq, sql } from "drizzle-orm";
+import migrationJournal from "../../drizzle/meta/_journal.json";
 import { startApiServer } from "../api.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
@@ -180,8 +181,8 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       async (db) => {
         await migrateDatabase(db);
         const before = await migrationState(db);
-        expect(before.journal).toHaveLength(19);
-        expect(before.tables).toHaveLength(36);
+        expect(before.journal).toHaveLength(migrationJournal.entries.length);
+        expect(before.tables).toHaveLength(37);
         expect(before.extensions).toEqual([
           { extname: "btree_gist" },
           { extname: "pg_trgm" },
@@ -232,8 +233,8 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
               { code: 0, stderr: "" },
             ]);
             const state = await migrationState(db);
-            expect(state.journal).toHaveLength(19);
-            expect(state.tables).toHaveLength(36);
+            expect(state.journal).toHaveLength(migrationJournal.entries.length);
+            expect(state.tables).toHaveLength(37);
             expect(state.groups).toHaveLength(2);
           } finally {
             for (const runner of runners) runner.kill();

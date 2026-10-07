@@ -1,7 +1,11 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { probeCache } from "../db/schema/index.ts";
-import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
+import {
+  type ProbeResult,
+  probeVideo,
+  UnreadableMediaError,
+} from "../mediums/video-common/probe.ts";
 import { type LibraryRoot, locateIn } from "./roots.ts";
 import { type LibraryFile, readLibraryFile } from "./walker.ts";
 
@@ -40,7 +44,19 @@ export async function probeLibraryFile(
     ) {
       return { ...before, probe: cached.result, cached: true };
     }
-    const result = await probe(before.absolute);
+    const result = await probe(before.absolute).catch(
+      async (error: unknown) => {
+        if (!(error instanceof UnreadableMediaError)) throw error;
+        // A failed probe can also mean the file disappeared or changed mid-read.
+        const after = await readLibraryFile(root.path, normalizedPath);
+        if (
+          after.bytes !== before.bytes ||
+          after.modifiedNs !== before.modifiedNs
+        )
+          throw new Error("File changed during probe.");
+        throw error;
+      },
+    );
     const after = await readLibraryFile(root.path, normalizedPath);
     if (
       after.bytes !== before.bytes ||

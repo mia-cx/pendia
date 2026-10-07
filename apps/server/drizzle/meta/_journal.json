@@ -134,6 +134,13 @@
       "when": 1791319202697,
       "tag": "0018_wealthy_mesmero",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791414975465,
+      "tag": "0019_scan_failures",
+      "breakpoints": true
     }
   ]
 }

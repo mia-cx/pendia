@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   copyFile,
   mkdir,
@@ -22,27 +22,454 @@ import {
   progress,
   providerIds,
   ratings,
+  scanFailures,
   seasons,
   shows,
   streams,
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { createJobQueue, listJobs } from "../jobs/queue.ts";
 import { moviesMedium } from "../mediums/movies.ts";
 import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
 import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
-import { probeVideo } from "../mediums/video-common/probe.ts";
+import {
+  parseProbeOutput,
+  probeVideo,
+  UnreadableMediaError,
+} from "../mediums/video-common/probe.ts";
+import { runScanJob } from "./jobs.ts";
 import { locateFile } from "./roots.ts";
 import {
   inScope,
+  libraryScanSource,
   scanDirectory,
   scanScope,
   scanShowDirectory,
 } from "./scan.ts";
 import { addRoot, insertLibraries } from "./testing.ts";
+import { MissingLibraryPathError } from "./walker.ts";
+
+describe.skipIf(!databaseUrl)("scan file failures", () => {
+  const video = parseProbeOutput({
+    streams: [{ index: 0, codec_type: "video", codec_name: "h264" }],
+  });
+  const audio = parseProbeOutput({
+    streams: [{ index: 0, codec_type: "audio", codec_name: "aac" }],
+  });
+
+  for (const medium of ["shows", "movies"] as const) {
+    const scan = medium === "shows" ? scanShowDirectory : scanDirectory;
+    const scope = medium === "shows" ? "Show" : "Movies";
+    const paths =
+      medium === "shows"
+        ? [
+            "Show/Season 01/Show S01E01.mkv",
+            "Show/Season 01/Show S01E02.mkv",
+            "Show/Season 01/Show S01E03.mp4",
+          ]
+        : [
+            "Movies/Alien.1979.mkv",
+            "Movies/Dune.2021.mkv",
+            "Movies/Arrival.2016.mp4",
+          ];
+    const [good, bad, audioOnly] = paths;
+    if (!good || !bad || !audioOnly) throw new Error("Fixture paths missing.");
+
+    const withFiles = (
+      run: (
+        db: Database,
+        root: string,
+        library: { id: string; rootId: string },
+      ) => Promise<void>,
+    ) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          for (const path of paths) {
+            await mkdir(join(root, dirname(path)), { recursive: true });
+            await writeFile(join(root, path), "");
+          }
+          const [library] = await insertLibraries(db, {
+            name: medium,
+            medium,
+            rootPath: root,
+          });
+          if (!library) throw new Error("Fixture library missing.");
+          await run(db, root, library);
+        }),
+      );
+
+    test(`${medium}: good files survive corrupt and audio-only neighbours, and the job completes`, () =>
+      withFiles(async (db, root, library) => {
+        await rm(join(root, good));
+        await createVideoFixture(join(root, good));
+        const audioProcess = Bun.spawn(
+          [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc",
+            "-t",
+            "0.1",
+            "-c:a",
+            "aac",
+            "-y",
+            join(root, audioOnly),
+          ],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const stderr = await new Response(audioProcess.stderr).text();
+        expect(await audioProcess.exited, stderr).toBe(0);
+        const queue = createJobQueue(db);
+        const queued = await queue.enqueue({
+          type: "scan",
+          libraryId: library.id,
+          path: scope,
+          reconcileMissing: true,
+        });
+        const job = await queue.claim(["scan"]);
+        if (job?.payload.type !== "scan")
+          throw new Error("Fixture scan job missing.");
+        await runScanJob(db, job.payload, job);
+        await queue.complete(job);
+        expect(
+          (await listJobs(db)).find((job) => job.id === queued.id),
+        ).toMatchObject({ state: "completed", attempts: 1, error: null });
+        expect(
+          (await db.select().from(files)).map((file) => file.path),
+        ).toEqual([good]);
+        expect(await db.select().from(versions)).toHaveLength(1);
+        const failures = await db
+          .select()
+          .from(scanFailures)
+          .orderBy(asc(scanFailures.path));
+        expect(failures).toMatchObject([
+          {
+            rootId: library.rootId,
+            path: medium === "shows" ? bad : audioOnly,
+            reason: medium === "shows" ? "unreadable" : "no-video",
+          },
+          {
+            rootId: library.rootId,
+            path: medium === "shows" ? audioOnly : bad,
+            reason: medium === "shows" ? "no-video" : "unreadable",
+          },
+        ]);
+        expect(
+          failures.find((failure) => failure.path === bad)?.detail,
+        ).toContain("ffprobe failed");
+        expect(
+          failures.find((failure) => failure.path === audioOnly)?.detail,
+        ).toContain("Recognized media has no video stream");
+      }));
+
+    test(`${medium}: unchanged failures skip probes, changed stamps recover, and missing failures are cleaned up`, () =>
+      withFiles(async (db, root, library) => {
+        const calls: string[] = [];
+        let repaired = false;
+        const probe = async (path: string) => {
+          calls.push(path);
+          if (path.endsWith(bad) && !repaired)
+            throw new UnreadableMediaError("ffprobe failed (1): broken");
+          return path.endsWith(audioOnly) ? audio : video;
+        };
+        await scan(db, library.id, scope, { probe });
+        const failures = await db
+          .select()
+          .from(scanFailures)
+          .orderBy(asc(scanFailures.path));
+        calls.length = 0;
+        await scan(db, library.id, scope, { probe });
+        expect(calls).toEqual([]);
+        expect(
+          await db.select().from(scanFailures).orderBy(asc(scanFailures.path)),
+        ).toEqual(failures);
+        repaired = true;
+        await utimes(
+          join(root, bad),
+          new Date("2020-01-01"),
+          new Date("2020-01-01"),
+        );
+        await scan(db, library.id, scope, { probe });
+        expect(calls).toEqual([join(root, bad)]);
+        expect(
+          (await db.select().from(files)).map((file) => file.path).sort(),
+        ).toEqual([good, bad].sort());
+        expect(await db.select().from(scanFailures)).toMatchObject([
+          { path: audioOnly, reason: "no-video" },
+        ]);
+        // Another scope's failure survives this folder's cleanup.
+        await db.insert(scanFailures).values({
+          rootId: library.rootId,
+          path: "Elsewhere/file.mkv",
+          bytes: 0n,
+          modifiedNs: 0n,
+          reason: "unreadable",
+          detail: "elsewhere",
+        });
+        await rm(join(root, audioOnly));
+        await scan(db, library.id, scope, { probe });
+        expect(await db.select().from(scanFailures)).toMatchObject([
+          { path: "Elsewhere/file.mkv" },
+        ]);
+      }));
+
+    test(`${medium}: an indexed file that fails keeps its rows and watch state`, () =>
+      withFiles(async (db, root, library) => {
+        await scan(db, library.id, scope, { probe: async () => video });
+        const beforeItems = await db
+          .select()
+          .from(items)
+          .orderBy(asc(items.id));
+        const beforeVersions = await db
+          .select()
+          .from(versions)
+          .orderBy(asc(versions.id));
+        const beforeFiles = await db
+          .select()
+          .from(files)
+          .orderBy(asc(files.id));
+        const file = beforeFiles.find((file) => file.path === bad);
+        if (!file) throw new Error("Indexed fixture missing.");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        await db.insert(progress).values({
+          userId: admin.id,
+          itemId: file.itemId,
+          versionId: file.versionId,
+          format: "video",
+          positionSeconds: 33,
+        });
+        await writeFile(join(root, bad), "corrupted");
+        const probe = async () => {
+          throw new UnreadableMediaError("ffprobe failed (1): corrupted");
+        };
+        for (let rescan = 0; rescan < 2; rescan++) {
+          await scan(db, library.id, scope, {
+            probe,
+            reconcileMissing: true,
+            changes: [
+              {
+                kind: "delete",
+                target: rescan === 0 ? "file" : "item",
+                rootId: library.rootId,
+                path: rescan === 0 ? bad : scope,
+                providerIds: {},
+              },
+            ],
+          });
+          expect(await db.select().from(items).orderBy(asc(items.id))).toEqual(
+            beforeItems,
+          );
+          expect(
+            await db.select().from(versions).orderBy(asc(versions.id)),
+          ).toEqual(beforeVersions);
+          expect(await db.select().from(files).orderBy(asc(files.id))).toEqual(
+            beforeFiles,
+          );
+          expect(await db.select().from(progress)).toMatchObject([
+            {
+              itemId: file.itemId,
+              versionId: file.versionId,
+              positionSeconds: 33,
+            },
+          ]);
+        }
+      }));
+
+    test(`${medium}: parse errors are recorded but transient failures still reject the job`, () =>
+      withFiles(async (db, root, library) => {
+        await scan(db, library.id, scope, {
+          probe: async () =>
+            parseProbeOutput({ streams: [{ codec_type: "video" }] }),
+        });
+        expect(await db.select().from(scanFailures)).toHaveLength(3);
+        expect(await db.select().from(items)).toEqual([]);
+        for (const path of paths)
+          await utimes(
+            join(root, path),
+            new Date("2020-01-01"),
+            new Date("2020-01-01"),
+          );
+        const source = await libraryScanSource(
+          db,
+          { id: library.id, medium },
+          async () => {
+            throw new Error("File changed during probe.");
+          },
+        );
+        await expect(
+          runScanJob(
+            db,
+            { type: "scan", libraryId: library.id, path: scope },
+            { id: crypto.randomUUID() },
+            source,
+          ),
+        ).rejects.toThrow("File changed during probe.");
+        expect(await db.select().from(items)).toEqual([]);
+      }));
+
+    test(`${medium}: a failed probe of a changed or missing file still retries`, () =>
+      withFiles(async (db, _root, library) => {
+        await expect(
+          scan(db, library.id, scope, {
+            probe: async (path) => {
+              await writeFile(path, "changed during probe");
+              throw new UnreadableMediaError("ffprobe failed (1): interrupted");
+            },
+          }),
+        ).rejects.toThrow("File changed during probe.");
+        expect(await db.select().from(scanFailures)).toEqual([]);
+        await expect(
+          scan(db, library.id, scope, {
+            probe: async (path) => {
+              await rm(path);
+              throw new UnreadableMediaError("ffprobe failed (1): vanished");
+            },
+          }),
+        ).rejects.toBeInstanceOf(MissingLibraryPathError);
+        expect(await db.select().from(scanFailures)).toEqual([]);
+        // Errors outside probe decoding, including database failures, propagate.
+        await expect(
+          scan(db, library.id, scope, {
+            probe: async () => {
+              throw new Error("database unavailable");
+            },
+          }),
+        ).rejects.toThrow("database unavailable");
+        expect(await db.select().from(scanFailures)).toEqual([]);
+      }));
+  }
+
+  test("a split episode Version is skipped as a whole, including on a rescan", () =>
+    withDatabase((db) =>
+      withVideoFixture(async (root) => {
+        const paths = [
+          "Show/Show S01E01 - part1.mkv",
+          "Show/Show S01E01 - part2.mkv",
+          "Show/Show S01E02.mkv",
+        ];
+        await mkdir(join(root, "Show"));
+        for (const path of paths) await writeFile(join(root, path), "");
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        let corrupted = true;
+        const probe = async (path: string) => {
+          if (corrupted && path.endsWith("part2.mkv"))
+            throw new UnreadableMediaError("bad part");
+          return video;
+        };
+        await scanShowDirectory(db, library.id, "Show", { probe });
+        expect(await db.select().from(episodes)).toMatchObject([
+          { episodeNumber: 2 },
+        ]);
+        expect(await db.select().from(files)).toHaveLength(1);
+        corrupted = false;
+        await utimes(
+          join(root, paths[1] ?? ""),
+          new Date("2020-01-01"),
+          new Date("2020-01-01"),
+        );
+        await scanShowDirectory(db, library.id, "Show", { probe });
+        const before = await db.select().from(files).orderBy(asc(files.id));
+        const beforeVersions = await db
+          .select()
+          .from(versions)
+          .orderBy(asc(versions.id));
+        corrupted = true;
+        await writeFile(join(root, paths[1] ?? ""), "corrupted");
+        await scanShowDirectory(db, library.id, "Show", {
+          probe,
+          reconcileMissing: true,
+        });
+        expect(await db.select().from(files).orderBy(asc(files.id))).toEqual(
+          before,
+        );
+        expect(
+          await db.select().from(versions).orderBy(asc(versions.id)),
+        ).toEqual(beforeVersions);
+      }),
+    ));
+
+  test("a failed movie group cannot lend its webhook ids to its playable neighbour", () =>
+    withDatabase((db) =>
+      withVideoFixture(async (root) => {
+        await mkdir(join(root, "Movies"));
+        const good = "Movies/Alien.1979.mkv";
+        const bad = "Movies/Dune.2021.mkv";
+        for (const path of [good, bad]) await writeFile(join(root, path), "");
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        await scanDirectory(db, library.id, "Movies", {
+          probe: async (path) => {
+            if (path.endsWith(bad))
+              throw new UnreadableMediaError("broken Dune");
+            return video;
+          },
+          changes: [
+            {
+              kind: "add",
+              rootId: library.rootId,
+              path: bad,
+              providerIds: { tmdb: "438631" },
+            },
+          ],
+        });
+        expect(await db.select().from(items)).toMatchObject([
+          { title: "Alien" },
+        ]);
+        expect(await db.select().from(providerIds)).toEqual([]);
+      }),
+    ));
+
+  test("a killed ffprobe leaves a valid unchanged file retryable", () =>
+    withDatabase((db) =>
+      withVideoFixture(async (root) => {
+        await mkdir(join(root, "Movie (2020)"));
+        const path = "Movie (2020)/Movie.mkv";
+        await createVideoFixture(join(root, path));
+        const [library] = await insertLibraries(db, {
+          name: "Movies",
+          medium: "movies",
+          rootPath: root,
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const killed = Bun.spawn(["/bin/sh", "-c", "kill -KILL $$"], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        await killed.exited;
+        const spawn = spyOn(Bun, "spawn").mockReturnValueOnce(killed);
+        try {
+          await expect(
+            scanDirectory(db, library.id, "Movie (2020)"),
+          ).rejects.toThrow("ffprobe terminated (SIGKILL)");
+        } finally {
+          spawn.mockRestore();
+        }
+        expect(await db.select().from(scanFailures)).toEqual([]);
+        await scanDirectory(db, library.id, "Movie (2020)");
+        expect(await db.select().from(files)).toMatchObject([{ path }]);
+      }),
+    ));
+});
 
 /** An ffprobe plus index read, like a watcher-reported probe carries. */
 const probeWithIndex = async (path: string) => ({
@@ -431,30 +858,33 @@ describe.skipIf(!databaseUrl)("scanDirectory", () => {
       });
     }));
 
-  test("aborts the directory write when a member has no video stream", () =>
+  test("skips a member with no video stream and writes the playable Version", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withVideoFixture(async (root) => {
         await populate(root);
         await withLibrary(db, root, async (library) => {
           const absolute = join(root, file2160);
-          await expect(
-            scanDirectory(db, library.id, folder, {
-              probe: async (path) => {
-                const probed = await probeVideo(path);
-                if (path !== absolute) return probed;
-                return {
-                  ...probed,
-                  streams: probed.streams.filter(
-                    (stream) => stream.kind !== "video",
-                  ),
-                };
-              },
-            }),
-          ).rejects.toThrow("no video stream");
-          expect(await db.select().from(items)).toHaveLength(0);
-          expect(await db.select().from(versions)).toHaveLength(0);
-          expect(await db.select().from(files)).toHaveLength(0);
+          await scanDirectory(db, library.id, folder, {
+            probe: async (path) => {
+              const probed = await probeVideo(path);
+              if (path !== absolute) return probed;
+              return {
+                ...probed,
+                streams: probed.streams.filter(
+                  (stream) => stream.kind !== "video",
+                ),
+              };
+            },
+          });
+          expect(await db.select().from(items)).toHaveLength(1);
+          expect(await db.select().from(versions)).toHaveLength(1);
+          expect(await db.select().from(files)).toMatchObject([
+            { path: file1080 },
+          ]);
+          expect(await db.select().from(scanFailures)).toMatchObject([
+            { path: file2160, reason: "no-video" },
+          ]);
         });
       });
     }));

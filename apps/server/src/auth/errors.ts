@@ -7,6 +7,7 @@ const errors = {
   FORBIDDEN: [403, "Permission denied."],
   NOT_FOUND: [404, "Auth record not found."],
   CONFLICT: [409, "Auth record already exists."],
+  PREPARING: [503, "This Version is being prepared for streaming."],
   SETUP_COMPLETE: [409, "Setup is already complete."],
   BODY_TOO_LARGE: [413, "Auth request body is too large."],
   METHOD_NOT_ALLOWED: [405, "Method not allowed."],

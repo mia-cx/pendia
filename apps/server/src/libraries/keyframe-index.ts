@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   files,
@@ -225,4 +225,44 @@ export async function queueKeyframeIndex(
       concurrencyKey: keyframesConcurrencyKey(payload.libraryId),
     },
   );
+}
+
+/**
+ * Pushes a file's index job to the front: a queued job's priority rises to 10,
+ * a running one is left alone, and nothing queued a fresh one at priority 10.
+ * Repeated calls never create a second job.
+ */
+export async function requestKeyframeIndex(
+  db: Database,
+  payload: Omit<Extract<JobPayload, { type: "keyframe-index" }>, "type">,
+) {
+  await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ id: jobs.id, state: jobs.state })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, "keyframe-index"),
+          inArray(jobs.state, ["queued", "running"]),
+          sql`${jobs.payload}->>'rootId' = ${payload.rootId}`,
+          sql`${jobs.payload}->>'path' = ${payload.path}`,
+        ),
+      )
+      .limit(1);
+    if (existing?.state === "running") return;
+    if (existing !== undefined) {
+      await tx
+        .update(jobs)
+        .set({ priority: sql`greatest(${jobs.priority}, 10)` })
+        .where(eq(jobs.id, existing.id));
+      return;
+    }
+    await createJobQueue(tx).enqueue(
+      { type: "keyframe-index", ...payload },
+      {
+        priority: 10,
+        concurrencyKey: keyframesConcurrencyKey(payload.libraryId),
+      },
+    );
+  });
 }

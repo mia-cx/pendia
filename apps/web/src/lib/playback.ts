@@ -13,6 +13,8 @@ export type MediaSupport = {
   codec: (mime: string) => boolean;
   /** Whether the display shows high dynamic range. */
   hdr: boolean;
+  /** Whether the page can feed a stream through Media Source Extensions. */
+  mse: boolean;
 };
 
 const containers = [
@@ -63,6 +65,7 @@ export function clientProfile(support: MediaSupport): ClientProfile {
       .map(({ codec, maxChannels }) => ({ codec, maxChannels })),
     subtitleFormats: ["webvtt"],
     hdr: support.hdr ? ["sdr", "hdr10", "hlg"] : ["sdr"],
+    progressive: support.mse,
   };
 }
 
@@ -79,7 +82,36 @@ export function browserProfile(): ClientProfile {
         ? video.canPlayType(mime) !== ""
         : source.isTypeSupported(mime),
     hdr: matchMedia("(video-dynamic-range: high)").matches,
+    mse: source !== undefined,
   });
+}
+
+/**
+ * Builds the MSE MIME for a progressive stream's codecs; null when the plan
+ * names a codec or profile the tables don't know.
+ */
+export function progressiveMime(
+  output: {
+    video: { codec: string; profile: string | null };
+    audio: { codec: string } | null;
+  } | null,
+): string | null {
+  if (output === null) return null;
+  const profiles = videoCodecs[output.video.codec as keyof typeof videoCodecs];
+  if (profiles === undefined) return null;
+  const video =
+    (output.video.profile === null
+      ? undefined
+      : profiles[output.video.profile as keyof typeof profiles]) ??
+    Object.values(profiles)[0];
+  if (video === undefined) return null;
+  const audio =
+    output.audio === null
+      ? null
+      : (audioCodecs.find(({ codec }) => codec === output.audio?.codec)?.type ??
+        null);
+  if (output.audio !== null && audio === null) return null;
+  return `video/mp4; codecs="${[video, audio].filter((part) => part !== null).join(",")}"`;
 }
 
 /** Swaps the playback token on a playback URL, resolved against the page. */

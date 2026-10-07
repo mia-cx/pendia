@@ -10,6 +10,7 @@ export type ApiErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "PAYLOAD_TOO_LARGE"
+  | "SERVICE_UNAVAILABLE"
   | "TOO_MANY_REQUESTS";
 
 /** A typed host failure carrying the oRPC code the boundary answers with. */
@@ -29,6 +30,7 @@ const authCodeMap = {
   FORBIDDEN: "FORBIDDEN",
   NOT_FOUND: "NOT_FOUND",
   CONFLICT: "CONFLICT",
+  PREPARING: "SERVICE_UNAVAILABLE",
   SETUP_COMPLETE: "CONFLICT",
   BODY_TOO_LARGE: "PAYLOAD_TOO_LARGE",
   METHOD_NOT_ALLOWED: "BAD_REQUEST",

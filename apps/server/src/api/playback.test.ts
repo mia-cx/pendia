@@ -16,6 +16,7 @@ import {
   events,
   files,
   items,
+  jobs,
   libraryAccess,
   segmentTimelines,
   sessionRegistry,
@@ -76,6 +77,7 @@ async function capture(promise: Promise<unknown>) {
 }
 
 type MediaOptions = {
+  container?: string;
   audioCodec?: string;
   audioProfile?: string | null;
   audioChannels?: number;
@@ -129,7 +131,7 @@ async function addMedia(
       order: 0,
       bytes: 75_000_000n,
       modifiedAt: new Date(),
-      container: "mp4",
+      container: options.container ?? "mp4",
       durationSeconds: 120,
     })
     .returning();
@@ -463,6 +465,11 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
+      // The index was read but this Version's frames don't align.
+      await db
+        .update(versions)
+        .set({ lazyIndexPending: false })
+        .where(eq(versions.id, fx.version.id));
       const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
@@ -484,6 +491,11 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db, "owner", { audioCodec: "ac3" });
+      // Indexed, but not aligned: the gate still refuses HLS.
+      await db
+        .update(versions)
+        .set({ lazyIndexPending: false })
+        .where(eq(versions.id, fx.version.id));
       const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
@@ -1156,5 +1168,150 @@ describe.skipIf(!databaseUrl)("api playback", () => {
           state: "starting",
         },
       ]);
+    }));
+});
+
+describe.skipIf(!databaseUrl)("api playback progressive", () => {
+  const jobsOf = (db: Database) =>
+    db.select().from(jobs).where(eq(jobs.type, "keyframe-index"));
+
+  test("an unindexed MKV plans a progressive stream when the profile accepts it", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db, "owner", { container: "mkv" });
+      const planned = await planPlayback(
+        db,
+        fx.keyCaller,
+        {
+          itemId: fx.item.id,
+          versionId: fx.version.id,
+          profile: { ...profile, progressive: true },
+          subtitleStreamIndex: 2,
+        },
+        { request: planRequest(), peerAddress: "127.0.0.1" },
+      );
+      expect(planned.method).toBe("remux");
+      expect(planned.delivery).toBe("progressive");
+      expect(planned.url).toMatch(/\/stream\?token=/);
+      expect(planned.output).toEqual({
+        video: { codec: "h264", profile: "high", transcode: false },
+        audio: { codec: "aac" },
+      });
+      // The chosen text subtitle is served as WebVTT beside the stream.
+      expect(planned.subtitleUrl).toMatch(/\/subtitles\/2\.vtt\?token=/);
+      const [registry] = await db
+        .select()
+        .from(sessionRegistry)
+        .where(eq(sessionRegistry.id, planned.sessionId ?? ""));
+      expect(registry?.decision?.delivery).toBe("progressive");
+    }));
+
+  test("a bitmap subtitle stays burned in with no subtitle URL", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db, "owner", {
+        container: "mkv",
+        subtitleCodec: "hdmv_pgs_subtitle",
+      });
+      const planned = await planPlayback(
+        db,
+        fx.keyCaller,
+        {
+          itemId: fx.item.id,
+          versionId: fx.version.id,
+          // h264 not accepted → video transcodes and burns the subtitle
+          profile: {
+            ...profile,
+            videoCodecs: [{ codec: "av1" }],
+            subtitleFormats: ["webvtt"],
+            progressive: true,
+          },
+          subtitleStreamIndex: 2,
+        },
+        { request: planRequest(), peerAddress: "127.0.0.1" },
+      );
+      expect(planned.method).toBe("transcode");
+      expect(planned.output?.video.transcode).toBe(true);
+      expect(planned.subtitleUrl).toBeNull();
+    }));
+
+  test("an unindexed Version without progressive throws PREPARING and queues one top-priority index job", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db, "owner", { container: "mkv" });
+      const plan = () =>
+        planPlayback(
+          db,
+          fx.keyCaller,
+          {
+            itemId: fx.item.id,
+            versionId: fx.version.id,
+            profile, // no progressive
+          },
+          { request: planRequest(), peerAddress: "127.0.0.1" },
+        );
+      await expect(plan()).rejects.toMatchObject({ code: "PREPARING" });
+      const queued = await jobsOf(db);
+      expect(queued).toHaveLength(1);
+      expect(queued[0]?.priority).toBe(10);
+      expect(queued[0]?.payload).toMatchObject({
+        rootId: expect.any(String),
+        path: fx.file.path,
+      });
+      // Planning again raises no duplicate.
+      await expect(plan()).rejects.toMatchObject({ code: "PREPARING" });
+      expect(await jobsOf(db)).toHaveLength(1);
+      // A low-priority backlog job is raised, not duplicated.
+      await db
+        .update(jobs)
+        .set({ priority: -5 })
+        .where(eq(jobs.id, queued[0]?.id ?? ""));
+      await expect(plan()).rejects.toMatchObject({ code: "PREPARING" });
+      const after = await jobsOf(db);
+      expect(after).toHaveLength(1);
+      expect(after[0]?.priority).toBe(10);
+    }));
+
+  test("an indexed but unaligned Version still refuses with CONFLICT", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db, "owner", { container: "mkv" });
+      await db
+        .update(versions)
+        .set({ lazyIndexPending: false })
+        .where(eq(versions.id, fx.version.id));
+      await expect(
+        planPlayback(
+          db,
+          fx.keyCaller,
+          {
+            itemId: fx.item.id,
+            versionId: fx.version.id,
+            profile,
+          },
+          { request: planRequest(), peerAddress: "127.0.0.1" },
+        ),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(await jobsOf(db)).toHaveLength(0);
+    }));
+
+  test("direct play reports no delivery", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db);
+      const planned = await planPlayback(
+        db,
+        fx.keyCaller,
+        {
+          itemId: fx.item.id,
+          versionId: fx.version.id,
+          profile,
+        },
+        { request: planRequest(), peerAddress: "127.0.0.1" },
+      );
+      expect(planned.method).toBe("direct-play");
+      expect(planned.delivery).toBeNull();
+      expect(planned.output).toBeNull();
+      expect(planned.subtitleUrl).toBeNull();
     }));
 });

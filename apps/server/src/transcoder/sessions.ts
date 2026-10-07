@@ -31,6 +31,8 @@ import {
   startLiveRun,
 } from "./live-run.ts";
 import { type SessionOutputs, sessionOutputs } from "./outputs.ts";
+import { progressiveArguments } from "./progressive.ts";
+import { readStreamHead } from "./stream-head.ts";
 import { type Conversion, convertToWebvtt } from "./subtitles.ts";
 
 /** The authorised session a request belongs to. */
@@ -54,6 +56,24 @@ export type SessionManagerOptions = {
 export type SessionManager = ReturnType<typeof createSessionManager>;
 
 type Waiter = (ok: boolean) => void;
+
+/** A session streaming one progressive fMP4: no timeline, no segments. */
+type StreamSession = {
+  scope: SessionScope;
+  /** The Version's length for clamping stream starts; null when unprobed. */
+  durationSeconds: number | null;
+  /** Maps a subtitle's source Stream index to its position among subtitle Streams; only text Streams the decision delivers appear. */
+  textSubtitles: Map<number, number>;
+  directory: string;
+  inputPath: string;
+  outputs: SessionOutputs;
+  /** WebVTT conversions by subtitle Stream position, started on first request. */
+  conversions: Map<number, Conversion>;
+  /** The ffmpeg run streaming now; a new request replaces it. */
+  running: { kill(): Promise<void> } | null;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  stopped: boolean;
+};
 
 type LiveSession = {
   scope: SessionScope;
@@ -113,6 +133,7 @@ export function createSessionManager(
   const readRate = options.readRate;
   const transcodeSlots = options.transcodeSlots ?? 2;
   const sessions = new Map<string, Promise<LiveSession>>();
+  const streamSessions = new Map<string, Promise<StreamSession>>();
   const stopping = new Map<string, Promise<void>>();
   // Session ids holding a transcode slot, and the sessions waiting for one in arrival order.
   const admitted = new Set<string>();
@@ -383,6 +404,163 @@ export function createSessionManager(
     };
   };
 
+  const loadStreamSession = async (
+    scope: SessionScope,
+  ): Promise<StreamSession> => {
+    const directory = join(scratchDir, `${scope.sessionId}-stream`);
+    const { version, file, source, subtitleDetails } = await loadPlaybackSource(
+      db,
+      scope.userId,
+      scope.itemId,
+      scope.versionId,
+    );
+    let inputPath: string;
+    try {
+      inputPath = (await locateFile(db, file)).absolute;
+    } catch {
+      throw new AuthError("NOT_FOUND");
+    }
+    const [row] = await db
+      .select({ decision: sessionRegistry.decision })
+      .from(sessionRegistry)
+      .where(eq(sessionRegistry.id, scope.sessionId))
+      .limit(1);
+    const outputs = sessionOutputs(row?.decision, source, subtitleDetails);
+    const decision =
+      row?.decision != null && "subtitles" in row.decision
+        ? row.decision
+        : undefined;
+    const textSubtitles = new Map<number, number>();
+    for (const subtitle of decision?.subtitles ?? []) {
+      const delivered =
+        subtitle.action === "convert" ||
+        (subtitle.action === "copy" && subtitle.format === "webvtt");
+      const sourceIndex = subtitleDetails[subtitle.stream]?.index;
+      if (delivered && sourceIndex !== undefined) {
+        textSubtitles.set(sourceIndex, subtitle.stream);
+      }
+    }
+    return {
+      scope,
+      durationSeconds: version.durationSeconds ?? file.durationSeconds,
+      textSubtitles,
+      directory,
+      inputPath,
+      outputs,
+      conversions: new Map(),
+      running: null,
+      idleTimer: null,
+      stopped: false,
+    };
+  };
+
+  const streamSession = async (scope: SessionScope): Promise<StreamSession> => {
+    const existing = streamSessions.get(scope.sessionId);
+    if (existing !== undefined) return existing;
+    const pending = loadStreamSession(scope);
+    streamSessions.set(scope.sessionId, pending);
+    pending.catch(() => {
+      if (streamSessions.get(scope.sessionId) === pending) {
+        streamSessions.delete(scope.sessionId);
+      }
+    });
+    return pending;
+  };
+
+  const streamTouch = (session: StreamSession) => {
+    if (session.idleTimer !== null) clearTimeout(session.idleTimer);
+    session.idleTimer = setTimeout(() => {
+      void stopStreamSession(session.scope.sessionId).catch((error: unknown) =>
+        log("error", "session.stop_failed", {
+          sessionId: session.scope.sessionId,
+          error: errorMessage(error),
+        }),
+      );
+    }, idleMs);
+  };
+
+  /** A request that reaches a session keeps it alive; a running stream does. */
+  const streamDisarm = (session: StreamSession) => {
+    if (session.idleTimer !== null) clearTimeout(session.idleTimer);
+    session.idleTimer = null;
+  };
+
+  /** Arms idle cleanup once the session has no live stream left. */
+  const streamArm = (session: StreamSession) => {
+    if (
+      closed ||
+      session.stopped ||
+      session.running !== null ||
+      session.idleTimer !== null
+    )
+      return;
+    streamTouch(session);
+  };
+
+  const stopStreamSession = (sessionId: string) =>
+    (async () => {
+      const pending = streamSessions.get(sessionId);
+      streamSessions.delete(sessionId);
+      if (pending === undefined) return;
+      const session = await pending.catch(() => null);
+      if (session === null) return;
+      if (session.idleTimer !== null) clearTimeout(session.idleTimer);
+      session.stopped = true;
+      await session.running?.kill();
+      // ffmpeg is gone, so the slot is free for the next queued session.
+      if (admitted.delete(sessionId)) admitNext();
+      for (const conversion of session.conversions.values()) {
+        conversion.kill();
+      }
+      await Promise.allSettled(
+        [...session.conversions.values()].map((conversion) => conversion.done),
+      );
+      await rm(session.directory, { recursive: true, force: true });
+      log("info", "session.stopped", { sessionId, reason: "ended" });
+    })();
+
+  const streamQueuedResponse = () =>
+    Response.json(
+      {
+        error: {
+          code: "SESSION_QUEUED",
+          message: "The session is waiting for a free transcoder.",
+        },
+      },
+      {
+        status: 503,
+        headers: { ...standardHeaders, "retry-after": "1" },
+      },
+    );
+
+  /** Takes a transcode slot for a re-encoding stream, waiting up to waitMs. */
+  const waitForStreamSlot = (session: StreamSession): Promise<boolean> => {
+    if (session.outputs.video.action !== "transcode") {
+      return Promise.resolve(true);
+    }
+    const { sessionId } = session.scope;
+    if (
+      admitted.size < transcodeSlots &&
+      queue.length === 0 &&
+      streamWaiters.size === 0
+    ) {
+      admitted.add(sessionId);
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolvePromise) => {
+      const waiter = {
+        sessionId,
+        done: (ok: boolean) => {
+          clearTimeout(timer);
+          streamWaiters.delete(waiter);
+          resolvePromise(ok);
+        },
+      };
+      const timer = setTimeout(() => waiter.done(false), waitMs);
+      streamWaiters.add(waiter);
+    });
+  };
+
   // Moves the registry state the client sees, only from the expected state,
   // so a stop or a start the client made in between wins. The row and its
   // event commit together, so nobody reads the state without its event.
@@ -440,11 +618,17 @@ export function createSessionManager(
     recordState(session, "starting", "queued");
   };
 
-  /** Hands freed slots to queued sessions in arrival order. */
+  /** Waits for a transcode slot for a progressive stream, in arrival order. */
+  const streamWaiters = new Set<{
+    sessionId: string;
+    done: (ok: boolean) => void;
+  }>();
+
+  /** Hands freed slots to queued sessions, then waiting streams, in arrival order. */
   const admitNext = () => {
     while (!closed && admitted.size < transcodeSlots) {
       const next = queue.shift();
-      if (next === undefined) return;
+      if (next === undefined) break;
       if (next.stopped) continue;
       admitted.add(next.scope.sessionId);
       next.queued = false;
@@ -454,6 +638,17 @@ export function createSessionManager(
       next.admissionWaiters.clear();
       log("info", "session.admitted", { sessionId: next.scope.sessionId });
       recordState(next, "queued", "starting");
+    }
+    while (
+      !closed &&
+      admitted.size < transcodeSlots &&
+      streamWaiters.size > 0
+    ) {
+      const waiter = streamWaiters.values().next().value;
+      if (waiter === undefined) return;
+      streamWaiters.delete(waiter);
+      admitted.add(waiter.sessionId);
+      waiter.done(true);
     }
   };
 
@@ -681,6 +876,56 @@ export function createSessionManager(
     });
   };
 
+  /**
+   * Where stream-time zero lands in the source, in seconds. A copy's ffmpeg
+   * run starts on the keyframe at or before the start: probe the first
+   * packet ffprobe reports after the same seek. A re-encode drops frames
+   * before the start (accurate seek), so its first frame is the start.
+   */
+  const streamStartOffset = async (
+    session: StreamSession,
+    start: number,
+  ): Promise<number> => {
+    if (start <= 0) return 0;
+    if (session.outputs.video.action === "transcode") return start;
+    // The run's demuxer seek lands on the keyframe at or before start;
+    // ffprobe's read_intervals seeks the same way and names the first
+    // packet's source time.
+    const proc = Bun.spawn(
+      [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "packet=pts_time",
+        "-of",
+        "csv=p=0",
+        "-read_intervals",
+        `${start}%+#1`,
+        session.inputPath,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    const [output, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    const first = output.split("\n").find((line) => line !== "");
+    const pts = Number.parseFloat(first ?? "");
+    if (code !== 0 || !Number.isFinite(pts)) {
+      log("error", "stream.offset_failed", {
+        sessionId: session.scope.sessionId,
+        start,
+        error: (stderr ?? "").trim().slice(-500) || `exit ${code}`,
+      });
+      return start;
+    }
+    return pts;
+  };
+
   return {
     async serve(
       scope: SessionScope,
@@ -723,8 +968,173 @@ export function createSessionManager(
       if (name.kind === "init") return serveInitRequest(session);
       return serveSegmentRequest(session, name.index);
     },
+    /**
+     * Streams the session as one progressive fMP4, no index needed. One run at
+     * a time per session: a new request kills the previous ffmpeg.
+     */
+    async stream(
+      scope: SessionScope,
+      startSeconds: number,
+      signal?: AbortSignal,
+    ): Promise<Response> {
+      if (closed) return stoppingResponse();
+      const session = await streamSession(scope);
+      if (closed || session.stopped) return stoppingResponse();
+      // The stream can outlive idleMs — hold the timer until the run ends.
+      streamDisarm(session);
+      const previous = session.running;
+      session.running = null;
+      await previous?.kill();
+      if (!(await waitForStreamSlot(session))) {
+        streamArm(session);
+        return session.stopped ? stoppingResponse() : streamQueuedResponse();
+      }
+      const start =
+        session.durationSeconds === null
+          ? startSeconds
+          : Math.min(startSeconds, session.durationSeconds);
+      const offset = await streamStartOffset(session, start);
+      const args = progressiveArguments({
+        inputPath: session.inputPath,
+        startSeconds: start,
+        video: session.outputs.video,
+        audioStream: session.outputs.audioStream,
+        audio: session.outputs.audio,
+        burnSubtitle: session.outputs.burnSubtitle,
+        // Copied audio seeks its own input to the same anchor.
+        audioStartSeconds: offset,
+      });
+      const proc = Bun.spawn(["ffmpeg", ...args], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stderr = new Response(proc.stderr).text();
+      const { sessionId } = scope;
+      let killed = false;
+      const kill = async () => {
+        if (killed) return;
+        killed = true;
+        try {
+          proc.kill("SIGKILL");
+        } catch {
+          // The process may have exited between the check and the kill.
+        }
+        await proc.exited;
+      };
+      const running = { kill };
+      session.running = running;
+      signal?.addEventListener("abort", () => void kill());
+      // Buffer the head until the first video moof: its first sample's
+      // presentation time is where stream-time zero would land wrong, so the
+      // offset reports source time minus it.
+      const head = await readStreamHead(proc.stdout);
+      if (head === null) {
+        // ffmpeg died before the first fragment; the stderr log lands in the
+        // exit hook above.
+        await kill();
+        return Response.json(
+          {
+            error: {
+              code: "INTERNAL_ERROR",
+              message: "The stream produced no playable output.",
+            },
+          },
+          { status: 500, headers: standardHeaders },
+        );
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(head.head);
+        },
+        async pull(controller) {
+          const { done, value } = await head.reader.read();
+          if (done) controller.close();
+          else controller.enqueue(value);
+        },
+        async cancel(reason) {
+          await head.reader.cancel(reason);
+        },
+      });
+      void proc.exited.then(async (code) => {
+        if (session.running === running) session.running = null;
+        if (admitted.delete(sessionId)) admitNext();
+        // The response body ended (or the client aborted, which killed the
+        // run above): the session may idle now.
+        streamArm(session);
+        if (!killed && code !== null && code !== 0) {
+          log("error", "run.failed", {
+            sessionId,
+            exitCode: code,
+            stderr: (await stderr).trim().slice(-2000),
+          });
+        }
+      });
+      return new Response(body, {
+        headers: {
+          ...standardHeaders,
+          "content-type": "video/mp4",
+          "x-stream-offset": String(offset - head.trackPts.video),
+        },
+      });
+    },
+    /**
+     * Serves one of the session's text subtitles as WebVTT, cues in absolute
+     * seconds. index is the subtitle's source Stream index in the File.
+     */
+    async streamSubtitle(
+      scope: SessionScope,
+      sourceIndex: number,
+    ): Promise<Response> {
+      if (closed) return stoppingResponse();
+      const session = await streamSession(scope);
+      if (closed || session.stopped) return stoppingResponse();
+      const index = session.textSubtitles.get(sourceIndex);
+      if (index === undefined) {
+        return Response.json(
+          {
+            error: {
+              code: "NOT_FOUND",
+              message: "Subtitle track not found.",
+            },
+          },
+          { status: 404, headers: standardHeaders },
+        );
+      }
+      streamArm(session);
+      const path = join(session.directory, `subs-${index}.vtt`);
+      if (!session.conversions.has(index)) {
+        await mkdir(session.directory, { recursive: true });
+      }
+      if (session.stopped) return stoppingResponse();
+      let conversion = session.conversions.get(index);
+      if (conversion === undefined) {
+        const started = convertToWebvtt(session.inputPath, index, path);
+        session.conversions.set(index, started);
+        started.done.catch(() => {
+          if (session.conversions.get(index) === started) {
+            session.conversions.delete(index);
+          }
+        });
+        conversion = started;
+      }
+      try {
+        await conversion.done;
+      } catch (error) {
+        log("error", "subtitle.failed", {
+          sessionId: session.scope.sessionId,
+          index,
+          error: errorMessage(error),
+        });
+        throw error;
+      }
+      return new Response(Bun.file(path), {
+        headers: { ...standardHeaders, "content-type": "text/vtt" },
+      });
+    },
     /** Stops a session the client ended, freeing its slot at once instead of at the idle timeout. */
     async end(sessionId: string) {
+      await stopStreamSession(sessionId);
       if (!sessions.has(sessionId)) return;
       await stopSession(sessionId, "ended");
     },
@@ -750,6 +1160,14 @@ export function createSessionManager(
       closed = true;
       // A stop already in flight adds to `stopping` mid-loop; keep draining
       // until both maps are empty.
+      for (const sessionId of [...streamSessions.keys()]) {
+        await stopStreamSession(sessionId).catch((error: unknown) =>
+          log("error", "session.stop_failed", {
+            sessionId,
+            error: errorMessage(error),
+          }),
+        );
+      }
       while (sessions.size > 0 || stopping.size > 0) {
         for (const sessionId of [...sessions.keys()]) {
           await stopSession(sessionId, "shutdown").catch((error: unknown) =>
@@ -761,6 +1179,7 @@ export function createSessionManager(
         }
         await Promise.allSettled([...stopping.values()]);
       }
+      for (const waiter of streamWaiters) waiter.done(false);
     },
   };
 }

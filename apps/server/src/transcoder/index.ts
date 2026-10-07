@@ -66,6 +66,60 @@ export async function startTranscoder(
   let nodeId: string | null = null;
   let stopping: Promise<void> | undefined;
 
+  /** The checks every session route shares: method, token auth and node ownership. */
+  const authenticateSession = async (
+    request: Request,
+    url: URL,
+    scope: { sessionId: string; itemId: string },
+  ): Promise<
+    | {
+        userId: string;
+        session: Awaited<ReturnType<typeof authorizeHlsRequest>>["session"];
+      }
+    | Response
+  > => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return Response.json(
+        {
+          error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed." },
+        },
+        {
+          status: 405,
+          headers: { ...standardHeaders, allow: "GET, HEAD" },
+        },
+      );
+    }
+    const { userId, session } = await authorizeHlsRequest(db, url, scope);
+    if (session.transcoderNodeId !== nodeId) {
+      // The drain released this node's sessions; a request already on its
+      // way here retries through the api, which assigns a live node.
+      if (stopping !== undefined) {
+        return Response.json(
+          {
+            error: {
+              code: "TRANSCODER_STOPPING",
+              message: "The transcoder is stopping.",
+            },
+          },
+          {
+            status: 503,
+            headers: { ...standardHeaders, "retry-after": "1" },
+          },
+        );
+      }
+      return Response.json(
+        {
+          error: {
+            code: "CONFLICT",
+            message: "Session belongs to another transcoder.",
+          },
+        },
+        { status: 409, headers: standardHeaders },
+      );
+    }
+    return { userId, session };
+  };
+
   const server = Bun.serve({
     port,
     async fetch(request, server) {
@@ -89,7 +143,59 @@ export async function startTranscoder(
           ? Response.json({ status: "ready" })
           : Response.json({ status: "database unavailable" }, { status: 503 });
       }
-      const hls = parseHlsPath(url.pathname, "/internal/playback");
+      const streamPath =
+        /^\/internal\/playback\/([^/]+)\/([^/]+)\/stream$/.exec(url.pathname);
+      const subtitlePath =
+        /^\/internal\/playback\/([^/]+)\/([^/]+)\/subtitles\/(\d+)\.vtt$/.exec(
+          url.pathname,
+        );
+      const hls =
+        streamPath === null && subtitlePath === null
+          ? parseHlsPath(url.pathname, "/internal/playback")
+          : null;
+      if (streamPath !== null || subtitlePath !== null) {
+        try {
+          // A paused viewer leaves the stream open and idle for minutes.
+          server.timeout(request, 0);
+          const scope = {
+            sessionId: (streamPath ?? subtitlePath)?.[1] ?? "",
+            itemId: (streamPath ?? subtitlePath)?.[2] ?? "",
+          };
+          const authed = await authenticateSession(request, url, scope);
+          if (authed instanceof Response) return authed;
+          const { userId, session } = authed;
+          if (session.decision?.delivery !== "progressive") {
+            return Response.json(
+              {
+                error: {
+                  code: "NOT_FOUND",
+                  message: "No progressive stream for this session.",
+                },
+              },
+              { status: 404, headers: standardHeaders },
+            );
+          }
+          const streamScope = {
+            ...scope,
+            versionId: session.versionId,
+            userId,
+          };
+          if (subtitlePath !== null) {
+            return await sessions.streamSubtitle(
+              streamScope,
+              Number(subtitlePath[3]),
+            );
+          }
+          const start = Number(url.searchParams.get("start") ?? "0");
+          return await sessions.stream(
+            streamScope,
+            Number.isFinite(start) && start >= 0 ? start : 0,
+            request.signal,
+          );
+        } catch (error) {
+          return errorResponse(error);
+        }
+      }
       if (hls === null) {
         return Response.json(
           { error: { code: "NOT_FOUND", message: "Not found." } },
@@ -97,53 +203,14 @@ export async function startTranscoder(
         );
       }
       try {
-        if (request.method !== "GET" && request.method !== "HEAD") {
-          return Response.json(
-            {
-              error: {
-                code: "METHOD_NOT_ALLOWED",
-                message: "Method not allowed.",
-              },
-            },
-            {
-              status: 405,
-              headers: { ...standardHeaders, allow: "GET, HEAD" },
-            },
-          );
-        }
         // A segment wait can outlive Bun's default ten second idle timeout.
         server.timeout(request, 30);
-        const { userId, session } = await authorizeHlsRequest(db, url, {
+        const authed = await authenticateSession(request, url, {
           sessionId: hls.sessionId,
           itemId: hls.itemId,
         });
-        if (session.transcoderNodeId !== nodeId) {
-          // The drain released this node's sessions; a request already on its
-          // way here retries through the api, which assigns a live node.
-          if (stopping !== undefined) {
-            return Response.json(
-              {
-                error: {
-                  code: "TRANSCODER_STOPPING",
-                  message: "The transcoder is stopping.",
-                },
-              },
-              {
-                status: 503,
-                headers: { ...standardHeaders, "retry-after": "1" },
-              },
-            );
-          }
-          return Response.json(
-            {
-              error: {
-                code: "CONFLICT",
-                message: "Session belongs to another transcoder.",
-              },
-            },
-            { status: 409, headers: standardHeaders },
-          );
-        }
+        if (authed instanceof Response) return authed;
+        const { userId, session } = authed;
         return await sessions.serve(
           {
             sessionId: hls.sessionId,

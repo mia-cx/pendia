@@ -20,6 +20,7 @@ import {
   userSettings,
   versions,
 } from "../db/schema/index.ts";
+import { requestKeyframeIndex } from "../libraries/keyframe-index.ts";
 import { selectStoredVariants } from "../stored/playback.ts";
 import { subtitleUrl } from "../subtitles/http.ts";
 import { listSubtitles } from "../subtitles/store.ts";
@@ -341,6 +342,7 @@ function isLanAddress(address: string): boolean {
 
 function playbackUrl(
   method: "direct-play" | "remux" | "transcode",
+  delivery: "progressive" | "hls" | null,
   request: Request,
   caller: Caller,
   sessionId: string,
@@ -350,7 +352,9 @@ function playbackUrl(
   const path =
     method === "direct-play"
       ? `/api/playback/${sessionId}/${itemId}/direct`
-      : `/api/playback/${sessionId}/${itemId}/hls/master.m3u8`;
+      : delivery === "progressive"
+        ? `/api/playback/${sessionId}/${itemId}/stream`
+        : `/api/playback/${sessionId}/${itemId}/hls/master.m3u8`;
   // Cookie callers can keep the token out of direct URLs; every HLS URL must
   // carry it because segments are requested without other credentials.
   if (
@@ -433,15 +437,34 @@ export async function planPlayback(
   if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
   const method =
     stored || decision === null ? ("remux" as const) : decision.method;
+  const delivery = stored
+    ? ("hls" as const)
+    : method === "direct-play"
+      ? null
+      : input.profile.progressive === true
+        ? ("progressive" as const)
+        : ("hls" as const);
   // A live HLS session cuts on the Item's timeline. A copy cuts on the
   // Version's own keyframes, and a re-encode restarts on the frame at a
-  // boundary, so both need the Version's frames on that timeline.
+  // boundary, so both need the Version's frames on that timeline. A
+  // progressive stream reads frames as they come and needs no index; when the
+  // index is merely pending, bump its job to the front and ask the client to
+  // retry.
   if (
     !stored &&
-    method !== "direct-play" &&
+    delivery === "hls" &&
     (version.segmentTimelineId === null || !version.timelineAligned)
-  )
+  ) {
+    if (version.lazyIndexPending) {
+      await requestKeyframeIndex(db, {
+        libraryId: item.libraryId,
+        rootId: file.rootId,
+        path: file.path,
+      });
+      throw new AuthError("PREPARING", 5);
+    }
     throw new AuthError("CONFLICT");
+  }
   const client = await callerClient(db, caller);
   // Tracks a subtitle provider stored next to the Item, served on the side.
   const subtitles = (await listSubtitles(db, item.id)).map((track) => ({
@@ -453,7 +476,9 @@ export async function planPlayback(
         ...(decision ?? { method: "stored" as const, selection }),
         storedVariantIds,
       }
-    : decision;
+    : delivery === null || decision === null
+      ? decision
+      : { ...decision, delivery };
   // Over HLS the session shows a burned subtitle, else the rendition it
   // marks default; a direct play leaves the choice to the client.
   const outputs =
@@ -470,6 +495,45 @@ export async function planPlayback(
     streams: readonly { index: number }[],
     position: number | null,
   ) => (position === null ? null : (streams[position]?.index ?? null));
+  // The codecs a progressive stream carries: copy keeps the source's, a
+  // transcode targets the decision's.
+  const output =
+    delivery !== "progressive" || decision === null
+      ? null
+      : {
+          video:
+            decision.video.action === "copy"
+              ? {
+                  codec: source.video.codec,
+                  profile: source.video.profile ?? null,
+                  transcode: false,
+                }
+              : {
+                  codec: decision.video.codec,
+                  profile: decision.video.profile ?? null,
+                  transcode: true,
+                },
+          audio:
+            decision.audio == null
+              ? null
+              : decision.audio.action === "copy"
+                ? {
+                    codec: source.audio[selection.audio ?? 0]?.codec ?? "aac",
+                  }
+                : { codec: decision.audio.codec },
+        };
+  const shownSubtitleIndex = indexOf(subtitleDetails, shownSubtitle);
+  const shownSubtitleDecision =
+    shownSubtitle === null || decision === null
+      ? null
+      : (decision.subtitles.find(
+          (subtitle) => subtitle.stream === shownSubtitle,
+        ) ?? null);
+  const deliveredAsText =
+    shownSubtitleDecision !== null &&
+    (shownSubtitleDecision.action === "convert" ||
+      (shownSubtitleDecision.action === "copy" &&
+        shownSubtitleDecision.format === "webvtt"));
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -504,15 +568,24 @@ export async function planPlayback(
       sessionId: session.id,
       ...playbackUrl(
         method,
+        delivery,
         transport.request,
         caller,
         session.id,
         item.id,
         issued,
       ),
+      delivery,
+      output,
+      subtitleUrl:
+        delivery === "progressive" &&
+        deliveredAsText &&
+        shownSubtitleIndex !== null
+          ? `/api/playback/${session.id}/${item.id}/subtitles/${shownSubtitleIndex}.vtt?token=${encodeURIComponent(issued.token)}`
+          : null,
       subtitles,
       audioStreamIndex: indexOf(audioDetails, selection.audio),
-      subtitleStreamIndex: indexOf(subtitleDetails, shownSubtitle),
+      subtitleStreamIndex: shownSubtitleIndex,
       audioStreams: audioDetails.map(
         ({ index, codec, channels, language, title }) => ({
           index,
@@ -553,6 +626,7 @@ export async function refreshPlayback(
       versionId: sessionRegistry.versionId,
       playMethod: sessionRegistry.playMethod,
       state: sessionRegistry.state,
+      decision: sessionRegistry.decision,
     })
     .from(sessionRegistry)
     .where(
@@ -579,8 +653,11 @@ export async function refreshPlayback(
     itemId: scope.itemId,
     versionId: session.versionId,
     sessionId: scope.sessionId,
+    delivery:
+      method === "direct-play" ? null : (session.decision?.delivery ?? "hls"),
     ...playbackUrl(
       method,
+      method === "direct-play" ? null : (session.decision?.delivery ?? "hls"),
       transport.request,
       caller,
       scope.sessionId,

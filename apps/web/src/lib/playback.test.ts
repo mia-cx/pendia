@@ -5,6 +5,7 @@ import {
   formatPosition,
   type MediaSupport,
   pickVersion,
+  progressiveMime,
   subtitleNames,
   withToken,
 } from "./playback.ts";
@@ -28,6 +29,7 @@ const chromium: MediaSupport = {
   container: (mime) => mime !== "video/quicktime",
   codec: (mime) => decoded.some((type) => mime.includes(`"${type}"`)),
   hdr: false,
+  mse: true,
 };
 
 describe("client profile", () => {
@@ -60,6 +62,7 @@ describe("client profile", () => {
           mime.includes(`"${type}"`),
         ),
       hdr: true,
+      mse: true,
     });
     expect(profile.containers).toContain("mov");
     expect(profile.videoCodecs).toContainEqual({
@@ -147,5 +150,42 @@ describe("playback helpers", () => {
     expect(formatPosition(0)).toBe("0:00");
     expect(formatPosition(754.9)).toBe("12:34");
     expect(formatPosition(3723)).toBe("1:02:03");
+  });
+});
+
+describe("progressive", () => {
+  test("clientProfile marks progressive when MSE exists", () => {
+    expect(clientProfile({ ...chromium, mse: true }).progressive).toBe(true);
+    expect(clientProfile({ ...chromium, mse: false }).progressive).toBe(false);
+  });
+
+  test("progressiveMime builds the MSE MIME from plan output", () => {
+    expect(
+      progressiveMime({
+        video: { codec: "h264", profile: "high" },
+        audio: { codec: "aac" },
+      }),
+    ).toBe('video/mp4; codecs="avc1.640028,mp4a.40.2"');
+    expect(
+      progressiveMime({
+        video: { codec: "hevc", profile: "main10" },
+        audio: { codec: "eac3" },
+      }),
+    ).toBe('video/mp4; codecs="hvc1.2.4.L120.90,ec-3"');
+    // An unknown profile falls back to the codec's first entry.
+    expect(
+      progressiveMime({
+        video: { codec: "h264", profile: "future" },
+        audio: null,
+      }),
+    ).toBe('video/mp4; codecs="avc1.42E01E"');
+    // An unknown codec cannot be described.
+    expect(
+      progressiveMime({
+        video: { codec: "vvc", profile: null },
+        audio: { codec: "aac" },
+      }),
+    ).toBeNull();
+    expect(progressiveMime(null)).toBeNull();
   });
 });

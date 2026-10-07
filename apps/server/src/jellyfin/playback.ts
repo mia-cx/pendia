@@ -221,7 +221,7 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
           // every flag off; Findroid plays the file regardless.
           if (
             !(error instanceof AuthError) ||
-            (error.code !== "INVALID_INPUT" && error.code !== "CONFLICT")
+            !["INVALID_INPUT", "CONFLICT", "PREPARING"].includes(error.code)
           )
             throw error;
         }

@@ -34,8 +34,17 @@ A plan may name one audio Stream and one subtitle Stream, or no subtitles, by th
 ## Play method
 
 - Direct play: every stream passes and the container is accepted. The file goes out over HTTP range requests.
-- Remux: every stream passes but the container or a subtitle format is not accepted. fMP4 HLS, no re-encode.
-- Transcode: any stream re-encodes. fMP4 HLS.
+- Remux: every stream passes but the container or a subtitle format is not accepted. fMP4, no re-encode.
+- Transcode: any stream re-encodes. fMP4.
+
+Remux and transcode go out in one of two deliveries. Clients that can feed
+Media Source Extensions (every modern browser) take one continuous
+fragmented-MP4 stream, `/api/playback/{session}/{item}/stream`, appended in
+`segments` mode — no index needed, so an unindexed Version still plays. Other
+clients take HLS, which needs the Version's keyframes on the Item's segment
+timeline; when the background index job has not reached the file yet the plan
+queues it at top priority and answers 503 PREPARING, and the client retries
+while the spinner holds.
 
 ## Segment timeline
 

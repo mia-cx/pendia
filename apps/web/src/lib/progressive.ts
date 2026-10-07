@@ -160,7 +160,9 @@ export function attachProgressive(
         return;
       }
       await interruptible(
-        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000,
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : 1000,
         current,
       );
       if (current.signal.aborted || closed.signal.aborted) return;

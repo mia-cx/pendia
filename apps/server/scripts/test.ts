@@ -27,7 +27,7 @@ const workers =
 
 const glob = new Bun.Glob("src/**/*.test.ts");
 const files: string[] = [];
-for await (const file of glob.scan({ cwd: import.meta.dir + "/.." })) {
+for await (const file of glob.scan({ cwd: `${import.meta.dir}/..` })) {
   files.push(file);
 }
 files.sort();

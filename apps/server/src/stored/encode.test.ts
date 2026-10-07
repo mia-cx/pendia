@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { ffprobeKeyframeTimes } from "../mediums/video-common/keyframe-fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
 import {
@@ -106,12 +107,10 @@ describe("runStore", () => {
       pattern: "testsrc2",
     });
     const probe = await probeVideo(inputPath);
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null)
+    const { keyframesSeconds } = await readKeyframeIndex(inputPath);
+    if (probe.durationSeconds === null || keyframesSeconds === null)
       throw new Error("Fixture probe returned no duration or keyframes.");
-    boundaries = deriveSegmentTimeline(
-      probe.keyframesSeconds,
-      probe.durationSeconds,
-    );
+    boundaries = deriveSegmentTimeline(keyframesSeconds, probe.durationSeconds);
     expect(boundaries.slice(0, 4)).toEqual([0, 3, 6, 9]);
   }, 60_000);
 
@@ -331,10 +330,13 @@ describe("runStore on a nonuniform timeline", () => {
     ]);
     if (encode.exitCode !== 0) throw new Error(encode.stderr.toString());
     const probe = await probeVideo(join(dir, "uneven.mkv"));
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null)
+    const { keyframesSeconds } = await readKeyframeIndex(
+      join(dir, "uneven.mkv"),
+    );
+    if (probe.durationSeconds === null || keyframesSeconds === null)
       throw new Error("Fixture probe returned no duration or keyframes.");
     boundaries = [0, 5, 8, 12, probe.durationSeconds];
-    expect(probe.keyframesSeconds).toEqual([0, 5, 8, 12, 14]);
+    expect(keyframesSeconds).toEqual([0, 5, 8, 12, 14]);
   }, 60_000);
 
   afterAll(async () => {

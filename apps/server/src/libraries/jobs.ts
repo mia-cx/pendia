@@ -12,6 +12,7 @@ import { createJobQueue, type Job } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { queueProviderFetch } from "../metadata/jobs.ts";
 import { reconcileStoredVersions } from "../stored/reconcile.ts";
+import { runKeyframeIndexJob } from "./keyframe-index.ts";
 import {
   isLibraryScan,
   libraryScanSource,
@@ -26,12 +27,15 @@ export function libraryConcurrencyKey(libraryId: string) {
   return `library:${libraryId}`;
 }
 
-/** Registers the built-in library scan job handler. */
+/** Registers the built-in library scan and keyframe-index job handlers. */
 export function registerLibraryJobs(
   db: Database,
   registry: ReturnType<typeof createJobRegistry>,
 ) {
   registry.register("scan", (payload, job) => runScanJob(db, payload, job));
+  registry.register("keyframe-index", (payload) =>
+    runKeyframeIndexJob(db, payload),
+  );
 }
 
 /** Runs one scan job, reading files from the local disk unless a source is given. */

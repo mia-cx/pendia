@@ -97,11 +97,11 @@ A user's score for an Item, 0 to 10 with one decimal, distinct from a provider's
 _Avoid_: score, stars
 
 **Scan**:
-A job that walks one Item folder, probes the files that changed and hands the matches to the medium, which reads what each file is from its name and the folders above it. A Library scan walks every root and queues one per Item folder. It runs on the watcher when one sits next to the disks, otherwise on a worker over the network.
+A job that walks one Item folder, probes the files that changed and hands the matches to the medium, which reads what each file is from its name and the folders above it. A Library scan walks every root and queues one per Item folder. It runs on the watcher when one sits next to the disks, otherwise on a worker over the network. Each new single-File Version without a keyframe index gets a `keyframe-index` job in the background.
 _Avoid_: refresh, index, crawl, import
 
 **Probe**:
-One read of a File's headers that yields its Streams, duration, chapters and keyframe index. Cached by path, size and mtime.
+One read of a File's headers that yields its Streams, duration and chapters. Cached by path, size and mtime. The container keyframe index is a separate, slower read done by the `keyframe-index` job (or by the watcher, whose probes carry it).
 _Avoid_: analyse, inspect, ffprobe as a concept
 
 **Play method**:
@@ -137,7 +137,7 @@ Something a plugin declares in its manifest and an admin approves, such as file 
 _Avoid_: permission, grant, scope
 
 **Job**:
-A unit of background work on the Postgres queue: a scan, a probe, a provider fetch, a store job, a plugin job.
+A unit of background work on the Postgres queue: a scan, a probe, a provider fetch, a keyframe index, a store job, a plugin job.
 _Avoid_: task, worker item, background process
 
 **Playback token**:

@@ -12,7 +12,11 @@ import { createApiKey } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import type { JsonObject } from "../db/schema/common.ts";
 import { sessionRegistry, versions } from "../db/schema/index.ts";
-import { databaseUrl, withDatabase } from "../db/testing.ts";
+import {
+  databaseUrl,
+  runQueuedKeyframeIndexes,
+  withDatabase,
+} from "../db/testing.ts";
 import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import {
@@ -246,6 +250,7 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
                 library.id,
                 fixtureFolder,
               );
+              await runQueuedKeyframeIndexes(db);
               const copyId = rescanned.versionIds.find(
                 (id) => id !== version.id,
               );

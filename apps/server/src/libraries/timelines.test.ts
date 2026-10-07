@@ -8,9 +8,16 @@ import { files, segmentTimelines, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { scanDirectory } from "./scan.ts";
 import { insertLibraries } from "./testing.ts";
+
+// Scans under test carry an index, as a watcher-reported probe would.
+const probeWithIndex = async (path: string) => ({
+  ...(await probeVideo(path)),
+  keyframesSeconds: (await readKeyframeIndex(path)).keyframesSeconds,
+});
 
 const folder = "Movie (2000)";
 const member = (name: string) => `${folder}/${name}`;
@@ -55,7 +62,9 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
         await mkdir(dir, { recursive: true });
         await createKeyframeFixture(join(dir, "z-original.mp4"));
         await withLibrary(db, root, async (library) => {
-          const first = await scanDirectory(db, library.id, folder);
+          const first = await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const itemId = first.itemId ?? "";
           const [timeline] = await timelines(db);
           expect(timeline).toMatchObject({
@@ -77,7 +86,9 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
           await createKeyframeFixture(join(dir, "b-unaligned.mp4"), {
             gop: 75,
           });
-          const second = await scanDirectory(db, library.id, folder);
+          const second = await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const persisted = await timelines(db);
           expect(persisted).toHaveLength(1);
           expect(persisted[0]?.id).toBe(timeline?.id);
@@ -102,7 +113,9 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
             timelineAligned: false,
           });
 
-          const third = await scanDirectory(db, library.id, folder);
+          const third = await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           expect(third.versionIds).toEqual(second.versionIds);
           expect(await timelines(db)).toHaveLength(1);
           expect(
@@ -121,7 +134,9 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
         await mkdir(dir, { recursive: true });
         await createKeyframeFixture(join(dir, "movie.mp4"));
         await withLibrary(db, root, async (library) => {
-          const first = await scanDirectory(db, library.id, folder);
+          const first = await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const itemId = first.itemId ?? "";
           const [timeline] = await timelines(db);
           const before = (await versionsByPath(db, itemId)).get(
@@ -135,7 +150,9 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
           const replacement = join(root, "replacement.mp4");
           await createKeyframeFixture(replacement, { gop: 75 });
           await rename(replacement, join(dir, "movie.mp4"));
-          await scanDirectory(db, library.id, folder);
+          await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const after = (await versionsByPath(db, itemId)).get(
             member("movie.mp4"),
           );
@@ -164,20 +181,24 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
           fragmented: true,
         });
         await withLibrary(db, root, async (library) => {
-          const first = await scanDirectory(db, library.id, folder);
+          const first = await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const itemId = first.itemId ?? "";
           expect(
             (await versionsByPath(db, itemId)).get(member("z-first.mp4")),
           ).toMatchObject({
             keyframesSeconds: null,
-            lazyIndexPending: true,
+            lazyIndexPending: false,
             segmentTimelineId: null,
             timelineAligned: false,
           });
           expect(await timelines(db)).toHaveLength(0);
 
           await createKeyframeFixture(join(dir, "a-later.mp4"));
-          await scanDirectory(db, library.id, folder);
+          await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const midway = await versionsByPath(db, itemId);
           expect(midway.get(member("a-later.mp4"))).toMatchObject({
             keyframesSeconds: [0, 2, 4, 6, 8, 10],
@@ -190,7 +211,9 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
           const replacement = join(root, "replacement.mp4");
           await createKeyframeFixture(replacement);
           await rename(replacement, join(dir, "z-first.mp4"));
-          await scanDirectory(db, library.id, folder);
+          await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const [timeline] = await timelines(db);
           expect(timeline).toMatchObject({
             cutKey: "original",
@@ -223,7 +246,9 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
           gop: 25,
         });
         await withLibrary(db, root, async (library) => {
-          const result = await scanDirectory(db, library.id, folder);
+          const result = await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
           const itemId = result.itemId ?? "";
           const [director, original] = await timelines(db);
           expect(director).toMatchObject({
@@ -269,8 +294,12 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
             const second = createDatabase(url);
             try {
               const results = await Promise.all([
-                scanDirectory(first.db, library.id, folder),
-                scanDirectory(second.db, library.id, folder),
+                scanDirectory(first.db, library.id, folder, {
+                  probe: probeWithIndex,
+                }),
+                scanDirectory(second.db, library.id, folder, {
+                  probe: probeWithIndex,
+                }),
               ]);
               expect(results[0]?.versionIds).toEqual(results[1]?.versionIds);
               const persisted = await timelines(db.db);
@@ -343,8 +372,10 @@ describe.skipIf(!databaseUrl)("persistScanTimelines", () => {
           throw new Error(`ffmpeg failed (${exitCode}): ${stderr.trim()}`);
         }
         await withLibrary(db, root, async (library) => {
-          const result = await scanDirectory(db, library.id, folder);
-          const expected = (await probeVideo(absolute)).keyframesSeconds;
+          const result = await scanDirectory(db, library.id, folder, {
+            probe: probeWithIndex,
+          });
+          const expected = (await readKeyframeIndex(absolute)).keyframesSeconds;
           expect(expected).toEqual([5, 7]);
           const byPath = await versionsByPath(db, result.itemId ?? "");
           expect(byPath.get(member("movie.mkv"))).toMatchObject({

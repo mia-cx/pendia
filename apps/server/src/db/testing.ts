@@ -4,6 +4,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sql";
+import { listJobs } from "../jobs/queue.ts";
+import { runKeyframeIndexJob } from "../libraries/keyframe-index.ts";
 import { createDatabase, type Database } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 
@@ -125,4 +127,15 @@ export async function withDatabase(
     await database.close();
     if (created) scheduleDrop(name);
   }
+}
+
+/**
+ * Runs every queued keyframe-index job. Scans only queue them now, so tests
+ * that need an indexed Version call this instead of waiting on a worker.
+ */
+export async function runQueuedKeyframeIndexes(db: Database) {
+  const queued = await listJobs(db, { state: "queued" });
+  for (const job of queued)
+    if (job.payload.type === "keyframe-index")
+      await runKeyframeIndexJob(db, job.payload);
 }

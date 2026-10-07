@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { ffprobeKeyframeTimes } from "../mediums/video-common/keyframe-fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
 import { parseSegmentList, remuxArguments, startRemuxRun } from "./remux.ts";
@@ -58,11 +59,12 @@ describe("remux", () => {
       pattern: "testsrc2",
     });
     const probe = await probeVideo(inputPath);
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
+    const { keyframesSeconds } = await readKeyframeIndex(inputPath);
+    if (probe.durationSeconds === null || keyframesSeconds === null) {
       throw new Error("Fixture probe returned no duration or keyframes.");
     }
     duration = probe.durationSeconds;
-    boundaries = deriveSegmentTimeline(probe.keyframesSeconds, duration);
+    boundaries = deriveSegmentTimeline(keyframesSeconds, duration);
     expect(boundaries.slice(0, 4)).toEqual([0, 3, 6, 9]);
     expect(boundaries.at(-1)).toBe(duration);
   }, 60_000);
@@ -380,13 +382,14 @@ describe("remux", () => {
       }
     }
     const probe = await probeVideo(hevcPath);
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
+    const { keyframesSeconds } = await readKeyframeIndex(hevcPath);
+    if (probe.durationSeconds === null || keyframesSeconds === null) {
       throw new Error("HEVC probe returned no duration or keyframes.");
     }
     return {
       path: hevcPath,
       boundaries: deriveSegmentTimeline(
-        probe.keyframesSeconds,
+        keyframesSeconds,
         probe.durationSeconds,
       ),
     };

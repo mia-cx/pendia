@@ -14,10 +14,15 @@ import {
   sessionRegistry,
   versions,
 } from "../db/schema/index.ts";
-import { databaseUrl, withDatabase } from "../db/testing.ts";
+import {
+  databaseUrl,
+  runQueuedKeyframeIndexes,
+  withDatabase,
+} from "../db/testing.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
+import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
 import {
   decidePlayback,
@@ -95,11 +100,12 @@ describe.skipIf(!databaseUrl)("session manager", () => {
       pattern: "testsrc2",
     });
     const probe = await probeVideo(file);
-    if (probe.durationSeconds === null || probe.keyframesSeconds === null) {
+    const { keyframesSeconds } = await readKeyframeIndex(file);
+    if (probe.durationSeconds === null || keyframesSeconds === null) {
       throw new Error("Fixture probe returned no duration or keyframes.");
     }
     duration = probe.durationSeconds;
-    boundaries = deriveSegmentTimeline(probe.keyframesSeconds, duration);
+    boundaries = deriveSegmentTimeline(keyframesSeconds, duration);
     expect(boundaries.slice(0, 4)).toEqual([0, 3, 6, 9]);
   }, 60_000);
 
@@ -132,6 +138,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         roots: [libraryRoot],
       });
       const scanned = await scanDirectory(db, library.id, "Movie (2026)");
+      await runQueuedKeyframeIndexes(db);
       const versionId = scanned.versionIds[0];
       if (scanned.itemId === null || versionId === undefined) {
         throw new Error("Expected exactly one scanned item and version.");

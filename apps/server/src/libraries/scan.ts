@@ -18,6 +18,7 @@ import {
   items,
   libraries,
   libraryRoots,
+  probeCache,
   providerIds,
   type ScanChange,
   seasons,
@@ -46,6 +47,7 @@ import {
   setItemProviderIds,
   updateItemCanonicalFolder,
 } from "./changes.ts";
+import { queueKeyframeIndex } from "./keyframe-index.ts";
 import { type ProbedLibraryFile, probeLibraryFile } from "./probe-cache.ts";
 import {
   type LibraryRoot,
@@ -205,6 +207,36 @@ async function confirmScopeEmpty(
     }
     throw error;
   }
+}
+
+/**
+ * The index state a Version write carries: the probe-cache row re-read inside
+ * the write transaction, under the same Library lock the keyframe-index job
+ * holds. An index that landed between the probe and the write is kept; a
+ * changed file's fresh cache row has none, so it stays pending.
+ */
+async function versionIndexState(
+  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  member: ProbedRootedFile,
+): Promise<{ keyframesSeconds: number[] | null; lazyIndexPending: boolean }> {
+  const [entry] = await tx
+    .select({ result: probeCache.result })
+    .from(probeCache)
+    .where(
+      and(
+        eq(probeCache.rootId, member.rootId),
+        eq(probeCache.path, member.path),
+      ),
+    );
+  // A cached null is a completed read of an unsupported container, not a
+  // missing one; only an unread cache falls back to the probe snapshot.
+  const cached = entry?.result.keyframesSeconds;
+  const keyframesSeconds =
+    cached !== undefined ? cached : member.probe.keyframesSeconds;
+  return {
+    keyframesSeconds: keyframesSeconds ?? null,
+    lazyIndexPending: keyframesSeconds === undefined,
+  };
 }
 
 /** Reads a Library's roots on the local disk through the walker and the persistent probe cache. */
@@ -798,6 +830,20 @@ async function findGroupItem(
   });
 }
 
+/** One structured timing line per directory scan, in the server's JSON log shape. */
+function logScanTiming(
+  data: Record<string, unknown> & { libraryId: string; path: string },
+) {
+  console.log(
+    JSON.stringify({
+      ...data,
+      timestamp: new Date().toISOString(),
+      level: "info",
+      message: "scan.directory",
+    }),
+  );
+}
+
 /**
  * Scan one Item folder of a movies library into Items, Versions, Files
  * and Streams. `itemId` is the first written Item, as before.
@@ -813,6 +859,7 @@ export async function scanDirectory(
   versionIds: string[];
   probed: number;
 }> {
+  const startedAt = performance.now();
   const changes = options.changes ?? [];
   const [library] = await db
     .select()
@@ -827,6 +874,7 @@ export async function scanDirectory(
   // Grouping reads root-relative paths, so the same folder in two roots is
   // one Item; each root's file at a member path is its own Version.
   const walked = await source.walk(path, false);
+  const walkedAt = performance.now();
   const groups = groupMoviePaths(walked).filter(
     (group) => group.canonicalFolder === path,
   );
@@ -849,6 +897,8 @@ export async function scanDirectory(
       memberByKey.set(rootedKey(file), member);
     }
   }
+
+  const probedAt = performance.now();
 
   // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
@@ -946,8 +996,7 @@ export async function scanDirectory(
               label,
               bytes: member.bytes,
               durationSeconds: member.probe.durationSeconds,
-              keyframesSeconds: member.probe.keyframesSeconds,
-              lazyIndexPending: member.probe.keyframesSeconds === null,
+              ...(await versionIndexState(tx, member)),
             })
             .where(eq(versions.id, versionId));
           await tx
@@ -971,8 +1020,7 @@ export async function scanDirectory(
               format: "video",
               bytes: member.bytes,
               durationSeconds: member.probe.durationSeconds,
-              keyframesSeconds: member.probe.keyframesSeconds,
-              lazyIndexPending: member.probe.keyframesSeconds === null,
+              ...(await versionIndexState(tx, member)),
             })
             .returning();
           if (!version) {
@@ -1002,6 +1050,13 @@ export async function scanDirectory(
         }
         versionIds.push(versionId);
         await upsertFileStreams(tx, versionId, fileId, member.probe);
+        // The keyframe index arrives from its own job after the scan.
+        if ((await versionIndexState(tx, member)).lazyIndexPending)
+          await queueKeyframeIndex(tx, {
+            libraryId,
+            rootId: member.rootId,
+            path: member.path,
+          });
       }
 
       timelineOwners.add(itemId);
@@ -1069,7 +1124,17 @@ export async function scanDirectory(
       versionIds,
     };
   });
+  const writtenAt = performance.now();
   await removeArtworkFiles(deletedArtwork);
+  logScanTiming({
+    libraryId,
+    path,
+    files: memberByKey.size,
+    probeCacheHits: memberByKey.size - probed,
+    walkMs: Math.round(walkedAt - startedAt),
+    probeMs: Math.round(probedAt - walkedAt),
+    writeMs: Math.round(writtenAt - probedAt),
+  });
   return { itemId: written.itemIds[0] ?? null, ...written, probed };
 }
 
@@ -1088,6 +1153,7 @@ export async function scanShowDirectory(
   versionIds: string[];
   probed: number;
 }> {
+  const startedAt = performance.now();
   const changes = options.changes ?? [];
   const [library] = await db
     .select()
@@ -1100,6 +1166,7 @@ export async function scanShowDirectory(
   const { rules } = scanScope("shows");
 
   const walked = await source.walk(path, false);
+  const walkedAt = performance.now();
   const groups = groupShowPaths(walked).filter(
     (candidate) => candidate.canonicalFolder === path,
   );
@@ -1131,6 +1198,8 @@ export async function scanShowDirectory(
       }
     }
   }
+
+  const probedAt = performance.now();
 
   // Artwork of deleted Items is removed only after the delete commits.
   const deletedArtwork: DeletedArtworkFile[] = [];
@@ -1389,14 +1458,13 @@ export async function scanShowDirectory(
             const first = members[0];
             if (!first) throw new Error("Show Version has no Files.");
             const label = videoVersionLabel(first.path, first.probe);
-            // Each split File has its own index, so only a lone File indexes the Version.
-            const indexFor = (fileCount: number) => {
-              const keyframesSeconds =
-                fileCount === 1 ? first.probe.keyframesSeconds : null;
-              return {
-                keyframesSeconds,
-                lazyIndexPending: keyframesSeconds === null,
-              };
+            // Each split File has its own index, so only a lone File indexes
+            // the Version. The cache re-read keeps an index that landed
+            // between this scan's probe and its write.
+            const indexFor = async (fileCount: number) => {
+              if (fileCount !== 1)
+                return { keyframesSeconds: null, lazyIndexPending: false };
+              return versionIndexState(tx, first);
             };
 
             const existingFiles = await tx
@@ -1412,6 +1480,7 @@ export async function scanShowDirectory(
             let versionId: string;
             let versionFiles: (RootedPath & { id: string; order: number })[] =
               [];
+            let retained = 0;
             if (existingFile) {
               for (const file of existingFiles) {
                 if (
@@ -1444,7 +1513,7 @@ export async function scanShowDirectory(
                 .from(files)
                 .where(eq(files.versionId, versionId));
               // Reconciliation deletes only Files the walk missed; the rest stay.
-              const retained = versionFiles.filter(
+              retained = versionFiles.filter(
                 (file) =>
                   !versionGroup.paths.includes(file.path) &&
                   (options.reconcileMissing !== true ||
@@ -1456,7 +1525,7 @@ export async function scanShowDirectory(
                   label,
                   bytes,
                   durationSeconds,
-                  ...indexFor(members.length + retained),
+                  ...(await indexFor(members.length + retained)),
                 })
                 .where(eq(versions.id, versionId));
             } else {
@@ -1470,7 +1539,7 @@ export async function scanShowDirectory(
                   format: "video",
                   bytes,
                   durationSeconds,
-                  ...indexFor(members.length),
+                  ...(await indexFor(members.length)),
                 })
                 .returning();
               if (!version) {
@@ -1479,6 +1548,15 @@ export async function scanShowDirectory(
               versionId = version.id;
             }
             versionIds.push(versionId);
+            if (
+              members.length + retained === 1 &&
+              (await indexFor(members.length + retained)).lazyIndexPending
+            )
+              await queueKeyframeIndex(tx, {
+                libraryId,
+                rootId: first.rootId,
+                path: first.path,
+              });
 
             const maxOrder = versionFiles.reduce(
               (maximum, file) => Math.max(maximum, file.order),
@@ -1604,6 +1682,16 @@ export async function scanShowDirectory(
 
     return { itemIds: [...new Set(itemIds)], versionIds };
   });
+  const writtenAt = performance.now();
   await removeArtworkFiles(deletedArtwork);
+  logScanTiming({
+    libraryId,
+    path,
+    files: memberByKey.size,
+    probeCacheHits: memberByKey.size - probed,
+    walkMs: Math.round(walkedAt - startedAt),
+    probeMs: Math.round(probedAt - walkedAt),
+    writeMs: Math.round(writtenAt - probedAt),
+  });
   return { itemId: written.itemIds[0] ?? null, ...written, probed };
 }

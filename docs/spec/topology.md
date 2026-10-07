@@ -21,7 +21,7 @@ One binary, `--role api|worker|transcoder|watcher|all`. `all` is one process run
 
 ## Jobs
 
-One jobs table on Postgres, claimed with `SELECT ... FOR UPDATE SKIP LOCKED`. Columns: type, payload, priority, attempts, max attempts, run after, concurrency key, state, error, claim token, lease expiry. Workers are woken by NOTIFY and poll on a slow interval as the fallback. The concurrency key caps parallel probes per library over NFS. Run after implements the idle window for store jobs. A failed job retries with backoff and stops at max attempts with its error kept. Each claim writes a fresh claim token and a lease that its holder renews while the job runs. A running job whose lease expired is claimable again as its next attempt, and only the current claim token can settle a job. Job types in the MVP: scan, probe, provider fetch, store, plugin job.
+One jobs table on Postgres, claimed with `SELECT ... FOR UPDATE SKIP LOCKED`. Columns: type, payload, priority, attempts, max attempts, run after, concurrency key, state, error, claim token, lease expiry. Workers are woken by NOTIFY and poll on a slow interval as the fallback. The concurrency key caps parallel probes per library over NFS. Run after implements the idle window for store jobs. A failed job retries with backoff and stops at max attempts with its error kept. Each claim writes a fresh claim token and a lease that its holder renews while the job runs. A running job whose lease expired is claimable again as its next attempt, and only the current claim token can settle a job. Job types in the MVP: scan, probe, provider fetch, keyframe index, store, plugin job.
 
 ## Config
 

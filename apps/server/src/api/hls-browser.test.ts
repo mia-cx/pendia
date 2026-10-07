@@ -9,7 +9,11 @@ import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { databaseUrl, withDatabase } from "../db/testing.ts";
+import {
+  databaseUrl,
+  runQueuedKeyframeIndexes,
+  withDatabase,
+} from "../db/testing.ts";
 import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
@@ -212,6 +216,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
             library.id,
             `${title} (2026)`,
           );
+          await runQueuedKeyframeIndexes(db);
           const versionId = scanned.versionIds[0];
           if (scanned.itemId === null || versionId === undefined) {
             throw new Error("Expected exactly one scanned item and version.");

@@ -21,6 +21,7 @@ import {
   probeCache,
   providerIds,
   type ScanChange,
+  scanFailures,
   seasons,
   streams,
   versions,
@@ -38,7 +39,11 @@ import {
   showsScan,
 } from "../mediums/shows.ts";
 import { videoVersionLabel } from "../mediums/video-common/labels.ts";
-import { type ProbeResult, probeVideo } from "../mediums/video-common/probe.ts";
+import {
+  type ProbeResult,
+  probeVideo,
+  UnreadableMediaError,
+} from "../mediums/video-common/probe.ts";
 import { parseTitle, titleKey } from "../mediums/video-common/titles.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
 import {
@@ -77,8 +82,8 @@ export type ScanSource = {
   walk(path: string, recursive: boolean): Promise<RootedFile[]>;
   /** Returns one walked file with its probe result. */
   probe(file: RootedPath): Promise<ProbedRootedFile>;
-  /** Fails when a probed file changed before the write. Runs under the write lock. */
-  verify(file: ProbedRootedFile): Promise<void>;
+  /** Fails when a probed or skipped file changed before the write. Runs under the write lock. */
+  verify(file: LibraryFile & RootedPath): Promise<void>;
   /** Fails when an empty scope gained files in any root before the write. Runs under the write lock. */
   confirmEmpty(path: string, recursive: boolean): Promise<void>;
   /** Fails when a file the walk missed exists again before the write. Runs under the write lock. */
@@ -844,6 +849,127 @@ function logScanTiming(
   );
 }
 
+/** Probe each member once, retaining failed paths as present for reconciliation. */
+async function probeScanMembers(
+  db: Database,
+  libraryId: string,
+  source: ScanSource,
+  walked: readonly RootedFile[],
+  members: readonly RootedPath[],
+) {
+  const previous = await db
+    .select({ failure: scanFailures })
+    .from(scanFailures)
+    .innerJoin(libraryRoots, eq(libraryRoots.id, scanFailures.rootId))
+    .where(eq(libraryRoots.libraryId, libraryId));
+  const failures = new Map(
+    previous.map(({ failure }) => [rootedKey(failure), failure]),
+  );
+  const walkedByKey = new Map(walked.map((file) => [rootedKey(file), file]));
+  const memberByKey = new Map<string, ProbedRootedFile>();
+  const skipped = new Map<string, RootedFile>();
+  const freshFailures: (typeof scanFailures.$inferInsert)[] = [];
+  let probed = 0;
+  for (const file of members) {
+    const key = rootedKey(file);
+    if (memberByKey.has(key) || skipped.has(key)) continue;
+    const snapshot = walkedByKey.get(key);
+    if (!snapshot) throw new Error(`Unwalked member: ${file.path}`);
+    const previous = failures.get(key);
+    if (
+      previous?.bytes === snapshot.bytes &&
+      previous.modifiedNs === snapshot.modifiedNs
+    ) {
+      skipped.set(key, snapshot);
+      continue;
+    }
+    let member: ProbedRootedFile;
+    try {
+      member = await source.probe(file);
+    } catch (error) {
+      if (!(error instanceof UnreadableMediaError)) throw error;
+      skipped.set(key, snapshot);
+      freshFailures.push({
+        ...file,
+        bytes: snapshot.bytes,
+        modifiedNs: snapshot.modifiedNs,
+        reason: "unreadable",
+        detail: error.message,
+      });
+      continue;
+    }
+    if (
+      !member.probe.streams.some(
+        (stream) => stream.kind === "video" && !stream.disposition.attached_pic,
+      )
+    ) {
+      skipped.set(key, { ...snapshot, ...member });
+      freshFailures.push({
+        ...file,
+        bytes: member.bytes,
+        modifiedNs: member.modifiedNs,
+        reason: "no-video",
+        detail: `Recognized media has no video stream: ${file.path}`,
+      });
+      continue;
+    }
+    if (!member.cached) probed += 1;
+    memberByKey.set(key, member);
+  }
+  return { memberByKey, skipped, freshFailures, previous, probed };
+}
+
+/** Commit new failures and remove recovered or vanished paths after a successful scan. */
+async function persistScanFailures(
+  tx: Transaction,
+  rules: ScanRules,
+  path: string,
+  walked: readonly RootedFile[],
+  result: Awaited<ReturnType<typeof probeScanMembers>>,
+) {
+  const walkedKeys = new Set(walked.map(rootedKey));
+  const removed = result.previous
+    .filter(
+      ({ failure }) =>
+        result.memberByKey.has(rootedKey(failure)) ||
+        (inScope(rules, path, false, failure.path) &&
+          !walkedKeys.has(rootedKey(failure))),
+    )
+    .map(({ failure }) => failure.id);
+  if (removed.length > 0)
+    await tx.delete(scanFailures).where(inArray(scanFailures.id, removed));
+  for (const failure of result.freshFailures)
+    await tx
+      .insert(scanFailures)
+      .values(failure)
+      .onConflictDoUpdate({
+        target: [scanFailures.rootId, scanFailures.path],
+        set: {
+          bytes: failure.bytes,
+          modifiedNs: failure.modifiedNs,
+          reason: failure.reason,
+          detail: failure.detail,
+          failedAt: new Date(),
+        },
+      });
+}
+
+/** A failed file is still present, even when a queued delete names it or its folder. */
+function changesWithoutFailedDeletes(
+  changes: readonly ScanChange[],
+  skipped: ReadonlyMap<string, RootedFile>,
+) {
+  return changes.filter((change) => {
+    if (change.kind !== "delete") return true;
+    if (change.target === "file") return !skipped.has(rootedKey(change));
+    return ![...skipped.values()].some(
+      (file) =>
+        file.rootId === change.rootId &&
+        (change.path === "." || file.path.startsWith(`${change.path}/`)),
+    );
+  });
+}
+
 /**
  * Scan one Item folder of a movies library into Items, Versions, Files
  * and Streams. `itemId` is the first written Item, as before.
@@ -875,28 +1001,23 @@ export async function scanDirectory(
   // one Item; each root's file at a member path is its own Version.
   const walked = await source.walk(path, false);
   const walkedAt = performance.now();
-  const groups = groupMoviePaths(walked).filter(
+  const discovered = groupMoviePaths(walked).filter(
     (group) => group.canonicalFolder === path,
   );
-
-  const memberByKey = new Map<string, ProbedRootedFile>();
-  let probed = 0;
-  for (const group of groups) {
-    for (const file of group.files) {
-      if (memberByKey.has(rootedKey(file))) continue;
-      const member = await source.probe(file);
-      if (
-        !member.probe.streams.some(
-          (stream) =>
-            stream.kind === "video" && !stream.disposition.attached_pic,
-        )
-      ) {
-        throw new Error(`Recognized media has no video stream: ${file.path}`);
-      }
-      if (!member.cached) probed += 1;
-      memberByKey.set(rootedKey(file), member);
-    }
-  }
+  const result = await probeScanMembers(
+    db,
+    libraryId,
+    source,
+    walked,
+    discovered.flatMap((group) => group.files),
+  );
+  const { memberByKey, skipped, probed } = result;
+  const groups = discovered
+    .map((group) => ({
+      ...group,
+      files: group.files.filter((file) => memberByKey.has(rootedKey(file))),
+    }))
+    .filter((group) => group.files.length > 0);
 
   const probedAt = performance.now();
 
@@ -916,11 +1037,12 @@ export async function scanDirectory(
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
-      changes,
+      changesWithoutFailedDeletes(changes, skipped),
       deletedArtwork,
     );
 
     for (const member of memberByKey.values()) await source.verify(member);
+    for (const file of skipped.values()) await source.verify(file);
 
     const itemIds: string[] = [];
     const foreignItemIds: string[] = [];
@@ -1119,6 +1241,7 @@ export async function scanDirectory(
       await pruneEmptiedItems(tx, touched, deletedArtwork);
     }
 
+    await persistScanFailures(tx, rules, path, walked, result);
     return {
       itemIds: [...new Set([...itemIds, ...foreignItemIds])],
       versionIds,
@@ -1167,37 +1290,48 @@ export async function scanShowDirectory(
 
   const walked = await source.walk(path, false);
   const walkedAt = performance.now();
-  const groups = groupShowPaths(walked).filter(
+  const discovered = groupShowPaths(walked).filter(
     (candidate) => candidate.canonicalFolder === path,
   );
 
-  const memberByKey = new Map<string, ProbedRootedFile>();
-  let probed = 0;
-  for (const group of groups) {
-    for (const season of group.seasons) {
-      for (const episode of season.episodes) {
-        for (const version of episode.versions) {
-          for (const memberPath of version.paths) {
-            const file = { rootId: version.rootId, path: memberPath };
-            if (memberByKey.has(rootedKey(file))) continue;
-            const member = await source.probe(file);
-            if (
-              !member.probe.streams.some(
-                (stream) =>
-                  stream.kind === "video" && !stream.disposition.attached_pic,
-              )
-            ) {
-              throw new Error(
-                `Recognized media has no video stream: ${memberPath}`,
-              );
-            }
-            if (!member.cached) probed += 1;
-            memberByKey.set(rootedKey(file), member);
-          }
-        }
-      }
-    }
-  }
+  const result = await probeScanMembers(
+    db,
+    libraryId,
+    source,
+    walked,
+    discovered.flatMap((group) =>
+      group.seasons.flatMap((season) =>
+        season.episodes.flatMap((episode) =>
+          episode.versions.flatMap((version) =>
+            version.paths.map((path) => ({ rootId: version.rootId, path })),
+          ),
+        ),
+      ),
+    ),
+  );
+  const { memberByKey, skipped, probed } = result;
+  // A split Version plays only when every part is readable. Keep the full walk
+  // for reconciliation, including good parts of Versions skipped as a whole.
+  const groups = discovered
+    .map((group) => ({
+      ...group,
+      seasons: group.seasons
+        .map((season) => ({
+          ...season,
+          episodes: season.episodes
+            .map((episode) => ({
+              ...episode,
+              versions: episode.versions.filter((version) =>
+                version.paths.every((path) =>
+                  memberByKey.has(rootedKey({ rootId: version.rootId, path })),
+                ),
+              ),
+            }))
+            .filter((episode) => episode.versions.length > 0),
+        }))
+        .filter((season) => season.episodes.length > 0),
+    }))
+    .filter((group) => group.seasons.length > 0);
 
   const probedAt = performance.now();
 
@@ -1217,11 +1351,12 @@ export async function scanShowDirectory(
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
-      changes,
+      changesWithoutFailedDeletes(changes, skipped),
       deletedArtwork,
     );
 
     for (const member of memberByKey.values()) await source.verify(member);
+    for (const file of skipped.values()) await source.verify(file);
 
     const itemIds: string[] = [];
     const versionIds: string[] = [];
@@ -1517,7 +1652,9 @@ export async function scanShowDirectory(
                 (file) =>
                   !versionGroup.paths.includes(file.path) &&
                   (options.reconcileMissing !== true ||
-                    memberByKey.has(rootedKey(file))),
+                    walked.some(
+                      (walkedFile) => rootedKey(walkedFile) === rootedKey(file),
+                    )),
               ).length;
               await tx
                 .update(versions)
@@ -1680,6 +1817,7 @@ export async function scanShowDirectory(
       await pruneEmptiedItems(tx, touched, deletedArtwork);
     }
 
+    await persistScanFailures(tx, rules, path, walked, result);
     return { itemIds: [...new Set(itemIds)], versionIds };
   });
   const writtenAt = performance.now();

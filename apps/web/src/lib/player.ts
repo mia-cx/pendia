@@ -94,6 +94,27 @@ function refusal(error: unknown): PlayerNotice {
 const tokenOf = (url: string) =>
   new URL(url, location.href).searchParams.get("token");
 
+/** Caps an hls.js instance's ABR ceiling at the highest level whose URL names one of the variant ids; null restores the ceiling. False when no level matches. Only `autoLevelCapping` is touched: level setters would lock hls.js into manual mode. */
+export function capHlsLevels(
+  hls: Pick<Hls, "levels" | "autoLevelCapping">,
+  variantIds: readonly string[] | null,
+): boolean {
+  if (variantIds === null) {
+    hls.autoLevelCapping = -1;
+    return true;
+  }
+  const top = hls.levels.reduce(
+    (highest, level, index) =>
+      level.url.some((url) => variantIds.some((id) => url.includes(id)))
+        ? index
+        : highest,
+    -1,
+  );
+  if (top < 0) return false;
+  hls.autoLevelCapping = top;
+  return true;
+}
+
 /**
  * Plans a session, plays it on the video element and reports progress:
  * start on the first frame, a heartbeat while playing, and stop on close.
@@ -343,21 +364,7 @@ export function play(options: PlaybackOptions) {
     /** Caps ABR at the highest level whose URL names one of the variant ids; null clears. False without hls.js or a matching level. */
     capLevels(variantIds: readonly string[] | null): boolean {
       if (hls === undefined) return false;
-      if (variantIds === null) {
-        hls.autoLevelCapping = -1;
-        return true;
-      }
-      const top = hls.levels.reduce(
-        (highest, level, index) =>
-          level.url.some((url) => variantIds.some((id) => url.includes(id)))
-            ? index
-            : highest,
-        -1,
-      );
-      if (top < 0) return false;
-      hls.autoLevelCapping = top;
-      if (hls.currentLevel > top) hls.nextLevel = top;
-      return true;
+      return capHlsLevels(hls, variantIds);
     },
     /** Stops the session with its last position and releases the video element. Safe to call twice. */
     close(): Promise<void> {

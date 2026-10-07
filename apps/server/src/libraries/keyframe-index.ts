@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   files,
@@ -161,7 +161,11 @@ export async function runKeyframeIndexJob(
   }
 }
 
-/** Queues one index job per file, unless a queued or running one already names it. */
+/**
+ * Queues one index job per file, unless a queued one already names it. A
+ * running job is no reason to skip: its read may predate a file replacement,
+ * and a duplicate for an unchanged file no-ops quickly in indexTarget.
+ */
 export async function queueKeyframeIndex(
   tx: Transaction,
   payload: Omit<Extract<JobPayload, { type: "keyframe-index" }>, "type">,
@@ -172,7 +176,7 @@ export async function queueKeyframeIndex(
     .where(
       and(
         eq(jobs.type, "keyframe-index"),
-        inArray(jobs.state, ["queued", "running"]),
+        eq(jobs.state, "queued"),
         sql`${jobs.payload}->>'rootId' = ${payload.rootId}`,
         sql`${jobs.payload}->>'path' = ${payload.path}`,
       ),

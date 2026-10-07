@@ -30,19 +30,15 @@ import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
 import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
+import { twoRungPolicy } from "../stored/testing.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import {
   keyframesConcurrencyKey,
   runKeyframeIndexJob,
 } from "./keyframe-index.ts";
-import {
-  libraryScanSource,
-  scanDirectory,
-  scanShowDirectory,
-} from "./scan.ts";
 import type { RootedPath } from "./roots.ts";
+import { libraryScanSource, scanDirectory, scanShowDirectory } from "./scan.ts";
 import { insertLibraries } from "./testing.ts";
-import { twoRungPolicy } from "../stored/testing.ts";
 
 /** An ffprobe plus index read, like a watcher-reported probe carries. */
 const probeWithIndex = async (path: string) => ({
@@ -807,6 +803,30 @@ describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
       });
     }));
 
+  test("a rescan of a replaced file queues a second job while the old one runs", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { library } = await scannedMovie(db, root);
+        const queue = createJobQueue(db);
+        const claimed = await queue.claim(["keyframe-index"]);
+        if (claimed === undefined) {
+          throw new Error("Expected the scan's keyframe-index job.");
+        }
+        // The running job still reads the old file; the rescan's file is new.
+        await appendFile(join(root, path), "mutated");
+        await scanDirectory(db, library.id, folder);
+        const indexJobs = (await listJobs(db)).filter(
+          (row) => row.type === "keyframe-index",
+        );
+        expect(indexJobs).toHaveLength(2);
+        expect(indexJobs.map((row) => row.state).sort()).toEqual([
+          "queued",
+          "running",
+        ]);
+      });
+    }));
+
   test("a rescan keeps an index that landed after its probe", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -841,11 +861,7 @@ describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
       await withTempRoot(async (root) => {
         await mkdir(join(root, folder), { recursive: true });
         await createKeyframeFixture(join(root, path));
-        const library = await insertLibrary(
-          db,
-          "Movies",
-          root,
-        );
+        const library = await insertLibrary(db, "Movies", root);
         await db
           .update(libraries)
           .set({ configuration: { storedVersions: twoRungPolicy } })

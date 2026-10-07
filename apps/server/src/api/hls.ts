@@ -146,6 +146,7 @@ async function proxyToNode(
     "content-range",
     "accept-ranges",
     "retry-after",
+    "x-stream-offset",
     "allow",
   ]) {
     const value = upstream.headers.get(header);

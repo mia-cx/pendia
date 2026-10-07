@@ -1,12 +1,7 @@
 <script lang="ts">
 import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 import { SvelteSet } from "svelte/reactivity";
-import {
-  failurePath,
-  failureReason,
-  type ScanFailure,
-  type ScanStatus,
-} from "$lib/scan.ts";
+import { failurePath, failureReason, type ScanStatus } from "$lib/scan.ts";
 import { cn } from "$lib/utils.ts";
 
 /** A scan's failures as rows inside a form panel; each row expands to the full error text. */
@@ -22,13 +17,9 @@ const {
 const ids = $props.id();
 const open = new SvelteSet<string>();
 
-function keyOf(failure: ScanFailure) {
-  return `${failure.kind}:${failure.root}:${failure.path}`;
-}
-
-function toggle(key: string) {
-  if (open.has(key)) open.delete(key);
-  else open.add(key);
+function toggle(id: string) {
+  if (open.has(id)) open.delete(id);
+  else open.add(id);
 }
 
 const rowClass =
@@ -37,15 +28,14 @@ const hidden = $derived(failures.total - failures.items.length);
 </script>
 
 <ul aria-label="Scan errors">
-  {#each failures.items as failure, index (keyOf(failure))}
-    {@const key = keyOf(failure)}
-    {@const expanded = open.has(key)}
+  {#each failures.items as failure (failure.id)}
+    {@const expanded = open.has(failure.id)}
     <li class={rowClass}>
       <button
         type="button"
         aria-expanded={expanded}
-        aria-controls="{ids}-detail-{index}"
-        onclick={() => toggle(key)}
+        aria-controls="{ids}-detail-{failure.id}"
+        onclick={() => toggle(failure.id)}
         class="flex min-h-12 w-full items-start gap-3 px-4 py-2.5 text-start transition-colors hover:bg-fill"
       >
         <span class="min-w-0 flex-1">
@@ -64,7 +54,7 @@ const hidden = $derived(failures.total - failures.items.length);
         />
       </button>
       <pre
-        id="{ids}-detail-{index}"
+        id="{ids}-detail-{failure.id}"
         hidden={!expanded}
         class="mx-4 mb-2.5 max-h-64 overflow-auto rounded-md bg-fill p-3 font-mono text-footnote whitespace-pre text-label-secondary select-text">{failure.detail}</pre>
     </li>

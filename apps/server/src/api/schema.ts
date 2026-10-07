@@ -380,6 +380,8 @@ export const ScanStatus = Schema.Struct({
     total: Schema.Int,
     items: Schema.Array(
       Schema.Struct({
+        /** The scan_failures row id for a file; the job id for a job. */
+        id: Schema.UUID,
         kind: Schema.Literal("file", "job"),
         /** Root-relative for a file; the job's library-relative folder for a job. */
         path: Schema.String,

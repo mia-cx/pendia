@@ -478,6 +478,7 @@ async function listScanFailures(
 ) {
   const files = await db
     .select({
+      id: scanFailures.id,
       path: scanFailures.path,
       root: libraryRoots.path,
       reason: scanFailures.reason,
@@ -494,6 +495,7 @@ async function listScanFailures(
   const failedJobs = run
     ? await db
         .select({
+          id: jobs.id,
           path: sql<string>`${jobs.payload}->>'path'`,
           error: jobs.error,
           at: jobs.runAfter,
@@ -511,6 +513,7 @@ async function listScanFailures(
     })),
     ...failedJobs.map((row) => ({
       kind: "job" as const,
+      id: row.id,
       path: row.path,
       root: null,
       reason: "error" as const,

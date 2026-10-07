@@ -576,6 +576,7 @@ describe.skipIf(!databaseUrl)("library service", () => {
       expect(unscanned.failures.total).toBe(2);
       expect(unscanned.failures.items).toEqual([
         {
+          id: expect.any(String),
           kind: "file",
           path: bladeRunner,
           root: "/srv/4k",
@@ -584,6 +585,7 @@ describe.skipIf(!databaseUrl)("library service", () => {
           at: at(3).toISOString(),
         },
         {
+          id: expect.any(String),
           kind: "file",
           path: alien,
           root: "/srv/hq",
@@ -605,6 +607,7 @@ describe.skipIf(!databaseUrl)("library service", () => {
         alien,
       ]);
       expect(latest.failures.items[1]).toEqual({
+        id: expect.any(String),
         kind: "job",
         path: "Heat (1995)",
         root: null,
@@ -642,6 +645,42 @@ describe.skipIf(!databaseUrl)("library service", () => {
       expect(isolated.failures.items.map((item) => item.path)).toEqual([
         "Heat (1995)/Heat.mkv",
       ]);
+    }));
+
+  test("libraryScanStatus lists retried failures of one path with distinct ids", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        roots: ["/srv/movies"],
+      });
+      const { jobId } = await scanLibrary(db, admin.id, library.id);
+      const failedJob = () =>
+        db.insert(jobs).values({
+          type: "scan",
+          payload: {
+            type: "scan",
+            libraryId: library.id,
+            path: "Heat (1995)",
+            runId: jobId,
+          },
+          state: "failed",
+          error: "ffprobe exited 1",
+          maxAttempts: 3,
+          runAfter: new Date(Date.UTC(2026, 0, 1)),
+        });
+      await failedJob();
+      await failedJob();
+      const status = await libraryScanStatus(db, admin.id, library.id);
+      expect(status.failures.total).toBe(2);
+      const items = status.failures.items.filter((item) => item.kind === "job");
+      expect(items).toHaveLength(2);
+      const [first, second] = items;
+      if (!first || !second) throw new Error("Failures are missing.");
+      expect(first.id).not.toBe(second.id);
+      expect(first.path).toBe(second.path);
     }));
 
   test("libraryScanStatus rejects unknown ids and non-admin actors", () =>

@@ -153,6 +153,7 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
       server: Awaited<ReturnType<typeof startThalia>>;
       keyToken: string;
     }) => Promise<void>,
+    options: { index?: boolean } = {},
   ) => {
     await withDatabase(async (db, url) => {
       await migrateDatabase(db);
@@ -163,7 +164,7 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
         roots: [libraryRoot],
       });
       const scanned = await scanDirectory(db, library.id, "Movie (2026)");
-      await runQueuedKeyframeIndexes(db);
+      if (options.index !== false) await runQueuedKeyframeIndexes(db);
       const versionId = scanned.versionIds[0];
       if (scanned.itemId === null || versionId === undefined) {
         throw new Error("Expected exactly one scanned item and version.");
@@ -544,6 +545,239 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
         expect(master.status).toBe(503);
         expect(master.headers.get("retry-after")).toBe("5");
         expect((await jsonError(master))?.code).toBe("NO_TRANSCODER");
+      }),
+    30_000,
+  );
+});
+
+describe.skipIf(!databaseUrl)("progressive playback", () => {
+  let libraryRoot: string;
+
+  beforeAll(async () => {
+    libraryRoot = await mkdtemp(
+      join(tmpdir(), "thalia-progressive-api-library-"),
+    );
+    const folder = join(libraryRoot, "Movie (2026)");
+    await mkdir(folder);
+    await createVideoFixture(join(folder, "Movie.mkv"), {
+      width: 1920,
+      height: 1080,
+      durationSeconds: 12,
+      frameRate: 25,
+      gopSeconds: 3,
+      pattern: "testsrc2",
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await rm(libraryRoot, { recursive: true, force: true });
+  });
+
+  const withProgressive = async (
+    run: (context: {
+      db: Database;
+      base: string;
+      client: ReturnType<typeof rpcClient>;
+      itemId: string;
+      versionId: string;
+      server: Awaited<ReturnType<typeof startThalia>>;
+      keyToken: string;
+    }) => Promise<void>,
+    options: { index?: boolean } = {},
+  ) => {
+    await withDatabase(async (db, url) => {
+      await migrateDatabase(db);
+      const fx = await seed(db);
+      const library = await createLibrary(db, fx.admin.id, {
+        name: "Movies",
+        medium: "movies",
+        roots: [libraryRoot],
+      });
+      const scanned = await scanDirectory(db, library.id, "Movie (2026)");
+      if (options.index !== false) await runQueuedKeyframeIndexes(db);
+      const versionId = scanned.versionIds[0];
+      if (scanned.itemId === null || versionId === undefined) {
+        throw new Error("Expected exactly one scanned item and version.");
+      }
+      const server = await startThalia("all", {
+        databaseUrl: url,
+        port: 0,
+        transcoderOptions: {
+          port: 0,
+          scratchDir: await mkdtemp(join(tmpdir(), "thalia-prog-scratch-")),
+          idleMs: 500,
+          waitMs: 400,
+        },
+      });
+      try {
+        await run({
+          db,
+          base: `http://127.0.0.1:${server.apiServer?.port}`,
+          client: rpcClient(
+            `http://127.0.0.1:${server.apiServer?.port}`,
+            fx.keyToken,
+          ),
+          itemId: scanned.itemId,
+          versionId,
+          server,
+          keyToken: fx.keyToken,
+        });
+      } finally {
+        await server.stop();
+      }
+    });
+  };
+
+  const planProgressive = async (
+    client: ReturnType<typeof rpcClient>,
+    itemId: string,
+    versionId: string,
+    subtitleStreamIndex?: number,
+  ) => {
+    const planned = await client.playback.plan({
+      itemId,
+      versionId,
+      profile: { ...profile, progressive: true },
+      ...(subtitleStreamIndex === undefined ? {} : { subtitleStreamIndex }),
+    });
+    if (planned.sessionId === null || planned.url === null) {
+      throw new Error("A progressive plan must return a session and URL.");
+    }
+    return planned;
+  };
+
+  test(
+    "an unindexed Version streams progressive fMP4",
+    () =>
+      withProgressive(
+        async ({ base, client, itemId, versionId }) => {
+          const planned = await planProgressive(client, itemId, versionId);
+          expect(planned.delivery).toBe("progressive");
+          expect(planned.url).toMatch(/\/stream\?token=/);
+          const stream = await fetch(new URL(planned.url ?? "", base));
+          if (stream.status !== 200)
+            console.log("STREAM ERR", stream.status, await stream.text());
+          expect(stream.status).toBe(200);
+          expect(stream.headers.get("content-type")).toBe("video/mp4");
+          expect(stream.headers.get("x-stream-offset")).toBe("0");
+          const reader = stream.body?.getReader();
+          const head = await reader?.read();
+          expect(head?.value?.length).toBeGreaterThan(0);
+          // ftyp leads a fragmented MP4 stream.
+          const magic = String.fromCharCode(
+            ...(head?.value?.slice(4, 8) ?? []),
+          );
+          expect(magic).toBe("ftyp");
+          await reader?.cancel();
+        },
+        { index: false },
+      ),
+    30_000,
+  );
+
+  test(
+    "a seek carries an offset header and absolute subtitles",
+    () =>
+      withProgressive(
+        async ({ base, client, itemId, versionId }) => {
+          const planned = await planProgressive(client, itemId, versionId, 2);
+          const token = new URL(planned.url ?? "", base).searchParams.get(
+            "token",
+          );
+          const at = new URL(
+            `/api/playback/${planned.sessionId}/${itemId}/stream`,
+            base,
+          );
+          at.searchParams.set("token", token ?? "");
+          at.searchParams.set("start", "6");
+          const stream = await fetch(at);
+          expect(stream.status).toBe(200);
+          // The copy lands on the keyframe at 6 s.
+          expect(Number(stream.headers.get("x-stream-offset"))).toBeCloseTo(
+            6,
+            0,
+          );
+          await stream.body?.cancel();
+          expect(planned.subtitleUrl).toMatch(/\/subtitles\/2\.vtt\?token=/);
+          const subtitles = await fetch(
+            new URL(planned.subtitleUrl ?? "", base),
+          );
+          expect(subtitles.status).toBe(200);
+          expect(subtitles.headers.get("content-type")).toBe("text/vtt");
+          expect(await subtitles.text()).toContain("WEBVTT");
+        },
+        { index: false },
+      ),
+    30_000,
+  );
+
+  test(
+    "the stream route rejects an hls session and vice versa",
+    () =>
+      withProgressive(async ({ base, client, itemId, versionId }) => {
+        const hlsPlanResult = await client.playback.plan({
+          itemId,
+          versionId,
+          profile,
+        });
+        if (hlsPlanResult.sessionId === null || hlsPlanResult.url === null) {
+          throw new Error("An HLS plan must return a session and URL.");
+        }
+        const hlsPlan = {
+          sessionId: hlsPlanResult.sessionId,
+          url: hlsPlanResult.url,
+        };
+        const hlsToken = new URL(hlsPlan.url, base).searchParams.get("token");
+        const asStream = await fetch(
+          new URL(
+            `/api/playback/${hlsPlan.sessionId}/${itemId}/stream?token=${hlsToken}`,
+            base,
+          ),
+        );
+        expect(asStream.status).toBe(404);
+        await asStream.body?.cancel();
+        const subAsHls = await fetch(
+          new URL(
+            `/api/playback/${hlsPlan.sessionId}/${itemId}/subtitles/2.vtt?token=${hlsToken}`,
+            base,
+          ),
+        );
+        expect(subAsHls.status).toBe(404);
+        await subAsHls.body?.cancel();
+
+        const progressivePlan = await planProgressive(
+          client,
+          itemId,
+          versionId,
+        );
+        const token = new URL(progressivePlan.url ?? "", base).searchParams.get(
+          "token",
+        );
+        const asHls = await fetch(
+          new URL(
+            `/api/playback/${progressivePlan.sessionId}/${itemId}/hls/master.m3u8?token=${token}`,
+            base,
+          ),
+        );
+        expect(asHls.status).toBe(404);
+        await asHls.body?.cancel();
+        // A bad start and an unknown subtitle are bad input / not found.
+        const badStart = await fetch(
+          new URL(
+            `/api/playback/${progressivePlan.sessionId}/${itemId}/stream?token=${token}&start=-1`,
+            base,
+          ),
+        );
+        expect(badStart.status).toBe(400);
+        await badStart.body?.cancel();
+        const badSubtitle = await fetch(
+          new URL(
+            `/api/playback/${progressivePlan.sessionId}/${itemId}/subtitles/99.vtt?token=${token}`,
+            base,
+          ),
+        );
+        expect(badSubtitle.status).toBe(404);
+        await badSubtitle.body?.cancel();
       }),
     30_000,
   );

@@ -426,6 +426,48 @@ describe.skipIf(!databaseUrl)("library service", () => {
       ).toBe(1);
     }));
 
+  test("libraryScanStatus includes folder work reused from another producer", () =>
+    withDatabase(async (db) => {
+      await withVideoFixture(async (root) => {
+        const { admin } = await seed(db);
+        const folder = "Alien (1979)";
+        await mkdir(join(root, folder));
+        await writeFile(join(root, folder, "Alien.mkv"), "dummy");
+        const library = await createLibrary(db, admin.id, {
+          name: "Movies",
+          medium: "movies",
+          roots: [root],
+        });
+        const parent = await scanLibrary(db, admin.id, library.id);
+        const queue = createJobQueue(db);
+        const child = await queue.enqueue(
+          { type: "scan", libraryId: library.id, path: folder },
+          {
+            concurrencyKey: libraryConcurrencyKey(library.id),
+            maxAttempts: 1,
+          },
+        );
+        const rootJob = await queue.claim(["scan"]);
+        if (!rootJob) throw new Error("Root scan was not claimed.");
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await registry.run(rootJob);
+        await queue.complete(rootJob);
+        expect(
+          (await libraryScanStatus(db, admin.id, library.id, parent.jobId))
+            .counts,
+        ).toEqual({ queued: 1, running: 0, completed: 1, failed: 0 });
+        const held = await queue.claim(["scan"]);
+        if (!held) throw new Error("Reused scan was not claimed.");
+        expect(held.id).toBe(child.id);
+        await queue.fail(held, new Error("Unavailable."));
+        expect(
+          (await libraryScanStatus(db, admin.id, library.id, parent.jobId))
+            .counts.failed,
+        ).toBe(1);
+      });
+    }));
+
   test("libraryScanStatus scopes counts to one run when scans overlap", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

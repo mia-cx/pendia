@@ -74,6 +74,58 @@ test("rejects invalid retry delays and concurrency limits", async () => {
 });
 
 describe.skipIf(!databaseUrl)("Job queue", () => {
+  test("a scan retry keeps changes in arrival order and its original run", () =>
+    withDatabase(async (db) => {
+      const queue = createJobQueue(db);
+      const rootId = Bun.randomUUIDv7();
+      const runId = Bun.randomUUIDv7();
+      const scope = {
+        type: "scan",
+        libraryId: Bun.randomUUIDv7(),
+        path: "Alien",
+        runId,
+      } as const;
+      const first = {
+        kind: "add",
+        rootId,
+        path: "Alien/old.mkv",
+        providerIds: {},
+      } as const;
+      const second = {
+        kind: "move",
+        rootId,
+        path: "Alien/new.mkv",
+        previousPath: first.path,
+        providerIds: {},
+      } as const;
+      const third = {
+        kind: "delete",
+        rootId,
+        path: second.path,
+        target: "file",
+        providerIds: {},
+      } as const;
+      const original = await queue.enqueueScanChanges({
+        ...scope,
+        changes: [first],
+      });
+      const held = await queue.claim(["scan"]);
+      if (!held) throw new Error("Scan was not claimed.");
+      await queue.enqueueScanChanges({ ...scope, changes: [second] });
+      await queue.fail(held, new Error("Retry."));
+      const updated = await queue.enqueueScanChanges({
+        ...scope,
+        changes: [third],
+        reconcileMissing: true,
+      });
+      expect(updated.id).toBe(original.id);
+      expect(updated.payload).toEqual({
+        ...scope,
+        changes: [first, second, third],
+        reconcileMissing: true,
+      });
+    }));
+
   test("concurrent scan enqueues reuse the queued or running job until it settles", () =>
     withDatabase(async (db, url) => {
       const other = createDatabase(url);

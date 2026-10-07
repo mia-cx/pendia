@@ -33,6 +33,22 @@ type EnqueueOptions = Partial<
   >
 >;
 
+type ScanPayload = Extract<JobPayload, { type: "scan" }>;
+
+function scanMatch(payload: ScanPayload) {
+  const libraryScan = sql`(${jobs.payload}->>'path' = '.' and ${jobs.payload}->>'runId' is null and ${jobs.payload}->'changes' is null)`;
+  return and(
+    eq(jobs.type, "scan"),
+    inArray(jobs.state, ["queued", "running"]),
+    sql`${jobs.payload}->>'libraryId' = ${payload.libraryId}`,
+    sql`${jobs.payload}->>'path' = ${payload.path}`,
+    // A root job must be able to queue its own `.` Item-folder child.
+    payload.path === "."
+      ? sql`${libraryScan} = ${isLibraryScan(payload)}`
+      : undefined,
+  );
+}
+
 const claimLockKey = 0x70656e646a6fn;
 /** Serializes scan insertion and repair coverage checks within one Library. */
 export const scanEnqueueLockClass = 0x7363616e;
@@ -143,22 +159,10 @@ export function createJobQueue(
           await tx.execute(
             sql`select pg_advisory_xact_lock(${scanEnqueueLockClass}, hashtext(${payload.libraryId}))`,
           );
-          const libraryScan = sql`(${jobs.payload}->>'path' = '.' and ${jobs.payload}->>'runId' is null and ${jobs.payload}->'changes' is null)`;
           const [existing] = await tx
             .select()
             .from(jobs)
-            .where(
-              and(
-                eq(jobs.type, "scan"),
-                inArray(jobs.state, ["queued", "running"]),
-                sql`${jobs.payload}->>'libraryId' = ${payload.libraryId}`,
-                sql`${jobs.payload}->>'path' = ${payload.path}`,
-                // A root job must be able to queue its own `.` Item-folder child.
-                payload.path === "."
-                  ? sql`${libraryScan} = ${isLibraryScan(payload)}`
-                  : undefined,
-              ),
-            )
+            .where(scanMatch(payload))
             .orderBy(jobs.id)
             .limit(1);
           if (existing !== undefined) return existing;
@@ -175,6 +179,65 @@ export function createJobQueue(
         if (!job) throw new Error("Job insertion returned no row.");
         await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
         return job;
+      });
+    },
+
+    /** Persists distinct changes on a reused scan; running jobs process them after their current input. */
+    async enqueueScanChanges(
+      payload: ScanPayload,
+      options: EnqueueOptions = {},
+    ) {
+      return db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${scanEnqueueLockClass}, hashtext(${payload.libraryId}))`,
+        );
+        const [existing] = await tx
+          .select()
+          .from(jobs)
+          .where(scanMatch(payload))
+          .orderBy(jobs.id)
+          .limit(1)
+          .for("update");
+        if (existing?.payload.type !== "scan")
+          return createJobQueue(tx).enqueue(payload, options);
+        const changes = payload.changes ?? [];
+        if (
+          changes.length === 0 &&
+          (!payload.reconcileMissing || existing.payload.reconcileMissing)
+        )
+          return existing;
+        const { pendingScan: pending, ...prior } = existing.payload;
+        const next =
+          existing.state === "running"
+            ? {
+                ...existing.payload,
+                pendingScan: {
+                  changes: [...(pending?.changes ?? []), ...changes],
+                  reconcileMissing:
+                    pending?.reconcileMissing === true ||
+                    payload.reconcileMissing === true,
+                },
+              }
+            : {
+                ...prior,
+                changes: [
+                  ...(prior.changes ?? []),
+                  ...(pending?.changes ?? []),
+                  ...changes,
+                ],
+                reconcileMissing:
+                  existing.payload.reconcileMissing === true ||
+                  pending?.reconcileMissing === true ||
+                  payload.reconcileMissing === true,
+              };
+        const [updated] = await tx
+          .update(jobs)
+          .set({ payload: next })
+          .where(eq(jobs.id, existing.id))
+          .returning();
+        if (!updated) throw new Error("Scan update returned no row.");
+        await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
+        return updated;
       });
     },
 
@@ -246,20 +309,52 @@ export function createJobQueue(
       });
     },
 
-    /** Completes the job only for the claim that holds it. */
+    /** Completes the held claim, or requeues that scan with changes received during its work. */
     async complete(job: Claim) {
-      const [completed] = await db
-        .update(jobs)
-        .set({ state: "completed" })
-        .where(
-          and(
-            eq(jobs.id, job.id),
-            eq(jobs.claimToken, job.claimToken),
-            eq(jobs.state, "running"),
-          ),
-        )
-        .returning();
-      return completed;
+      return db.transaction(async (tx) => {
+        const held = and(
+          eq(jobs.id, job.id),
+          eq(jobs.claimToken, job.claimToken),
+          eq(jobs.state, "running"),
+        );
+        const [current] = await tx
+          .select()
+          .from(jobs)
+          .where(held)
+          .for("update");
+        if (!current) return undefined;
+        if (
+          current.payload.type === "scan" &&
+          current.payload.pendingScan !== undefined
+        ) {
+          const { pendingScan, ...payload } = current.payload;
+          const [queued] = await tx
+            .update(jobs)
+            .set({
+              state: "queued",
+              attempts: 0,
+              error: null,
+              runAfter: sql`statement_timestamp()`,
+              payload: {
+                ...payload,
+                changes: pendingScan.changes,
+                reconcileMissing:
+                  payload.reconcileMissing === true ||
+                  pendingScan.reconcileMissing,
+              },
+            })
+            .where(held)
+            .returning();
+          await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
+          return queued;
+        }
+        const [completed] = await tx
+          .update(jobs)
+          .set({ state: "completed" })
+          .where(held)
+          .returning();
+        return completed;
+      });
     },
 
     /**

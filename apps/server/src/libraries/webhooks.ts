@@ -104,7 +104,7 @@ export function createChangeDebouncer(
     batch.timer = undefined;
     const persisted = batch.changes.slice();
     const flushing = queue
-      .enqueue(
+      .enqueueScanChanges(
         {
           type: "scan",
           libraryId: batch.libraryId,

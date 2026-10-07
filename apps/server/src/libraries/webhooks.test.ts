@@ -66,6 +66,62 @@ async function waitForScanJobs(db: Database, count: number) {
 }
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
+  test.each(["queued", "running"] as const)(
+    "a later watcher move survives a %s scan of the same folder",
+    (state) =>
+      withDatabase(async (db) => {
+        await withVideoFixture(async (root) => {
+          const folder = "Alien (1979)";
+          const oldPath = `${folder}/old.mkv`;
+          const newPath = `${folder}/new.mkv`;
+          await mkdir(join(root, folder));
+          await createVideoFixture(join(root, oldPath));
+          const library = await insertLibrary(db, "Movies", root);
+          const debouncer = createChangeDebouncer(db);
+          const queue = createJobQueue(db);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const first = await queue.enqueue({
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            changes: [
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: oldPath,
+                providerIds: {},
+              },
+            ],
+          });
+          const held =
+            state === "running" ? await queue.claim(["scan"]) : undefined;
+          if (held) await registry.run(held);
+          else await scanDirectory(db, library.id, folder);
+          const [original] = await db.select().from(files);
+          if (!original) throw new Error("Initial File was not imported.");
+          await rename(join(root, oldPath), join(root, newPath));
+          await debouncer.submitWatched(library.rootId, [
+            { kind: "move", previousPath: oldPath, path: newPath },
+          ]);
+          await debouncer.close();
+          if (held) await queue.complete(held);
+          for (;;) {
+            const job = await queue.claim(["scan"]);
+            if (!job) break;
+            await registry.run(job);
+            await queue.complete(job);
+          }
+          expect(await db.select().from(files)).toMatchObject([
+            { id: original.id, path: newPath },
+          ]);
+          expect(
+            (await listJobs(db, { type: "scan" })).map((job) => job.id),
+          ).toEqual([first.id]);
+        });
+      }),
+  );
+
   test("three changes for one movie directory become one scan job", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

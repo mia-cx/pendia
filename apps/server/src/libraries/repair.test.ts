@@ -208,6 +208,35 @@ describe.skipIf(!databaseUrl)("library repair", () => {
       });
     }));
 
+  test("restart repair scans a completed folder that gained a file while its sibling waits", () =>
+    withDatabase(async (db) => {
+      await withVideoFixture(async (root) => {
+        for (const path of [file1080, "Heat (1995)/Heat.mkv"]) {
+          await mkdir(join(root, path, ".."), { recursive: true });
+          await createVideoFixture(join(root, path));
+        }
+        const library = await insertLibrary(db, root);
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue({ type: "scan", libraryId: library.id, path: "." });
+        for (let index = 0; index < 2; index++) {
+          const job = await queue.claim(["scan"]);
+          if (!job) throw new Error("Scan was not claimed.");
+          await registry.run(job);
+          await queue.complete(job);
+        }
+        await createVideoFixture(join(root, file2160));
+        const repair = createLibraryRepair(db);
+        expect(await repair.run()).toBe(1);
+        await drainScanJobs(db);
+        expect(
+          (await db.select().from(files)).map((file) => file.path),
+        ).toContain(file2160);
+        expect(await repair.run()).toBe(0);
+      });
+    }));
+
   test("a directory change queues a scan that imports the new file", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

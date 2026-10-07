@@ -73,6 +73,10 @@ export type JobPayload =
       changes?: ScanChange[];
       reconcileMissing?: boolean;
       runId?: string;
+      /** Folder jobs this whole-Library run created or reused. */
+      childJobIds?: string[];
+      /** Changes arriving after a running scan captured its input. */
+      pendingScan?: { changes: ScanChange[]; reconcileMissing: boolean };
     }
   | { type: "probe"; fileId: string }
   // `weekly` marks the one refresh a continuing Show keeps queued a week ahead.

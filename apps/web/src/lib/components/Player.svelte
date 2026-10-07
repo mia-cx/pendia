@@ -56,6 +56,7 @@ let video = $state<HTMLVideoElement>();
 let root = $state<HTMLElement>();
 let barHeight = $state(0);
 let player = $state<ReturnType<typeof createPlayer>>();
+let boost: ReturnType<typeof createBoost> | undefined;
 let playerState = $state<PlayerState>();
 let fullscreen = $state(false);
 let pip = $state(false);
@@ -95,6 +96,8 @@ $effect(() => {
   if (initial === undefined) return;
   const media = video;
   const detailNow = detail;
+  const nextBoost = createBoost(media);
+  boost = nextBoost;
   player = untrack(() =>
     createPlayer({
       media,
@@ -118,7 +121,7 @@ $effect(() => {
           onTracks: request.onTracks,
         }),
       prefs: playerPrefs,
-      amplify: createBoost(media),
+      amplify: nextBoost.amplify,
     }),
   );
 });
@@ -158,6 +161,7 @@ onDestroy(() => {
   destroyed = true;
   clearTimeout(tapTimer);
   void player?.close();
+  boost?.close();
 });
 
 afterNavigate(({ from }) => {

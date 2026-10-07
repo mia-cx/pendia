@@ -56,17 +56,29 @@ class FakeContext {
     this.state = "running";
     return Promise.resolve();
   }
+  closes = 0;
+  close() {
+    this.closes += 1;
+    this.state = "closed";
+    return Promise.resolve();
+  }
 }
 
 function setup() {
   const media = new EventTarget() as unknown as HTMLMediaElement;
   const context = new FakeContext();
   let created = 0;
-  const amplify = createBoost(media, () => {
+  const boost = createBoost(media, () => {
     created += 1;
     return context as unknown as AudioContext;
   });
-  return { media, context, amplify, created: () => created };
+  return {
+    media,
+    context,
+    boost,
+    amplify: boost.amplify,
+    created: () => created,
+  };
 }
 
 describe("audio boost", () => {
@@ -105,6 +117,26 @@ describe("audio boost", () => {
     expect(gain?.gain.value).toBe(1);
     expect(gain?.connected).toEqual([context.destination]);
     expect(compressor?.connected).toEqual([]);
+  });
+
+  test("close after a boost closes the context and stops the listener", () => {
+    const { media, context, boost, amplify } = setup();
+    amplify(2);
+    boost.close();
+    expect(context.closes).toBe(1);
+    expect(context.source.connected).toEqual([]);
+    expect(context.gains[0]?.connected).toEqual([]);
+    const resumes = context.resumes;
+    media.dispatchEvent(new Event("play"));
+    expect(context.resumes).toBe(resumes);
+  });
+
+  test("close without a graph builds nothing, and a second close is fine", () => {
+    const { context, boost, created } = setup();
+    boost.close();
+    boost.close();
+    expect(created()).toBe(0);
+    expect(context.closes).toBe(0);
   });
 
   test("a play event resumes a suspended context", () => {

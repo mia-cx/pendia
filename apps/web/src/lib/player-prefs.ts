@@ -22,10 +22,12 @@ export type PrefsStore = {
   write(prefs: PlayerPrefs): void;
 };
 
-/** Reads the stored prefs; each field falls back to its default when missing or invalid, and storage that throws reads as defaults. */
-export function readPrefs(storage: Pick<Storage, "getItem">): PlayerPrefs {
+/** Reads the stored prefs; each field falls back to its default when missing or invalid, and storage that throws reads as defaults. The storage getter itself is called inside the try: under some browser policies even `localStorage` access throws. */
+export function readPrefs(
+  storage: () => Pick<Storage, "getItem">,
+): PlayerPrefs {
   try {
-    const raw = storage.getItem(key);
+    const raw = storage().getItem(key);
     if (raw === null) return { ...defaults };
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return { ...defaults };
@@ -51,11 +53,11 @@ export function readPrefs(storage: Pick<Storage, "getItem">): PlayerPrefs {
 
 /** Persists the prefs; storage that throws is ignored. */
 export function writePrefs(
-  storage: Pick<Storage, "setItem">,
+  storage: () => Pick<Storage, "setItem">,
   prefs: PlayerPrefs,
 ) {
   try {
-    storage.setItem(key, JSON.stringify(prefs));
+    storage().setItem(key, JSON.stringify(prefs));
   } catch {
     // Private browsing may refuse writes; prefs stay session-only.
   }
@@ -63,6 +65,6 @@ export function writePrefs(
 
 /** The localStorage-backed store the Player passes to createPlayer. */
 export const playerPrefs: PrefsStore = {
-  read: () => readPrefs(localStorage),
-  write: (prefs) => writePrefs(localStorage, prefs),
+  read: () => readPrefs(() => localStorage),
+  write: (prefs) => writePrefs(() => localStorage, prefs),
 };

@@ -14,6 +14,7 @@ import {
   libraries,
   libraryRoots,
   probeCache,
+  scanFailures,
 } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { runScanJob } from "../libraries/jobs.ts";
@@ -29,7 +30,10 @@ import type {
   createChangeDebouncer,
   WatchedChange,
 } from "../libraries/webhooks.ts";
-import { parseProbeOutput } from "../mediums/video-common/probe.ts";
+import {
+  parseProbeOutput,
+  UnreadableMediaError,
+} from "../mediums/video-common/probe.ts";
 
 const bearerPattern = /^Bearer (\S+)$/i;
 const jobPattern = /^\/api\/watcher\/jobs\/([^/]+)$/;
@@ -103,6 +107,16 @@ const ScanReport = Schema.Union(
         keyframesSeconds: Schema.NullOr(Schema.Array(Schema.Number)),
       }),
     ),
+    /** Deterministic probe failures; the rest of the folder still scanned. */
+    failures: Schema.optionalWith(
+      Schema.Array(
+        Schema.Struct({
+          ...ReportedPath.fields,
+          detail: Schema.String,
+        }),
+      ),
+      { default: () => [] },
+    ),
     /** The claim's `check` files that are gone. */
     missing: Schema.optionalWith(Schema.Array(ReportedPath), {
       default: () => [],
@@ -128,6 +142,8 @@ export type WatcherClaim = {
     library: boolean;
     /** Files whose cached probe is current at this size and mtime. */
     cached: (typeof ReportedFile.Encoded)[];
+    /** Failed probes whose current size and mtime suppress another probe. */
+    failed?: (typeof ReportedFile.Encoded)[];
     /** Stored Files outside the scope whose existence the scan may need: the rest of a moved Show. */
     check: RootedPath[];
   } | null;
@@ -251,6 +267,24 @@ async function claim(
   const moves = (job.payload.changes ?? []).flatMap((change) =>
     change.kind === "move" ? [change] : [],
   );
+  const failed = libraryScan
+    ? []
+    : await db
+        .select({
+          rootId: scanFailures.rootId,
+          path: scanFailures.path,
+          bytes: scanFailures.bytes,
+          modifiedNs: scanFailures.modifiedNs,
+        })
+        .from(scanFailures)
+        .where(
+          and(
+            inArray(scanFailures.rootId, library.rootIds),
+            ...(path === "."
+              ? []
+              : [sql`starts_with(${scanFailures.path}, ${`${path}/`})`]),
+          ),
+        );
   // The scan re-paths moved Files first, so a destination that vanished must be checked too.
   const check =
     library.medium === "shows" && moves.length > 0
@@ -274,6 +308,11 @@ async function claim(
       medium: library.medium,
       library: libraryScan,
       cached: cached.map((file) => Schema.encodeSync(ReportedFile)(file)),
+      ...(failed.length === 0
+        ? {}
+        : {
+            failed: failed.map((file) => Schema.encodeSync(ReportedFile)(file)),
+          }),
       check,
     },
   };
@@ -335,6 +374,9 @@ function reportedScanSource(
   const probes = new Map(
     report.probes.map((probe) => [rootedKey(probe), probe]),
   );
+  const failures = new Map(
+    report.failures.map((failure) => [rootedKey(failure), failure.detail]),
+  );
   const missing = new Set(report.missing.map(rootedKey));
   return {
     rootsRevision: report.rootsRevision,
@@ -348,6 +390,8 @@ function reportedScanSource(
       const file = reportedFiles.get(rootedKey(at));
       if (file === undefined)
         throw new Error(`Watcher did not report ${at.path}.`);
+      const failure = failures.get(rootedKey(at));
+      if (failure !== undefined) throw new UnreadableMediaError(failure);
       const reported = probes.get(rootedKey(at));
       if (reported !== undefined) {
         const probe = {

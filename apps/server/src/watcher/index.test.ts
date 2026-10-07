@@ -1,11 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { jobs, probeCache, streams } from "../db/schema/index.ts";
+import {
+  files,
+  jobs,
+  probeCache,
+  scanFailures,
+  streams,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startThalia } from "../index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
@@ -19,10 +32,113 @@ import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
-import { createWatcherHandler } from "./http.ts";
+import { createWatcherHandler, type WatcherReport } from "./http.ts";
 import { readWatcherConfig, startWatcher } from "./index.ts";
 
 const rootId = "0199a000-0000-7000-8000-000000000001";
+
+test.skipIf(!databaseUrl)(
+  "watcher scans index healthy neighbours, reuse failures, and recover changed files",
+  () =>
+    withDatabase((db) =>
+      withVideoFixture(async (root) => {
+        await mkdir(join(root, "Show"));
+        const good = "Show/Show S01E01.mkv";
+        const bad = "Show/Show S01E02.mkv";
+        await createVideoFixture(join(root, good));
+        await writeFile(join(root, bad), "");
+        const admin = await setupAdmin(db, {
+          username: "admin",
+          password: "admin-pass",
+        });
+        const { token } = await createApiKey(db, admin.id, "Watcher");
+        const [library] = await insertLibraries(db, {
+          name: "Shows",
+          medium: "shows",
+          rootPath: "/nfs/shows",
+        });
+        if (!library) throw new Error("Fixture library missing.");
+        const handler = createWatcherHandler(db, {
+          submitWatched: () => Promise.reject(new Error("No events expected.")),
+        });
+        const reports: WatcherReport[] = [];
+        const api = Bun.serve({
+          port: 0,
+          async fetch(request) {
+            if (/\/api\/watcher\/jobs\//.test(new URL(request.url).pathname))
+              reports.push(await request.clone().json());
+            return (
+              (await handler(request)) ?? new Response(null, { status: 404 })
+            );
+          },
+        });
+        const queue = createJobQueue(db);
+        const run = async () => {
+          const job = await queue.enqueue({
+            type: "scan",
+            libraryId: library.id,
+            path: "Show",
+            reconcileMissing: true,
+          });
+          const errors: unknown[] = [];
+          const watcher = await startWatcher(
+            {
+              apiUrl: new URL(api.url),
+              token,
+              roots: new Map([[library.rootId, root]]),
+            },
+            {
+              pollIntervalMs: 20,
+              settleMs: 10_000,
+              onError: (error) => errors.push(error),
+            },
+          );
+          try {
+            const deadline = Date.now() + 5_000;
+            let written = (await db.select().from(jobs)).find(
+              (row) => row.id === job.id,
+            );
+            while (written?.state !== "completed" && Date.now() < deadline) {
+              await Bun.sleep(20);
+              written = (await db.select().from(jobs)).find(
+                (row) => row.id === job.id,
+              );
+            }
+            expect(written).toMatchObject({ state: "completed", attempts: 1 });
+            expect(
+              errors.filter(
+                (error) => !String(error).includes("heartbeat failed (409)"),
+              ),
+            ).toEqual([]);
+          } finally {
+            await watcher.stop();
+          }
+        };
+        try {
+          await run();
+          expect(await db.select().from(files)).toMatchObject([{ path: good }]);
+          const failures = await db.select().from(scanFailures);
+          expect(failures).toMatchObject([{ path: bad, reason: "unreadable" }]);
+          expect(reports[0]).toMatchObject({
+            failures: [
+              { path: bad, detail: expect.stringContaining("ffprobe failed") },
+            ],
+          });
+          await run();
+          expect(reports[1]).toMatchObject({ probes: [] });
+          expect(reports[1]).not.toHaveProperty("failures");
+          expect(await db.select().from(scanFailures)).toEqual(failures);
+          await copyFile(join(root, good), join(root, bad));
+          await run();
+          expect(await db.select().from(files)).toHaveLength(2);
+          expect(await db.select().from(scanFailures)).toEqual([]);
+          expect(reports[2]).toMatchObject({ probes: [{ path: bad }] });
+        } finally {
+          await api.stop();
+        }
+      }),
+    ),
+);
 
 /** Waits up to `ms` for a pushed change that matches. */
 async function waitForChange(

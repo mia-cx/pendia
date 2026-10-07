@@ -138,14 +138,32 @@ export function attachProgressive(
       buffer.abort();
       if (updating) await nextUpdate();
     }
+    // A busy transcoder answers 503 SESSION_QUEUED with Retry-After: wait and
+    // refetch the same start until a minute has passed.
+    let queuedSince: number | null = null;
     let response: Response;
-    try {
-      response = await fetch(options.streamUrl(start), {
-        signal: current.signal,
-      });
-    } catch {
-      if (!current.signal.aborted && !closed.signal.aborted) fail();
-      return;
+    for (;;) {
+      try {
+        response = await fetch(options.streamUrl(start), {
+          signal: current.signal,
+        });
+      } catch {
+        if (!current.signal.aborted && !closed.signal.aborted) fail();
+        return;
+      }
+      if (response.status !== 503) break;
+      const retryAfter = Number(response.headers.get("retry-after"));
+      await response.body?.cancel().catch(() => {});
+      if (queuedSince === null) queuedSince = Date.now();
+      if (Date.now() - queuedSince > 60_000) {
+        fail();
+        return;
+      }
+      await interruptible(
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000,
+        current,
+      );
+      if (current.signal.aborted || closed.signal.aborted) return;
     }
     if (response.body === null || !response.ok) {
       fail();

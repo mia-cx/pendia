@@ -24,10 +24,7 @@ import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
-import {
-  decidePlayback,
-  type PlaybackDecision,
-} from "../playback/decisions.ts";
+import { decidePlayback, type SessionDecision } from "../playback/decisions.ts";
 import { loadPlaybackSource } from "../playback/planning.ts";
 import { type HlsName, parseHlsName } from "../playback/playlists.ts";
 import { deriveSegmentTimeline } from "../playback/timeline.ts";
@@ -124,7 +121,7 @@ describe.skipIf(!databaseUrl)("session manager", () => {
       versionId: string;
     }) => Promise<void>,
     managerOptions: Partial<SessionManagerOptions> = {},
-    decision?: PlaybackDecision,
+    decision?: SessionDecision,
   ) => {
     await withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -1010,6 +1007,136 @@ describe.skipIf(!databaseUrl)("session manager", () => {
         }
         expect(() => process.kill(pid, 0)).toThrow();
       }),
+    30_000,
+  );
+});
+
+describe.skipIf(!databaseUrl)("progressive streams", () => {
+  // withSession is scoped to the describe above; build a minimal one here.
+  const withProgressiveSession = async (
+    run: (context: {
+      db: Database;
+      manager: SessionManager;
+      scope: SessionScope;
+    }) => Promise<void>,
+    managerOptions: Partial<SessionManagerOptions> = {},
+  ) => {
+    await withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const admin = await setupAdmin(db, {
+        username: "admin",
+        password: "secret",
+      });
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        roots: [libraryRoot],
+      });
+      const scanned = await scanDirectory(db, library.id, "Movie (2026)");
+      const versionId = scanned.versionIds[0];
+      if (scanned.itemId === null || versionId === undefined) {
+        throw new Error("Expected exactly one scanned item and version.");
+      }
+      const [session] = await db
+        .insert(sessionRegistry)
+        .values({
+          userId: admin.id,
+          itemId: scanned.itemId,
+          versionId,
+          playMethod: "remux",
+          state: "starting",
+          decision: {
+            method: "remux",
+            video: {
+              action: "copy",
+              codec: "h264",
+              hdr: "sdr",
+              stripDolbyVision: false,
+            },
+            audio: { action: "copy", codec: "aac", channels: 2 },
+            subtitles: [],
+            selection: { audio: 0 },
+            delivery: "progressive",
+          },
+        })
+        .returning();
+      if (session === undefined) {
+        throw new Error("Session insert returned no row.");
+      }
+      const manager = createSessionManager(db, {
+        scratchDir: await mkdtemp(join(tmpdir(), "thalia-prog-scratch-")),
+        idleMs: 400,
+        waitMs: 300,
+        ...managerOptions,
+      });
+      try {
+        await run({
+          db,
+          manager,
+          scope: {
+            sessionId: session.id,
+            itemId: scanned.itemId,
+            versionId,
+            userId: admin.id,
+          },
+        });
+      } finally {
+        await manager.stop();
+      }
+    });
+  };
+
+  let libraryRoot: string;
+
+  beforeAll(async () => {
+    libraryRoot = await mkdtemp(join(tmpdir(), "thalia-prog-library-"));
+    const folder = join(libraryRoot, "Movie (2026)");
+    await mkdir(folder);
+    await createVideoFixture(join(folder, "Movie.mkv"), {
+      width: 1920,
+      height: 1080,
+      durationSeconds: 12,
+      frameRate: 25,
+      gopSeconds: 3,
+      pattern: "testsrc2",
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await rm(libraryRoot, { recursive: true, force: true });
+  });
+
+  test(
+    "a stream in flight outlives the idle timeout",
+    () =>
+      withProgressiveSession(
+        async ({ manager, scope }) => {
+          const response = await manager.stream(scope, 0);
+          expect(response.status).toBe(200);
+          if (response.body === null) throw new Error("No stream body.");
+          const reader = response.body.getReader();
+          const first = await reader.read();
+          expect(first.done).toBe(false);
+          expect(first.value?.length).toBeGreaterThan(0);
+          // Stop reading well past idleMs: ffmpeg blocks on the full pipe but
+          // the run must not be reaped.
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          let bytes = 0;
+          const deadline = Date.now() + 8_000;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            bytes += value?.length ?? 0;
+            if (Date.now() > deadline) break;
+          }
+          expect(bytes).toBeGreaterThan(0);
+          const alive = await manager.stream(scope, 0);
+          expect(alive.status).toBe(200);
+          await alive.body?.cancel();
+          await reader.cancel();
+        },
+        { idleMs: 150, waitMs: 300 },
+      ),
     30_000,
   );
 });

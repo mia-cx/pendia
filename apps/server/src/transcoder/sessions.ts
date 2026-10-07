@@ -478,6 +478,24 @@ export function createSessionManager(
     }, idleMs);
   };
 
+  /** A request that reaches a session keeps it alive; a running stream does. */
+  const streamDisarm = (session: StreamSession) => {
+    if (session.idleTimer !== null) clearTimeout(session.idleTimer);
+    session.idleTimer = null;
+  };
+
+  /** Arms idle cleanup once the session has no live stream left. */
+  const streamArm = (session: StreamSession) => {
+    if (
+      closed ||
+      session.stopped ||
+      session.running !== null ||
+      session.idleTimer !== null
+    )
+      return;
+    streamTouch(session);
+  };
+
   const stopStreamSession = (sessionId: string) =>
     (async () => {
       const pending = streamSessions.get(sessionId);
@@ -961,11 +979,13 @@ export function createSessionManager(
       if (closed) return stoppingResponse();
       const session = await streamSession(scope);
       if (closed || session.stopped) return stoppingResponse();
-      streamTouch(session);
+      // The stream can outlive idleMs — hold the timer until the run ends.
+      streamDisarm(session);
       const previous = session.running;
       session.running = null;
       await previous?.kill();
       if (!(await waitForStreamSlot(session))) {
+        streamArm(session);
         return session.stopped ? stoppingResponse() : streamQueuedResponse();
       }
       const start =
@@ -1005,6 +1025,9 @@ export function createSessionManager(
       void proc.exited.then(async (code) => {
         if (session.running === running) session.running = null;
         if (admitted.delete(sessionId)) admitNext();
+        // The response body ended (or the client aborted, which killed the
+        // run above): the session may idle now.
+        streamArm(session);
         if (!killed && code !== null && code !== 0) {
           log("error", "run.failed", {
             sessionId,
@@ -1044,7 +1067,7 @@ export function createSessionManager(
           { status: 404, headers: standardHeaders },
         );
       }
-      streamTouch(session);
+      streamArm(session);
       const path = join(session.directory, `subs-${index}.vtt`);
       if (!session.conversions.has(index)) {
         await mkdir(session.directory, { recursive: true });

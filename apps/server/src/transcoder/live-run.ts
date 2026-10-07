@@ -124,7 +124,11 @@ const oneSegmentSeconds = 86_400;
 
 const seconds = (time: number) => (Math.floor(time * 1e6) / 1e6).toFixed(6);
 
-function videoArguments(run: LiveRun) {
+/** Builds the video args for a run; when forceKeyFrames is given it replaces the timeline boundary list. */
+export function videoArguments(
+  run: { video: VideoDecision; burnSubtitle?: number },
+  forceKeyFrames?: string,
+) {
   const video = run.video;
   if (video.action === "copy") {
     const args = ["-map", "0:V:0", "-c:v", "copy"];
@@ -170,18 +174,19 @@ function videoArguments(run: LiveRun) {
   if (video.maxFrameRate !== null) {
     args.push("-fpsmax", String(video.maxFrameRate));
   }
-  // Only the boundaries this run reaches: ffmpeg consumes one forced time per
-  // frame, so earlier ones would turn the run's first frames into keyframes.
-  const forced = run.boundariesSeconds.slice(run.startIndex + 1, -1);
-  if (forced.length > 0) {
-    args.push("-force_key_frames:v", forced.map(seconds).join(","));
+  if (forceKeyFrames !== undefined) {
+    args.push("-force_key_frames:v", forceKeyFrames);
+    return args;
   }
   return args;
 }
 
-function audioArguments(run: LiveRun) {
+export function audioArguments(run: {
+  audioStream?: number;
+  audio?: AudioDecision | null;
+}) {
   const audio = run.audio;
-  if (audio === undefined || audio.action === "copy") {
+  if (audio == null || audio.action === "copy") {
     return [...audioMap(run.audioStream), "-c:a", "copy"];
   }
   const bitrate =
@@ -226,10 +231,16 @@ export function liveRunArguments(run: LiveRun) {
     const boundary = run.boundariesSeconds[run.startIndex] ?? 0;
     args.push("-seek_timestamp", "1", "-ss", `${Math.ceil(boundary * 1e6)}us`);
   }
+  // Only the boundaries this run reaches: ffmpeg consumes one forced time per
+  // frame, so earlier ones would turn the run's first frames into keyframes.
+  const forced = run.boundariesSeconds.slice(run.startIndex + 1, -1);
   args.push(
     "-i",
     run.inputPath,
-    ...videoArguments(run),
+    ...videoArguments(
+      run,
+      forced.length > 0 ? forced.map(seconds).join(",") : undefined,
+    ),
     ...audioArguments(run),
     "-sn",
     "-dn",

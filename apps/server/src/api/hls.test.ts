@@ -689,14 +689,14 @@ describe.skipIf(!databaseUrl)("progressive playback", () => {
             base,
           );
           at.searchParams.set("token", token ?? "");
-          at.searchParams.set("start", "6");
+          // 7 s is not on a keyframe: the fixture cuts GOPs every 3 s, so the
+          // stream starts on the keyframe at 6 s and the header says so.
+          at.searchParams.set("start", "7");
           const stream = await fetch(at);
           expect(stream.status).toBe(200);
-          // The copy lands on the keyframe at 6 s.
-          expect(Number(stream.headers.get("x-stream-offset"))).toBeCloseTo(
-            6,
-            0,
-          );
+          const offset = Number(stream.headers.get("x-stream-offset"));
+          expect(offset).toBeCloseTo(6, 3);
+          expect(offset).not.toBeCloseTo(7, 3);
           await stream.body?.cancel();
           expect(planned.subtitleUrl).toMatch(/\/subtitles\/2\.vtt\?token=/);
           const subtitles = await fetch(

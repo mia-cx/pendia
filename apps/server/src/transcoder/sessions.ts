@@ -869,13 +869,14 @@ export function createSessionManager(
   ): Promise<number> => {
     if (start <= 0) return 0;
     if (session.outputs.video.action === "transcode") return start;
+    // The run's demuxer seek lands on the keyframe at or before start;
+    // ffprobe's read_intervals seeks the same way and names the first
+    // packet's source time.
     const proc = Bun.spawn(
       [
         "ffprobe",
         "-v",
         "error",
-        "-ss",
-        String(start),
         "-select_streams",
         "v:0",
         "-show_entries",
@@ -883,17 +884,27 @@ export function createSessionManager(
         "-of",
         "csv=p=0",
         "-read_intervals",
-        "%+0.5",
+        `${start}%+#1`,
         session.inputPath,
       ],
-      { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     );
-    const first = (await new Response(proc.stdout).text())
-      .split("\n")
-      .find((line) => line !== "");
-    await proc.exited;
+    const [output, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    const first = output.split("\n").find((line) => line !== "");
     const pts = Number.parseFloat(first ?? "");
-    return Number.isFinite(pts) ? pts : start;
+    if (code !== 0 || !Number.isFinite(pts)) {
+      log("error", "stream.offset_failed", {
+        sessionId: session.scope.sessionId,
+        start,
+        error: (stderr ?? "").trim().slice(-500) || `exit ${code}`,
+      });
+      return start;
+    }
+    return pts;
   };
 
   return {

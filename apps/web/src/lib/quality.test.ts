@@ -91,7 +91,15 @@ describe("qualityValue", () => {
       "Auto",
     );
     expect(qualityValue(state("original"), quality())).toBe("Original");
-    expect(qualityValue(state("720p"), quality())).toBe("720p");
+    // A rung pick names the rung that's playing, and the pick before a frame.
+    expect(
+      qualityValue(state("720p", { width: 1280, height: 720 }), quality()),
+    ).toBe("720p");
+    expect(qualityValue({ quality: "720p", videoSize: null }, quality())).toBe(
+      "720p",
+    );
+    // A persisted rung taller than the source still names what plays.
+    expect(qualityValue(state("2160p"), quality())).toBe("1080p");
   });
 });
 

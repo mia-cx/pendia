@@ -40,7 +40,7 @@ export function playingName(
   return box?.name ?? `${size.height}p`;
 }
 
-/** The Quality row's value: `Auto · 1080p`, `Original`, or the picked rung. */
+/** The Quality row's value: `Auto · 1080p`, `Original`, or the rung that's playing, falling back to the pick before a frame loads. */
 export function qualityValue(
   state: {
     quality: string;
@@ -48,12 +48,11 @@ export function qualityValue(
   },
   quality: Quality | undefined,
 ): string {
+  const name = playingName(state.videoSize, quality);
   if (state.quality === "original") return "Original";
-  if (state.quality === "auto") {
-    const name = playingName(state.videoSize, quality);
+  if (state.quality === "auto")
     return name === null ? "Auto" : `Auto · ${name}`;
-  }
-  return state.quality;
+  return name ?? state.quality;
 }
 
 /** One Quality submenu option; `versionId` names the Version to open for version-sourced rungs. */

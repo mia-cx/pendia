@@ -20,15 +20,17 @@ const forcedKeyframes = "expr:gte(t,n_forced*4)";
 
 /**
  * Builds the ffmpeg argument list for one progressive fMP4 stream to stdout.
- * `-copyts` keeps a stream copy's timestamps absolute: the first moof's tfdt is
- * the source time of its first frame, the keyframe at or before the seek. A
- * re-encode rebases tfdt to its first frame no matter the flags (see the spike
- * in the #135 plan notes); clients add the start back with
- * SourceBuffer.timestampOffset.
+ * Timestamps are always relative to the run's first frame: ffmpeg's muxer
+ * rebases them when everything copies or re-encodes, and only keeps absolute
+ * `-copyts` times on mixed copy/encode runs, which is too inconsistent to
+ * depend on (see the spike notes in the #135 plan). The run tells the client
+ * where stream-time zero lands through the `x-stream-offset` response header,
+ * and it becomes MSE's SourceBuffer.timestampOffset.
  */
 export function progressiveArguments(run: ProgressiveRun) {
   const args = ["-hide_banner", "-loglevel", "error", "-nostdin"];
   if (run.startSeconds > 0) {
+    // A demuxer seek lands on the keyframe at or before the position.
     args.push(
       "-seek_timestamp",
       "1",
@@ -43,9 +45,9 @@ export function progressiveArguments(run: ProgressiveRun) {
     ...audioArguments(run),
     "-sn",
     "-dn",
-    "-copyts",
+    // Frames before the seek land negative; zero the floor so they stay in.
     "-avoid_negative_ts",
-    "disabled",
+    "make_zero",
     "-f",
     "mp4",
     // delay_moov lets the muxer finish parsing an AC-3 or E-AC-3 header before

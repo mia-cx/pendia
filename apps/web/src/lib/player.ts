@@ -223,7 +223,6 @@ export function play(options: PlaybackOptions) {
         mime,
         durationSeconds: options.durationSeconds,
         startAt: at,
-        timestampsRelative: planned.output?.video.transcode === true,
         onError: () => onNotice(stalled),
       });
       if (planned.subtitleUrl !== null) {

@@ -8,11 +8,6 @@ export type ProgressiveOptions = {
   durationSeconds: number | null;
   /** Source second playback starts at. */
   startAt: number;
-  /**
-   * A re-encoded stream's timestamps are relative to its start; a copied
-   * stream's are absolute. When true each fetch's start becomes the offset.
-   */
-  timestampsRelative: boolean;
   onError: () => void;
 };
 
@@ -120,9 +115,6 @@ export function attachProgressive(
       buffer.abort();
       await nextUpdate();
     }
-    if (buffer !== undefined) {
-      buffer.timestampOffset = options.timestampsRelative ? start : 0;
-    }
     let response: Response;
     try {
       response = await fetch(options.streamUrl(start), {
@@ -135,6 +127,12 @@ export function attachProgressive(
     if (response.body === null || !response.ok) {
       fail();
       return;
+    }
+    if (buffer !== undefined) {
+      // The server streams with timestamps relative to its first frame and
+      // reports where that frame sits in the source.
+      const offset = Number(response.headers.get("x-stream-offset"));
+      buffer.timestampOffset = Number.isFinite(offset) ? offset : start;
     }
     const reader = response.body.getReader();
     try {
@@ -194,7 +192,6 @@ export function attachProgressive(
       }
       buffer = mediaSource.addSourceBuffer(options.mime);
       buffer.mode = "segments";
-      buffer.timestampOffset = options.timestampsRelative ? options.startAt : 0;
       video.currentTime = options.startAt;
       void streamFrom(options.startAt);
     },

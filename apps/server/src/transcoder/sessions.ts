@@ -857,6 +857,45 @@ export function createSessionManager(
     });
   };
 
+  /**
+   * Where stream-time zero lands in the source, in seconds. A copy's ffmpeg
+   * run starts on the keyframe at or before the start: probe the first
+   * packet ffprobe reports after the same seek. A re-encode drops frames
+   * before the start (accurate seek), so its first frame is the start.
+   */
+  const streamStartOffset = async (
+    session: StreamSession,
+    start: number,
+  ): Promise<number> => {
+    if (start <= 0) return 0;
+    if (session.outputs.video.action === "transcode") return start;
+    const proc = Bun.spawn(
+      [
+        "ffprobe",
+        "-v",
+        "error",
+        "-ss",
+        String(start),
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "packet=pts_time",
+        "-of",
+        "csv=p=0",
+        "-read_intervals",
+        "%+0.5",
+        session.inputPath,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+    );
+    const first = (await new Response(proc.stdout).text())
+      .split("\n")
+      .find((line) => line !== "");
+    await proc.exited;
+    const pts = Number.parseFloat(first ?? "");
+    return Number.isFinite(pts) ? pts : start;
+  };
+
   return {
     async serve(
       scope: SessionScope,
@@ -922,6 +961,7 @@ export function createSessionManager(
         session.durationSeconds === null
           ? startSeconds
           : Math.min(startSeconds, session.durationSeconds);
+      const offset = await streamStartOffset(session, start);
       const args = progressiveArguments({
         inputPath: session.inputPath,
         startSeconds: start,
@@ -963,7 +1003,11 @@ export function createSessionManager(
         }
       });
       return new Response(proc.stdout, {
-        headers: { ...standardHeaders, "content-type": "video/mp4" },
+        headers: {
+          ...standardHeaders,
+          "content-type": "video/mp4",
+          "x-stream-offset": String(offset),
+        },
       });
     },
     /**

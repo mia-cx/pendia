@@ -39,10 +39,7 @@ const authCodeMap = {
 
 /** Adapts an auth failure into a typed API error. */
 export function fromAuthError(error: AuthError): ApiError {
-  return new ApiError({
-    code: authCodeMap[error.code],
-    reason: error.message,
-  });
+  return new ApiError({ code: authCodeMap[error.code], reason: error.message });
 }
 
 /** Runs a host module promise as an effect: auth failures become typed, the rest die. */

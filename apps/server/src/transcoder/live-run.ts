@@ -176,7 +176,6 @@ export function videoArguments(
   }
   if (forceKeyFrames !== undefined) {
     args.push("-force_key_frames:v", forceKeyFrames);
-    return args;
   }
   return args;
 }

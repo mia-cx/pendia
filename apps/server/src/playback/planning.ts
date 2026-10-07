@@ -437,11 +437,10 @@ export async function planPlayback(
   if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
   const method =
     stored || decision === null ? ("remux" as const) : decision.method;
-  const delivery =
-    method === "direct-play" || stored
-      ? stored
-        ? ("hls" as const)
-        : null
+  const delivery = stored
+    ? ("hls" as const)
+    : method === "direct-play"
+      ? null
       : input.profile.progressive === true
         ? ("progressive" as const)
         : ("hls" as const);

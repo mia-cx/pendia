@@ -63,9 +63,13 @@ describe("sessionOutputs", () => {
   });
 
   test("a transcode advertises the rung, the encoded audio and burns the bitmap track", () => {
-    const decision = decidePlayback(source, browser, { isLan: true });
+    const selected: PlaybackSource = {
+      ...source,
+      selection: { subtitle: 1 },
+    };
+    const decision = decidePlayback(selected, browser, { isLan: true });
     expect(decision.method).toBe("transcode");
-    const outputs = sessionOutputs(decision, source, details);
+    const outputs = sessionOutputs(decision, selected, details);
     expect(outputs.video).toMatchObject({
       action: "transcode",
       codec: "h264",

@@ -46,6 +46,7 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
       server: Awaited<ReturnType<typeof startThalia>>;
       plan: (
         profile: Parameters<Client["playback"]["plan"]>[0]["profile"],
+        subtitleStreamIndex?: number,
       ) => ReturnType<Client["playback"]["plan"]>;
     }) => Promise<void>,
   ) =>
@@ -89,11 +90,12 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
               db,
               base,
               server,
-              plan: (profile) =>
+              plan: (profile, subtitleStreamIndex) =>
                 client.playback.plan({
                   itemId,
                   versionId: version.id,
                   profile,
+                  subtitleStreamIndex,
                 }),
             });
           } finally {
@@ -160,7 +162,7 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
     "a PGS track the client cannot draw keeps the live burn-in over stored rungs",
     () =>
       planStored(["pgs"], async ({ db, plan }) => {
-        const planned = await plan(browser);
+        const planned = await plan(browser, 2);
         expect(planned.method).toBe("transcode");
         const decision = await decisionOf(db, planned.sessionId);
         expect(decision?.storedVariantIds).toBeUndefined();
@@ -170,7 +172,7 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
         // Under every live rung but over the stored 360p one: no path can
         // burn the track in, so the plan fails rather than drop it.
         await expect(
-          plan({ ...browser, maxBitrate: 1_200_000 }),
+          plan({ ...browser, maxBitrate: 1_200_000 }, 2),
         ).rejects.toMatchObject({ status: 400 });
       }),
     120_000,

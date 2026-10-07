@@ -110,10 +110,12 @@ export function attachProgressive(
     fetching?.abort();
     fetching = new AbortController();
     const current = fetching;
-    // Drop a half-appended segment before the new run's first bytes.
-    if (buffer?.updating) {
+    // Drop a half-appended segment before the new run's first bytes; abort
+    // works whenever the source is open, not only mid-update.
+    if (buffer !== undefined && mediaSource.readyState === "open") {
+      const updating = buffer.updating;
       buffer.abort();
-      await nextUpdate();
+      if (updating) await nextUpdate();
     }
     let response: Response;
     try {
@@ -132,7 +134,12 @@ export function attachProgressive(
       // The server streams with timestamps relative to its first frame and
       // reports where that frame sits in the source.
       const offset = Number(response.headers.get("x-stream-offset"));
-      buffer.timestampOffset = Number.isFinite(offset) ? offset : start;
+      try {
+        buffer.timestampOffset = Number.isFinite(offset) ? offset : start;
+      } catch {
+        fail();
+        return;
+      }
     }
     const reader = response.body.getReader();
     try {

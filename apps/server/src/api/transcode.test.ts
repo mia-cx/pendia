@@ -218,7 +218,10 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
     context: { base: string; client: Client; dir: string },
     media: { itemId: string; versionId: string },
     profile: Profile,
-    streams: { audioStreamIndex?: number; subtitleStreamIndex?: null } = {},
+    streams: Pick<
+      Parameters<Client["playback"]["plan"]>[0],
+      "audioStreamIndex" | "subtitleStreamIndex"
+    > = {},
   ) => {
     const planned = await context.client.playback.plan({
       ...media,
@@ -343,6 +346,7 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
           { base, client, dir },
           media,
           browser,
+          { subtitleStreamIndex: 2 },
         );
         expect(planned.method).toBe("transcode");
         expect(variant.subtitles).toEqual([]);

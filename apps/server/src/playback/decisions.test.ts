@@ -265,7 +265,7 @@ describe("decidePlayback methods", () => {
     "supported bitmap %s copies on direct play",
     (subtitle, expected) => {
       const result = decidePlayback(
-        { ...source, subtitles: [subtitle] },
+        { ...source, subtitles: [subtitle], selection: { subtitle: 0 } },
         client,
         { isLan: false },
       );
@@ -279,7 +279,11 @@ describe("decidePlayback methods", () => {
     (format) => {
       const textOnly: ClientProfile = { ...client, subtitleFormats: ["srt"] };
       const result = decidePlayback(
-        { ...source, subtitles: [{ format, kind: "bitmap" }] },
+        {
+          ...source,
+          subtitles: [{ format, kind: "bitmap" }],
+          selection: { subtitle: 0 },
+        },
         textOnly,
         { isLan: false },
       );
@@ -301,6 +305,34 @@ describe("decidePlayback methods", () => {
 });
 
 describe("decidePlayback video", () => {
+  const sdrOutputCases: [string, string[] | undefined, string | null][] = [
+    ["h264", ["constrainedbaseline", "baseline", "main", "high"], "high"],
+    ["h264", ["high", "main", "baseline", "constrainedbaseline"], "high"],
+    ["h264", ["baseline", "high10", "high", "main"], "high"],
+    ["h264", ["constrainedbaseline", "baseline", "main"], "main"],
+    ["h264", ["constrainedbaseline", "baseline"], "baseline"],
+    ["h264", ["constrainedbaseline"], "constrainedbaseline"],
+    ["h264", undefined, null],
+    ["hevc", ["main10", "main"], "main"],
+  ];
+  test.each(sdrOutputCases)(
+    "selects the best accepted SDR %s profile from %o",
+    (codec, profiles, profile) => {
+      const result = decidePlayback(
+        { ...source, video: { ...source.video, codec: "vp9" } },
+        { ...client, videoCodecs: [{ codec, profiles }] },
+        { isLan: false },
+      );
+      expect(result.video).toMatchObject({
+        action: "transcode",
+        codec,
+        profile,
+        hdr: "sdr",
+        toneMap: null,
+      });
+    },
+  );
+
   test("transcodes an unsupported codec to the best client codec", () => {
     const result = decidePlayback(
       { ...source, video: { ...source.video, codec: "vp9" } },
@@ -484,6 +516,28 @@ describe("decidePlayback video", () => {
       {
         codec: "hevc",
         profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+    [
+      "hevc main10 before main",
+      [{ codec: "hevc", profiles: ["main10", "main"] }],
+      {
+        codec: "hevc",
+        profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+    [
+      "h264 SDR profiles before high10",
+      [{ codec: "h264", profiles: ["baseline", "main", "high", "high10"] }],
+      {
+        codec: "h264",
+        profile: "high10",
         hdr: "hdr10",
         toneMap: null,
         backend: "qsv",
@@ -685,6 +739,7 @@ describe("decidePlayback video", () => {
           video: { ...dvVideo, dvProfile: 5 },
           subtitles:
             trigger === "subtitle" ? [{ format: "pgs", kind: "bitmap" }] : [],
+          selection: trigger === "subtitle" ? { subtitle: 0 } : undefined,
         },
         dvClient,
         {
@@ -1262,18 +1317,45 @@ describe("decidePlayback stream selection", () => {
     ]);
     expect(requiresBurnIn(chosen, mkv, false)).toBe(false);
     expect(requiresBurnIn(chosen, mkv, true)).toBe(true);
-    // Without a choice, a drawable bitmap track over HLS stays as before.
+    // An unchosen bitmap track does not affect either delivery method.
     expect(requiresBurnIn(dubbedSigns, mkv, true)).toBe(false);
   });
 
-  test("no subtitle choice keeps every subtitle Stream", () => {
-    expect(requiresBurnIn(signs, textOnly, false)).toBe(true);
-    expect(decidePlayback(signs, textOnly, { isLan: false }).subtitles).toEqual(
-      [
-        { stream: 0, action: "convert", format: "webvtt", delivery: "sidecar" },
-        { stream: 1, action: "burn", format: "pgs" },
+  test.each([undefined, { audio: 0 }])(
+    "an unchosen PGS subtitle leaves compatible video as a copy with selection %o",
+    (selection) => {
+      const input: PlaybackSource = {
+        ...source,
+        subtitles: [{ format: "pgs", kind: "bitmap" }],
+        selection,
+      };
+      const result = decidePlayback(input, textOnly, { isLan: false });
+      expect(result.method).toBe("direct-play");
+      expect(result.video.action).toBe("copy");
+      expect(result.subtitles).toEqual([]);
+      expect(requiresBurnIn(input, textOnly, false)).toBe(false);
+      expect(requiresBurnIn(input, textOnly, true)).toBe(false);
+    },
+  );
+
+  test("no subtitle choice keeps text sidecars with their original Stream positions", () => {
+    const input: PlaybackSource = {
+      ...source,
+      container: "mkv",
+      subtitles: [
+        { format: "pgs", kind: "bitmap" },
+        { format: "srt", kind: "text" },
+        { format: "ass", kind: "text" },
       ],
-    );
+    };
+    const result = decidePlayback(input, textOnly, { isLan: false });
+    expect(result.method).toBe("remux");
+    expect(result.video.action).toBe("copy");
+    expect(result.subtitles).toEqual([
+      { stream: 1, action: "convert", format: "webvtt", delivery: "sidecar" },
+      { stream: 2, action: "convert", format: "webvtt", delivery: "sidecar" },
+    ]);
+    expect(requiresBurnIn(input, textOnly, true)).toBe(false);
   });
 });
 

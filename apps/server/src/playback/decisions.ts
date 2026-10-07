@@ -37,8 +37,8 @@ export type SubtitleStream = { format: string; kind: "text" | "bitmap" };
 /**
  * The audio and subtitle Streams a session plays, counted among Streams of
  * their kind as ffmpeg counts them. No audio plays the default-flagged audio
- * Stream, else the first. No subtitle keeps every subtitle Stream; null
- * turns subtitles off.
+ * Stream, else the first. No subtitle keeps only text subtitle Streams;
+ * null turns subtitles off.
  */
 export type StreamSelection = { audio?: number; subtitle?: number | null };
 
@@ -84,7 +84,9 @@ export function resolveSelection(source: PlaybackSource): ResolvedSelection {
 function selectedSubtitles(source: PlaybackSource) {
   const choice = source.selection?.subtitle;
   return source.subtitles.flatMap((subtitle, stream) =>
-    choice === undefined || choice === stream ? [{ stream, subtitle }] : [],
+    (choice === undefined && subtitle.kind === "text") || choice === stream
+      ? [{ stream, subtitle }]
+      : [],
   );
 }
 
@@ -132,6 +134,22 @@ const hdrProfiles: Readonly<Record<string, readonly string[]>> = {
   av1: ["main", "high", "professional"],
   vp9: ["2", "3"],
 };
+
+// Prefer compression efficiency for SDR, independently of client list order.
+const sdrProfiles: Readonly<Record<string, readonly string[]>> = {
+  h264: ["high", "main", "baseline", "constrainedbaseline"],
+  hevc: ["main"],
+};
+
+function sdrOutputProfile(candidate: ClientProfile["videoCodecs"][number]) {
+  return (
+    sdrProfiles[candidate.codec]?.find((profile) =>
+      candidate.profiles?.includes(profile),
+    ) ??
+    candidate.profiles?.[0] ??
+    null
+  );
+}
 
 function hdrOutputProfile(candidate: ClientProfile["videoCodecs"][number]) {
   const profiles = hdrProfiles[candidate.codec] ?? [];
@@ -220,7 +238,7 @@ function decideVideo(
       profile:
         hdr !== "sdr" && toneMap === null && hdrProfile !== null
           ? hdrProfile
-          : (candidate.profiles?.[0] ?? null),
+          : sdrOutputProfile(candidate),
       level: candidate.maxLevel ?? null,
       maxFrameRate,
       width,

@@ -201,6 +201,7 @@ const burnDecision = decidePlayback(
     },
     audio: [{ codec: "aac", channels: 2 }],
     subtitles: [{ format: "pgs", kind: "bitmap" }],
+    selection: { subtitle: 0 },
   },
   {
     containers: ["mkv"],
@@ -225,6 +226,7 @@ const hdrBurnDecision = decidePlayback(
     },
     audio: [{ codec: "aac", channels: 2 }],
     subtitles: [{ format: "pgs", kind: "bitmap" }],
+    selection: { subtitle: 0 },
   },
   {
     containers: ["mkv"],

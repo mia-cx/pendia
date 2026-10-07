@@ -260,14 +260,16 @@ describe("selectAdaptiveGroup", () => {
     expect(result.variants.map((v) => v.id)).toEqual(["v-3m"]);
   });
 
-  test("lan bypasses the policy cap", () => {
+  test("a lan session cap still filters variants", () => {
     const v3 = imported("v-3m");
     const v6 = imported("v-6m", { bitrate: 6_000_000 });
     const result = selectAdaptiveGroup([v3, v6], timeline, client, {
+      globalDefault: 500_000,
       sessionRequest: 3_000_000,
       isLan: true,
     });
-    expect(result.variants.map((v) => v.id)).toEqual(["v-3m", "v-6m"]);
+    // The session cap binds on lan while the tighter global cap is ignored.
+    expect(result.variants.map((v) => v.id)).toEqual(["v-3m"]);
   });
 
   test("the client decoder limit still filters on lan", () => {

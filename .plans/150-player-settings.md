@@ -32,7 +32,7 @@ The player's settings menu becomes one YouTube-style menu: a list of rows, each 
 
 **Plan input.** `quality?: string`: `"original"`, a rung name, or absent/`"auto"`. An unknown name plays as Auto (the client persists names across ladder changes). Bounded string, max 32.
 
-- Rung: profile = `boxProfile(input.profile, rung)`; `sessionRequest = min(input.bitrateCapBps, rung.bitrate)`.
+- Rung: profile = `boxProfile(input.profile, rung)`; the caller's own `bitrateCapBps` still applies.
 - Original: no session cap from quality, and stored variants are skipped so the source File plays as is.
 - The requested Version is always the one planned. Version substitution is the client's call (see Web), so an explicit Version row pick is never overridden.
 
@@ -61,12 +61,12 @@ quality: {
 }
 ```
 
-Per rung of `sourceRungs(current source video)`, with `profile = boxProfile(input.profile, rung)` and caps `sessionRequest = min(input.bitrateCapBps, rung.bitrate)`:
+Per rung of `sourceRungs(current source video)`, with `profile = boxProfile(input.profile, rung)` and caps unchanged (the caller's own `bitrateCapBps` still applies):
 
 1. `live = decidePlayback(current, profile, caps, capabilities)` in try/catch (null on throw). If `live.method !== "transcode"`, the current File already plays as is at this rung: skip the rung, Original covers it.
 2. Stored: `pickStoredVariants(...)` with `liveMethod = live?.method ?? null`, unless the session burns subtitles in or plays a non-first audio Stream (same gate planning uses). Non-empty → `source: "stored"`, `bitrate` = max variant bitrate.
 3. Version: other imported video Versions of the Item whose duration is within `versionDurationToleranceSeconds = 5` of the current one, whose decision under `profile`/caps is not a transcode, and which can stream (`direct-play`, or `profile.progressive`, or an aligned segment timeline). Pick the highest video bitrate. → `source: "version"`.
-4. Else `source: "transcode"`, `bitrate = rung.bitrate`, `available = live !== null && live.video.action === "transcode" && rungName(live.video.rung) === rungName(rung)`. A planner that throws or falls to a lower rung (the #147 CPU ceiling) disables the option.
+4. Else `source: "transcode"`, `bitrate` = the decision's `live.video.bitrate` when it transcodes (it already counts codec and frame-rate factors), else `rung.bitrate`; `available = live !== null && live.video.action === "transcode" && rungName(live.video.rung) === rungName(rung)`. A planner that throws or falls to a lower rung (the #147 CPU ceiling) disables the option.
 
 `original`: `decidePlayback(current, input.profile, caps without quality)` is not a transcode and can stream → `{ name: the smallest deduped rung whose box contains the source, else `${height}p`; width; height; bitrate: source video bitrate }`.
 

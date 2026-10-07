@@ -1267,6 +1267,8 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       expect(planned.quality.rungs.map((rung) => rung.name)).toEqual([
         "720p",
         "480p",
+        "360p",
+        "240p",
       ]);
     }));
 });

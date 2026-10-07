@@ -78,7 +78,7 @@ Loading other Versions: imported video Versions of the Item except the current o
 
 **Boost (`apps/web/src/lib/audio-boost.ts`, new).** `createBoost(media, createContext = () => new AudioContext())` → `{ amplify(gain), close() }`; Player closes it on destroy. First call with gain > 1 builds `createMediaElementSource → GainNode → DynamicsCompressorNode (limiter: threshold -3 dB, knee 0, ratio 20, attack 0.001 s, release 0.25 s; -1 dB / 3 ms measurably clipped) → destination`, once per element. Gain 1 with no graph is a no-op. Gain 1 with a graph sets gain to 1 and routes gain straight to destination, bypassing the compressor (its makeup gain would change the level). Resumes the context on each call and on the media's `play`. `createPlayer` takes `amplify?: (gain: number) => void`.
 
-**Player session (`player.ts`).** `PlaybackOptions` gains `quality: string` sent as the plan's `quality`. `play()` also returns `capLevels(variantIds: readonly string[] | null): boolean`: with hls.js attached, caps ABR to the highest level whose URL contains one of the ids (`autoLevelCapping`, plus `nextLevel` when the current level is above it); null clears the cap. Returns false when there's no hls.js or no level matches.
+**Player session (`player.ts`).** `PlaybackOptions` gains `quality: string` sent as the plan's `quality`. `play()` also returns `capLevels(variantIds: readonly string[] | null): boolean`: with hls.js attached, caps ABR to the highest level whose URL contains one of the ids (`autoLevelCapping` only; a level setter would lock hls.js into manual mode); null clears the cap. Returns false when there's no hls.js or no level matches.
 
 **State (`player-state.ts`).**
 

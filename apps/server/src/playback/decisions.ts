@@ -166,7 +166,7 @@ const highFrameRateFactor = 1.5;
 const standardFrameRate = 30;
 const cpuMaxHeight = 1080;
 
-/** Fits the highest live rung to the actual encoder, decoder and output bitrate. */
+/** Fits the highest useful live rung to the source, encoder, decoder and output bitrate. */
 function videoOutput(
   video: VideoStream,
   candidate: ClientProfile["videoCodecs"][number],
@@ -177,14 +177,25 @@ function videoOutput(
     candidate.codec === "hevc" || candidate.codec === "av1"
       ? efficientCodecFactor
       : 1;
-  for (const rung of ladder) {
+  const sourceScale = Math.min(
+    1,
+    (candidate.maxWidth ?? Infinity) / video.width,
+    (candidate.maxHeight ?? Infinity) / video.height,
+  );
+  for (const [index, rung] of ladder.entries()) {
     if (cpuLimited && rung.height > cpuMaxHeight) continue;
+    const nextRung = ladder[index + 1];
+    // A lower rung that fits the client-bounded source gives the same picture at a lower bitrate.
+    if (
+      nextRung &&
+      video.width * sourceScale <= nextRung.width &&
+      video.height * sourceScale <= nextRung.height
+    )
+      continue;
     const scale = Math.min(
-      1,
+      sourceScale,
       rung.width / video.width,
       rung.height / video.height,
-      (candidate.maxWidth ?? Infinity) / video.width,
-      (candidate.maxHeight ?? Infinity) / video.height,
     );
     const width = Math.max(2, Math.floor((video.width * scale) / 2) * 2);
     const height = Math.max(2, Math.floor((video.height * scale) / 2) * 2);

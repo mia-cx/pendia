@@ -1378,6 +1378,55 @@ describe("decidePlayback caps and scaling", () => {
     hdr: ["sdr"],
   };
 
+  test.each([
+    [1280, 720, false, 1280, 720, 4_000_000, "720p"],
+    [1280, 720, true, 1280, 720, 4_000_000, "720p"],
+    [1920, 800, false, 1920, 800, 8_000_000, "1080p"],
+    [3840, 2160, false, 1920, 1080, 8_000_000, "1080p"],
+    [3840, 2160, true, 3840, 2160, 25_000_000, "2160p"],
+    [640, 360, false, 640, 360, 800_000, "360p"],
+    [320, 180, false, 320, 180, 300_000, "240p"],
+  ] as const)(
+    "%sx%s source with CPU 4K %s uses %sx%s at %s bit/s (%s)",
+    (width, height, allowCpu4k, outputWidth, outputHeight, bitrate, name) => {
+      expect(
+        decidePlayback(
+          { ...hdr4k, video: { ...hdr4k.video, width, height } },
+          sdrClient,
+          { isLan: false },
+          cpuCapabilities,
+          allowCpu4k,
+        ).video,
+      ).toMatchObject({
+        action: "transcode",
+        width: outputWidth,
+        height: outputHeight,
+        bitrate,
+        rung: { name },
+      });
+    },
+  );
+
+  test.each([
+    [1280, undefined, 1280, 720, 4_000_000, "720p"],
+    [undefined, 720, 1280, 720, 4_000_000, "720p"],
+    [854, 480, 852, 480, 2_000_000, "480p"],
+  ] as const)(
+    "client bounds %sx%s select %sx%s at %s bit/s (%s)",
+    (maxWidth, maxHeight, width, height, bitrate, name) => {
+      expect(
+        decidePlayback(
+          hdr4k,
+          {
+            ...sdrClient,
+            videoCodecs: [{ codec: "h264", maxWidth, maxHeight }],
+          },
+          { isLan: false },
+        ).video,
+      ).toMatchObject({ width, height, bitrate, rung: { name } });
+    },
+  );
+
   test("4K HDR on a CPU-only node plans 1080p", () => {
     expect(
       decidePlayback(hdr4k, sdrClient, { isLan: true }).video,
@@ -1597,6 +1646,8 @@ describe("decidePlayback caps and scaling", () => {
       maxFrameRate: 2321,
       width: 640,
       height: 360,
+      bitrate: 480_000,
+      rung: { name: "360p", bitrate: 800_000, width: 640, height: 360 },
     });
   });
 
@@ -1619,6 +1670,8 @@ describe("decidePlayback caps and scaling", () => {
       maxFrameRate: 580,
       width: 1280,
       height: 720,
+      bitrate: 2_400_000,
+      rung: { name: "720p", bitrate: 4_000_000, width: 1280, height: 720 },
     });
   });
 });

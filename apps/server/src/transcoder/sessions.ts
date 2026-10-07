@@ -32,6 +32,7 @@ import {
 } from "./live-run.ts";
 import { type SessionOutputs, sessionOutputs } from "./outputs.ts";
 import { progressiveArguments } from "./progressive.ts";
+import { readStreamHead } from "./stream-head.ts";
 import { type Conversion, convertToWebvtt } from "./subtitles.ts";
 
 /** The authorised session a request belongs to. */
@@ -1000,6 +1001,8 @@ export function createSessionManager(
         audioStream: session.outputs.audioStream,
         audio: session.outputs.audio,
         burnSubtitle: session.outputs.burnSubtitle,
+        // Copied audio seeks its own input to the same anchor.
+        audioStartSeconds: offset,
       });
       const proc = Bun.spawn(["ffmpeg", ...args], {
         stdin: "ignore",
@@ -1022,6 +1025,37 @@ export function createSessionManager(
       const running = { kill };
       session.running = running;
       signal?.addEventListener("abort", () => void kill());
+      // Buffer the head until the first video moof: its first sample's
+      // presentation time is where stream-time zero would land wrong, so the
+      // offset reports source time minus it.
+      const head = await readStreamHead(proc.stdout);
+      if (head === null) {
+        // ffmpeg died before the first fragment; the stderr log lands in the
+        // exit hook above.
+        await kill();
+        return Response.json(
+          {
+            error: {
+              code: "INTERNAL_ERROR",
+              message: "The stream produced no playable output.",
+            },
+          },
+          { status: 500, headers: standardHeaders },
+        );
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(head.head);
+        },
+        async pull(controller) {
+          const { done, value } = await head.reader.read();
+          if (done) controller.close();
+          else controller.enqueue(value);
+        },
+        async cancel(reason) {
+          await head.reader.cancel(reason);
+        },
+      });
       void proc.exited.then(async (code) => {
         if (session.running === running) session.running = null;
         if (admitted.delete(sessionId)) admitNext();
@@ -1036,11 +1070,11 @@ export function createSessionManager(
           });
         }
       });
-      return new Response(proc.stdout, {
+      return new Response(body, {
         headers: {
           ...standardHeaders,
           "content-type": "video/mp4",
-          "x-stream-offset": String(offset),
+          "x-stream-offset": String(offset - head.trackPts.video),
         },
       });
     },

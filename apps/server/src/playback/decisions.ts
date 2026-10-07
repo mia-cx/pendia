@@ -4,10 +4,10 @@ import {
   cpuCapabilities,
   effectiveCap,
   type Hdr,
+  ladder,
   outputFrameRateLimit,
   type PlaybackCaps,
   selectBackend,
-  selectLadderRung,
 } from "./policy.ts";
 
 /** A normalized video Stream: codec, constraints, dimensions, bitrate and HDR flavour. */
@@ -18,6 +18,8 @@ export type VideoStream = {
   width: number;
   height: number;
   bitrate: number;
+  /** Probed frames per second; absent when the source rate is unknown. */
+  frameRate?: number | null;
   hdr: Hdr;
   dvProfile?: number | null;
 };
@@ -159,6 +161,80 @@ function hdrOutputProfile(candidate: ClientProfile["videoCodecs"][number]) {
         null);
 }
 
+const efficientCodecFactor = 0.6;
+const highFrameRateFactor = 1.5;
+const standardFrameRate = 30;
+const cpuMaxHeight = 1080;
+
+/** Fits the highest useful live rung to the source, encoder, decoder and output bitrate. */
+function videoOutput(
+  video: VideoStream,
+  candidate: ClientProfile["videoCodecs"][number],
+  cap: number | null,
+  cpuLimited: boolean,
+) {
+  const codecFactor =
+    candidate.codec === "hevc" || candidate.codec === "av1"
+      ? efficientCodecFactor
+      : 1;
+  const sourceScale = Math.min(
+    1,
+    (candidate.maxWidth ?? Infinity) / video.width,
+    (candidate.maxHeight ?? Infinity) / video.height,
+  );
+  for (const [index, rung] of ladder.entries()) {
+    if (cpuLimited && rung.height > cpuMaxHeight) continue;
+    const nextRung = ladder[index + 1];
+    // A lower rung that fits the client-bounded source gives the same picture at a lower bitrate.
+    if (
+      nextRung &&
+      video.width * sourceScale <= nextRung.width &&
+      video.height * sourceScale <= nextRung.height
+    )
+      continue;
+    const scale = Math.min(
+      sourceScale,
+      rung.width / video.width,
+      rung.height / video.height,
+    );
+    const width = Math.max(2, Math.floor((video.width * scale) / 2) * 2);
+    const height = Math.max(2, Math.floor((video.height * scale) / 2) * 2);
+    const baseBitrate = Math.round(rung.bitrate * codecFactor);
+    const frameRateLimit = (bitrate: number) =>
+      candidate.maxLevel === undefined
+        ? null
+        : outputFrameRateLimit(
+            candidate.codec,
+            candidate.maxLevel,
+            width,
+            height,
+            bitrate,
+          );
+    let maxFrameRate = frameRateLimit(baseBitrate);
+    if (maxFrameRate === undefined) continue;
+    let bitrate = baseBitrate;
+    if (
+      Math.min(video.frameRate ?? standardFrameRate, maxFrameRate ?? Infinity) >
+      standardFrameRate
+    ) {
+      const highBitrate = Math.round(baseBitrate * highFrameRateFactor);
+      const highLimit = frameRateLimit(highBitrate);
+      // A decoder that cannot take the higher bitrate gets a 30 fps output.
+      if (
+        highLimit === undefined ||
+        (highLimit !== null && highLimit <= standardFrameRate)
+      ) {
+        maxFrameRate = standardFrameRate;
+      } else {
+        bitrate = highBitrate;
+        maxFrameRate = highLimit;
+      }
+    }
+    if (cap !== null && bitrate > cap) continue;
+    return { rung, width, height, bitrate, maxFrameRate };
+  }
+}
+
 function decideVideo(
   video: VideoStream,
   client: ClientProfile,
@@ -166,6 +242,7 @@ function decideVideo(
   capabilities: CapabilityTable,
   burnSubtitles: boolean,
   hls: boolean,
+  allowCpu4k: boolean,
 ) {
   if (
     !burnSubtitles &&
@@ -182,8 +259,6 @@ function decideVideo(
   }
   const hdr = playbackHdr(video, false);
   const forceCpu = video.hdr === "dolby-vision" && video.dvProfile === 5;
-  const rung = selectLadderRung(videoCap(client, cap));
-  if (!rung) throw new Error("No ladder rung fits the bitrate cap.");
   const candidates = [
     ...new Set(client.videoCodecs.map((entry) => entry.codec)),
   ].flatMap((codec) => {
@@ -212,26 +287,13 @@ function decideVideo(
       forceCpu,
     );
     if (!backend) continue;
-    const scale = Math.min(
-      1,
-      rung.width / video.width,
-      rung.height / video.height,
-      (candidate.maxWidth ?? Infinity) / video.width,
-      (candidate.maxHeight ?? Infinity) / video.height,
+    const output = videoOutput(
+      video,
+      candidate,
+      videoCap(client, cap),
+      backend === "cpu" && !allowCpu4k,
     );
-    const width = Math.max(2, Math.floor((video.width * scale) / 2) * 2);
-    const height = Math.max(2, Math.floor((video.height * scale) / 2) * 2);
-    const maxFrameRate =
-      candidate.maxLevel === undefined
-        ? null
-        : outputFrameRateLimit(
-            candidate.codec,
-            candidate.maxLevel,
-            width,
-            height,
-            rung.bitrate,
-          );
-    if (maxFrameRate === undefined) continue;
+    if (!output) continue;
     return {
       action: "transcode" as const,
       codec: candidate.codec,
@@ -240,11 +302,7 @@ function decideVideo(
           ? hdrProfile
           : sdrOutputProfile(candidate),
       level: candidate.maxLevel ?? null,
-      maxFrameRate,
-      width,
-      height,
-      bitrate: rung.bitrate,
-      rung,
+      ...output,
       hdr: toneMap === null ? hdr : ("sdr" as const),
       toneMap,
       backend,
@@ -360,6 +418,7 @@ export function decidePlayback(
   client: ClientProfile,
   caps: PlaybackCaps,
   capabilities: CapabilityTable = cpuCapabilities,
+  allowCpu4k = false,
 ) {
   const cap = effectiveCap(caps);
   const selection = resolveSelection(source);
@@ -373,6 +432,7 @@ export function decidePlayback(
     capabilities,
     subtitles.some((subtitle) => subtitle.action === "burn"),
     false,
+    allowCpu4k,
   );
   const directAudio =
     selectedAudio === undefined
@@ -407,6 +467,7 @@ export function decidePlayback(
     capabilities,
     hlsSubtitles.some((subtitle) => subtitle.action === "burn"),
     true,
+    allowCpu4k,
   );
   const transcodes =
     hlsVideo.action === "transcode" || audio?.action === "transcode";

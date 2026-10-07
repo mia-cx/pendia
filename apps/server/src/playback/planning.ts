@@ -43,7 +43,7 @@ import {
   type Hdr,
   type PlaybackCaps,
 } from "./policy.ts";
-import { readGlobalBitrateCap } from "./settings.ts";
+import { readPlaybackSettings } from "./settings.ts";
 
 /** The decoded input every playback planning call receives. */
 export type PlanInput = {
@@ -190,6 +190,10 @@ export async function loadPlaybackSource(
       width: video.width,
       height: video.height,
       bitrate: videoBitrate(video, file, version),
+      frameRate:
+        video.frameRateNumerator === null || video.frameRateDenominator === null
+          ? null
+          : video.frameRateNumerator / video.frameRateDenominator,
       hdr: video.hdr,
       dvProfile: video.dvProfile,
     },
@@ -394,8 +398,9 @@ export async function planPlayback(
     transport.peerAddress,
     config.trustedProxyAddresses,
   );
+  const playbackSettings = await readPlaybackSettings(db);
   const caps: PlaybackCaps = {
-    globalDefault: await readGlobalBitrateCap(db),
+    globalDefault: playbackSettings.bitrateCapBps,
     userOverride: await userBitrateCap(db, caller.user.id),
     sessionRequest: input.bitrateCapBps ?? null,
     isLan: isLanAddress(identity.address),
@@ -409,6 +414,7 @@ export async function planPlayback(
       input.profile,
       caps,
       await readCapabilityTable(db),
+      playbackSettings.allowCpu4k,
     );
   } catch {
     decision = null;

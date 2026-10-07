@@ -169,10 +169,14 @@ describe.skipIf(!databaseUrl)("stored playback with subtitles", () => {
         expect(decision).toMatchObject({
           video: { action: "transcode", burnSubtitles: true },
         });
-        // Under every live rung but over the stored 360p one: no path can
-        // burn the track in, so the plan fails rather than drop it.
+        // Even a low cap keeps the subtitle on the live path.
+        const capped = await plan({ ...browser, maxBitrate: 500_000 }, 2);
+        expect(await decisionOf(db, capped.sessionId)).toMatchObject({
+          video: { burnSubtitles: true, rung: { name: "240p" } },
+        });
+        // Under every live rung, the plan fails rather than drop the subtitle.
         await expect(
-          plan({ ...browser, maxBitrate: 1_200_000 }, 2),
+          plan({ ...browser, maxBitrate: 299_999 }, 2),
         ).rejects.toMatchObject({ status: 400 });
       }),
     120_000,

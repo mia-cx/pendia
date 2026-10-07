@@ -33,6 +33,7 @@ const device = {
 // What settings.get answers before anyone sets a cap or an idle window.
 const serverDefaults = {
   bitrateCapBps: null,
+  allowCpu4k: false,
   idleWindow: defaultIdleWindow,
   artworkStore: describeArtworkStore(artworkStoreConfig()),
 };
@@ -642,12 +643,21 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           .where(eq(jobs.id, waiting.id));
         expect(job?.runAfter.getTime()).toBeLessThanOrEqual(Date.now());
         expect((await client.settings.get()).bitrateCapBps).toBe(4_000_000);
+        expect((await client.settings.get()).allowCpu4k).toBe(false);
+        const optedIn = await client.settings.update({ allowCpu4k: true });
+        expect(optedIn.allowCpu4k).toBe(true);
+        expect(optedIn.bitrateCapBps).toBe(4_000_000);
         expect(
           (await client.settings.update({ bitrateCapBps: null })).bitrateCapBps,
         ).toBeNull();
+        expect((await client.settings.get()).allowCpu4k).toBe(true);
+        expect(
+          (await client.settings.update({ allowCpu4k: false })).allowCpu4k,
+        ).toBe(false);
 
         for (const body of [
           { bitrateCapBps: 0 },
+          { allowCpu4k: "true" },
           { idleWindow: { start: "25:00", end: "07:00" } },
         ]) {
           const bad = await fetch(`${base}/api/settings`, {
@@ -664,10 +674,11 @@ describe.skipIf(!databaseUrl)("admin api", () => {
           createThaliaClient({
             origin: base,
             headers: { authorization: `Bearer ${viewerToken}` },
-          }).settings.update({ bitrateCapBps: 1_000_000 }),
+          }).settings.update({ bitrateCapBps: 1_000_000, allowCpu4k: true }),
         );
         expect(denied.code).toBe("FORBIDDEN");
         expect((await client.settings.get()).bitrateCapBps).toBeNull();
+        expect((await client.settings.get()).allowCpu4k).toBe(false);
       } finally {
         await server.stop();
       }

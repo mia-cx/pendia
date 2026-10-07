@@ -5,40 +5,52 @@ import { settings } from "../db/schema/index.ts";
 
 const playbackSettingsKey = "playback";
 
-/** Reads the global default bitrate cap in bits per second; null when uncapped. */
-export async function readGlobalBitrateCap(
-  db: Database,
-): Promise<number | null> {
+/** Reads the live playback defaults; CPU 4K encoding requires an explicit opt-in. */
+export async function readPlaybackSettings(db: Database) {
   const [row] = await db
     .select({ value: settings.value })
     .from(settings)
     .where(eq(settings.key, playbackSettingsKey))
     .limit(1);
-  if (row === undefined) return null;
+  if (row === undefined) return { bitrateCapBps: null, allowCpu4k: false };
   const raw: unknown = row.value;
   if (raw === null || typeof raw !== "object" || Array.isArray(raw))
     throw new Error("Invalid playback settings.");
   const cap = (raw as Record<string, unknown>).bitrateCapBps;
-  if (cap === null || cap === undefined) return null;
-  if (typeof cap !== "number" || !Number.isSafeInteger(cap) || cap <= 0)
+  const allowCpu4k = (raw as Record<string, unknown>).allowCpu4k ?? false;
+  if (
+    (cap != null &&
+      (typeof cap !== "number" || !Number.isSafeInteger(cap) || cap <= 0)) ||
+    typeof allowCpu4k !== "boolean"
+  )
     throw new Error("Invalid playback settings.");
-  return cap;
+  return { bitrateCapBps: cap ?? null, allowCpu4k };
 }
 
-/** Sets or clears the global default bitrate cap for a caller holding manage-server; the next plan reads it. */
+/** Patches live playback defaults for a caller holding manage-server; the next plan reads them. */
+export async function writePlaybackSettings(
+  db: Database,
+  actorId: string,
+  patch: { bitrateCapBps?: number | null; allowCpu4k?: boolean },
+) {
+  await requirePermission(db, actorId, "manage-server");
+  await db
+    .insert(settings)
+    .values({ key: playbackSettingsKey, value: patch })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: {
+        value: sql`${settings.value} || ${JSON.stringify(patch)}::text::jsonb`,
+        updatedAt: sql`clock_timestamp()`,
+      },
+    });
+}
+
+/** Sets or clears the global bitrate cap without changing the CPU 4K opt-in. */
 export async function writeGlobalBitrateCap(
   db: Database,
   actorId: string,
   bitrateCapBps: number | null,
 ) {
-  await requirePermission(db, actorId, "manage-server");
-  // The row holds only the cap, so a write replaces it whole.
-  const value = { bitrateCapBps };
-  await db
-    .insert(settings)
-    .values({ key: playbackSettingsKey, value })
-    .onConflictDoUpdate({
-      target: settings.key,
-      set: { value, updatedAt: sql`clock_timestamp()` },
-    });
+  await writePlaybackSettings(db, actorId, { bitrateCapBps });
 }

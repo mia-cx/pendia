@@ -38,19 +38,15 @@ export function effectiveCap(caps: PlaybackCaps) {
   return limits.length === 0 ? null : Math.min(...limits);
 }
 
-/** The transcode bitrate ladder, highest first, in bits per second with bounding boxes. */
+/** Live H.264 defaults at up to 30 fps, highest first, with named bounding boxes. */
 export const ladder = [
-  { bitrate: 20_000_000, width: 3840, height: 2160 },
-  { bitrate: 10_000_000, width: 1920, height: 1080 },
-  { bitrate: 6_000_000, width: 1920, height: 1080 },
-  { bitrate: 3_000_000, width: 1280, height: 720 },
-  { bitrate: 1_500_000, width: 854, height: 480 },
+  { name: "2160p", bitrate: 25_000_000, width: 3840, height: 2160 },
+  { name: "1080p", bitrate: 8_000_000, width: 1920, height: 1080 },
+  { name: "720p", bitrate: 4_000_000, width: 1280, height: 720 },
+  { name: "480p", bitrate: 2_000_000, width: 854, height: 480 },
+  { name: "360p", bitrate: 800_000, width: 640, height: 360 },
+  { name: "240p", bitrate: 300_000, width: 426, height: 240 },
 ] as const;
-
-/** Returns the first rung at or under the cap; undefined when the cap is below every rung. */
-export function selectLadderRung(cap: number | null) {
-  return ladder.find((rung) => cap === null || rung.bitrate <= cap);
-}
 
 type LevelBound = readonly [
   level: number,

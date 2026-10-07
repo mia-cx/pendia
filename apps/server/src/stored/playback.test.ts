@@ -202,8 +202,7 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
                 idOf("360p"),
               ]);
 
-              // A cap under the live ladder's 1.5 Mbit/s floor has no live
-              // path at all, but the 1 Mbit/s rung still fits.
+              // The stored 1 Mbit/s rung still wins over a live 360p encode.
               const belowLadder = await plan({
                 ...remuxClient,
                 maxBitrate: 1_200_000,
@@ -213,8 +212,9 @@ describe.skipIf(!databaseUrl)("stored playback", () => {
                 .select({ decision: sessionRegistry.decision })
                 .from(sessionRegistry)
                 .where(eq(sessionRegistry.id, belowLadder.sessionId ?? ""));
-              expect(belowSession?.decision).toEqual({
-                method: "stored",
+              expect(belowSession?.decision).toMatchObject({
+                method: "transcode",
+                video: { bitrate: 800_000, rung: { name: "360p" } },
                 selection: { audio: 0 },
                 storedVariantIds: [idOf("360p")],
               });

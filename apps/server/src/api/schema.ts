@@ -297,6 +297,7 @@ export const ServerSettings = Schema.Struct({
   oidcClientSecretSet: Schema.Boolean,
   providerKeys: Schema.Array(Schema.String),
   bitrateCapBps: Schema.NullOr(Schema.Int),
+  allowCpu4k: Schema.Boolean,
   idleWindow: Schema.Struct({ start: Schema.String, end: Schema.String }),
   artworkStore: Schema.Struct({
     backend: Schema.Literal("colocated", "configured-path", "s3"),

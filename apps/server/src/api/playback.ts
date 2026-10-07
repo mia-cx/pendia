@@ -45,6 +45,9 @@ const PlanInput = Schema.Struct({
   bitrateCapBps: Schema.optional(positiveInt),
   audioStreamIndex: Schema.optional(streamIndex),
   subtitleStreamIndex: Schema.optional(Schema.NullOr(streamIndex)),
+  quality: Schema.optional(
+    Schema.String.pipe(Schema.minLength(1), Schema.maxLength(32)),
+  ),
 });
 
 const RefreshOutput = Schema.Struct({
@@ -68,8 +71,35 @@ const StreamCodecs = Schema.Struct({
   audio: Schema.NullOr(Schema.Struct({ codec: Schema.String })),
 });
 
+/** One resolution option of the plan's quality menu. */
+const QualityRung = Schema.Struct({
+  name: Schema.String,
+  width: positiveInt,
+  height: positiveInt,
+  bitrate: Schema.Number.pipe(Schema.positive()),
+  source: Schema.Literal("stored", "version", "transcode"),
+  versionId: Schema.NullOr(Schema.UUID),
+  storedVariantIds: Schema.Array(Schema.UUID),
+  available: Schema.Boolean,
+});
+
+/** The quality menu's options and the stored rungs this session serves. */
+const QualityOutput = Schema.Struct({
+  original: Schema.NullOr(
+    Schema.Struct({
+      name: Schema.String,
+      width: positiveInt,
+      height: positiveInt,
+      bitrate: Schema.Number.pipe(Schema.positive()),
+    }),
+  ),
+  rungs: Schema.Array(QualityRung),
+  storedVariantIds: Schema.Array(Schema.UUID),
+});
+
 const PlanOutput = Schema.Struct({
   ...RefreshOutput.fields,
+  quality: QualityOutput,
   output: Schema.NullOr(StreamCodecs),
   subtitleUrl: Schema.NullOr(Schema.String),
   subtitles: Schema.Array(

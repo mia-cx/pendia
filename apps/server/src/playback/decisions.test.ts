@@ -1556,13 +1556,20 @@ describe("decidePlayback caps and scaling", () => {
     });
   });
 
-  test("lan copies above the policy cap without a decoder limit", () => {
+  test("a lan session cap applies while global and user caps are ignored", () => {
     const result = decidePlayback(source, client, {
       isLan: true,
+      globalDefault: 500_000,
+      userOverride: 500_000,
       sessionRequest: 1_500_000,
     });
-    expect(result.method).toBe("direct-play");
-    expect(result.video.action).toBe("copy");
+    // The 1.5 mbit session cap binds; a 480p HEVC transcode (2 mbit x 0.6) fits it.
+    expect(result.method).toBe("transcode");
+    expect(result.video).toMatchObject({
+      action: "transcode",
+      bitrate: 1_200_000,
+      rung: { name: "480p" },
+    });
   });
 
   test("a wan 6 mbit cap selects HEVC 1080p at 4.8 mbit", () => {

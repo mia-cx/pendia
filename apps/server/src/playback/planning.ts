@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, ne, sql } from "drizzle-orm";
 import { Schema } from "effect";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
@@ -21,7 +21,10 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { requestKeyframeIndex } from "../libraries/keyframe-index.ts";
-import { selectStoredVariants } from "../stored/playback.ts";
+import {
+  loadStoredCandidates,
+  pickStoredVariants,
+} from "../stored/playback.ts";
 import { subtitleUrl } from "../subtitles/http.ts";
 import { listSubtitles } from "../subtitles/store.ts";
 import { sessionOutputs } from "../transcoder/outputs.ts";
@@ -43,6 +46,12 @@ import {
   type Hdr,
   type PlaybackCaps,
 } from "./policy.ts";
+import {
+  boxProfile,
+  findRung,
+  type QualityCandidate,
+  qualityOptions,
+} from "./quality.ts";
 import { readPlaybackSettings } from "./settings.ts";
 
 /** The decoded input every playback planning call receives. */
@@ -57,6 +66,8 @@ export type PlanInput = {
   audioStreamIndex?: number;
   /** The source Stream index of the subtitle to show, null for none; every subtitle Stream when absent. */
   subtitleStreamIndex?: number | null;
+  /** The quality menu's choice: `"original"`, a rung name, or absent/`"auto"` for the policy's own. An unknown name plays as auto. */
+  quality?: string;
 };
 
 /** The request details planning needs to judge network locality and URL style. */
@@ -399,21 +410,35 @@ export async function planPlayback(
     config.trustedProxyAddresses,
   );
   const playbackSettings = await readPlaybackSettings(db);
+  // A rung pick boxes the client profile to the rung's resolution; the
+  // caller's own bitrateCapBps still applies. "original" and unknown names
+  // change nothing.
+  const qualityRung =
+    input.quality === undefined ||
+    input.quality === "auto" ||
+    input.quality === "original"
+      ? undefined
+      : findRung(input.quality);
+  const profile =
+    qualityRung === undefined
+      ? input.profile
+      : boxProfile(input.profile, qualityRung);
   const caps: PlaybackCaps = {
     globalDefault: playbackSettings.bitrateCapBps,
     userOverride: await userBitrateCap(db, caller.user.id),
     sessionRequest: input.bitrateCapBps ?? null,
     isLan: isLanAddress(identity.address),
   };
+  const capabilities = await readCapabilityTable(db);
   // No live path, such as a cap under every ladder rung, can still leave a
   // stored rung that fits.
   let decision: PlaybackDecision | null;
   try {
     decision = decidePlayback(
       source,
-      input.profile,
+      profile,
       caps,
-      await readCapabilityTable(db),
+      capabilities,
       playbackSettings.allowCpu4k,
     );
   } catch {
@@ -423,22 +448,30 @@ export async function planPlayback(
   // disk over HLS. They carry no subtitle pixels and only the first audio
   // Stream, so a burn-in over HLS or another audio Stream stays live, or
   // fails the plan when no live path exists.
+  const storedEligible =
+    !requiresBurnIn(source, profile, true) && (selection.audio ?? 0) === 0;
+  const segmentTimelineId = version.timelineAligned
+    ? version.segmentTimelineId
+    : null;
+  const storedCandidates = storedEligible
+    ? await loadStoredCandidates(db, { itemId: item.id, fileId: file.id })
+    : [];
+  const pickStored = (
+    storedProfile: ClientProfile,
+    storedCaps: PlaybackCaps,
+    liveMethod: PlaybackDecision["method"] | null,
+  ) =>
+    pickStoredVariants(
+      storedCandidates,
+      { segmentTimelineId, liveMethod },
+      storedProfile,
+      storedCaps,
+    );
+  // An "original" pick skips stored rungs so the source File plays as is.
   const storedVariantIds =
-    requiresBurnIn(source, input.profile, true) || (selection.audio ?? 0) !== 0
+    input.quality === "original" || !storedEligible
       ? []
-      : await selectStoredVariants(
-          db,
-          {
-            itemId: item.id,
-            fileId: file.id,
-            segmentTimelineId: version.timelineAligned
-              ? version.segmentTimelineId
-              : null,
-            liveMethod: decision?.method ?? null,
-          },
-          input.profile,
-          caps,
-        );
+      : pickStored(profile, caps, decision?.method ?? null).variantIds;
   const stored = storedVariantIds.length > 0;
   if (!stored && decision === null) throw new AuthError("INVALID_INPUT");
   const method =
@@ -540,6 +573,55 @@ export async function planPlayback(
     (shownSubtitleDecision.action === "convert" ||
       (shownSubtitleDecision.action === "copy" &&
         shownSubtitleDecision.format === "webvtt"));
+  // The quality menu's candidates: the Item's other imported Versions that
+  // plan at all.
+  const otherVersions = await db
+    .select({ id: versions.id })
+    .from(versions)
+    .where(
+      and(
+        eq(versions.itemId, item.id),
+        eq(versions.origin, "imported"),
+        ne(versions.id, version.id),
+      ),
+    );
+  const candidates: QualityCandidate[] = [];
+  for (const other of otherVersions) {
+    try {
+      const candidate = await loadPlaybackSource(
+        db,
+        caller.user.id,
+        item.id,
+        other.id,
+      );
+      candidates.push({
+        id: other.id,
+        durationSeconds: candidate.version.durationSeconds,
+        timelineAligned:
+          candidate.version.timelineAligned &&
+          candidate.version.segmentTimelineId !== null,
+        source: candidate.source,
+      });
+    } catch {
+      // An unplannable Version is no option.
+    }
+  }
+  const quality = {
+    ...qualityOptions({
+      source,
+      profile: input.profile,
+      caps,
+      capabilities,
+      allowCpu4k: playbackSettings.allowCpu4k,
+      current: {
+        durationSeconds: version.durationSeconds,
+        timelineAligned: segmentTimelineId !== null,
+      },
+      pickStored: storedEligible ? pickStored : undefined,
+      versions: candidates,
+    }),
+    storedVariantIds,
+  };
   return db.transaction(async (tx) => {
     const [session] = await tx
       .insert(sessionRegistry)
@@ -610,6 +692,7 @@ export async function planPlayback(
           forced: disposition.forced === true,
         }),
       ),
+      quality,
     };
   });
 }

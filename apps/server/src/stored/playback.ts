@@ -89,32 +89,40 @@ const accepts = (client: ClientProfile, audio: StreamRow | undefined) =>
       candidate.maxChannels >= (audio.channels ?? Infinity),
   );
 
-/** Picks the stored rungs a client gets instead of a live session; empty when the live path should run. A null live method means no live path exists. */
-export async function selectStoredVariants(
+/** Loads the complete stored Versions derived from one File, with their video and first audio Stream. */
+export async function loadStoredCandidates(
   db: Database,
-  source: {
-    itemId: string;
-    fileId: string;
-    segmentTimelineId: string | null;
-    liveMethod: PlaybackDecision["method"] | null;
-  },
-  client: ClientProfile,
-  caps: PlaybackCaps,
+  source: { itemId: string; fileId: string },
 ) {
-  if (source.liveMethod === "direct-play" || source.segmentTimelineId === null)
-    return [];
   // Only rungs of the played File: another Version may be another
   // translation or release on the same timeline. A trigger keeps their
   // timeline equal to the source's.
-  const stored = await loadStored(
+  return loadStored(
     db,
     and(
       eq(versions.itemId, source.itemId),
       eq(versions.sourceFileId, source.fileId),
     ),
   );
+}
+
+type StoredCandidates = Awaited<ReturnType<typeof loadStoredCandidates>>;
+
+/** Picks the stored rungs among loaded candidates a client gets; empty when the live path should run. A null live method means no live path exists. */
+export function pickStoredVariants(
+  stored: StoredCandidates,
+  source: {
+    segmentTimelineId: string | null;
+    liveMethod: PlaybackDecision["method"] | null;
+  },
+  client: ClientProfile,
+  caps: PlaybackCaps,
+): { variantIds: string[]; bitrate: number | null } {
+  const none = { variantIds: [], bitrate: null };
+  if (source.liveMethod === "direct-play" || source.segmentTimelineId === null)
+    return none;
   const [first] = stored;
-  if (first === undefined) return [];
+  if (first === undefined) return none;
   const candidates = stored.filter((row) => accepts(client, row.audio));
   const group = selectAdaptiveGroup(
     candidates.map(
@@ -133,18 +141,22 @@ export async function selectStoredVariants(
     client,
     caps,
   );
-  const variants = group.variants.map((variant) => variant.id);
   // A remux already plays the source untouched; stored rungs replace it only
   // when they include that source, so quality never drops to save nothing.
   if (source.liveMethod === "remux") {
+    const variants = group.variants.map((variant) => variant.id);
     const keepsSource = stored.some(
       (row) =>
         variants.includes(row.version.id) &&
         row.version.rung === sourceRungName,
     );
-    if (!keepsSource) return [];
+    if (!keepsSource) return none;
   }
-  return variants;
+  const bitrates = group.variants.map((variant) => variant.video.bitrate);
+  return {
+    variantIds: group.variants.map((variant) => variant.id),
+    bitrate: bitrates.length === 0 ? null : Math.max(...bitrates),
+  };
 }
 
 const playlist = (body: string) =>

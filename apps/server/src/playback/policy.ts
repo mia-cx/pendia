@@ -27,9 +27,9 @@ export type PlaybackCaps = {
   isLan: boolean;
 };
 
-/** Returns the lowest policy cap in bits per second, or null when uncapped or on LAN. */
+/** Returns the lowest policy cap in bits per second; on LAN only an explicit session request applies, and null stays uncapped. */
 export function effectiveCap(caps: PlaybackCaps) {
-  if (caps.isLan) return null;
+  if (caps.isLan) return caps.sessionRequest ?? null;
   const limits = [
     caps.globalDefault,
     caps.userOverride,

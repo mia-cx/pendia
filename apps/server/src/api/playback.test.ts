@@ -1232,6 +1232,45 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         },
       ]);
     }));
+
+  test("a 720p quality pick on LAN transcodes at the rung and reports the menu's rungs", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const fx = await seedPlayback(db);
+      // A transcode plan opens an HLS session, which needs a timeline.
+      await alignTimeline(db, fx.version);
+      const planned = await planPlayback(
+        db,
+        fx.keyCaller,
+        {
+          itemId: fx.item.id,
+          versionId: fx.version.id,
+          profile,
+          quality: "720p",
+        },
+        { request: planRequest(), peerAddress: "192.168.1.5" },
+      );
+      expect(planned.method).toBe("transcode");
+      if (planned.sessionId === null) throw new Error("Expected a session.");
+      const [row] = await db
+        .select({ decision: sessionRegistry.decision })
+        .from(sessionRegistry)
+        .where(eq(sessionRegistry.id, planned.sessionId));
+      expect(row?.decision).toMatchObject({
+        video: {
+          action: "transcode",
+          height: 720,
+          rung: { height: 720 },
+        },
+      });
+      expect(planned.quality.original?.name).toBe("1080p");
+      expect(planned.quality.rungs.map((rung) => rung.name)).toEqual([
+        "720p",
+        "480p",
+        "360p",
+        "240p",
+      ]);
+    }));
 });
 
 describe.skipIf(!databaseUrl)("api playback progressive", () => {

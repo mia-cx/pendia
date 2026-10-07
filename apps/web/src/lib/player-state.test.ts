@@ -10,6 +10,11 @@ class FakeMedia extends EventTarget {
   ended = false;
   volume = 1;
   muted = false;
+  playbackRate = 1;
+  defaultPlaybackRate = 1;
+  preservesPitch = false;
+  videoWidth = 0;
+  videoHeight = 0;
   buffered: {
     start(index: number): number;
     end(index: number): number;
@@ -43,12 +48,14 @@ class FakeMedia extends EventTarget {
 type RecordedRequest = SessionRequest & {
   close: () => Promise<void>;
   closed: boolean;
+  capCalls: (readonly string[] | null)[];
+  capLevels: (variantIds: readonly string[] | null) => boolean;
 };
 
 /** A createPlayer on FakeMedia whose sessions and clock the test drives. */
 function setup(
   overrides: Partial<Parameters<typeof createPlayer>[0]> = {},
-  fake: { likeVideo?: boolean } = {},
+  fake: { likeVideo?: boolean; capOk?: boolean } = {},
 ) {
   const media = new FakeMedia();
   const requests: RecordedRequest[] = [];
@@ -65,6 +72,11 @@ function setup(
       const entry: RecordedRequest = {
         ...request,
         closed: false,
+        capCalls: [],
+        capLevels: (variantIds) => {
+          entry.capCalls.push(variantIds);
+          return fake.capOk ?? true;
+        },
         close: () => {
           if (fake.likeVideo) {
             // video.load(): pauses and rewinds without firing any event.
@@ -100,6 +112,32 @@ function setup(
       ],
       audioStreamIndex: 0,
       subtitleStreamIndex: null,
+      quality: {
+        original: null,
+        rungs: [
+          {
+            name: "1080p",
+            width: 1920,
+            height: 1080,
+            bitrate: 8_000_000,
+            source: "stored",
+            versionId: null,
+            storedVariantIds: ["sv1"],
+            available: true,
+          },
+          {
+            name: "720p",
+            width: 1280,
+            height: 720,
+            bitrate: 3_000_000,
+            source: "transcode",
+            versionId: null,
+            storedVariantIds: [],
+            available: true,
+          },
+        ],
+        storedVariantIds: ["sv1", "sv2"],
+      },
       ...part,
     }) as PlannedTracks;
   const state = () => get(player.state);
@@ -590,5 +628,109 @@ describe("player state", () => {
     await player.close();
     media.fire("waiting");
     expect(state().buffering).toBe(false);
+  });
+
+  test("a quality pick reopens at the position with the rung in the request", async () => {
+    const { media, requests, player, state, tracks } = setup();
+    requests[0]?.onTracks(tracks());
+    media.currentTime = 30;
+    media.fire("timeupdate");
+
+    await player.chooseQuality("720p");
+    expect(state().quality).toBe("720p");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.quality).toBe("720p");
+    expect(requests[1]?.startAt).toBe(30);
+  });
+
+  test("a version-sourced quality switches Version and resets streams", async () => {
+    const { requests, player, state, tracks } = setup();
+    requests[0]?.onTracks(tracks());
+    await player.chooseAudio(1);
+    requests[1]?.onTracks(tracks());
+
+    await player.chooseQuality("720p", "v2");
+    expect(state().versionId).toBe("v2");
+    expect(requests).toHaveLength(3);
+    expect(requests[2]?.versionId).toBe("v2");
+    expect(requests[2]?.quality).toBe("720p");
+    expect(requests[2]?.streams).toEqual({});
+  });
+
+  test("a stored pick inside the served variants caps locally without a replan", async () => {
+    const { requests, player, state, tracks } = setup();
+    requests[0]?.onTracks(tracks());
+
+    await player.chooseQuality("1080p");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.capCalls).toEqual([["sv1"]]);
+    expect(state().quality).toBe("1080p");
+
+    // Back to Auto lifts the cap in place too.
+    await player.chooseQuality("auto");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.capCalls).toEqual([["sv1"], null]);
+    expect(state().quality).toBe("auto");
+  });
+
+  test("a transcode pick outside the stored variants replans", async () => {
+    const { requests, player, tracks } = setup();
+    requests[0]?.onTracks(tracks());
+
+    await player.chooseQuality("720p");
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.quality).toBe("720p");
+    expect(requests[0]?.capCalls).toHaveLength(0);
+  });
+
+  test("setSpeed drives the media rates without a restart", async () => {
+    const { media, requests, player, state } = setup();
+    const count = requests.length;
+    player.setSpeed(1.5);
+    expect(media.playbackRate).toBe(1.5);
+    expect(media.defaultPlaybackRate).toBe(1.5);
+    expect(media.preservesPitch).toBe(true);
+    expect(state().speed).toBe(1.5);
+    expect(requests).toHaveLength(count);
+  });
+
+  test("setBoost amplifies over unity without a restart", () => {
+    const amplified: number[] = [];
+    const { requests, player, state } = setup({
+      amplify: (gain) => amplified.push(gain),
+    });
+    const count = requests.length;
+    player.setBoost(2);
+    expect(amplified).toEqual([3]);
+    expect(state().boost).toBe(2);
+    expect(requests).toHaveLength(count);
+    player.setBoost(0);
+    expect(amplified).toEqual([3, 1]);
+  });
+
+  test("stored prefs apply on creation and persist on change", async () => {
+    const written: { quality: string; speed: number; boost: number }[] = [];
+    const amplified: number[] = [];
+    const { media, requests, player, state } = setup({
+      prefs: {
+        read: () => ({ quality: "720p", speed: 1.5, boost: 2 }),
+        write: (prefs) => written.push(prefs),
+      },
+      amplify: (gain) => amplified.push(gain),
+    });
+    expect(requests[0]?.quality).toBe("720p");
+    expect(media.playbackRate).toBe(1.5);
+    expect(media.preservesPitch).toBe(true);
+    expect(amplified).toEqual([3]);
+    expect(state().quality).toBe("720p");
+
+    player.setSpeed(0.75);
+    player.setBoost(0);
+    await player.chooseQuality("auto");
+    expect(written).toEqual([
+      { quality: "720p", speed: 0.75, boost: 2 },
+      { quality: "720p", speed: 0.75, boost: 0 },
+      { quality: "auto", speed: 0.75, boost: 0 },
+    ]);
   });
 });

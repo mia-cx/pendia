@@ -3,9 +3,9 @@ status: accepted
 date: 2026-09-11
 ---
 
-# A job queue of Pendia's own on Postgres
+# A job queue of Thalia's own on Postgres
 
-pg-boss and graphile-worker are the obvious choices. Both run on the `pg` driver, which would sit next to Bun.sql as a second Postgres client with its own pool, and neither offers the per-library concurrency cap that keeps probes from flooding NFS. Pendia keeps one jobs table claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, with priority, attempts, run after and a concurrency key. About a hundred lines that the team understands fully.
+pg-boss and graphile-worker are the obvious choices. Both run on the `pg` driver, which would sit next to Bun.sql as a second Postgres client with its own pool, and neither offers the per-library concurrency cap that keeps probes from flooding NFS. Thalia keeps one jobs table claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, with priority, attempts, run after and a concurrency key. About a hundred lines that the team understands fully.
 
 ## Consequences
 

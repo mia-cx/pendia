@@ -64,7 +64,7 @@ describe.skipIf(!databaseUrl)("store status", () => {
                 sql`${jobs.payload}->>'rung' = '360p'`,
               ),
             );
-          const folder = join(root, `${fixturePath}.pendia`, "360p");
+          const folder = join(root, `${fixturePath}.thalia`, "360p");
           await mkdir(join(folder, ".partial"), { recursive: true });
           await Bun.write(join(folder, "0.m4s"), "0");
           await Bun.write(join(folder, "1.m4s"), "1");

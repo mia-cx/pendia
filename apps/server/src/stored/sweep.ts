@@ -5,7 +5,7 @@ import type { Database } from "../db/client.ts";
 import { files, versions } from "../db/schema/index.ts";
 import { type LibraryRoot, rootsOf } from "../libraries/roots.ts";
 
-const storeSuffix = ".pendia";
+const storeSuffix = ".thalia";
 
 /** Matches root-relative paths inside a folder; "." is the whole root. */
 export function inFolder(path: typeof files.path, folder: string) {
@@ -63,7 +63,7 @@ async function sweepRoot(db: Database, root: LibraryRoot, folder: string) {
         await visit(child);
         continue;
       }
-      // A bare `.pendia` folder holds Item artwork, not a stored source.
+      // A bare `.thalia` folder holds Item artwork, not a stored source.
       if (entry.name === storeSuffix) continue;
       const absolute = resolve(root.path, child);
       const source = child.slice(0, -storeSuffix.length);
@@ -78,7 +78,7 @@ async function sweepRoot(db: Database, root: LibraryRoot, folder: string) {
             force: true,
           });
       }
-      // The `.pendia` folder goes once its last rung does.
+      // The `.thalia` folder goes once its last rung does.
       await rmdir(absolute).catch((error: unknown) => {
         if (errorCode(error) !== "ENOTEMPTY") throw error;
       });
@@ -87,7 +87,7 @@ async function sweepRoot(db: Database, root: LibraryRoot, folder: string) {
   await visit(folder);
 }
 
-/** Deletes stored output under a Library folder, in every root, that nothing owns: `<file>.pendia` folders whose source is gone from disk and has no File row, and rung folders with no Stored Version. Runs on a worker, which writes to the share. */
+/** Deletes stored output under a Library folder, in every root, that nothing owns: `<file>.thalia` folders whose source is gone from disk and has no File row, and rung folders with no Stored Version. Runs on a worker, which writes to the share. */
 export async function sweepStoredFolders(
   db: Database,
   libraryId: string,

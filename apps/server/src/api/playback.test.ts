@@ -25,12 +25,12 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { rootsOf } from "../libraries/roots.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { planPlayback, refreshPlayback } from "../playback/planning.ts";
 import { writeGlobalBitrateCap } from "../playback/settings.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 const device = {
   clientName: "Test Client",
@@ -43,7 +43,7 @@ function rpcClient(base: string, token?: string) {
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 type ApiClient = ReturnType<typeof rpcClient>;
@@ -243,7 +243,7 @@ async function seedPlayback(
 }
 
 function planRequest(forwardedFor?: string) {
-  return new Request("http://pendia.test/api/playback/plan", {
+  return new Request("http://thalia.test/api/playback/plan", {
     method: "POST",
     headers:
       forwardedFor === undefined
@@ -260,7 +260,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -334,13 +334,13 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const rest = await fetch(`${base}/api/playback/plan`, {
           method: "POST",
           headers: {
-            cookie: `pendia_session=${fx.accountToken}`,
+            cookie: `thalia_session=${fx.accountToken}`,
             "content-type": "application/json",
           },
           body: JSON.stringify({
@@ -373,7 +373,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       await alignTimeline(db, fx.version);
       const second = await addItem(db, fx.library.id, "Sequel");
       await addMedia(db, fx.library.id, second.id, { audioCodec: "ac3" });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -463,7 +463,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -484,7 +484,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db, "owner", { audioCodec: "ac3" });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -528,7 +528,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         fx.library.id,
         otherItem.id,
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -592,7 +592,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         .returning();
       if (!secondFile || !multiFile)
         throw new Error("File insert returned no row.");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -629,7 +629,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -706,7 +706,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         userId: viewer.id,
         allowed: false,
       });
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const input = {
@@ -746,7 +746,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -837,7 +837,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
       await migrateDatabase(db);
       const fx = await seedPlayback(db);
       await alignTimeline(db, fx.version);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, fx.keyToken);
@@ -893,7 +893,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         })
         .returning();
       if (!remuxSession) throw new Error("Session insert returned no row.");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const foreign = await capture(
@@ -984,7 +984,7 @@ describe.skipIf(!databaseUrl)("api playback", () => {
         throw new Error("Expected a session and URL.");
       const token = new URL(
         forwardedLan.url,
-        "http://pendia.test",
+        "http://thalia.test",
       ).searchParams.get("token");
       if (token === null) throw new Error("Missing playback token.");
       await verifyPlaybackToken(db, token, {

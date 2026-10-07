@@ -2,11 +2,11 @@ services:
   postgres:
     image: postgres:18
     environment:
-      POSTGRES_DB: pendia
-      POSTGRES_PASSWORD: pendia
-      POSTGRES_USER: pendia
+      POSTGRES_DB: thalia
+      POSTGRES_PASSWORD: thalia
+      POSTGRES_USER: thalia
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready --username pendia --dbname pendia"]
+      test: ["CMD-SHELL", "pg_isready --username thalia --dbname thalia"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -14,17 +14,17 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
 
-  pendia:
+  thalia:
     # A published release. compose.build.yaml builds this checkout instead.
-    image: ghcr.io/mia-cx/pendia:${PENDIA_VERSION:-latest}
+    image: ghcr.io/mia-cx/thalia:${THALIA_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://pendia:pendia@postgres:5432/pendia
-      # Artwork goes here when the media folder is read-only to Pendia.
-      PENDIA_ARTWORK_PATH: /var/lib/pendia/artwork
-      # Optional; set it in .env or the shell. A key stored in Pendia wins.
+      DATABASE_URL: postgresql://thalia:thalia@postgres:5432/thalia
+      # Artwork goes here when the media folder is read-only to Thalia.
+      THALIA_ARTWORK_PATH: /var/lib/thalia/artwork
+      # Optional; set it in .env or the shell. A key stored in Thalia wins.
       TMDB_API_KEY: ${TMDB_API_KEY:-}
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://localhost:3000/readyz"]
@@ -34,14 +34,14 @@ services:
       # Migrations and the transcoder trial run before the first answer.
       start_period: 30s
     ports:
-      # Host port; override with PENDIA_HOST_PORT when 3000 is taken.
-      - "${PENDIA_HOST_PORT:-3000}:3000"
+      # Host port; override with THALIA_HOST_PORT when 3000 is taken.
+      - "${THALIA_HOST_PORT:-3000}:3000"
     restart: unless-stopped
     volumes:
       # Your media folder, seen as /media inside the container.
-      - ${PENDIA_MEDIA:-./media}:/media
-      - pendia-data:/var/lib/pendia
+      - ${THALIA_MEDIA:-./media}:/media
+      - thalia-data:/var/lib/thalia
 
 volumes:
   postgres-data:
-  pendia-data:
+  thalia-data:

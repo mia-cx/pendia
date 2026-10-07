@@ -2,7 +2,7 @@ import type {
   ItemKind,
   MetadataProvider,
   MetadataResult,
-} from "@pendia/plugin-api";
+} from "@thalia/plugin-api";
 import { and, eq, lte, sql } from "drizzle-orm";
 import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";

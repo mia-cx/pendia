@@ -37,10 +37,10 @@ export function isVideoPath(path: string): boolean {
   return extensions.has(extname(path).toLowerCase());
 }
 
-/** Whether a path sits in an extras or Pendia store directory or is an extra file. */
+/** Whether a path sits in an extras or Thalia store directory or is an extra file. */
 export function isVideoExtra(path: string): boolean {
   const parts = path.split("/");
-  if (parts.some((part) => part.toLowerCase().endsWith(".pendia"))) {
+  if (parts.some((part) => part.toLowerCase().endsWith(".thalia"))) {
     return true;
   }
   if (parts.slice(0, -1).some((part) => extraNames.has(normalizedName(part)))) {

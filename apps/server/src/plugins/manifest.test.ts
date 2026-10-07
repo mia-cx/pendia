@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readPluginPackage } from "./manifest.ts";
 
 const valid = {
-  name: "pendia-plugin-prunarr",
+  name: "thalia-plugin-prunarr",
   version: "1.2.3",
-  pendia: {
+  thalia: {
     api: "^1.0.0",
     capabilities: ["items:read", "network", "network"],
     network: ["radarr.example"],
@@ -16,14 +16,14 @@ const valid = {
   },
 };
 
-function withPendia(pendia: Record<string, unknown>) {
-  return { ...valid, pendia: { ...valid.pendia, ...pendia } };
+function withThalia(thalia: Record<string, unknown>) {
+  return { ...valid, thalia: { ...valid.thalia, ...thalia } };
 }
 
 describe("readPluginPackage", () => {
   test("reads a valid package with deduplicated capabilities and a normalized entry", () => {
     expect(readPluginPackage(valid)).toEqual({
-      name: "pendia-plugin-prunarr",
+      name: "thalia-plugin-prunarr",
       version: "1.2.3",
       manifest: {
         api: "^1.0.0",
@@ -39,15 +39,15 @@ describe("readPluginPackage", () => {
   });
 
   test("accepts a scoped name and no config", () => {
-    const { config: _, ...pendia } = valid.pendia;
-    const read = readPluginPackage({ ...valid, name: "@pendia/x", pendia });
-    expect(read.name).toBe("@pendia/x");
+    const { config: _, ...thalia } = valid.thalia;
+    const read = readPluginPackage({ ...valid, name: "@thalia/x", thalia });
+    expect(read.name).toBe("@thalia/x");
     expect(read.manifest.config).toBeNull();
   });
 
   test("accepts * for any host", () => {
     expect(
-      readPluginPackage(withPendia({ network: ["*"] })).manifest.network,
+      readPluginPackage(withThalia({ network: ["*"] })).manifest.network,
     ).toEqual(["*"]);
   });
 
@@ -55,46 +55,46 @@ describe("readPluginPackage", () => {
     ["a non-object", "nope", "package.json must be an object"],
     ["an uppercase name", { ...valid, name: "Bad" }, "name"],
     ["a loose version", { ...valid, version: "1.2" }, "version"],
-    ["no pendia block", { name: "x", version: "1.0.0" }, "pendia block"],
-    ["an api range the host misses", withPendia({ api: "^2.0.0" }), "host API"],
+    ["no thalia block", { name: "x", version: "1.0.0" }, "thalia block"],
+    ["an api range the host misses", withThalia({ api: "^2.0.0" }), "host API"],
     [
       "an unknown capability",
-      withPendia({ capabilities: ["root"] }),
+      withThalia({ capabilities: ["root"] }),
       "unknown capability root",
     ],
     [
       "items:write without items:read",
-      withPendia({ capabilities: ["items:write"] }),
+      withThalia({ capabilities: ["items:write"] }),
       "items:write needs items:read",
     ],
     [
       "a URL in the network list",
-      withPendia({ network: ["https://radarr.example"] }),
-      "pendia.network",
+      withThalia({ network: ["https://radarr.example"] }),
+      "thalia.network",
     ],
     [
       "a partial wildcard in the network list",
-      withPendia({ network: ["*.example"] }),
-      "pendia.network",
+      withThalia({ network: ["*.example"] }),
+      "thalia.network",
     ],
     [
       "an entry outside the package",
-      withPendia({ entry: "../escape.js" }),
+      withThalia({ entry: "../escape.js" }),
       "inside the package",
     ],
     [
       "an absolute entry",
-      withPendia({ entry: "/etc/x.js" }),
+      withThalia({ entry: "/etc/x.js" }),
       "inside the package",
     ],
     [
       "a config that is not an object schema",
-      withPendia({ config: { type: "string" } }),
+      withThalia({ config: { type: "string" } }),
       "object schema",
     ],
     [
       "a config with an unsupported type",
-      withPendia({
+      withThalia({
         config: { type: "object", properties: { a: { type: "date" } } },
       }),
       "config.properties.a has an unsupported type",

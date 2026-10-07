@@ -15,7 +15,7 @@ COPY packages packages
 COPY plugins plugins
 
 RUN bun run --cwd apps/web build
-RUN bun build --compile apps/server/src/index.ts --outfile /app/pendia
+RUN bun build --compile apps/server/src/index.ts --outfile /app/thalia
 
 FROM debian:trixie-slim AS runtime
 
@@ -24,22 +24,22 @@ RUN apt-get update \
   && apt-get install --yes --no-install-recommends ca-certificates curl ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd --system pendia \
-  && useradd --system --gid pendia --home-dir /app --no-create-home --shell /usr/sbin/nologin pendia \
-  && install --directory --owner pendia --group pendia /var/lib/pendia
+RUN groupadd --system thalia \
+  && useradd --system --gid thalia --home-dir /app --no-create-home --shell /usr/sbin/nologin thalia \
+  && install --directory --owner thalia --group thalia /var/lib/thalia
 
 WORKDIR /app
 
-COPY --from=build --chown=pendia:pendia /app/pendia /app/pendia
-COPY --from=build --chown=pendia:pendia /app/apps/server/drizzle /app/drizzle
-COPY --from=build --chown=pendia:pendia /app/apps/web/build /app/web
+COPY --from=build --chown=thalia:thalia /app/thalia /app/thalia
+COPY --from=build --chown=thalia:thalia /app/apps/server/drizzle /app/drizzle
+COPY --from=build --chown=thalia:thalia /app/apps/web/build /app/web
 
-ENV PENDIA_PORT=3000
-ENV PENDIA_WEB_ROOT=/app/web
+ENV THALIA_PORT=3000
+ENV THALIA_WEB_ROOT=/app/web
 
-USER pendia
+USER thalia
 
 EXPOSE 3000
 
-ENTRYPOINT ["/app/pendia"]
+ENTRYPOINT ["/app/thalia"]
 CMD ["--role", "all"]

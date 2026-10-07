@@ -17,11 +17,11 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 HLS.setOptions({ strictMode: true });
 
@@ -45,7 +45,7 @@ function rpcClient(base: string, token?: string) {
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function seed(db: Database) {
@@ -121,7 +121,7 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
   let libraryRoot: string;
 
   beforeAll(async () => {
-    libraryRoot = await mkdtemp(join(tmpdir(), "pendia-hls-api-library-"));
+    libraryRoot = await mkdtemp(join(tmpdir(), "thalia-hls-api-library-"));
     const folder = join(libraryRoot, "Movie (2026)");
     await mkdir(folder);
     await createVideoFixture(join(folder, "Movie.mkv"), {
@@ -146,7 +146,7 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
       itemId: string;
       versionId: string;
       scratchDir: string;
-      server: Awaited<ReturnType<typeof startPendia>>;
+      server: Awaited<ReturnType<typeof startThalia>>;
       keyToken: string;
     }) => Promise<void>,
   ) => {
@@ -164,9 +164,9 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
         throw new Error("Expected exactly one scanned item and version.");
       }
       const scratchDir = await mkdtemp(
-        join(tmpdir(), "pendia-hls-api-scratch-"),
+        join(tmpdir(), "thalia-hls-api-scratch-"),
       );
-      const server = await startPendia("all", {
+      const server = await startThalia("all", {
         databaseUrl: url,
         port: 0,
         transcoderOptions: {
@@ -495,7 +495,7 @@ describe.skipIf(!databaseUrl)("hls playback", () => {
         if (scanned.itemId === null || versionId === undefined) {
           throw new Error("Expected exactly one scanned item and version.");
         }
-        const server = await startPendia("api", {
+        const server = await startThalia("api", {
           databaseUrl: url,
           port: 0,
         });

@@ -82,7 +82,7 @@ function newDeviceId() {
 
 function storedDeviceId(): string | null {
   try {
-    return localStorage.getItem("pendia.deviceId");
+    return localStorage.getItem("thalia.deviceId");
   } catch {
     return null;
   }
@@ -90,7 +90,7 @@ function storedDeviceId(): string | null {
 
 function rememberDeviceId(deviceId: string): void {
   try {
-    localStorage.setItem("pendia.deviceId", deviceId);
+    localStorage.setItem("thalia.deviceId", deviceId);
   } catch {
     // A browser that denies storage gets an id for this page only.
   }
@@ -107,7 +107,7 @@ export function deviceInfo() {
     .trim()
     .slice(0, 128);
   return {
-    clientName: "Pendia Web",
+    clientName: "Thalia Web",
     deviceId,
     deviceName: agent === "" ? "Browser" : agent,
   };

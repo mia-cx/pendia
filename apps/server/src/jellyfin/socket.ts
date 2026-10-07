@@ -28,7 +28,7 @@ const message = (type: string, data?: unknown) =>
     ...(data === undefined ? {} : { Data: data }),
   });
 
-/** Maps a Pendia event to the Jellyfin message it means for this caller; undefined when none. */
+/** Maps a Thalia event to the Jellyfin message it means for this caller; undefined when none. */
 async function toMessage(db: Database, caller: Caller, event: Event) {
   switch (event.kind) {
     case "library.changed": {

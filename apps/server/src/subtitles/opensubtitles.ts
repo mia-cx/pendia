@@ -1,4 +1,4 @@
-import type { SubtitleMatch, SubtitleProvider } from "@pendia/plugin-api";
+import type { SubtitleMatch, SubtitleProvider } from "@thalia/plugin-api";
 import { and, asc, eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
@@ -16,7 +16,7 @@ import { readLanguage, subtitleFormats } from "./store.ts";
 
 const baseUrl = "https://api.opensubtitles.com/api/v1";
 // OpenSubtitles asks every client to name itself.
-const userAgent = "Pendia v1.0.0";
+const userAgent = "Thalia v1.0.0";
 const limits = {
   label: "OpenSubtitles",
   timeoutMs: 15_000,

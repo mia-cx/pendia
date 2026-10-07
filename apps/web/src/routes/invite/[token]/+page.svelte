@@ -66,11 +66,11 @@ async function submit(event: SubmitEvent) {
 </script>
 
 <svelte:head>
-  <title>Join Pendia</title>
+  <title>Join Thalia</title>
 </svelte:head>
 
 {#if status === "live"}
-  <FocusScreen title="Welcome to Pendia">
+  <FocusScreen title="Welcome to Thalia">
     <p class="text-center text-callout text-label-secondary">
       Create your account to start watching.
     </p>

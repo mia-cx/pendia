@@ -1,5 +1,5 @@
 import { open } from "node:fs/promises";
-import type { MetadataResult } from "@pendia/plugin-api";
+import type { MetadataResult } from "@thalia/plugin-api";
 import { and, eq } from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";

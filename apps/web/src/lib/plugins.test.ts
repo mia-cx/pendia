@@ -50,10 +50,10 @@ const registries: Registry[] = [
     url: officialRegistry,
     entries: [
       {
-        name: "@pendia/plugin-webhooks",
+        name: "@thalia/plugin-webhooks",
         description: "Send server events to any HTTP endpoint.",
         versions: [
-          { version: "1.0.0", source: "@pendia/plugin-webhooks@1.0.0" },
+          { version: "1.0.0", source: "@thalia/plugin-webhooks@1.0.0" },
         ],
       },
     ],
@@ -68,7 +68,7 @@ const registries: Registry[] = [
 
 describe("registry helpers", () => {
   test("labels the official registry, a hostname and a broken URL", () => {
-    expect(registryLabel(officialRegistry)).toBe("Pendia registry");
+    expect(registryLabel(officialRegistry)).toBe("Thalia registry");
     expect(registryLabel("https://plugins.example.com/list.json")).toBe(
       "plugins.example.com",
     );
@@ -76,36 +76,36 @@ describe("registry helpers", () => {
   });
 
   test("names a plugin's origin from registry entries, then the source shape", () => {
-    expect(pluginOrigin("@pendia/plugin-webhooks@1.0.0", registries)).toBe(
-      "Pendia registry",
+    expect(pluginOrigin("@thalia/plugin-webhooks@1.0.0", registries)).toBe(
+      "Thalia registry",
     );
     expect(pluginOrigin("/srv/plugins/tool", registries)).toBe("Local folder");
     expect(pluginOrigin("https://x.example/p.tgz", registries)).toBe(
       "x.example",
     );
-    expect(pluginOrigin("pendia-plugin-tool@2.0.0", registries)).toBe("npm");
+    expect(pluginOrigin("thalia-plugin-tool@2.0.0", registries)).toBe("npm");
   });
 
   test("an entry reads install, update or installed against the list", () => {
     const installed = [
-      { name: "@pendia/plugin-webhooks", version: "1.0.0" },
-      { name: "pendia-plugin-tool", version: "0.9.0" },
+      { name: "@thalia/plugin-webhooks", version: "1.0.0" },
+      { name: "thalia-plugin-tool", version: "0.9.0" },
     ] as InstalledPlugin[];
     const webhook = registries[0]?.entries[0];
     if (webhook === undefined) throw new Error("fixture has no webhook entry");
     const tool = {
-      name: "pendia-plugin-tool",
+      name: "thalia-plugin-tool",
       description: null,
-      versions: [{ version: "1.0.0", source: "pendia-plugin-tool@1.0.0" }],
+      versions: [{ version: "1.0.0", source: "thalia-plugin-tool@1.0.0" }],
     };
     expect(entryAction(webhook, installed)).toBe("installed");
     expect(entryAction(tool, installed)).toBe("update");
     expect(
       entryAction(
         {
-          name: "pendia-plugin-new",
+          name: "thalia-plugin-new",
           description: null,
-          versions: [{ version: "1.0.0", source: "pendia-plugin-new@1.0.0" }],
+          versions: [{ version: "1.0.0", source: "thalia-plugin-new@1.0.0" }],
         },
         installed,
       ),

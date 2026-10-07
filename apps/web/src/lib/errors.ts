@@ -49,7 +49,7 @@ export function readFailure(error: unknown): {
   if (error instanceof ServerUnreachable)
     return {
       code: "UNREACHABLE",
-      message: "Pendia cannot reach its server. Check your connection.",
+      message: "Thalia cannot reach its server. Check your connection.",
     };
   if (code !== undefined && unauthorized.has(code))
     return {

@@ -136,7 +136,7 @@ const streamEvents = authenticated
   });
 
 /** The API router: procedures defined once, served over both RPC and REST. */
-export const pendiaRouter = {
+export const thaliaRouter = {
   me,
   items: {
     list: listItems,

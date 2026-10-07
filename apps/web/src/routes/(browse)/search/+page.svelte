@@ -87,7 +87,7 @@ function submit(event: SubmitEvent) {
 </script>
 
 <svelte:head>
-  <title>{query === "" ? "Search" : `${query} · Search`} · Pendia</title>
+  <title>{query === "" ? "Search" : `${query} · Search`} · Thalia</title>
 </svelte:head>
 
 <div class="pt-4 lg:pt-8">

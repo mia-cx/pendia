@@ -144,7 +144,7 @@ export function navDirection(from: string, to: string): "push" | "pop" | null {
   return null;
 }
 
-/** Reads /readyz: Pendia answers 200 when ready and a JSON 503 when its database is down; anything else means Pendia did not answer. */
+/** Reads /readyz: Thalia answers 200 when ready and a JSON 503 when its database is down; anything else means Thalia did not answer. */
 export async function checkHealth(
   transport?: typeof fetch,
 ): Promise<"ready" | "no-database" | "unreachable"> {

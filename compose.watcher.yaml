@@ -2,15 +2,15 @@
 # It reaches the api over HTTP and needs no database.
 services:
   watcher:
-    image: ghcr.io/mia-cx/pendia:${PENDIA_VERSION:-latest}
+    image: ghcr.io/mia-cx/thalia:${THALIA_VERSION:-latest}
     command: ["--role", "watcher"]
     environment:
-      PENDIA_API_URL: ${PENDIA_API_URL:?set the api origin, such as http://pendia.lan:3000}
-      PENDIA_WATCHER_TOKEN: ${PENDIA_WATCHER_TOKEN:?set an API key with manage-libraries}
+      THALIA_API_URL: ${THALIA_API_URL:?set the api origin, such as http://thalia.lan:3000}
+      THALIA_WATCHER_TOKEN: ${THALIA_WATCHER_TOKEN:?set an API key with manage-libraries}
       # <root-id>=<path inside this container>, comma separated.
       # A root id is shown on the Library page in the admin UI.
-      PENDIA_WATCH: ${PENDIA_WATCH:?set <root-id>=/media/<folder> pairs}
+      THALIA_WATCH: ${THALIA_WATCH:?set <root-id>=/media/<folder> pairs}
     volumes:
       # The watcher only reads the media.
-      - ${PENDIA_MEDIA:-/srv/media}:/media:ro
+      - ${THALIA_MEDIA:-/srv/media}:/media:ro
     restart: unless-stopped

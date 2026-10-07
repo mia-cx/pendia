@@ -12,7 +12,7 @@ import type {
   PluginRequest,
   PluginResponse,
   SubtitleProvider,
-} from "@pendia/plugin-api";
+} from "@thalia/plugin-api";
 import { and, asc, eq, gt, inArray, lt, type SQL } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";

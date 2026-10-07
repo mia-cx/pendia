@@ -157,7 +157,7 @@ const rows = Array.from(
 </script>
 
 <svelte:head>
-  <title>Design system · Pendia</title>
+  <title>Design system · Thalia</title>
 </svelte:head>
 
 <div class="mx-auto flex max-w-3xl flex-col gap-12 pt-4 lg:pt-8">
@@ -317,7 +317,7 @@ const rows = Array.from(
         <Dialog.Content>
           <Dialog.Header>
             <Dialog.Title>Edit title</Dialog.Title>
-            <Dialog.Description>Change how Pendia lists this title.</Dialog.Description>
+            <Dialog.Description>Change how Thalia lists this title.</Dialog.Description>
           </Dialog.Header>
           <Input value="Dune: Part Two" aria-label="Title" />
           <Dialog.Footer>
@@ -341,7 +341,7 @@ const rows = Array.from(
           <AlertDialog.Header>
             <AlertDialog.Title>Delete library?</AlertDialog.Title>
             <AlertDialog.Description>
-              Deleting Films removes its titles from Pendia. The files stay on disk.
+              Deleting Films removes its titles from Thalia. The files stay on disk.
             </AlertDialog.Description>
           </AlertDialog.Header>
           <AlertDialog.Footer>

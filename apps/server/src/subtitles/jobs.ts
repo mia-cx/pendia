@@ -1,4 +1,4 @@
-import type { SubtitleMatch, SubtitleProvider } from "@pendia/plugin-api";
+import type { SubtitleMatch, SubtitleProvider } from "@thalia/plugin-api";
 import { and, eq } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { items, jobs } from "../db/schema/index.ts";

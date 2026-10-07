@@ -18,7 +18,7 @@
       // Restore the collapsed sidebar before first paint so its width never jumps.
       // localStorage can be blocked; the sidebar then simply starts expanded.
       try {
-        if (localStorage.getItem("pendia.sidebar") === "collapsed")
+        if (localStorage.getItem("thalia.sidebar") === "collapsed")
           document.documentElement.dataset.sidebar = "collapsed";
       } catch {}
     </script>

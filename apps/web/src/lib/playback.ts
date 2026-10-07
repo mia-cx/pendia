@@ -1,8 +1,8 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
 /** The client profile `playback.plan` decides against. */
 export type ClientProfile = Parameters<
-  PendiaClient["playback"]["plan"]
+  ThaliaClient["playback"]["plan"]
 >[0]["profile"];
 
 /** What a browser can decode, asked one MIME type at a time. */
@@ -89,7 +89,7 @@ export function withToken(url: string, token: string, page: string): string {
   return next.href;
 }
 
-type Plan = Awaited<ReturnType<PendiaClient["playback"]["plan"]>>;
+type Plan = Awaited<ReturnType<ThaliaClient["playback"]["plan"]>>;
 
 /** One audio Stream of the planned Version. */
 export type AudioStream = Plan["audioStreams"][number];

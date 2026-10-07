@@ -17,7 +17,7 @@ import { readAuthSettings } from "./settings.ts";
 import { requestIdentity } from "./transport.ts";
 
 /** The session cookie the auth routes set and the API documents. */
-export const sessionCookieName = "pendia_session";
+export const sessionCookieName = "thalia_session";
 const maxBodyBytes = 16_384;
 const cookieMaxAgeSeconds = 34_560_000;
 const bearerPattern = /^Bearer ([A-Za-z0-9_-]{43})$/i;
@@ -227,7 +227,7 @@ function sessionCookie(token: string, secure: boolean, expiresAt: Date | null) {
 const clearedCookie = (secure: boolean) =>
   `${sessionCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 
-const oidcFlowCookieName = "pendia_oidc_flow";
+const oidcFlowCookieName = "thalia_oidc_flow";
 
 const oidcFlowPath = "/api/auth/oidc/callback";
 

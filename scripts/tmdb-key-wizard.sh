@@ -191,14 +191,14 @@ TOTAL_STAGES=1
 # The key lands in the repository's .env, wherever the wizard runs from.
 ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.env"
 
-banner "Pendia: TMDB API key"
+banner "Thalia: TMDB API key"
 
 # ── 1. TMDB API key ────────────────────────────────────────────────────────
 stage "TMDB: copy your API key"
 open_url "https://www.themoviedb.org/settings/api"
 step "Sign in to TMDB if it asks."
 step "Under 'API Key', copy the 32-character value."
-note "Skip 'API Read Access Token' (the long one starting eyJ). Pendia doesn't use it."
+note "Skip 'API Read Access Token' (the long one starting eyJ). Thalia doesn't use it."
 if ! command -v curl >/dev/null 2>&1; then
   warn "The wizard checks the key with curl. Install curl and run it again."
   exit 1
@@ -226,5 +226,5 @@ write_env TMDB_API_KEY "$TMDB_API_KEY"
 # ──────────────────────────────────────────────────────────────────────────
 
 finish
-note "Pendia reads TMDB_API_KEY from .env when it runs under Docker Compose."
+note "Thalia reads TMDB_API_KEY from .env when it runs under Docker Compose."
 printf '\n'

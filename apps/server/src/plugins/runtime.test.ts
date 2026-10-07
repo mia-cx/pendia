@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { Capability } from "@pendia/plugin-api";
+import type { Capability } from "@thalia/plugin-api";
 import { migrateDatabase } from "../db/migrate.ts";
 import { files, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";

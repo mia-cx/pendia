@@ -30,7 +30,7 @@ export const jellyfinTokenLifetimeSeconds = 24 * 60 * 60;
 /**
  * Resolves who asks for a media URL. Players often cannot send headers, so
  * besides the MediaBrowser header this takes the client's own token as
- * `ApiKey` or `api_key`, or the playback token Pendia wrote into the URL
+ * `ApiKey` or `api_key`, or the playback token Thalia wrote into the URL
  * beside its PlaySessionId.
  */
 async function mediaUserId(
@@ -155,7 +155,7 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
           body.number("MaxStreamingBitrate") ??
             query.count("maxStreamingBitrate"),
         );
-        // Jellyfin numbers Streams across the File, as Pendia does. A
+        // Jellyfin numbers Streams across the File, as Thalia does. A
         // negative audio index asks for the default; -1 turns subtitles off.
         const audioIndex =
           body.number("AudioStreamIndex") ?? query.integer("AudioStreamIndex");

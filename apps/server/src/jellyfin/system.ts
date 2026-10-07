@@ -2,10 +2,10 @@ import { readServerId } from "../server-id.ts";
 import { identify, json, type RequestContext, type Route } from "./http.ts";
 import { toGuid } from "./request.ts";
 
-// Clients pick their API dialect from the version, and Pendia speaks 10.10.
+// Clients pick their API dialect from the version, and Thalia speaks 10.10.
 const productName = "Jellyfin Server";
 const version = "10.10.7";
-const serverName = "Pendia";
+const serverName = "Thalia";
 
 async function publicInfo(context: RequestContext) {
   const { secure } = await identify(context);

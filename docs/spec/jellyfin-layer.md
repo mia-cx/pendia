@@ -1,12 +1,12 @@
 # Jellyfin translation layer
 
-Pendia speaks enough of the Jellyfin API that existing clients work without changes. Field-level detail is in the research findings on branch `research/jellyfin-client-api`.
+Thalia speaks enough of the Jellyfin API that existing clients work without changes. Field-level detail is in the research findings on branch `research/jellyfin-client-api`.
 
 ## Promised clients
 
 Infuse and Swiftfin are the clients Mia tests. Findroid and Jellyfin Android TV are expected to work. Any client that talks to a Jellyfin server over its API is welcome; the promise is the endpoint list below, not a client list.
 
-Not promised: Kodi and jellyfin-web, which both call the pre-10.10 `/Users/{userId}/...` routes. Pendia serves the 10.10 and later dialect only. If Kodi matters later, a Pendia Kodi plugin beats serving a second dialect forever.
+Not promised: Kodi and jellyfin-web, which both call the pre-10.10 `/Users/{userId}/...` routes. Thalia serves the 10.10 and later dialect only. If Kodi matters later, a Thalia Kodi plugin beats serving a second dialect forever.
 
 ## Endpoints
 
@@ -46,8 +46,8 @@ Absent
 
 ## Mapping
 
-- A Jellyfin GUID is the Pendia UUID without dashes, for Items and users alike, so no mapping table exists.
+- A Jellyfin GUID is the Thalia UUID without dashes, for Items and users alike, so no mapping table exists.
 - A client's DeviceProfile becomes the playback engine's client profile through one table. An unknown codec string counts as unsupported.
-- Pendia serves a real transcode URL in Jellyfin's `master.m3u8` shape, and clients follow it as given.
+- Thalia serves a real transcode URL in Jellyfin's `master.m3u8` shape, and clients follow it as given.
 - PlaybackInfo takes `AudioStreamIndex` and `SubtitleStreamIndex` from the body or the query and plans the session with them; `SubtitleStreamIndex=-1` turns subtitles off. Both indexes stay on the transcode URL, and `DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` name the session's choice.
 - Query parameter names are matched case-insensitively, as ASP.NET does and clients rely on.

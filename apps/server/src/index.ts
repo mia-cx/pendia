@@ -44,7 +44,7 @@ import {
 
 const roles = ["api", "worker", "transcoder", "watcher", "all"] as const;
 
-/** A Pendia runtime role selected by --role. */
+/** A Thalia runtime role selected by --role. */
 export type Role = (typeof roles)[number];
 
 const minimumBunVersion = [1, 4, 0] as const;
@@ -77,7 +77,7 @@ function isSupportedBunVersion(version: string): boolean {
   return true;
 }
 
-/** Reads the requested Pendia role from command-line arguments. */
+/** Reads the requested Thalia role from command-line arguments. */
 export function parseRole(args: readonly string[]): Role {
   const optionIndex = args.indexOf("--role");
   const equalsOption = args.find((argument) => argument.startsWith("--role="));
@@ -101,11 +101,11 @@ export function parseRole(args: readonly string[]): Role {
   );
 }
 
-/** Fails when the current Bun version is older than Pendia supports. */
+/** Fails when the current Bun version is older than Thalia supports. */
 export function requireSupportedBunVersion(version: string): void {
   if (!isSupportedBunVersion(version)) {
     throw new Error(
-      `Pendia requires Bun 1.4.0 or later. Found ${version || "an unknown version"}.`,
+      `Thalia requires Bun 1.4.0 or later. Found ${version || "an unknown version"}.`,
     );
   }
 }
@@ -176,7 +176,7 @@ type StartOptions = {
 };
 
 /** Starts the selected roles and returns their shared shutdown operation. */
-export async function startPendia(
+export async function startThalia(
   role: Role,
   {
     databaseUrl = process.env.DATABASE_URL,
@@ -400,7 +400,7 @@ export async function startPendia(
 async function run(): Promise<void> {
   requireSupportedBunVersion(Bun.version);
   const role = parseRole(Bun.argv);
-  const server = await startPendia(role);
+  const server = await startThalia(role);
   try {
     await new Promise<void>((resolve) => {
       process.once("SIGTERM", resolve);

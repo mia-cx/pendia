@@ -1,6 +1,6 @@
 # Playback decisions
 
-How Pendia decides what a client receives for an Item. Every rule here is meant to be encoded by a test.
+How Thalia decides what a client receives for an Item. Every rule here is meant to be encoded by a test.
 
 ## Inputs
 
@@ -39,7 +39,7 @@ A plan may name one audio Stream and one subtitle Stream, or no subtitles, by th
 
 ## Segment timeline
 
-One per Item, or one per cut when an Item has several cuts. Pendia derives it once from the Item's first Version: the subset of that Version's keyframes closest to a 4 s target. Every Version Pendia produces forces keyframes at those timestamps. A Version from elsewhere joins the adaptive group only when its keyframes include every timeline timestamp. Every media playlist, live or stored, uses these boundaries.
+One per Item, or one per cut when an Item has several cuts. Thalia derives it once from the Item's first Version: the subset of that Version's keyframes closest to a 4 s target. Every Version Thalia produces forces keyframes at those timestamps. A Version from elsewhere joins the adaptive group only when its keyframes include every timeline timestamp. Every media playlist, live or stored, uses these boundaries.
 
 ## Renditions
 
@@ -49,11 +49,11 @@ One per Item, or one per cut when an Item has several cuts. Pendia derives it on
 
 ## Fetched subtitles
 
-Subtitle providers, OpenSubtitles first, fetch the admin's subtitle languages for each matched movie and episode. A track lands in the Item's folder as `.pendia/subtitles/<item id>.<language>.<format>`, in the provider's format: SubRip, ASS or WebVTT. The file is the record: the play plan lists the tracks found there for every play method, each with a URL that serves the file to callers who may view the Item, and deleting the file removes the track. One track per language; a forced-only track does not count.
+Subtitle providers, OpenSubtitles first, fetch the admin's subtitle languages for each matched movie and episode. A track lands in the Item's folder as `.thalia/subtitles/<item id>.<language>.<format>`, in the provider's format: SubRip, ASS or WebVTT. The file is the record: the play plan lists the tracks found there for every play method, each with a URL that serves the file to callers who may view the Item, and deleting the file removes the track. One track per language; a forced-only track does not count.
 
 ## Stored Versions
 
-Pendia owns pre-transcoding, with the quality profile, never the live profile. When transcoding is enabled for a library or an Item, a store job segments the source into a folder next to the source file, named after it with a `.pendia` suffix, one subfolder per rung. The source rung is a remux. A Stored Version is offered only when every segment is present; otherwise the client gets a live transcode for that rung. A per-library policy names the rungs to store and the condition, for example a 1080p H.264 8 Mbit/s AAC stereo Version for every Item whose best Version is 4K, HEVC or HDR. Manual per-Item requests exist. Store jobs run on workers at low priority inside an idle window. When the source file is deleted, its derived folder goes with it. Files transcoded elsewhere still become Versions when they land in the Item folder, and join the adaptive group only when aligned. Live transcodes are never kept.
+Thalia owns pre-transcoding, with the quality profile, never the live profile. When transcoding is enabled for a library or an Item, a store job segments the source into a folder next to the source file, named after it with a `.thalia` suffix, one subfolder per rung. The source rung is a remux. A Stored Version is offered only when every segment is present; otherwise the client gets a live transcode for that rung. A per-library policy names the rungs to store and the condition, for example a 1080p H.264 8 Mbit/s AAC stereo Version for every Item whose best Version is 4K, HEVC or HDR. Manual per-Item requests exist. Store jobs run on workers at low priority inside an idle window. When the source file is deleted, its derived folder goes with it. Files transcoded elsewhere still become Versions when they land in the Item folder, and join the adaptive group only when aligned. Live transcodes are never kept.
 
 ## Caps and ladder
 

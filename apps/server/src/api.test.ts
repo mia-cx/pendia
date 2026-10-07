@@ -46,18 +46,18 @@ let fixtureRoot: string;
 let previousWebRoot: string | undefined;
 
 beforeEach(() => {
-  fixtureRoot = mkdtempSync(join(tmpdir(), "pendia-web-"));
-  writeFileSync(join(fixtureRoot, "index.html"), "<h1>Pendia index</h1>");
-  writeFileSync(join(fixtureRoot, "200.html"), "<h1>Pendia shell</h1>");
-  previousWebRoot = Bun.env.PENDIA_WEB_ROOT;
-  Bun.env.PENDIA_WEB_ROOT = fixtureRoot;
+  fixtureRoot = mkdtempSync(join(tmpdir(), "thalia-web-"));
+  writeFileSync(join(fixtureRoot, "index.html"), "<h1>Thalia index</h1>");
+  writeFileSync(join(fixtureRoot, "200.html"), "<h1>Thalia shell</h1>");
+  previousWebRoot = Bun.env.THALIA_WEB_ROOT;
+  Bun.env.THALIA_WEB_ROOT = fixtureRoot;
 });
 
 afterEach(() => {
   if (previousWebRoot === undefined) {
-    delete Bun.env.PENDIA_WEB_ROOT;
+    delete Bun.env.THALIA_WEB_ROOT;
   } else {
-    Bun.env.PENDIA_WEB_ROOT = previousWebRoot;
+    Bun.env.THALIA_WEB_ROOT = previousWebRoot;
   }
   rmSync(fixtureRoot, { recursive: true, force: true });
 });
@@ -67,9 +67,9 @@ test("the web root serves the prerendered page at / and the shell elsewhere", as
   const base = `http://127.0.0.1:${server.port}`;
 
   try {
-    expect(await (await fetch(`${base}/`)).text()).toContain("Pendia index");
+    expect(await (await fetch(`${base}/`)).text()).toContain("Thalia index");
     expect(await (await fetch(`${base}/some/client/route`)).text()).toContain(
-      "Pendia shell",
+      "Thalia shell",
     );
   } finally {
     await server.stop(true);

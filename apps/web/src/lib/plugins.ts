@@ -1,16 +1,16 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
 // Mirrors the server's default registry.
-export const officialRegistry = "https://github.com/mia-cx/pendia";
+export const officialRegistry = "https://github.com/mia-cx/thalia";
 
 /** An installed plugin as the admin list returns it. */
 export type InstalledPlugin = Awaited<
-  ReturnType<PendiaClient["plugins"]["list"]>
+  ReturnType<ThaliaClient["plugins"]["list"]>
 >["plugins"][number];
 
 /** A registry as the admin list returns it. */
 export type Registry = Awaited<
-  ReturnType<PendiaClient["registries"]["list"]>
+  ReturnType<ThaliaClient["registries"]["list"]>
 >[number];
 
 /** A plugin one registry entry offers. */
@@ -76,9 +76,9 @@ export function filesOffFor(
   return { until: new Date(now + durations[choice]).toISOString() };
 }
 
-/** Names a registry: the official one reads "Pendia registry", others read their hostname. */
+/** Names a registry: the official one reads "Thalia registry", others read their hostname. */
 export function registryLabel(url: string): string {
-  if (url === officialRegistry) return "Pendia registry";
+  if (url === officialRegistry) return "Thalia registry";
   try {
     return new URL(url).hostname;
   } catch {

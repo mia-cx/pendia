@@ -43,7 +43,7 @@ async function claimWhenReady(queue: ReturnType<typeof createJobQueue>) {
 }
 
 test("rejects invalid retry delays and concurrency limits", async () => {
-  const lazy = createDatabase("postgresql://pendia:pendia@127.0.0.1:1/unused");
+  const lazy = createDatabase("postgresql://thalia:thalia@127.0.0.1:1/unused");
   try {
     for (const retryDelayMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY])
       expect(() => createJobQueue(lazy.db, { retryDelayMs })).toThrow(

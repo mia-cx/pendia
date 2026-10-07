@@ -1,5 +1,5 @@
 {
-  "name": "@pendia/plugin-api",
+  "name": "@thalia/plugin-api",
   "version": "0.1.0",
   "type": "module",
   "sideEffects": false,

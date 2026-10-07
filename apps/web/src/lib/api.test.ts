@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createPendiaClient, reachServer, ServerUnreachable } from "./api.ts";
+import { createThaliaClient, reachServer, ServerUnreachable } from "./api.ts";
 import { readFailure } from "./errors.ts";
 
-const pageOrigin = "http://pendia.test:8080";
+const pageOrigin = "http://thalia.test:8080";
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis, "location");
@@ -15,7 +15,7 @@ test("the default client calls the page's own origin", async () => {
   });
   const requested: string[] = [];
   const status = { complete: true, oidcConfigured: false, oidcName: null };
-  const client = createPendiaClient({
+  const client = createThaliaClient({
     fetch: Object.assign(
       async (request: URL | RequestInfo) => {
         requested.push(
@@ -31,7 +31,7 @@ test("the default client calls the page's own origin", async () => {
 });
 
 function answering(respond: () => Promise<Response>) {
-  return createPendiaClient({
+  return createThaliaClient({
     origin: pageOrigin,
     fetch: Object.assign(respond, { preconnect: fetch.preconnect }),
   });
@@ -59,7 +59,7 @@ describe("an unreachable server", () => {
     expect(readFailure(error).code).toBe("UNREACHABLE");
   });
 
-  test("Pendia's own JSON 503 stays a server failure", async () => {
+  test("Thalia's own JSON 503 stays a server failure", async () => {
     const client = answering(async () =>
       Response.json(
         { json: { defined: false, code: "SERVICE_UNAVAILABLE", status: 503 } },

@@ -1,7 +1,7 @@
 /**
- * Pendia plugin API, version 1.
+ * Thalia plugin API, version 1.
  *
- * A plugin exports `definePlugin(setup)`. Pendia calls `setup` once with a
+ * A plugin exports `definePlugin(setup)`. Thalia calls `setup` once with a
  * PluginHost built for that plugin: a capability the plugin did not declare,
  * or the admin switched off, is absent from the object.
  *
@@ -99,7 +99,7 @@ export interface PluginHost {
    * Present with "files", which the admin approves at install behind a warning
    * and can switch off per plugin or globally, temporarily or for good. Paths
    * are relative to the root of the library `libraryId` names, as in
-   * `Version.files`. There are no file handles: a plugin asks Pendia to act
+   * `Version.files`. There are no file handles: a plugin asks Thalia to act
    * on a path.
    */
   readonly files?: {

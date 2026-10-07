@@ -13,7 +13,7 @@ const drizzleFolder = new URL("../../drizzle", import.meta.url).pathname;
 
 /** Applies every migration before the roots migration. */
 async function migrateBeforeRoots(db: Database) {
-  const folder = await mkdtemp(join(tmpdir(), "pendia-migrations-"));
+  const folder = await mkdtemp(join(tmpdir(), "thalia-migrations-"));
   try {
     await cp(drizzleFolder, folder, { recursive: true });
     const journalPath = join(folder, "meta/_journal.json");
@@ -92,15 +92,15 @@ async function seedSingleRoots(db: Database) {
         (${ids.episodeFile}, ${ids.episodeVersion}, ${ids.episode}, ${ids.shows}, ${episodePath}, 0, 20, now())`);
     await tx.execute(sql`
       insert into versions (id, item_id, item_kind, library_id, label, format, bytes, segment_timeline_id, timeline_aligned, origin, source_file_id, stored_folder, rung, complete)
-      values (${ids.stored}, ${ids.movie}, 'movie', ${ids.movies}, '360p', 'video', 5, ${ids.timeline}, true, 'stored', ${ids.movieFile}, ${`${moviePath}.pendia/360p`}, '360p', true)`);
+      values (${ids.stored}, ${ids.movie}, 'movie', ${ids.movies}, '360p', 'video', 5, ${ids.timeline}, true, 'stored', ${ids.movieFile}, ${`${moviePath}.thalia/360p`}, '360p', true)`);
     await tx.execute(sql`
       insert into progress (id, user_id, item_id, version_id, format, position_seconds) values
         (${id()}, ${ids.user}, ${ids.movie}, ${ids.movieVersion}, 'video', 42),
         (${id()}, ${ids.user}, ${ids.episode}, ${ids.episodeVersion}, 'video', 7)`);
     await tx.execute(sql`
       insert into artwork (id, item_id, type, backend, storage_key, selected) values
-        (${id()}, ${ids.movie}, 'poster', 'colocated', 'Movie (2020)/.pendia/artwork/poster.jpg', true),
-        (${id()}, ${ids.show}, 'poster', 'colocated', 'Show/.pendia/artwork/poster.jpg', true)`);
+        (${id()}, ${ids.movie}, 'poster', 'colocated', 'Movie (2020)/.thalia/artwork/poster.jpg', true),
+        (${id()}, ${ids.show}, 'poster', 'colocated', 'Show/.thalia/artwork/poster.jpg', true)`);
     await tx.execute(sql`
       insert into probe_cache (id, library_id, path, bytes, modified_ns, result) values
         (${id()}, ${ids.movies}, ${moviePath}, 10, 1, '{}'),

@@ -119,7 +119,7 @@ function creditsAside(detail: ItemDetail) {
 </script>
 
 <svelte:head>
-  <title>{item.data ? `${item.data.title} · Pendia` : "Pendia"}</title>
+  <title>{item.data ? `${item.data.title} · Thalia` : "Thalia"}</title>
 </svelte:head>
 
 {#if item.data}

@@ -10,9 +10,9 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { artwork, items, libraryAccess } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 const device = {
   clientName: "Test Client",
@@ -25,7 +25,7 @@ function rpcClient(base: string, token?: string) {
     url: `${base}/rpc`,
     headers: token === undefined ? {} : { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function capture(promise: Promise<unknown>) {
@@ -77,7 +77,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const viaRpc = await rpcClient(base, token).items.list({ limit: 2 });
@@ -95,7 +95,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token, rows } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, token);
@@ -144,7 +144,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
         })
         .returning();
       if (!early || !late) throw new Error("Item insert returned no row.");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, token);
@@ -172,7 +172,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
 
   test("an unauthenticated call answers 401 on both transports", () =>
     withDatabase(async (_db, url) => {
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         expect((await fetch(`${base}/api/items`)).status).toBe(401);
@@ -194,7 +194,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
       });
       await setPermissionOverride(db, admin.id, viewer.id, "view", false);
       const { token } = await createApiKey(db, viewer.id, "viewer-key");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const rest = await fetch(`${base}/api/items`, {
@@ -214,7 +214,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
       await migrateDatabase(db);
       const { admin, token } = await seed(db);
       const { token: keyToken, key } = await createApiKey(db, admin.id, "bot");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const viaSession = await rpcClient(base, token).me();
@@ -235,7 +235,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, token);
@@ -298,7 +298,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
         allowed: false,
       });
       const { token } = await createApiKey(db, viewer.id, "viewer-key");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const page = await rpcClient(base, token).items.list({});
@@ -326,7 +326,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
         allowed: true,
       });
       const { token } = await createApiKey(db, viewer.id, "viewer-key");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const page = await rpcClient(base, token).items.list({});
@@ -349,7 +349,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
       });
       await setPermissionOverride(db, admin.id, viewer.id, "view", false);
       const { token } = await createApiKey(db, viewer.id, "viewer-key");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const rest = await fetch(`${base}/api/items`, {
@@ -376,12 +376,12 @@ describe.skipIf(!databaseUrl)("api router", () => {
           type: "poster",
           sourceUrl: "https://image.example/poster.png",
           backend: "colocated",
-          storageKey: "movie-0/.pendia/artwork/poster",
+          storageKey: "movie-0/.thalia/artwork/poster",
           selected: true,
         })
         .returning();
       if (!poster) throw new Error("Artwork insert returned no row.");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const client = rpcClient(base, token);
@@ -410,7 +410,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const response = await fetch(`${base}/api/openapi.json`);
@@ -426,7 +426,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const headers = { authorization: `Bearer ${token}` };
@@ -454,7 +454,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
           },
         });
         const client =
-          createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+          createORPCClient<RouterClient<typeof thaliaRouter>>(link);
         await client.me();
         if (!rpc) throw new Error("The RPC link never fetched.");
         expect(rpc.get("cache-control")).toContain("no-store");
@@ -470,7 +470,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const response = await fetch(`${base}/api/openapi.json`);
@@ -487,7 +487,7 @@ describe.skipIf(!databaseUrl)("api router", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token, rows } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const rest = await fetch(`${base}/api/items`, {

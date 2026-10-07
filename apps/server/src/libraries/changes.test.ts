@@ -1246,7 +1246,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         );
         const progressBefore = await db.select().from(progress);
 
-        // A file-only move leaves .pendia behind in the old folder.
+        // A file-only move leaves .thalia behind in the old folder.
         const destinationFolder = "Moved Copies";
         const movedPath = `${destinationFolder}/Alien.1080p.mkv`;
         await mkdir(join(root, destinationFolder), { recursive: true });
@@ -1294,7 +1294,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         const basename = stored.storageKey.split("/").pop();
         if (basename === undefined) throw new Error("Basename missing.");
         await expect(
-          access(join(root, destinationFolder, ".pendia", "artwork", basename)),
+          access(join(root, destinationFolder, ".thalia", "artwork", basename)),
         ).rejects.toThrow();
       });
     }));
@@ -1316,7 +1316,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
           respondWith(png),
         );
 
-        // Radarr renames the whole folder, so .pendia moves with the file.
+        // Radarr renames the whole folder, so .thalia moves with the file.
         const renamedFolder = "Alien (1979) {tmdb-348} Renamed";
         const movedPath = `${renamedFolder}/Alien.1080p.mkv`;
         await rename(join(root, folder), join(root, renamedFolder));
@@ -1331,7 +1331,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
         ]);
 
         const [row] = await db.select().from(artwork);
-        expect(row?.storageKey.startsWith(`${renamedFolder}/.pendia/`)).toBe(
+        expect(row?.storageKey.startsWith(`${renamedFolder}/.thalia/`)).toBe(
           true,
         );
         const original = await readArtworkOriginal(db, stored.id);
@@ -1483,7 +1483,7 @@ describe.skipIf(!databaseUrl)("scan changes", () => {
             if (!item) throw new Error("Fixture Item missing.");
             markLocked();
             await waitForBlockedUpdate(db);
-            const storageKey = `${folder}/.pendia/artwork/${Bun.randomUUIDv7()}`;
+            const storageKey = `${folder}/.thalia/artwork/${Bun.randomUUIDv7()}`;
             await tx.insert(artwork).values({
               itemId,
               versionId: null,

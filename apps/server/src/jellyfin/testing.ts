@@ -47,7 +47,7 @@ export async function jellyfinLogin(
   password = "viewer-pass",
 ) {
   const response = await send(
-    new Request("http://pendia.test/Users/AuthenticateByName", {
+    new Request("http://thalia.test/Users/AuthenticateByName", {
       method: "POST",
       headers: { authorization: header, "content-type": "application/json" },
       body: JSON.stringify({ Username: username, Pw: password }),

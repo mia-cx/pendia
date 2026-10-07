@@ -5,7 +5,7 @@ date: 2026-09-07
 
 # Bun and TypeScript for the host
 
-Pendia exists to be faster than Jellyfin, so a reader will expect Rust. We chose Bun and TypeScript. ffmpeg and libvips do the CPU work whichever language wraps them, so the host language decides development speed and startup time, not playback speed. Bun is the stack Mia already runs, trusted plugins load as lazy ES modules with no bridge, and a scope of eight mediums would take a multiple of the time in Rust.
+Thalia exists to be faster than Jellyfin, so a reader will expect Rust. We chose Bun and TypeScript. ffmpeg and libvips do the CPU work whichever language wraps them, so the host language decides development speed and startup time, not playback speed. Bun is the stack Mia already runs, trusted plugins load as lazy ES modules with no bridge, and a scope of eight mediums would take a multiple of the time in Rust.
 
 ## Considered options
 

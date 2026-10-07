@@ -136,7 +136,7 @@ const succeeds = async (args: string[]) =>
 // them with the live settings cannot serve one. SVT-AV1 1.7 under ffmpeg 6.1
 // is one: it honours forced keyframes only in CRF mode.
 const forcesKeyframe = async (codec: string) => {
-  const directory = await mkdtemp(join(tmpdir(), "pendia-trial-"));
+  const directory = await mkdtemp(join(tmpdir(), "thalia-trial-"));
   const path = join(directory, `${codec}.mkv`);
   try {
     if (!(await succeeds(cpuTrialArguments(codec, path)))) return false;

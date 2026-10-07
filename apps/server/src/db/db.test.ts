@@ -295,7 +295,7 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
   test("collects Version-owned colocated artwork on subtree deletion", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      const root = await mkdtemp(join(tmpdir(), "pendia-tree-"));
+      const root = await mkdtemp(join(tmpdir(), "thalia-tree-"));
       try {
         const [library] = await insertLibraries(db, {
           name: "Movies",
@@ -323,9 +323,9 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
           })
           .returning();
         if (!version) throw new Error("Version missing.");
-        const storageKey = "Alien (1979)/.pendia/artwork/poster.png";
+        const storageKey = "Alien (1979)/.thalia/artwork/poster.png";
         const target = join(root, storageKey);
-        await mkdir(join(root, "Alien (1979)", ".pendia", "artwork"), {
+        await mkdir(join(root, "Alien (1979)", ".thalia", "artwork"), {
           recursive: true,
         });
         await writeFile(target, Buffer.from("png"));

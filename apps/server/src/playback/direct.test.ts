@@ -24,7 +24,7 @@ import {
   versions,
 } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { type PlanInput, planPlayback } from "./planning.ts";
 
@@ -53,7 +53,7 @@ const profile: PlanInput["profile"] = {
 };
 
 async function makeFixture() {
-  const root = await mkdtemp(join(tmpdir(), "pendia-direct-"));
+  const root = await mkdtemp(join(tmpdir(), "thalia-direct-"));
   await writeFile(join(root, "movie.mp4"), fixtureBytes);
   return {
     root,
@@ -174,7 +174,7 @@ async function seedDirect(db: Database, root: string) {
 }
 
 function planRequest(bearer: boolean) {
-  return new Request("http://pendia.test/api/playback/plan", {
+  return new Request("http://thalia.test/api/playback/plan", {
     method: "POST",
     headers: bearer ? { authorization: "Bearer service" } : {},
   });
@@ -205,7 +205,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
       const fixture = await makeFixture();
       try {
         const fx = await seedDirect(db, fixture.root);
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const planned = await planDirect(
@@ -276,7 +276,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
       const fixture = await makeFixture();
       try {
         const fx = await seedDirect(db, fixture.root);
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const planned = await planDirect(
@@ -342,7 +342,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
           await expectUnauthorized(`${path}?api_key=${fx.keyToken}`);
           await expectUnauthorized(`${path}?token=${fx.accountToken}`);
           await expectUnauthorized(`${path}?token=not-a-token`, {
-            cookie: `pendia_session=${fx.accountToken}`,
+            cookie: `thalia_session=${fx.accountToken}`,
           });
           await expectUnauthorized(
             `/api/playback/nope/${scope.itemId}/direct?token=${token}`,
@@ -364,7 +364,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
       const fixture = await makeFixture();
       try {
         const fx = await seedDirect(db, fixture.root);
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const planned = await planDirect(
@@ -377,7 +377,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
           expect(planned.url).toBe(
             `/api/playback/${planned.sessionId}/${fx.item.id}/direct`,
           );
-          const cookie = `pendia_session=${fx.accountToken}`;
+          const cookie = `thalia_session=${fx.accountToken}`;
 
           const full = await fetch(`${base}${planned.url}`, {
             headers: { cookie },
@@ -395,7 +395,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
           expect(crossSite.status).toBe(403);
 
           const other = await fetch(`${base}${planned.url}`, {
-            headers: { cookie: `pendia_session=${fx.adminToken}` },
+            headers: { cookie: `thalia_session=${fx.adminToken}` },
           });
           expect(other.status).toBe(401);
 
@@ -426,7 +426,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
       const fixture = await makeFixture();
       try {
         const fx = await seedDirect(db, fixture.root);
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const planned = await planDirect(
@@ -436,7 +436,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
             fx.version.id,
             true,
           );
-          const cookie = `pendia_session=${fx.accountToken}`;
+          const cookie = `thalia_session=${fx.accountToken}`;
 
           await db.insert(libraryAccess).values({
             libraryId: fx.library.id,
@@ -506,7 +506,7 @@ describe.skipIf(!databaseUrl)("direct playback", () => {
       const outside = await makeFixture();
       try {
         const fx = await seedDirect(db, fixture.root);
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const planned = await planDirect(

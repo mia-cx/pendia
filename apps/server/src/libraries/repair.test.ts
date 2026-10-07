@@ -6,7 +6,7 @@ import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { files, items, jobs, streams, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { createJobQueue, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import {
@@ -332,14 +332,14 @@ describe.skipIf(!databaseUrl)("library repair", () => {
       });
     }));
 
-  test("startPendia runs the startup pass and the interval until stop", () =>
+  test("startThalia runs the startup pass and the interval until stop", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       await withVideoFixture(async (root) => {
         await mkdir(join(root, folder), { recursive: true });
         await createVideoFixture(join(root, file1080));
         const library = await insertLibrary(db, root);
-        const server = await startPendia("api", {
+        const server = await startThalia("api", {
           databaseUrl: url,
           port: 0,
           repairOptions: { intervalMs: 40 },

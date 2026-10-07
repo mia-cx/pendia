@@ -29,7 +29,7 @@ export type StoreRun = {
   timelineId: string;
   rung: Rung;
   source: StoreSource;
-  folder: string; // absolute `<source file>.pendia/<rung>`
+  folder: string; // absolute `<source file>.thalia/<rung>`
   readRate?: RemuxRun["readRate"]; // tests only
 };
 

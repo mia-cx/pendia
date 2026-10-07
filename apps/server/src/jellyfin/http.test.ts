@@ -26,7 +26,7 @@ const routes: Route[] = [
 // Anonymous routes and unauthenticated failures never reach the database.
 const handle = createJellyfinHandler({} as Database, routes);
 const get = (path: string, headers: HeadersInit = {}) =>
-  handle(new Request(`http://pendia.test${path}`, { headers }), "127.0.0.1");
+  handle(new Request(`http://thalia.test${path}`, { headers }), "127.0.0.1");
 
 test("matches paths and query names case-insensitively", async () => {
   const response = await get("/system/info/public?Secret=s", {
@@ -65,7 +65,7 @@ test("leaves lowercase web screens to the SPA", async () => {
 test("rejects unauthenticated calls to user routes and wrong methods", async () => {
   expect((await get("/Users/Me"))?.status).toBe(401);
   const posted = await handle(
-    new Request("http://pendia.test/Users/Me", { method: "POST" }),
+    new Request("http://thalia.test/Users/Me", { method: "POST" }),
     "127.0.0.1",
   );
   expect(posted?.status).toBe(405);

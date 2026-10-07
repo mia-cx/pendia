@@ -39,7 +39,7 @@ const maxRetryDelayMs = 60_000;
 export const watcherHeartbeatMs = 30_000;
 
 /** The Postgres NOTIFY channel that wakes idle workers. */
-export const jobChannel = "pendia_jobs";
+export const jobChannel = "thalia_jobs";
 
 /** The error a job keeps when its holder stopped renewing its lease. */
 export const leaseExpiredError =

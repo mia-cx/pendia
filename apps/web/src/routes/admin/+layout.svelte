@@ -40,7 +40,7 @@ onNavigate((nav) => {
 </script>
 
 <svelte:head>
-  <title>Pendia admin</title>
+  <title>Thalia admin</title>
 </svelte:head>
 
 <Tooltip.Provider>

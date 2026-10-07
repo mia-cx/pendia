@@ -63,7 +63,7 @@ export const quickConnectRoutes: Route[] = [
     method: "POST",
     path: "/QuickConnect/Authorize",
     handle: async ({ db, query, caller }) => {
-      // Jellyfin lets the caller name the user. Pendia approves for the caller only.
+      // Jellyfin lets the caller name the user. Thalia approves for the caller only.
       const userId = query.get("userId");
       if (userId !== undefined && parseGuid(userId) !== caller.user.id)
         throw new AuthError("FORBIDDEN");

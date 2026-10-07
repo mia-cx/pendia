@@ -16,15 +16,15 @@ describe("readArtworkStoreConfig", () => {
 
   test("keeps the path as the colocated read-only fallback", () => {
     expect(
-      readArtworkStoreConfig({ PENDIA_ARTWORK_PATH: "/srv/artwork" }),
+      readArtworkStoreConfig({ THALIA_ARTWORK_PATH: "/srv/artwork" }),
     ).toEqual({ backend: "colocated", path: "/srv/artwork" });
   });
 
   test("selects the configured path", () => {
     expect(
       readArtworkStoreConfig({
-        PENDIA_ARTWORK_STORE: "path",
-        PENDIA_ARTWORK_PATH: "/srv/artwork",
+        THALIA_ARTWORK_STORE: "path",
+        THALIA_ARTWORK_PATH: "/srv/artwork",
       }),
     ).toEqual({ backend: "configured-path", path: "/srv/artwork" });
   });
@@ -32,7 +32,7 @@ describe("readArtworkStoreConfig", () => {
   test("selects S3 using S3_ or AWS_ configuration", () => {
     for (const prefix of ["S3", "AWS"]) {
       const config = readArtworkStoreConfig({
-        PENDIA_ARTWORK_STORE: "s3",
+        THALIA_ARTWORK_STORE: "s3",
         [`${prefix}_BUCKET`]: "art",
         [`${prefix}_ACCESS_KEY_ID`]: "test-key",
         [`${prefix}_SECRET_ACCESS_KEY`]: "test-secret",
@@ -53,8 +53,8 @@ describe("readArtworkStoreConfig", () => {
     expect(
       describeArtworkStore(
         readArtworkStoreConfig({
-          PENDIA_ARTWORK_STORE: "path",
-          PENDIA_ARTWORK_PATH: "/srv/artwork",
+          THALIA_ARTWORK_STORE: "path",
+          THALIA_ARTWORK_PATH: "/srv/artwork",
         }),
       ),
     ).toEqual({
@@ -76,37 +76,37 @@ describe("readArtworkStoreConfig", () => {
     ]) {
       expect(() =>
         readArtworkStoreConfig({
-          PENDIA_ARTWORK_STORE: "s3",
+          THALIA_ARTWORK_STORE: "s3",
           S3_BUCKET: "art",
           ...credentials,
         }),
       ).toThrow(
-        "PENDIA_ARTWORK_STORE=s3 needs S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).",
+        "THALIA_ARTWORK_STORE=s3 needs S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY (or AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY).",
       );
     }
   });
 
   test("rejects incomplete and unknown choices", () => {
     expect(() =>
-      readArtworkStoreConfig({ PENDIA_ARTWORK_STORE: "path" }),
-    ).toThrow("PENDIA_ARTWORK_STORE=path needs PENDIA_ARTWORK_PATH.");
+      readArtworkStoreConfig({ THALIA_ARTWORK_STORE: "path" }),
+    ).toThrow("THALIA_ARTWORK_STORE=path needs THALIA_ARTWORK_PATH.");
     expect(() =>
-      readArtworkStoreConfig({ PENDIA_ARTWORK_PATH: "artwork" }),
-    ).toThrow("PENDIA_ARTWORK_PATH must be an absolute path.");
+      readArtworkStoreConfig({ THALIA_ARTWORK_PATH: "artwork" }),
+    ).toThrow("THALIA_ARTWORK_PATH must be an absolute path.");
     expect(() =>
-      readArtworkStoreConfig({ PENDIA_ARTWORK_STORE: "s3" }),
-    ).toThrow("PENDIA_ARTWORK_STORE=s3 needs S3_BUCKET.");
+      readArtworkStoreConfig({ THALIA_ARTWORK_STORE: "s3" }),
+    ).toThrow("THALIA_ARTWORK_STORE=s3 needs S3_BUCKET.");
     expect(() =>
-      readArtworkStoreConfig({ PENDIA_ARTWORK_STORE: "configured-path" }),
+      readArtworkStoreConfig({ THALIA_ARTWORK_STORE: "configured-path" }),
     ).toThrow(
-      'PENDIA_ARTWORK_STORE must be colocated, path or s3. Found "configured-path".',
+      'THALIA_ARTWORK_STORE must be colocated, path or s3. Found "configured-path".',
     );
   });
 });
 
 describe("configured artwork directory", () => {
   test("creates a missing root and round-trips an original", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "pendia-artwork-"));
+    const parent = await mkdtemp(join(tmpdir(), "thalia-artwork-"));
     try {
       const store = {
         backend: "configured-path",
@@ -125,7 +125,7 @@ describe("configured artwork directory", () => {
   });
 
   test("rejects symlinks in a configured root or its ancestors", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "pendia-artwork-"));
+    const parent = await mkdtemp(join(tmpdir(), "thalia-artwork-"));
     try {
       await symlink(parent, join(parent, "link"));
       for (const path of [join(parent, "link"), join(parent, "link", "new")]) {
@@ -146,7 +146,7 @@ describe("configured artwork directory", () => {
   });
 
   test("does not create a missing colocated Library root", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "pendia-artwork-"));
+    const parent = await mkdtemp(join(tmpdir(), "thalia-artwork-"));
     try {
       const root = join(parent, "missing-library");
       await expect(

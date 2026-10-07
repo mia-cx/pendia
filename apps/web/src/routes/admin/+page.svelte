@@ -7,7 +7,7 @@ const desktop = new MediaQuery("min-width: 64rem");
 </script>
 
 <svelte:head>
-  <title>Settings · Pendia admin</title>
+  <title>Settings · Thalia admin</title>
 </svelte:head>
 
 {#if desktop.current}

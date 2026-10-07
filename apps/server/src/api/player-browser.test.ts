@@ -12,7 +12,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { progress, sessionRegistry } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
@@ -20,7 +20,7 @@ import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 // Google Chrome comes first: Chromium builds without proprietary codecs cannot
 // decode the H.264 and AAC fixtures.
 const browser =
-  Bun.env.PENDIA_BROWSER ??
+  Bun.env.THALIA_BROWSER ??
   ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
     .map((name) => Bun.which(name))
     .find((path) => path !== null) ??
@@ -32,14 +32,14 @@ const webBuild = fileURLToPath(
 
 if (databaseUrl && browser === undefined)
   console.info(
-    "Skipping the web player test: no Chromium found; set PENDIA_BROWSER.",
+    "Skipping the web player test: no Chromium found; set THALIA_BROWSER.",
   );
 
 const fixtureSeconds = 4;
 
 /** Opens `url` in headless Chromium and clicks the player's Play control. */
 async function clickPlay(browser: string, url: string) {
-  const profileDir = await mkdtemp(join(tmpdir(), "pendia-player-profile-"));
+  const profileDir = await mkdtemp(join(tmpdir(), "thalia-player-profile-"));
   const proc = Bun.spawn(
     [
       browser,
@@ -164,7 +164,7 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
   let libraryRoot: string;
 
   beforeAll(async () => {
-    libraryRoot = await mkdtemp(join(tmpdir(), "pendia-player-library-"));
+    libraryRoot = await mkdtemp(join(tmpdir(), "thalia-player-library-"));
     const fixture = {
       width: 1280,
       height: 720,
@@ -221,7 +221,7 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
           {
             username: "admin",
             password: "secret",
-            clientName: "Pendia Web",
+            clientName: "Thalia Web",
             deviceId: "player-test",
             deviceName: "Chromium",
           },
@@ -233,9 +233,9 @@ describe.skipIf(!databaseUrl || browser === undefined)("web player", () => {
           roots: [libraryRoot],
         });
         const scratchDir = await mkdtemp(
-          join(tmpdir(), "pendia-player-scratch-"),
+          join(tmpdir(), "thalia-player-scratch-"),
         );
-        const server = await startPendia("all", {
+        const server = await startThalia("all", {
           databaseUrl: url,
           port: 0,
           transcoderOptions: { port: 0, scratchDir },

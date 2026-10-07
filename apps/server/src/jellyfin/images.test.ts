@@ -27,7 +27,7 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
   test("serves the selected poster without a token, and with one when artwork auth is on", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
-      const root = await mkdtemp(join(tmpdir(), "pendia-images-"));
+      const root = await mkdtemp(join(tmpdir(), "thalia-images-"));
       try {
         await setupAdmin(db, { username: "mia", password: "secret-pass" });
         const [library] = await insertLibraries(db, {
@@ -58,7 +58,7 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
         );
         const send = async (path: string, headers: HeadersInit = {}) => {
           const response = await handle(
-            new Request(`http://pendia.test${path}`, {
+            new Request(`http://thalia.test${path}`, {
               method: path.startsWith("/Users/") ? "POST" : "GET",
               headers: { "content-type": "application/json", ...headers },
               body: path.startsWith("/Users/")

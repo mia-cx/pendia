@@ -26,7 +26,7 @@ const fixture: Fixture = await Bun.file(fixturePath).json();
 
 /** Applies every migration before the title_key migration. */
 async function migrateBeforeTitleKey(db: Database) {
-  const folder = await mkdtemp(join(tmpdir(), "pendia-migrations-"));
+  const folder = await mkdtemp(join(tmpdir(), "thalia-migrations-"));
   try {
     await cp(drizzleFolder, folder, { recursive: true });
     const journalPath = join(folder, "meta/_journal.json");
@@ -73,7 +73,7 @@ describe.skipIf(!databaseUrl)("pre-117 scan identity", () => {
   test("the captured scan migrates to title keys and rescans unchanged", () =>
     withDatabase(async (db) => {
       await migrateBeforeTitleKey(db);
-      const dir = await mkdtemp(join(tmpdir(), "pendia-identity-"));
+      const dir = await mkdtemp(join(tmpdir(), "thalia-identity-"));
       try {
         const rootPaths = new Map<string, string>();
         for (const [placeholder, { files: relative }] of Object.entries(

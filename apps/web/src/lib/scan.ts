@@ -1,11 +1,11 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
 /** The scan status shape the libraries API answers. */
 export type ScanStatus = Awaited<
-  ReturnType<PendiaClient["libraries"]["scanStatus"]>
+  ReturnType<ThaliaClient["libraries"]["scanStatus"]>
 >;
 
-type ScanStatusInput = Parameters<PendiaClient["libraries"]["scanStatus"]>[0];
+type ScanStatusInput = Parameters<ThaliaClient["libraries"]["scanStatus"]>[0];
 
 /** What setup's Scan step derives from a scan status reading. */
 export type ScanProgress =

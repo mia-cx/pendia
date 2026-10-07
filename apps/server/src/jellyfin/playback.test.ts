@@ -41,7 +41,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
   let root: string;
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), "pendia-jellyfin-playback-"));
+    root = await mkdtemp(join(tmpdir(), "thalia-jellyfin-playback-"));
     await mkdir(join(root, "Atmos (2026)"));
     // H.264 with 5.1 TrueHD and an SRT: an Infuse file, but not HLS-safe audio.
     await createVideoFixture(join(root, "Atmos (2026)", "Atmos.mkv"), {
@@ -92,7 +92,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
       ) => {
         const response = await send(
           new Request(
-            `http://pendia.test/Items/${toGuid(movie.itemId)}/PlaybackInfo`,
+            `http://thalia.test/Items/${toGuid(movie.itemId)}/PlaybackInfo`,
             {
               method: "POST",
               headers: {
@@ -163,7 +163,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
       });
       const url = new URL(
         hlsSource?.TranscodingUrl ?? "",
-        "http://pendia.test",
+        "http://thalia.test",
       );
       expect(url.pathname).toBe(`/videos/${toGuid(movie.itemId)}/master.m3u8`);
       expect(url.searchParams.get("PlaySessionId")).toBe(
@@ -212,7 +212,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
       expect(unknown.status).toBe(404);
       const anonymous = await send(
         new Request(
-          `http://pendia.test/Items/${toGuid(movie.itemId)}/PlaybackInfo`,
+          `http://thalia.test/Items/${toGuid(movie.itemId)}/PlaybackInfo`,
           {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -224,7 +224,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
 
       // The detail lists every Version as a source before anything is planned.
       const detail = await send(
-        new Request(`http://pendia.test/Items/${toGuid(movie.itemId)}`, {
+        new Request(`http://thalia.test/Items/${toGuid(movie.itemId)}`, {
           headers: { authorization: `${findroid}, Token="${findroidToken}"` },
         }),
       );
@@ -257,7 +257,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
       const playbackInfo = async (query: string, body: object) => {
         const response = await send(
           new Request(
-            `http://pendia.test/Items/${toGuid(movie.itemId)}/PlaybackInfo${query}`,
+            `http://thalia.test/Items/${toGuid(movie.itemId)}/PlaybackInfo${query}`,
             {
               method: "POST",
               headers: {
@@ -277,7 +277,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
         if (source === undefined) throw new Error("Expected a source.");
         return {
           source,
-          url: new URL(source.TranscodingUrl ?? "", "http://pendia.test"),
+          url: new URL(source.TranscodingUrl ?? "", "http://thalia.test"),
         };
       };
 

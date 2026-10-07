@@ -18,7 +18,7 @@ describe("transport identity", () => {
   });
 
   test("untrusted peers ignore every forwarding header", () => {
-    const request = req("http://pendia.local/api", {
+    const request = req("http://thalia.local/api", {
       forwarded: "for=1.2.3.4;proto=https",
       "x-forwarded-for": "1.2.3.4",
       "x-forwarded-proto": "https",
@@ -27,7 +27,7 @@ describe("transport identity", () => {
       address: "10.0.0.9",
       secure: false,
     });
-    const direct = req("https://pendia.local/api", {
+    const direct = req("https://thalia.local/api", {
       "x-forwarded-proto": "http",
     });
     expect(requestIdentity(direct, "10.0.0.9", ["10.0.0.2"])).toEqual({
@@ -51,7 +51,7 @@ describe("transport identity", () => {
 
   test("trusted Forwarded chain walks to the first untrusted hop", () => {
     const trusted = ["10.0.0.2", "10.0.0.9"];
-    const request = req("http://pendia.local/api", {
+    const request = req("http://thalia.local/api", {
       forwarded:
         'for="[2001:DB8::1]:8443";proto=https, for=198.51.100.5;proto=http',
     });
@@ -59,7 +59,7 @@ describe("transport identity", () => {
       address: "198.51.100.5",
       secure: false,
     });
-    const deeper = req("http://pendia.local/api", {
+    const deeper = req("http://thalia.local/api", {
       forwarded:
         'for="[2001:db8::1]";proto=https, for=10.0.0.9;proto=http, for=203.0.113.7;proto=https',
     });
@@ -67,7 +67,7 @@ describe("transport identity", () => {
       address: "203.0.113.7",
       secure: true,
     });
-    const single = req("http://pendia.local/api", {
+    const single = req("http://thalia.local/api", {
       forwarded: "for=203.0.113.9;proto=https",
     });
     expect(requestIdentity(single, "10.0.0.2", trusted)).toEqual({
@@ -78,21 +78,21 @@ describe("transport identity", () => {
 
   test("XFF walks right to left and stops at the first untrusted hop", () => {
     const trusted = ["10.0.0.2", "10.0.0.9"];
-    const request = req("http://pendia.local/api", {
+    const request = req("http://thalia.local/api", {
       "x-forwarded-for": "1.1.1.1, 8.8.8.8, 10.0.0.9",
     });
     expect(requestIdentity(request, "10.0.0.2", trusted)).toEqual({
       address: "8.8.8.8",
       secure: false,
     });
-    const malformed = req("http://pendia.local/api", {
+    const malformed = req("http://thalia.local/api", {
       "x-forwarded-for": "8.8.8.8, not-an-ip",
     });
     expect(requestIdentity(malformed, "10.0.0.2", trusted)).toEqual({
       address: "10.0.0.2",
       secure: false,
     });
-    const badForwarded = req("http://pendia.local/api", {
+    const badForwarded = req("http://thalia.local/api", {
       forwarded: "for=8.8.8.8, for=_obfuscated",
     });
     expect(requestIdentity(badForwarded, "10.0.0.2", trusted)).toEqual({
@@ -105,12 +105,12 @@ describe("transport identity", () => {
     const trusted = ["10.0.0.2"];
     expect(
       requestIdentity(
-        req("http://pendia.local/api", { "x-forwarded-proto": "https" }),
+        req("http://thalia.local/api", { "x-forwarded-proto": "https" }),
         "10.0.0.2",
         trusted,
       ),
     ).toEqual({ address: "10.0.0.2", secure: true });
-    const chained = req("http://pendia.local/api", {
+    const chained = req("http://thalia.local/api", {
       "x-forwarded-for": "8.8.8.8, 9.9.9.9",
       "x-forwarded-proto": "https, http",
     });
@@ -118,14 +118,14 @@ describe("transport identity", () => {
       address: "9.9.9.9",
       secure: false,
     });
-    const mapped = req("https://pendia.local/api", {
+    const mapped = req("https://thalia.local/api", {
       forwarded: "for=203.0.113.9;proto=https",
     });
     expect(requestIdentity(mapped, "::ffff:10.0.0.2", trusted)).toEqual({
       address: "203.0.113.9",
       secure: true,
     });
-    const wrongList = req("http://pendia.local/api", {
+    const wrongList = req("http://thalia.local/api", {
       "x-forwarded-for": "8.8.8.8",
       "x-forwarded-proto": "https, http",
     });

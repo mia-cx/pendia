@@ -12,20 +12,20 @@ import { migrateDatabase } from "../db/migrate.ts";
 import { items, jobs, providerIds, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { registerMetadataJobs } from "../metadata/jobs.ts";
 import { tvdbResponse } from "../metadata/tvdb-fixtures.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 function rpcClient(base: string, token: string) {
   const link = new RPCLink({
     url: `${base}/rpc`,
     headers: { authorization: `Bearer ${token}` },
   });
-  return createORPCClient<RouterClient<typeof pendiaRouter>>(link);
+  return createORPCClient<RouterClient<typeof thaliaRouter>>(link);
 }
 
 async function rejection(promise: Promise<unknown>) {
@@ -47,7 +47,7 @@ describe.skipIf(!databaseUrl)("items.refresh", () => {
   test("queues one Show fetch ahead of background work and re-fetches it", () =>
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
-      const root = await mkdtemp(join(tmpdir(), "pendia-refresh-"));
+      const root = await mkdtemp(join(tmpdir(), "thalia-refresh-"));
       try {
         const admin = await setupAdmin(db, {
           username: "admin",
@@ -90,7 +90,7 @@ describe.skipIf(!databaseUrl)("items.refresh", () => {
           { concurrencyKey: `provider:${show.id}` },
         );
 
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
           const client = rpcClient(base, adminToken);

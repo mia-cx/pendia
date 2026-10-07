@@ -1,4 +1,4 @@
-import type { Capability } from "@pendia/plugin-api";
+import type { Capability } from "@thalia/plugin-api";
 import { eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import type { JsonObject } from "../db/schema/common.ts";
@@ -9,10 +9,10 @@ import { capabilities } from "./manifest.ts";
 const pluginSettingsKey = "plugins";
 
 /** The Postgres NOTIFY channel that tells every process the plugin settings or lockfile changed. */
-export const pluginChannel = "pendia_plugins";
+export const pluginChannel = "thalia_plugins";
 
-/** The registry Pendia ships with, where the first-party plugins live. */
-export const officialRegistry = "https://github.com/mia-cx/pendia";
+/** The registry Thalia ships with, where the first-party plugins live. */
+export const officialRegistry = "https://github.com/mia-cx/thalia";
 
 /** A files switch that is off: for good when `until` is null, otherwise until that instant. */
 export type FilesOff = { until: string | null };

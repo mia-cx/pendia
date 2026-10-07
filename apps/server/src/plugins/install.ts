@@ -38,7 +38,7 @@ const npmSpecPattern = /^((?:@[^/@\s]+\/)?[^/@\s]+)(?:@(\S+))?$/;
 
 /** The folder this process installs plugins into. */
 export function pluginDirectory(): string {
-  return Bun.env.PENDIA_PLUGIN_DIR ?? join(tmpdir(), "pendia-plugins");
+  return Bun.env.THALIA_PLUGIN_DIR ?? join(tmpdir(), "thalia-plugins");
 }
 
 function sha512(bytes: Uint8Array | string, encoding: "base64" | "hex") {
@@ -168,7 +168,7 @@ export async function fetchPlugin(
   source: string,
   {
     fetch: request = fetch,
-    npmRegistry = Bun.env.PENDIA_NPM_REGISTRY ?? defaultNpmRegistry,
+    npmRegistry = Bun.env.THALIA_NPM_REGISTRY ?? defaultNpmRegistry,
   }: SourceOptions = {},
 ): Promise<FetchedPlugin> {
   const trimmed = source.trim();

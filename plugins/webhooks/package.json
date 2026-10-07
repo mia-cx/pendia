@@ -1,5 +1,5 @@
 {
-  "name": "@pendia/plugin-webhooks",
+  "name": "@thalia/plugin-webhooks",
   "version": "1.0.0",
   "description": "Send server events to any HTTP endpoint.",
   "type": "module",
@@ -10,7 +10,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "pendia": {
+  "thalia": {
     "api": "^1.0.0",
     "capabilities": [
       "events",
@@ -91,6 +91,6 @@
     "prepack": "bun run build"
   },
   "devDependencies": {
-    "@pendia/plugin-api": "workspace:*"
+    "@thalia/plugin-api": "workspace:*"
   }
 }

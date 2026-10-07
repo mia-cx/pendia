@@ -48,7 +48,7 @@ async function seed(db: Database) {
 }
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "pendia-library-"));
+  const dir = await mkdtemp(join(tmpdir(), "thalia-library-"));
   try {
     return await run(dir);
   } finally {

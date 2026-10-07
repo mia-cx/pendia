@@ -12,7 +12,7 @@ import {
 import { migrateDatabase } from "../db/migrate.ts";
 import { items, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import {
   createVideoFixture,
   withVideoFixture,
@@ -37,7 +37,7 @@ describe.skipIf(!databaseUrl)("first-run wizard", () => {
         await migrateDatabase(db);
         await withVideoFixture(async (root) => {
           await populate(root);
-          const server = await startPendia("all", {
+          const server = await startThalia("all", {
             databaseUrl: url,
             port: 0,
             workerOptions: { pollIntervalMs: 20 },

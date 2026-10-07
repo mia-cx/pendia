@@ -8,7 +8,7 @@ import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { files, items, providerIds, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { createJobQueue, type Job, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import {
@@ -554,7 +554,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       };
       const handler = createServarrWebhookHandler(db, failing);
       const request = new Request(
-        `http://pendia.test/api/webhooks/radarr/${token}`,
+        `http://thalia.test/api/webhooks/radarr/${token}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -724,7 +724,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
       );
       const movies = await insertLibrary(db, "Movies", "/media/movies");
       const shows = await insertLibrary(db, "Shows", "/media/shows", "shows");
-      const server = await startPendia("api", {
+      const server = await startThalia("api", {
         databaseUrl: url,
         port: 0,
         changeOptions: { delayMs: 10 },
@@ -843,7 +843,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           password: "admin-pass",
         });
         const { token } = await createApiKey(db, admin.id, "Sonarr");
-        const server = await startPendia("api", {
+        const server = await startThalia("api", {
           databaseUrl: url,
           port: 0,
           changeOptions: { delayMs: 10 },

@@ -7,8 +7,8 @@ import { createLocalUser, setupAdmin } from "./accounts.ts";
 import { readAuthSettings, writeAuthSettings } from "./settings.ts";
 
 const oidcConfig = {
-  issuer: " https://ID.MIA.CX/application/o/pendia ",
-  clientId: " pendia ",
+  issuer: " https://ID.MIA.CX/application/o/thalia ",
+  clientId: " thalia ",
   clientSecret: " secret ",
   scopes: ["openid", " profile ", "openid", "email", "profile"],
 };
@@ -58,7 +58,7 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
         oidcClientSecret: "third",
       });
       expect(replaced.oidc?.clientSecret).toBe("third");
-      expect(replaced.oidc?.clientId).toBe("pendia");
+      expect(replaced.oidc?.clientId).toBe("thalia");
       for (const oidcClientSecret of ["", "   ", "x".repeat(4097)])
         await expect(
           writeAuthSettings(db, admin.id, { oidcClientSecret }),
@@ -75,8 +75,8 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
       });
       const { oidc } = await readAuthSettings(db);
       expect(oidc?.issuer).toBeInstanceOf(URL);
-      expect(oidc?.issuer.href).toBe("https://id.mia.cx/application/o/pendia");
-      expect(oidc?.clientId).toBe("pendia");
+      expect(oidc?.issuer.href).toBe("https://id.mia.cx/application/o/thalia");
+      expect(oidc?.clientId).toBe("thalia");
       expect(oidc?.clientSecret).toBe("secret");
       expect(oidc?.scopes).toEqual(["openid", "profile", "email"]);
       await db
@@ -290,7 +290,7 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
       expect(written.artworkRequiresAuth).toBe(true);
       expect(written.loginMaxAttempts).toBe(7);
       expect(written.oidc?.issuer.href).toBe(
-        "https://id.mia.cx/application/o/pendia",
+        "https://id.mia.cx/application/o/thalia",
       );
       const [row] = await db
         .select({ value: settings.value })
@@ -299,7 +299,7 @@ describe.skipIf(!databaseUrl)("auth OIDC settings", () => {
       expect(row?.value).toMatchObject({
         artworkRequiresAuth: true,
         loginMaxAttempts: 7,
-        oidc: { issuer: " https://ID.MIA.CX/application/o/pendia " },
+        oidc: { issuer: " https://ID.MIA.CX/application/o/thalia " },
       });
       const reread = await readAuthSettings(db);
       expect(reread.oidc?.issuer).toBeInstanceOf(URL);

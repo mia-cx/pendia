@@ -341,7 +341,7 @@ async function removeKey(name: string) {
     <FormGroup
       title="Artwork"
       failure={artFailure}
-      description="Set by PENDIA_ARTWORK_STORE when Pendia starts."
+      description="Set by THALIA_ARTWORK_STORE when Thalia starts."
     >
       <FormRow label="Require sign-in for artwork" for="artworkAuth" inline>
         <Switch

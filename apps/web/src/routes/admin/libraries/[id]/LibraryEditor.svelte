@@ -269,7 +269,7 @@ async function deleteLibrary() {
   <ConfirmDialog
     bind:open={deleteOpen}
     title="Delete {library.data?.name}?"
-    description="Its Items and watch history leave Pendia. The files stay on disk."
+    description="Its Items and watch history leave Thalia. The files stay on disk."
     action="Delete library"
     onconfirm={deleteLibrary}
   />

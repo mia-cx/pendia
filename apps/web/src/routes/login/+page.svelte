@@ -78,10 +78,10 @@ async function submit(event: SubmitEvent) {
 </script>
 
 <svelte:head>
-  <title>Sign in · Pendia</title>
+  <title>Sign in · Thalia</title>
 </svelte:head>
 
-<FocusScreen title="Sign in to Pendia" bind:card>
+<FocusScreen title="Sign in to Thalia" bind:card>
   {#if data.oidc}
     <OidcSignIn name={data.oidc.name} />
     <div class="my-5 flex w-full items-center gap-3">

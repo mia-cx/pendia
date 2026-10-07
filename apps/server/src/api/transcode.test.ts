@@ -13,7 +13,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { events, sessionRegistry } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
 import {
@@ -21,11 +21,11 @@ import {
   type VideoFixtureOptions,
 } from "../mediums/video-common/fixtures.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
-import type { pendiaRouter } from "./router.ts";
+import type { thaliaRouter } from "./router.ts";
 
 HLS.setOptions({ strictMode: true });
 
-type Client = RouterClient<typeof pendiaRouter>;
+type Client = RouterClient<typeof thaliaRouter>;
 type Profile = Parameters<Client["playback"]["plan"]>[0]["profile"];
 
 // A browser without HEVC or AC-3 that renders only WebVTT.
@@ -124,7 +124,7 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
   let libraryRoot: string;
 
   beforeAll(async () => {
-    libraryRoot = await mkdtemp(join(tmpdir(), "pendia-transcode-library-"));
+    libraryRoot = await mkdtemp(join(tmpdir(), "thalia-transcode-library-"));
     await Promise.all(
       Object.entries(fixtures).map(async ([title, options]) => {
         const folder = join(libraryRoot, `${title} (2026)`);
@@ -143,7 +143,7 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
       db: Database;
       base: string;
       client: Client;
-      server: Awaited<ReturnType<typeof startPendia>>;
+      server: Awaited<ReturnType<typeof startThalia>>;
       scan: (title: string) => Promise<{ itemId: string; versionId: string }>;
       dir: string;
     }) => Promise<void>,
@@ -164,8 +164,8 @@ describe.skipIf(!databaseUrl)("live transcode over HLS", () => {
         medium: "movies",
         roots: [libraryRoot],
       });
-      const dir = await mkdtemp(join(tmpdir(), "pendia-transcode-scratch-"));
-      const server = await startPendia("all", {
+      const dir = await mkdtemp(join(tmpdir(), "thalia-transcode-scratch-"));
+      const server = await startThalia("all", {
         databaseUrl: url,
         port: 0,
         transcoderOptions: {

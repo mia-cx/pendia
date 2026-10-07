@@ -1,5 +1,5 @@
 import type Hls from "hls.js";
-import { client, createPendiaClient } from "./api.ts";
+import { client, createThaliaClient } from "./api.ts";
 import { readFailure } from "./errors.ts";
 import { browserProfile, withToken } from "./playback.ts";
 
@@ -47,7 +47,7 @@ const refreshRetryMs = 15_000;
 const closeWaitMs = 3_000;
 
 // The last report as a tab closes has to outlive the page.
-const lastWord = createPendiaClient({ keepalive: true });
+const lastWord = createThaliaClient({ keepalive: true });
 
 const cannotPlay = "Cannot play this Version";
 const stalled: PlayerNotice = {
@@ -69,7 +69,7 @@ function refusal(error: unknown): PlayerNotice {
   if (failure.code === "CONFLICT")
     return {
       title: cannotPlay,
-      message: "Pendia cannot stream this Version yet.",
+      message: "Thalia cannot stream this Version yet.",
       retry: false,
     };
   return { title: cannotPlay, message: failure.message, retry: false };

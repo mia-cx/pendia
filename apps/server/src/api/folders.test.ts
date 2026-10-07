@@ -7,7 +7,7 @@ import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 
 async function seed(db: Database) {
   const admin = await setupAdmin(db, {
@@ -30,7 +30,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const root = await mkdtemp(join(tmpdir(), "pendia-folders-"));
+      const root = await mkdtemp(join(tmpdir(), "thalia-folders-"));
       await mkdir(join(root, "b"));
       await mkdir(join(root, "b", "inner"));
       await mkdir(join(root, "a"));
@@ -39,7 +39,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
       await mkdir(join(root, ".hidden"));
       await writeFile(join(root, "notes.txt"), "");
       await symlink(join(root, "b"), join(root, "link"), "dir");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const listing = await fetch(
@@ -64,7 +64,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
           );
           expect(through.status).toBe(400);
           expect((await through.json()).message).toBe(
-            "Pendia doesn't follow symbolic links.",
+            "Thalia doesn't follow symbolic links.",
           );
         }
 
@@ -90,7 +90,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { viewerToken } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         for (const path of [
@@ -111,7 +111,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const relative = await fetch(`${base}/api/folders?path=relative`, {
@@ -119,7 +119,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
         });
         expect(relative.status).toBe(400);
         const missing = await fetch(
-          `${base}/api/folders?path=${encodeURIComponent("/pendia-no-such-folder")}`,
+          `${base}/api/folders?path=${encodeURIComponent("/thalia-no-such-folder")}`,
           { headers: bearer(token) },
         );
         expect(missing.status).toBe(404);
@@ -137,10 +137,10 @@ describe.skipIf(!databaseUrl)("folders api", () => {
       withDatabase(async (db, url) => {
         await migrateDatabase(db);
         const { token } = await seed(db);
-        const root = await mkdtemp(join(tmpdir(), "pendia-folders-"));
+        const root = await mkdtemp(join(tmpdir(), "thalia-folders-"));
         const locked = join(root, "locked");
         await mkdir(locked);
-        const server = await startPendia("api", {
+        const server = await startThalia("api", {
           databaseUrl: url,
           port: 0,
         });
@@ -153,7 +153,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
           );
           expect(denied.status).toBe(400);
           expect((await denied.json()).message).toBe(
-            "Pendia can't read this folder. Check its permissions.",
+            "Thalia can't read this folder. Check its permissions.",
           );
         } finally {
           await chmod(locked, 0o755).catch(() => {});
@@ -166,7 +166,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const root = await mkdtemp(join(tmpdir(), "pendia-folders-"));
+      const root = await mkdtemp(join(tmpdir(), "thalia-folders-"));
       const show = join(root, "Breaking Bad (2008)");
       await mkdir(join(show, "Season 01"), { recursive: true });
       await mkdir(join(show, "Season 02"));
@@ -179,7 +179,7 @@ describe.skipIf(!databaseUrl)("folders api", () => {
         "",
       );
       await writeFile(join(show, "Season 02", "Breaking.Bad.S02E01.mkv"), "");
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const preview = await fetch(

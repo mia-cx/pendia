@@ -5,14 +5,14 @@ import { join } from "node:path";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
-import type { pendiaRouter } from "../api/router.ts";
+import type { thaliaRouter } from "../api/router.ts";
 import { setupAdmin } from "../auth/accounts.ts";
 import { createApiKey } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { items, providerIds, settings } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
 import { scanDirectory } from "../libraries/scan.ts";
@@ -102,7 +102,7 @@ describe("track names", () => {
 
 describe("openSubtitlesHash", () => {
   test("adds the size and the little-endian words of the first and last 64 KiB", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "pendia-hash-"));
+    const dir = await mkdtemp(join(tmpdir(), "thalia-hash-"));
     try {
       const bytes = new Uint8Array(3 * 64 * 1024);
       const view = new DataView(bytes.buffer);
@@ -224,15 +224,15 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
           year: "2026",
         });
         expect(search?.headers.get("api-key")).toBe("os-key");
-        expect(search?.headers.get("user-agent")).toStartWith("Pendia");
+        expect(search?.headers.get("user-agent")).toStartWith("Thalia");
         expect(await listSubtitles(db, itemId)).toEqual([
           { language: "en", format: "srt" },
           { language: "nl", format: "srt" },
         ]);
 
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
-          const client = createORPCClient<RouterClient<typeof pendiaRouter>>(
+          const client = createORPCClient<RouterClient<typeof thaliaRouter>>(
             new RPCLink({
               url: `http://127.0.0.1:${server.apiServer?.port}/rpc`,
               headers: { authorization: `Bearer ${token}` },
@@ -284,14 +284,14 @@ describe.skipIf(!databaseUrl)("stored subtitle tracks", () => {
         ]);
         expect(
           await Bun.file(
-            join(root, "Movie (2026)/.pendia/subtitles", `${itemId}.nl.srt`),
+            join(root, "Movie (2026)/.thalia/subtitles", `${itemId}.nl.srt`),
           ).text(),
         ).toBe(cue);
 
-        const server = await startPendia("api", { databaseUrl: url, port: 0 });
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
           const base = `http://127.0.0.1:${server.apiServer?.port}`;
-          const client = createORPCClient<RouterClient<typeof pendiaRouter>>(
+          const client = createORPCClient<RouterClient<typeof thaliaRouter>>(
             new RPCLink({
               url: `${base}/rpc`,
               headers: { authorization: `Bearer ${token}` },
@@ -338,7 +338,7 @@ describe.skipIf(!databaseUrl)("stored subtitle tracks", () => {
             .select({ libraryId: items.libraryId })
             .from(items);
           if (!item) throw new Error("Item missing.");
-          const extra = await mkdtemp(join(tmpdir(), "pendia-sub-extra-"));
+          const extra = await mkdtemp(join(tmpdir(), "thalia-sub-extra-"));
           await addRoot(db, item.libraryId, extra);
           await writeSubtitle(
             db,

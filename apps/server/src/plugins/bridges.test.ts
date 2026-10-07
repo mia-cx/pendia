@@ -19,18 +19,18 @@ import { readPluginSettings } from "./settings.ts";
 import { type FixturePlugin, installFixture, withFolder } from "./testing.ts";
 
 declare global {
-  var pendiaCalls: unknown[] | undefined;
+  var thaliaCalls: unknown[] | undefined;
 }
 
-/** A fixture entry that records calls on globalThis.pendiaCalls. */
+/** A fixture entry that records calls on globalThis.thaliaCalls. */
 function recording(body: string) {
-  return `const record = (value) => { (globalThis.pendiaCalls ??= []).push(value); };
+  return `const record = (value) => { (globalThis.thaliaCalls ??= []).push(value); };
 export default (host) => { ${body} };`;
 }
 
 async function seed(db: Database, folder: string, plugin: FixturePlugin) {
   await migrateDatabase(db);
-  globalThis.pendiaCalls = [];
+  globalThis.thaliaCalls = [];
   await installFixture(db, folder, plugin);
   const [library] = await insertLibraries(db, {
     name: "Movies",
@@ -71,7 +71,7 @@ describe.skipIf(!databaseUrl)("plugin bridges", () => {
     withFolder((folder) =>
       withDatabase(async (db) => {
         const { item, runtime } = await seed(db, folder, {
-          name: "pendia-plugin-catalog",
+          name: "thalia-plugin-catalog",
           capabilities: ["providers"],
           source: `export default (host) => host.providers.metadata({
   id: "catalog",
@@ -115,7 +115,7 @@ describe.skipIf(!databaseUrl)("plugin bridges", () => {
     withFolder((folder) =>
       withDatabase(async (db) => {
         const { runtime } = await seed(db, folder, {
-          name: "pendia-plugin-listener",
+          name: "thalia-plugin-listener",
           capabilities: ["events"],
           source: recording(
             'host.events.on("item.added", async (payload) => record(payload));',
@@ -123,18 +123,18 @@ describe.skipIf(!databaseUrl)("plugin bridges", () => {
         });
         // The plugin installs before the seed adds its item, so item.added is queued.
         await runPluginJobs(db, runtime);
-        expect(globalThis.pendiaCalls).toEqual([
+        expect(globalThis.thaliaCalls).toEqual([
           { itemId: expect.any(String), kind: "movie" },
         ]);
         await runPluginJobs(db, runtime);
-        expect(globalThis.pendiaCalls).toHaveLength(1);
+        expect(globalThis.thaliaCalls).toHaveLength(1);
       }),
     ));
 
   test("a schedule tick enqueues one deduplicated job that runs the handler", () =>
     withFolder((folder) =>
       withDatabase(async (db) => {
-        const name = "pendia-plugin-cron";
+        const name = "thalia-plugin-cron";
         const { runtime } = await seed(db, folder, {
           name,
           capabilities: ["jobs"],
@@ -150,7 +150,7 @@ describe.skipIf(!databaseUrl)("plugin bridges", () => {
           await db.select().from(jobs).where(eq(jobs.type, "plugin")),
         ).toHaveLength(1);
         await runPluginJobs(db, runtime);
-        expect(globalThis.pendiaCalls).toEqual(["swept"]);
+        expect(globalThis.thaliaCalls).toEqual(["swept"]);
         await runtime.stop();
       }),
     ));
@@ -158,7 +158,7 @@ describe.skipIf(!databaseUrl)("plugin bridges", () => {
   test("a route answers under the plugin prefix, and a throwing route fails only its plugin", () =>
     withFolder((folder) =>
       withDatabase(async (db) => {
-        const name = "@pendia/plugin-route";
+        const name = "@thalia/plugin-route";
         const { runtime } = await seed(db, folder, {
           name,
           capabilities: ["http"],
@@ -174,7 +174,7 @@ host.http.route("POST", "/boom", async () => { throw new Error("route boom"); })
         const handle = createPluginRouteHandler(db, runtime);
         const hello = await handle(
           new Request(
-            "http://pendia.test/plugins/@pendia/plugin-route/hello?x=1",
+            "http://thalia.test/plugins/@thalia/plugin-route/hello?x=1",
             {
               headers: { authorization: `Bearer ${token}` },
             },
@@ -187,16 +187,16 @@ host.http.route("POST", "/boom", async () => { throw new Error("route boom"); })
           query: { x: "1" },
         });
         const anonymous = await handle(
-          new Request("http://pendia.test/plugins/@pendia/plugin-route/hello"),
+          new Request("http://thalia.test/plugins/@thalia/plugin-route/hello"),
           "127.0.0.1",
         );
         expect(await anonymous?.json()).toMatchObject({ userId: null });
         expect(
-          await handle(new Request("http://pendia.test/api/me"), "127.0.0.1"),
+          await handle(new Request("http://thalia.test/api/me"), "127.0.0.1"),
         ).toBeUndefined();
 
         const boom = await handle(
-          new Request("http://pendia.test/plugins/@pendia/plugin-route/boom", {
+          new Request("http://thalia.test/plugins/@thalia/plugin-route/boom", {
             method: "POST",
           }),
           "127.0.0.1",
@@ -207,7 +207,7 @@ host.http.route("POST", "/boom", async () => { throw new Error("route boom"); })
           failure: { message: "route boom" },
         });
         const after = await handle(
-          new Request("http://pendia.test/plugins/@pendia/plugin-route/hello"),
+          new Request("http://thalia.test/plugins/@thalia/plugin-route/hello"),
           "127.0.0.1",
         );
         expect(after?.status).toBe(404);
@@ -218,7 +218,7 @@ host.http.route("POST", "/boom", async () => { throw new Error("route boom"); })
     withFolder((folder) =>
       withDatabase(async (db) => {
         const { item, runtime } = await seed(db, folder, {
-          name: "pendia-plugin-shelf",
+          name: "thalia-plugin-shelf",
           capabilities: ["shelves", "items:read"],
           source: `export default (host) => host.shelves.register({
   id: "leaving-soon",
@@ -236,7 +236,7 @@ host.http.route("POST", "/boom", async () => { throw new Error("route boom"); })
         });
         const shelves = await homeShelves(db, admin.id, runtime);
         const shelf = shelves.find(
-          (candidate) => candidate.id === "pendia-plugin-shelf:leaving-soon",
+          (candidate) => candidate.id === "thalia-plugin-shelf:leaving-soon",
         );
         expect(shelf?.title).toBe("Leaving soon");
         expect(shelf?.entries.map((entry) => entry.item.id)).toEqual([item.id]);

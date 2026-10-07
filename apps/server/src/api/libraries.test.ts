@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
-import { createPendiaClient } from "../../../web/src/lib/api.ts";
+import { createThaliaClient } from "../../../web/src/lib/api.ts";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { sessionCookieName } from "../auth/http.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
@@ -10,7 +10,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { files, items, libraries, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
-import { startPendia } from "../index.ts";
+import { startThalia } from "../index.ts";
 import { listJobs } from "../jobs/queue.ts";
 import {
   createVideoFixture,
@@ -142,7 +142,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
         const { token } = await seed(db);
         await withVideoFixture(async (root) => {
           await populate(root);
-          const server = await startPendia("all", {
+          const server = await startThalia("all", {
             databaseUrl: url,
             port: 0,
             workerOptions: { pollIntervalMs: 20 },
@@ -150,7 +150,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
           });
           try {
             const base = `http://127.0.0.1:${server.apiServer?.port}`;
-            const client = createPendiaClient({
+            const client = createThaliaClient({
               origin: base,
               headers: { authorization: `Bearer ${token}` },
             });
@@ -292,7 +292,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
         viewer.id,
         "viewer",
       );
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const adminHeaders = { authorization: `Bearer ${token}` };
@@ -385,14 +385,14 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
           await createVideoFixture(join(seasonDir, "Show S01E01 - part1.mkv"));
           await createVideoFixture(join(seasonDir, "Show S01E01 - part2.mkv"));
           await createVideoFixture(join(seasonDir, "Show S01E02-E03.mkv"));
-          const server = await startPendia("all", {
+          const server = await startThalia("all", {
             databaseUrl: url,
             port: 0,
             workerOptions: { pollIntervalMs: 20 },
           });
           try {
             const base = `http://127.0.0.1:${server.apiServer?.port}`;
-            const client = createPendiaClient({
+            const client = createThaliaClient({
               origin: base,
               headers: { authorization: `Bearer ${token}` },
             });
@@ -471,7 +471,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
     withDatabase(async (db, url) => {
       await migrateDatabase(db);
       const { token } = await seed(db);
-      const server = await startPendia("api", { databaseUrl: url, port: 0 });
+      const server = await startThalia("api", { databaseUrl: url, port: 0 });
       try {
         const base = `http://127.0.0.1:${server.apiServer?.port}`;
         const body = (name: string) =>
@@ -543,7 +543,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
               [dbA, urlA, tokenA, "First"],
               [dbB, urlB, tokenB, "Second"],
             ] as const) {
-              const server = await startPendia("all", {
+              const server = await startThalia("all", {
                 databaseUrl: url,
                 port: 0,
                 workerOptions: { pollIntervalMs: 20 },
@@ -551,7 +551,7 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
               });
               try {
                 const base = `http://127.0.0.1:${server.apiServer?.port}`;
-                const client = createPendiaClient({
+                const client = createThaliaClient({
                   origin: base,
                   headers: { authorization: `Bearer ${token}` },
                 });

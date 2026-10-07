@@ -1,9 +1,9 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 import { fromMbps, toMbps } from "./bitrate.ts";
 
 /** A library's stored-version policy as the API reads it; null stores nothing. */
 export type StoredPolicy = Awaited<
-  ReturnType<PendiaClient["libraries"]["storedVersions"]>
+  ReturnType<ThaliaClient["libraries"]["storedVersions"]>
 >["policy"];
 
 /** One rung of a policy. */

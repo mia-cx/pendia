@@ -36,7 +36,7 @@ const playableKinds = new Set<Kind>(["movie", "episode"]);
 
 const collectionTypes = { movies: "movies", shows: "tvshows" } as const;
 
-// Jellyfin's ItemSortBy names, lowercased, for the orders Pendia can serve.
+// Jellyfin's ItemSortBy names, lowercased, for the orders Thalia can serve.
 const sortsByName = new Map<string, ItemViewSort>([
   ["sortname", "title"],
   ["name", "title"],
@@ -200,7 +200,7 @@ function kindsOf(query: Query): Kind[] | undefined {
     return undefined;
   const kinds = Object.keys(itemTypes) as Kind[];
   const typeOf = (kind: Kind) => itemTypes[kind].toLowerCase();
-  // Every playable Pendia kind is a Video; folders have no media type.
+  // Every playable Thalia kind is a Video; folders have no media type.
   return kinds.filter(
     (kind) =>
       (include.size === 0 || include.has(typeOf(kind))) &&

@@ -8,7 +8,7 @@ import type { ApiContext } from "./context.ts";
 import type { EventBroker } from "./events.ts";
 import { createHlsHandler } from "./hls.ts";
 import { openApiDocument } from "./openapi.ts";
-import { pendiaRouter } from "./router.ts";
+import { thaliaRouter } from "./router.ts";
 
 const eventStreamPaths = new Set(["/api/events", "/rpc/events/stream"]);
 
@@ -19,8 +19,8 @@ export function createApiHandler(
   transcoder?: Transcoder,
   plugins: PluginRuntime = createPluginRuntime(db),
 ) {
-  const rpc = new RPCHandler<ApiContext>(pendiaRouter);
-  const openapi = new OpenAPIHandler<ApiContext>(pendiaRouter);
+  const rpc = new RPCHandler<ApiContext>(thaliaRouter);
+  const openapi = new OpenAPIHandler<ApiContext>(thaliaRouter);
   const direct = createDirectPlayHandler(db);
   const hls = createHlsHandler(db, transcoder);
   return async (

@@ -76,7 +76,7 @@ function pngHeader(width: number, height: number): Uint8Array<ArrayBuffer> {
 }
 
 async function withTempRoot<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "pendia-library-"));
+  const dir = await mkdtemp(join(tmpdir(), "thalia-library-"));
   try {
     return await run(dir);
   } finally {
@@ -188,7 +188,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         });
         expect(row.storageKey).toMatch(
           new RegExp(
-            `^Alien \\(1979\\)/\\.pendia/artwork/${row.id}\\.[0-9a-f-]{36}$`,
+            `^Alien \\(1979\\)/\\.thalia/artwork/${row.id}\\.[0-9a-f-]{36}$`,
           ),
         );
         const stored = await readFile(join(root, row.storageKey));
@@ -221,7 +221,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         expect(second.storageKey).not.toBe(first.storageKey);
         expect(second.storageKey).toMatch(
           new RegExp(
-            `^Alien \\(1979\\)/\\.pendia/artwork/${first.id}\\.[0-9a-f-]{36}$`,
+            `^Alien \\(1979\\)/\\.thalia/artwork/${first.id}\\.[0-9a-f-]{36}$`,
           ),
         );
         expect(second.sourceUrl).toBe("https://image.example/new.jpg");
@@ -233,16 +233,16 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
           replacement,
         );
         const names = await readdir(
-          join(root, item.canonicalFolder, ".pendia", "artwork"),
+          join(root, item.canonicalFolder, ".thalia", "artwork"),
         );
         expect(names).toHaveLength(1);
-        expect(`${item.canonicalFolder}/.pendia/artwork/${names[0]}`).toBe(
+        expect(`${item.canonicalFolder}/.thalia/artwork/${names[0]}`).toBe(
           second.storageKey,
         );
       });
     }));
 
-  test("stores a root-anchored Item's artwork under the root's .pendia", () =>
+  test("stores a root-anchored Item's artwork under the root's .thalia", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
@@ -264,13 +264,13 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const { request } = mockRequest(() => new Response(png));
         const row = await storeArtworkOriginal(db, item.id, poster, request);
         expect(row.storageKey).toMatch(
-          new RegExp(`^\\.pendia/artwork/${row.id}\\.[0-9a-f-]{36}$`),
+          new RegExp(`^\\.thalia/artwork/${row.id}\\.[0-9a-f-]{36}$`),
         );
         expect(await readFile(join(root, row.storageKey))).toEqual(png);
       });
     }));
 
-  test("stores loose movies' colocated artwork under one folder's .pendia", () =>
+  test("stores loose movies' colocated artwork under one folder's .thalia", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) => {
@@ -307,8 +307,8 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
           poster,
           request,
         );
-        expect(first.storageKey).toMatch(/^Movies\/\.pendia\/artwork\//);
-        expect(second.storageKey).toMatch(/^Movies\/\.pendia\/artwork\//);
+        expect(first.storageKey).toMatch(/^Movies\/\.thalia\/artwork\//);
+        expect(second.storageKey).toMatch(/^Movies\/\.thalia\/artwork\//);
         expect(first.storageKey).not.toBe(second.storageKey);
         expect(await readFile(join(root, first.storageKey))).toEqual(png);
         expect(await readFile(join(root, second.storageKey))).toEqual(png);
@@ -364,10 +364,10 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         const [final] = await db.select().from(artwork);
         if (!final) throw new Error("Stored artwork missing.");
         const names = await readdir(
-          join(root, item.canonicalFolder, ".pendia", "artwork"),
+          join(root, item.canonicalFolder, ".thalia", "artwork"),
         );
         expect(names).toHaveLength(1);
-        expect(`${item.canonicalFolder}/.pendia/artwork/${names[0]}`).toBe(
+        expect(`${item.canonicalFolder}/.thalia/artwork/${names[0]}`).toBe(
           final.storageKey,
         );
       });
@@ -403,7 +403,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         });
         expect(await readFile(join(root, first.storageKey))).toEqual(png);
         const names = await readdir(
-          join(root, item.canonicalFolder, ".pendia", "artwork"),
+          join(root, item.canonicalFolder, ".thalia", "artwork"),
         );
         expect(names).toHaveLength(1);
         expect(names[0]?.startsWith(`${first.id}.`)).toBe(true);
@@ -475,7 +475,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         }
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(
-          access(join(root, "Alien (1979)", ".pendia")),
+          access(join(root, "Alien (1979)", ".thalia")),
         ).rejects.toThrow();
       });
     }));
@@ -509,7 +509,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         expect(calls).toHaveLength(1);
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(
-          access(join(root, "Alien (1979)", ".pendia")),
+          access(join(root, "Alien (1979)", ".thalia")),
         ).rejects.toThrow();
       });
     }));
@@ -538,7 +538,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         expect(cancelled).toBe(true);
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(
-          access(join(root, "Alien (1979)", ".pendia")),
+          access(join(root, "Alien (1979)", ".thalia")),
         ).rejects.toThrow();
       });
     }));
@@ -594,7 +594,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         });
         expect(await readFile(join(root, first.storageKey))).toEqual(png);
         const names = await readdir(
-          join(root, item.canonicalFolder, ".pendia", "artwork"),
+          join(root, item.canonicalFolder, ".thalia", "artwork"),
         );
         const basename = first.storageKey.split("/").pop();
         if (basename === undefined) throw new Error("Basename missing.");
@@ -620,7 +620,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
           );
           expect(await readFile(join(path, row.storageKey))).toEqual(png);
           await expect(
-            access(join(root, "Alien (1979)", ".pendia")),
+            access(join(root, "Alien (1979)", ".thalia")),
           ).rejects.toThrow();
           const original = await readArtworkOriginal(db, row.id, store);
           expect(Buffer.from(original?.bytes ?? [])).toEqual(png);
@@ -725,7 +725,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         expect(calls).toHaveLength(1);
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(
-          access(join(root, "Alien (1979)", ".pendia")),
+          access(join(root, "Alien (1979)", ".thalia")),
         ).rejects.toThrow();
       });
     }));
@@ -769,13 +769,13 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
       });
     }));
 
-  test("a .pendia symlink is rejected instead of followed outside the root", () =>
+  test("a .thalia symlink is rejected instead of followed outside the root", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) =>
         withTempRoot(async (outside) => {
           const { item } = await fixture(db, root);
-          await symlink(outside, join(root, item.canonicalFolder, ".pendia"));
+          await symlink(outside, join(root, item.canonicalFolder, ".thalia"));
           const { calls, request } = mockRequest(() => new Response(png));
           await expect(
             storeArtworkOriginal(db, item.id, poster, request),
@@ -817,7 +817,7 @@ describe.skipIf(!databaseUrl)("storeArtworkOriginal", () => {
         ).rejects.toThrow("timed out");
         expect(await db.select().from(artwork)).toHaveLength(0);
         await expect(
-          access(join(root, "Alien (1979)", ".pendia")),
+          access(join(root, "Alien (1979)", ".thalia")),
         ).rejects.toThrow();
       });
     }));
@@ -888,7 +888,7 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
         const { item } = await fixture(db, root);
         const { request } = mockRequest(() => new Response(png));
         const row = await storeArtworkOriginal(db, item.id, poster, request);
-        await rm(join(root, item.canonicalFolder, ".pendia"), {
+        await rm(join(root, item.canonicalFolder, ".thalia"), {
           recursive: true,
         });
         expect(await readArtworkOriginal(db, row.id)).toBeNull();
@@ -1000,7 +1000,7 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
               type: "poster",
               sourceUrl: poster.url,
               backend: "colocated",
-              storageKey: `Alien (1979)/.pendia/artwork/${Bun.randomUUIDv7()}`,
+              storageKey: `Alien (1979)/.thalia/artwork/${Bun.randomUUIDv7()}`,
               selected: true,
             })
             .returning();
@@ -1033,13 +1033,13 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
       });
     }));
 
-  test("rejects a .pendia symlink in read mode", () =>
+  test("rejects a .thalia symlink in read mode", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
       await withTempRoot(async (root) =>
         withTempRoot(async (outside) => {
           const { item } = await fixture(db, root);
-          await symlink(outside, join(root, item.canonicalFolder, ".pendia"));
+          await symlink(outside, join(root, item.canonicalFolder, ".thalia"));
           const [row] = await db
             .insert(artwork)
             .values({
@@ -1048,7 +1048,7 @@ describe.skipIf(!databaseUrl)("readArtworkOriginal", () => {
               type: "poster",
               sourceUrl: poster.url,
               backend: "colocated",
-              storageKey: `Alien (1979)/.pendia/artwork/${Bun.randomUUIDv7()}`,
+              storageKey: `Alien (1979)/.thalia/artwork/${Bun.randomUUIDv7()}`,
               selected: true,
             })
             .returning();
@@ -1170,7 +1170,7 @@ describe.skipIf(!databaseUrl)("artwork and subtitles across roots", () => {
         );
         await access(join(rootA, row.storageKey));
         await access(
-          join(rootA, folder, ".pendia", "subtitles", `${item.id}.en.srt`),
+          join(rootA, folder, ".thalia", "subtitles", `${item.id}.en.srt`),
         );
 
         // Reordering puts root B first, so the home root moves to B.

@@ -81,8 +81,8 @@ describe.skipIf(!databaseUrl)("session manager", () => {
   let boundaries: number[];
 
   beforeAll(async () => {
-    libraryRoot = await mkdtemp(join(tmpdir(), "pendia-hls-library-"));
-    scratchRoot = await mkdtemp(join(tmpdir(), "pendia-hls-scratch-"));
+    libraryRoot = await mkdtemp(join(tmpdir(), "thalia-hls-library-"));
+    scratchRoot = await mkdtemp(join(tmpdir(), "thalia-hls-scratch-"));
     const folder = join(libraryRoot, "Movie (2026)");
     await mkdir(folder);
     const file = join(folder, "Movie.mkv");

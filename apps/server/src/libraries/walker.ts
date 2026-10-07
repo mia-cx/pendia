@@ -128,7 +128,14 @@ export async function readLibraryFile(
 }
 
 const prunesDirectory = (rules: ScanRules, relative: string): boolean =>
-  relative.split("/").some((part) => part.toLowerCase().endsWith(".pendia")) ||
+  // ".pendia" stays: libraries written before the rename carry it on disk.
+  relative
+    .split("/")
+    .some(
+      (part) =>
+        part.toLowerCase().endsWith(".thalia") ||
+        part.toLowerCase().endsWith(".pendia"),
+    ) ||
   (rules.isExtra(`${relative}/placeholder.mkv`) &&
     !rules.identify(`${relative}/${posix.basename(relative)}.mkv`));
 

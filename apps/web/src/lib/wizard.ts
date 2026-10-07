@@ -1,4 +1,4 @@
-import { createPendiaClient, type PendiaClient } from "./api.ts";
+import { createThaliaClient, type ThaliaClient } from "./api.ts";
 import { createFirstAdmin, type PublicUser, signIn } from "./auth.ts";
 import { waitForScan } from "./scan.ts";
 
@@ -11,12 +11,12 @@ export type WizardOptions = {
 /** The signed-in caller and its client that later wizard steps need. */
 export type WizardSession = {
   user: PublicUser;
-  client: PendiaClient;
+  client: ThaliaClient;
 };
 
 /** Reports whether the first-run wizard still needs to run. */
 export async function setupOpen(options: WizardOptions = {}) {
-  const { complete } = await createPendiaClient({
+  const { complete } = await createThaliaClient({
     origin: options.origin,
     fetch: options.fetch,
   }).setup.status();
@@ -35,7 +35,7 @@ export async function createAdmin(
   );
   return {
     user,
-    client: createPendiaClient({
+    client: createThaliaClient({
       origin: options.origin,
       headers: { authorization: `Bearer ${token}` },
       fetch: options.fetch,
@@ -45,7 +45,7 @@ export async function createAdmin(
 
 /** The mediums a first library can take. */
 export type LibraryMedium = Parameters<
-  PendiaClient["libraries"]["create"]
+  ThaliaClient["libraries"]["create"]
 >[0]["medium"];
 
 /** Creates the first library for the chosen medium. */

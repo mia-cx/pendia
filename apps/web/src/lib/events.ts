@@ -1,6 +1,6 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
-type Stream = Awaited<ReturnType<PendiaClient["events"]["stream"]>>;
+type Stream = Awaited<ReturnType<ThaliaClient["events"]["stream"]>>;
 
 /** One server event as `events.stream` delivers it. */
 export type ServerEvent =

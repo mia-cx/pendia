@@ -1,8 +1,8 @@
-import type { PendiaClient } from "./api.ts";
+import type { ThaliaClient } from "./api.ts";
 
 /** One permission name, taken from the API's own group shape. */
 export type Permission = Awaited<
-  ReturnType<PendiaClient["groups"]["list"]>
+  ReturnType<ThaliaClient["groups"]["list"]>
 >[number]["permissions"][number];
 
 // Every permission needs a key here, so the build fails when the server adds one.

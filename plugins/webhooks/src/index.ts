@@ -1,4 +1,4 @@
-import { definePlugin, type PluginEvents } from "@pendia/plugin-api";
+import { definePlugin, type PluginEvents } from "@thalia/plugin-api";
 import { readHeaders, renderBody } from "./message.ts";
 
 /** The config the plugin's schema in package.json describes, with its defaults filled in. */

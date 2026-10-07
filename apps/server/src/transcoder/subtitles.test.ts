@@ -46,7 +46,7 @@ describe("subtitle paths", () => {
   let inputPath: string;
 
   beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), "pendia-subtitles-"));
+    dir = await mkdtemp(join(tmpdir(), "thalia-subtitles-"));
     inputPath = join(dir, "input.mkv");
     await createVideoFixture(inputPath, {
       width,

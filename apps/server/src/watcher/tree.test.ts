@@ -38,7 +38,7 @@ async function watchWhile(
 }
 
 async function withBase(run: (base: string) => Promise<void>) {
-  const base = await mkdtemp(join(tmpdir(), "pendia-tree-"));
+  const base = await mkdtemp(join(tmpdir(), "thalia-tree-"));
   try {
     await run(base);
   } finally {

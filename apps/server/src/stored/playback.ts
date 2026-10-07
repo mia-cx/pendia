@@ -159,24 +159,6 @@ export function pickStoredVariants(
   };
 }
 
-/** Picks the stored rungs a client gets instead of a live session; empty when the live path should run. A null live method means no live path exists. */
-export async function selectStoredVariants(
-  db: Database,
-  source: {
-    itemId: string;
-    fileId: string;
-    segmentTimelineId: string | null;
-    liveMethod: PlaybackDecision["method"] | null;
-  },
-  client: ClientProfile,
-  caps: PlaybackCaps,
-) {
-  if (source.liveMethod === "direct-play" || source.segmentTimelineId === null)
-    return [];
-  const stored = await loadStoredCandidates(db, source);
-  return pickStoredVariants(stored, source, client, caps).variantIds;
-}
-
 const playlist = (body: string) =>
   new Response(body, {
     headers: {

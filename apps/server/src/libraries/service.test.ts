@@ -14,7 +14,13 @@ import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { AuthError } from "../auth/errors.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { files, items, jobs, progress } from "../db/schema/index.ts";
+import {
+  files,
+  items,
+  jobs,
+  progress,
+  scanFailures,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJobQueue, listJobs } from "../jobs/queue.ts";
 import { createJobRegistry } from "../jobs/registry.ts";
@@ -376,6 +382,7 @@ describe.skipIf(!databaseUrl)("library service", () => {
         counts: { queued: 0, running: 0, completed: 0, failed: 0 },
         latest: null,
         runId: null,
+        failures: { total: 0, items: [] },
       });
       const { jobId } = await scanLibrary(db, admin.id, library.id);
       const status = await libraryScanStatus(db, admin.id, library.id);
@@ -514,6 +521,127 @@ describe.skipIf(!databaseUrl)("library service", () => {
         completed: 1,
         failed: 0,
       });
+    }));
+
+  test("libraryScanStatus lists skipped files and the run's failed jobs, newest first", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      const { admin } = await seed(db);
+      const library = await createLibrary(db, admin.id, {
+        name: "Movies",
+        medium: "movies",
+        roots: ["/srv/hq", "/srv/4k"],
+      });
+      const other = await createLibrary(db, admin.id, {
+        name: "Other",
+        medium: "movies",
+        roots: ["/srv/other"],
+      });
+      const [hq, uhd] = library.roots;
+      const [elsewhere] = other.roots;
+      if (!hq || !uhd || !elsewhere) throw new Error("Roots are missing.");
+      const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute));
+      const skipped = (
+        rootId: string,
+        path: string,
+        reason: "unreadable" | "no-video",
+        minute: number,
+      ) => ({
+        rootId,
+        path,
+        bytes: 0n,
+        modifiedNs: 0n,
+        reason,
+        detail: `${path}: Invalid data found when processing input`,
+        failedAt: at(minute),
+      });
+      await db
+        .insert(scanFailures)
+        .values([
+          skipped(hq.id, alien, "unreadable", 1),
+          skipped(uhd.id, bladeRunner, "no-video", 3),
+          skipped(elsewhere.id, "Heat (1995)/Heat.mkv", "unreadable", 5),
+        ]);
+      const failedJob = (runId: string, path: string, minute: number) =>
+        db.insert(jobs).values({
+          type: "scan",
+          payload: { type: "scan", libraryId: library.id, path, runId },
+          state: "failed",
+          error: `ffprobe exited 1\n${path}`,
+          maxAttempts: 3,
+          runAfter: at(minute),
+        });
+
+      const unscanned = await libraryScanStatus(db, admin.id, library.id);
+      expect(unscanned.failures.total).toBe(2);
+      expect(unscanned.failures.items).toEqual([
+        {
+          kind: "file",
+          path: bladeRunner,
+          root: "/srv/4k",
+          reason: "no-video",
+          detail: `${bladeRunner}: Invalid data found when processing input`,
+          at: at(3).toISOString(),
+        },
+        {
+          kind: "file",
+          path: alien,
+          root: "/srv/hq",
+          reason: "unreadable",
+          detail: `${alien}: Invalid data found when processing input`,
+          at: at(1).toISOString(),
+        },
+      ]);
+
+      const first = await scanLibrary(db, admin.id, library.id);
+      await failedJob(first.jobId, "Old (2001)", 4);
+      const second = await scanLibrary(db, admin.id, library.id);
+      await failedJob(second.jobId, "Heat (1995)", 2);
+      const latest = await libraryScanStatus(db, admin.id, library.id);
+      expect(latest.failures.total).toBe(3);
+      expect(latest.failures.items.map((item) => item.path)).toEqual([
+        bladeRunner,
+        "Heat (1995)",
+        alien,
+      ]);
+      expect(latest.failures.items[1]).toEqual({
+        kind: "job",
+        path: "Heat (1995)",
+        root: null,
+        reason: "error",
+        detail: "ffprobe exited 1\nHeat (1995)",
+        at: at(2).toISOString(),
+      });
+      const earlier = await libraryScanStatus(
+        db,
+        admin.id,
+        library.id,
+        first.jobId,
+      );
+      expect(earlier.failures.items.map((item) => item.path)).toEqual([
+        "Old (2001)",
+        bladeRunner,
+        alien,
+      ]);
+
+      await db
+        .insert(scanFailures)
+        .values(
+          Array.from({ length: 120 }, (_, i) =>
+            skipped(hq.id, `Extra ${i}.mkv`, "unreadable", 0),
+          ),
+        );
+      const crowded = await libraryScanStatus(db, admin.id, library.id);
+      expect(crowded.failures.total).toBe(123);
+      expect(crowded.failures.items).toHaveLength(100);
+      expect(
+        crowded.failures.items.slice(0, 3).map((item) => item.path),
+      ).toEqual([bladeRunner, "Heat (1995)", alien]);
+      const isolated = await libraryScanStatus(db, admin.id, other.id);
+      expect(isolated.failures.total).toBe(1);
+      expect(isolated.failures.items.map((item) => item.path)).toEqual([
+        "Heat (1995)/Heat.mkv",
+      ]);
     }));
 
   test("libraryScanStatus rejects unknown ids and non-admin actors", () =>

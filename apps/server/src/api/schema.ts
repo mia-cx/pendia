@@ -355,7 +355,10 @@ export const StoreStatus = Schema.Struct({
   }),
 });
 
-/** The newest scan run's job counts and newest job for one library. */
+/**
+ * The newest scan run's job counts and newest job for one library, plus its
+ * failures: files any scan skipped, and the run's failed scan jobs.
+ */
 export const ScanStatus = Schema.Struct({
   libraryId: Schema.UUID,
   counts: Schema.Struct({
@@ -372,6 +375,23 @@ export const ScanStatus = Schema.Struct({
     }),
   ),
   runId: Schema.NullOr(Schema.UUID),
+  /** Newest first, at most 100 items; `total` counts them all. */
+  failures: Schema.Struct({
+    total: Schema.Int,
+    items: Schema.Array(
+      Schema.Struct({
+        kind: Schema.Literal("file", "job"),
+        /** Root-relative for a file; the job's library-relative folder for a job. */
+        path: Schema.String,
+        /** The root's path for a file; null for a job. */
+        root: Schema.NullOr(Schema.String),
+        reason: Schema.Literal("unreadable", "no-video", "error"),
+        /** The full error text, such as ffprobe's stderr. */
+        detail: Schema.String,
+        at: Schema.String,
+      }),
+    ),
+  }),
 });
 
 /** A cross-process event streamed to subscribed clients. */

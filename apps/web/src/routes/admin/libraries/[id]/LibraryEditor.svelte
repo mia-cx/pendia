@@ -7,6 +7,7 @@ import AdminPage from "$lib/components/admin/AdminPage.svelte";
 import FolderFields from "$lib/components/admin/FolderFields.svelte";
 import FormGroup from "$lib/components/admin/FormGroup.svelte";
 import FormRow from "$lib/components/admin/FormRow.svelte";
+import ScanFailures from "$lib/components/admin/ScanFailures.svelte";
 import ScanState from "$lib/components/admin/ScanState.svelte";
 import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
 import Failure from "$lib/components/Failure.svelte";
@@ -246,6 +247,12 @@ async function deleteLibrary() {
         <FormRow label="Status" inline>
           <ScanState {status} withTime class="items-end @lg:items-start" />
         </FormRow>
+        {#if status && status.failures.total > 0}
+          <ScanFailures
+            failures={status.failures}
+            withRoot={library.data.roots.length > 1}
+          />
+        {/if}
       {/if}
       {#snippet actions()}
         <Button variant="secondary" onclick={scanNow} disabled={scanBusy}

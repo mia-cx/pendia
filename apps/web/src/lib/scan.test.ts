@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { ScanReader, ScanStatus } from "./scan.ts";
 import {
+  failurePath,
+  failureReason,
   type ScanProgress,
   scanPhase,
   scanProgress,
@@ -11,15 +13,18 @@ import {
 
 const libraryId = "11111111-1111-4111-8111-111111111111";
 
+/** A status whose failure total counts its failed jobs plus `skipped` files, as the server's does. */
 function status(
   counts: Partial<ScanStatus["counts"]>,
   latest: ScanStatus["latest"] = null,
+  skipped = 0,
 ): ScanStatus {
   return {
     libraryId,
     counts: { queued: 0, running: 0, completed: 0, failed: 0, ...counts },
     latest,
     runId: null,
+    failures: { total: (counts.failed ?? 0) + skipped, items: [] },
   };
 }
 
@@ -138,9 +143,12 @@ describe("scanProgress", () => {
 });
 
 describe("scanState", () => {
-  function withLatest(counts: Partial<ScanStatus["counts"]>): ScanStatus {
+  function withLatest(
+    counts: Partial<ScanStatus["counts"]>,
+    skipped = 0,
+  ): ScanStatus {
     return {
-      ...status(counts),
+      ...status(counts, null, skipped),
       latest: { id: libraryId, state: "completed", error: null },
     };
   }
@@ -183,11 +191,69 @@ describe("scanState", () => {
     );
   });
 
+  test("skipped files count as errors beside failed jobs", () => {
+    expect(scanState(withLatest({ completed: 3 }, 2))).toEqual({
+      label: "Scanned with 2 errors",
+      tone: "error",
+    });
+    expect(scanState(withLatest({ completed: 3, failed: 1 }, 2)).label).toBe(
+      "Scanned with 3 errors",
+    );
+    expect(scanState(withLatest({ failed: 1 }, 2)).label).toBe("Scan failed");
+  });
+
   test("a clean scan reads Scanned", () => {
     expect(scanState(withLatest({ completed: 9 }))).toEqual({
       label: "Scanned",
       tone: "done",
     });
+  });
+});
+
+describe("failureReason", () => {
+  test("skipped files read a fixed phrase", () => {
+    expect(failureReason({ reason: "unreadable", detail: "moov atom" })).toBe(
+      "File is empty or corrupt",
+    );
+    expect(failureReason({ reason: "no-video", detail: "" })).toBe(
+      "No video stream",
+    );
+  });
+
+  test("a job error reads its first line", () => {
+    expect(
+      failureReason({
+        reason: "error",
+        detail: "\n  permission denied on /srv/movies \nstack trace",
+      }),
+    ).toBe("permission denied on /srv/movies");
+    expect(failureReason({ reason: "error", detail: " \n" })).toBe(
+      "Unknown error",
+    );
+  });
+
+  test("a long job error is trimmed to 120 characters", () => {
+    const reason = failureReason({ reason: "error", detail: "x".repeat(300) });
+    expect(reason).toHaveLength(120);
+    expect(reason.endsWith("…")).toBe(true);
+    const fits = "y".repeat(120);
+    expect(failureReason({ reason: "error", detail: fits })).toBe(fits);
+  });
+});
+
+describe("failurePath", () => {
+  const file = { path: "Alien (1979)/Alien.mkv", root: "/srv/movies/hq/" };
+
+  test("leads with the root's folder name only when asked", () => {
+    expect(failurePath(file, true)).toBe("hq/Alien (1979)/Alien.mkv");
+    expect(failurePath(file, false)).toBe("Alien (1979)/Alien.mkv");
+  });
+
+  test("a job keeps its own path, and the run's root job reads Whole library", () => {
+    expect(failurePath({ path: "Heat (1995)", root: null }, true)).toBe(
+      "Heat (1995)",
+    );
+    expect(failurePath({ path: ".", root: null }, true)).toBe("Whole library");
   });
 });
 

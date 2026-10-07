@@ -33,6 +33,7 @@ const ClientProfileInput = Schema.Struct({
   subtitleFormats: bounded(shortString),
   hdr: bounded(Schema.Literal("sdr", "hdr10", "hdr10+", "hlg", "dolby-vision")),
   maxBitrate: Schema.optional(Schema.NullOr(positiveInt)),
+  progressive: Schema.optional(Schema.Boolean),
 });
 
 const streamIndex = Schema.Int.pipe(Schema.nonNegative());
@@ -53,10 +54,22 @@ const RefreshOutput = Schema.Struct({
   sessionId: Schema.NullOr(Schema.UUID),
   url: Schema.NullOr(Schema.String),
   expiresAt: Schema.NullOr(Schema.String),
+  delivery: Schema.NullOr(Schema.Literal("progressive", "hls")),
+});
+
+/** The codecs a progressive stream carries, so a client can build its MSE MIME. */
+const StreamCodecs = Schema.Struct({
+  video: Schema.Struct({
+    codec: Schema.String,
+    profile: Schema.NullOr(Schema.String),
+  }),
+  audio: Schema.NullOr(Schema.Struct({ codec: Schema.String })),
 });
 
 const PlanOutput = Schema.Struct({
   ...RefreshOutput.fields,
+  output: Schema.NullOr(StreamCodecs),
+  subtitleUrl: Schema.NullOr(Schema.String),
   subtitles: Schema.Array(
     Schema.Struct({
       language: Schema.String,

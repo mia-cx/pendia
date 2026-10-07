@@ -413,4 +413,6 @@ export type SessionDecision = (
   | { method: "stored"; selection: ResolvedSelection }
 ) & {
   storedVariantIds?: string[];
+  /** Where the session's media goes; absent means HLS. */
+  delivery?: "progressive" | "hls";
 };

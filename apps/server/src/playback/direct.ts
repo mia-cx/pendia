@@ -38,6 +38,9 @@ export function errorResponse(error: unknown): Response {
     return respond(
       { error: { code: error.code, message: error.message } },
       error.status,
+      error.retryAfterSeconds === undefined
+        ? undefined
+        : { "retry-after": String(error.retryAfterSeconds) },
     );
   console.error(
     JSON.stringify({ level: "error", message: "playback.request.failed" }),

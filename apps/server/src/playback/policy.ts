@@ -15,6 +15,8 @@ export type ClientProfile = {
   subtitleFormats: readonly string[];
   hdr: readonly Hdr[];
   maxBitrate?: number | null;
+  /** The player can take one continuous fMP4 stream fed through Media Source Extensions. */
+  progressive?: boolean;
 };
 
 /** The policy bitrate caps applying to one session, in bits per second. */

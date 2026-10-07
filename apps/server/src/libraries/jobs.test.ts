@@ -15,6 +15,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   events,
+  files,
   items,
   libraries,
   probeCache,
@@ -36,6 +37,7 @@ import {
 } from "./keyframe-index.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
 import { insertLibraries } from "./testing.ts";
+import { twoRungPolicy } from "../stored/testing.ts";
 
 /** An ffprobe plus index read, like a watcher-reported probe carries. */
 const probeWithIndex = async (path: string) => ({
@@ -797,6 +799,49 @@ describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
         const { library, job } = await scannedMovie(db, root);
         await db.delete(libraries).where(eq(libraries.id, library.id));
         await expect(runKeyframeIndexJob(db, job)).resolves.toBeUndefined();
+      });
+    }));
+
+  test("an index that lands after the scan queues the stored outputs it made eligible", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createKeyframeFixture(join(root, path));
+        const library = await insertLibrary(
+          db,
+          "Movies",
+          root,
+        );
+        await db
+          .update(libraries)
+          .set({ configuration: { storedVersions: twoRungPolicy } })
+          .where(eq(libraries.id, library.id));
+        await scanDirectory(db, library.id, folder);
+        // bestSources needs an aligned timeline, so no store job exists yet.
+        expect(
+          (await listJobs(db)).some(
+            (row) =>
+              row.type === "store" &&
+              (row.payload as { sourceFileId?: string }).sourceFileId !==
+                undefined,
+          ),
+        ).toBe(false);
+        await runKeyframeIndexJob(db, {
+          type: "keyframe-index",
+          libraryId: library.id,
+          rootId: library.rootId,
+          path,
+        });
+        const [file] = await db.select().from(files);
+        expect(
+          (await listJobs(db)).filter(
+            (row) =>
+              row.type === "store" &&
+              (row.payload as { sourceFileId?: string }).sourceFileId ===
+                file?.id,
+          ),
+        ).not.toHaveLength(0);
       });
     }));
 

@@ -18,6 +18,7 @@ import {
   items,
   libraries,
   libraryRoots,
+  probeCache,
   providerIds,
   type ScanChange,
   seasons,
@@ -206,6 +207,33 @@ async function confirmScopeEmpty(
     }
     throw error;
   }
+}
+
+/**
+ * The index state a Version write carries: the probe-cache row re-read inside
+ * the write transaction, under the same Library lock the keyframe-index job
+ * holds. An index that landed between the probe and the write is kept; a
+ * changed file's fresh cache row has none, so it stays pending.
+ */
+async function versionIndexState(
+  tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
+  member: ProbedRootedFile,
+): Promise<{ keyframesSeconds: number[] | null; lazyIndexPending: boolean }> {
+  const [entry] = await tx
+    .select({ result: probeCache.result })
+    .from(probeCache)
+    .where(
+      and(
+        eq(probeCache.rootId, member.rootId),
+        eq(probeCache.path, member.path),
+      ),
+    );
+  const keyframesSeconds =
+    entry?.result.keyframesSeconds ?? member.probe.keyframesSeconds;
+  return {
+    keyframesSeconds: keyframesSeconds ?? null,
+    lazyIndexPending: keyframesSeconds === undefined,
+  };
 }
 
 /** Reads a Library's roots on the local disk through the walker and the persistent probe cache. */
@@ -965,8 +993,7 @@ export async function scanDirectory(
               label,
               bytes: member.bytes,
               durationSeconds: member.probe.durationSeconds,
-              keyframesSeconds: member.probe.keyframesSeconds ?? null,
-              lazyIndexPending: member.probe.keyframesSeconds === undefined,
+              ...(await versionIndexState(tx, member)),
             })
             .where(eq(versions.id, versionId));
           await tx
@@ -990,8 +1017,7 @@ export async function scanDirectory(
               format: "video",
               bytes: member.bytes,
               durationSeconds: member.probe.durationSeconds,
-              keyframesSeconds: member.probe.keyframesSeconds ?? null,
-              lazyIndexPending: member.probe.keyframesSeconds === undefined,
+              ...(await versionIndexState(tx, member)),
             })
             .returning();
           if (!version) {
@@ -1022,7 +1048,7 @@ export async function scanDirectory(
         versionIds.push(versionId);
         await upsertFileStreams(tx, versionId, fileId, member.probe);
         // The keyframe index arrives from its own job after the scan.
-        if (member.probe.keyframesSeconds === undefined)
+        if ((await versionIndexState(tx, member)).lazyIndexPending)
           await queueKeyframeIndex(tx, {
             libraryId,
             rootId: member.rootId,
@@ -1429,15 +1455,13 @@ export async function scanShowDirectory(
             const first = members[0];
             if (!first) throw new Error("Show Version has no Files.");
             const label = videoVersionLabel(first.path, first.probe);
-            // Each split File has its own index, so only a lone File indexes the Version.
-            const indexFor = (fileCount: number) => {
-              const keyframesSeconds =
-                fileCount === 1 ? (first.probe.keyframesSeconds ?? null) : null;
-              return {
-                keyframesSeconds,
-                lazyIndexPending:
-                  fileCount === 1 && first.probe.keyframesSeconds === undefined,
-              };
+            // Each split File has its own index, so only a lone File indexes
+            // the Version. The cache re-read keeps an index that landed
+            // between this scan's probe and its write.
+            const indexFor = async (fileCount: number) => {
+              if (fileCount !== 1)
+                return { keyframesSeconds: null, lazyIndexPending: false };
+              return versionIndexState(tx, first);
             };
 
             const existingFiles = await tx
@@ -1498,7 +1522,7 @@ export async function scanShowDirectory(
                   label,
                   bytes,
                   durationSeconds,
-                  ...indexFor(members.length + retained),
+                  ...(await indexFor(members.length + retained)),
                 })
                 .where(eq(versions.id, versionId));
             } else {
@@ -1512,7 +1536,7 @@ export async function scanShowDirectory(
                   format: "video",
                   bytes,
                   durationSeconds,
-                  ...indexFor(members.length),
+                  ...(await indexFor(members.length)),
                 })
                 .returning();
               if (!version) {
@@ -1523,7 +1547,7 @@ export async function scanShowDirectory(
             versionIds.push(versionId);
             if (
               members.length + retained === 1 &&
-              first.probe.keyframesSeconds === undefined
+              (await indexFor(members.length + retained)).lazyIndexPending
             )
               await queueKeyframeIndex(tx, {
                 libraryId,

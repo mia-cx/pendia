@@ -35,7 +35,12 @@ import {
   keyframesConcurrencyKey,
   runKeyframeIndexJob,
 } from "./keyframe-index.ts";
-import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import {
+  libraryScanSource,
+  scanDirectory,
+  scanShowDirectory,
+} from "./scan.ts";
+import type { RootedPath } from "./roots.ts";
 import { insertLibraries } from "./testing.ts";
 import { twoRungPolicy } from "../stored/testing.ts";
 
@@ -799,6 +804,34 @@ describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
         const { library, job } = await scannedMovie(db, root);
         await db.delete(libraries).where(eq(libraries.id, library.id));
         await expect(runKeyframeIndexJob(db, job)).resolves.toBeUndefined();
+      });
+    }));
+
+  test("a rescan keeps an index that landed after its probe", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { library, version, job } = await scannedMovie(db, root);
+        // A rescan whose cache read predates the index job's commit: the
+        // write must take the index state from the cache row, not the stale
+        // probe snapshot.
+        const base = await libraryScanSource(db, library);
+        await scanDirectory(db, library.id, folder, {
+          source: {
+            ...base,
+            probe: async (file: RootedPath) => {
+              const member = await base.probe(file);
+              await runKeyframeIndexJob(db, job);
+              return member;
+            },
+          },
+        });
+        const [after] = await db.select().from(versions);
+        expect(after).toMatchObject({
+          id: version.id,
+          keyframesSeconds: [0, 2, 4, 6, 8, 10],
+          lazyIndexPending: false,
+        });
       });
     }));
 

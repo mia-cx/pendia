@@ -48,11 +48,6 @@ export const ladder = [
   { name: "240p", bitrate: 300_000, width: 426, height: 240 },
 ] as const;
 
-/** Returns the first rung at or under the cap; undefined when the cap is below every rung. */
-export function selectLadderRung(cap: number | null) {
-  return ladder.find((rung) => cap === null || rung.bitrate <= cap);
-}
-
 type LevelBound = readonly [
   level: number,
   maxPicture: number,

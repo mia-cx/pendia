@@ -10,7 +10,6 @@ import {
   outputFrameRateLimit,
   type PlaybackCaps,
   selectBackend,
-  selectLadderRung,
 } from "./policy.ts";
 
 describe("effectiveCap", () => {
@@ -73,7 +72,7 @@ describe("effectiveCap", () => {
   });
 });
 
-describe("selectLadderRung", () => {
+describe("ladder", () => {
   test("ladder holds six named rates and bounding boxes", () => {
     expect(ladder).toEqual([
       { name: "2160p", bitrate: 25_000_000, width: 3840, height: 2160 },
@@ -83,34 +82,6 @@ describe("selectLadderRung", () => {
       { name: "360p", bitrate: 800_000, width: 640, height: 360 },
       { name: "240p", bitrate: 300_000, width: 426, height: 240 },
     ]);
-  });
-
-  test("returns the top rung when uncapped", () => {
-    expect(selectLadderRung(null)).toEqual({
-      name: "2160p",
-      bitrate: 25_000_000,
-      width: 3840,
-      height: 2160,
-    });
-  });
-
-  const caps: [number, (typeof ladder)[number]["name"] | undefined][] = [
-    [25_000_000, "2160p"],
-    [24_999_999, "1080p"],
-    [8_000_000, "1080p"],
-    [7_999_999, "720p"],
-    [4_000_000, "720p"],
-    [3_999_999, "480p"],
-    [2_000_000, "480p"],
-    [1_999_999, "360p"],
-    [800_000, "360p"],
-    [799_999, "240p"],
-    [500_000, "240p"],
-    [300_000, "240p"],
-    [299_999, undefined],
-  ];
-  test.each(caps)("cap %i picks the first fitting rung", (cap, expected) => {
-    expect(selectLadderRung(cap)?.name).toBe(expected);
   });
 });
 

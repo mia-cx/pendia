@@ -66,7 +66,7 @@ Thalia owns pre-transcoding, with the quality profile, never the live profile. W
 
 ## Caps and ladder
 
-Global default, per-user override, session request; the lowest wins. Ladder: 25, 8, 4, 2, 0.8 and 0.3 Mbit/s, resolution following. One live transcode rendition per session.
+Global default, per-user override, session request; the lowest wins. On the LAN only the session request applies. Ladder: 25, 8, 4, 2, 0.8 and 0.3 Mbit/s, resolution following. One live transcode rendition per session.
 
 ## Hardware
 

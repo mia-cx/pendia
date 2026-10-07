@@ -3,7 +3,10 @@ import { drizzle } from "drizzle-orm/bun-sql";
 import * as schema from "./schema/index.ts";
 
 /** Creates a lazy Postgres client and its close operation. */
-export function createDatabase(databaseUrl = process.env.DATABASE_URL) {
+export function createDatabase(
+  databaseUrl = process.env.DATABASE_URL,
+  options: { max?: number } = {},
+) {
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required.");
   }
@@ -23,7 +26,9 @@ export function createDatabase(databaseUrl = process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL must name a Postgres host and database.");
   }
 
-  const client = new SQL(databaseUrl, { bigint: true });
+  // Test pools stay small: --parallel runs many files against one Postgres.
+  const max = options.max ?? (process.env.NODE_ENV === "test" ? 3 : undefined);
+  const client = new SQL(databaseUrl, { max, bigint: true });
   return {
     db: drizzle({ client, schema }),
     close: () => client.close(),

@@ -6,7 +6,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { startApiServer } from "../api.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
-import { type Database, probeDatabase } from "./client.ts";
+import { createDatabase, type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import {
   artwork,
@@ -176,66 +176,72 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
     }));
 
   test("migrates an empty database once and preserves the second run", () =>
-    withDatabase(async (db) => {
-      await migrateDatabase(db);
-      const before = await migrationState(db);
-      expect(before.journal).toHaveLength(18);
-      expect(before.tables).toHaveLength(36);
-      expect(before.extensions).toEqual([
-        { extname: "btree_gist" },
-        { extname: "pg_trgm" },
-      ]);
-      expect(before.groups).toMatchObject([
-        { name: "admins", builtIn: true, permissions: [...permissions] },
-        { name: "users", builtIn: true, permissions: ["view", "play"] },
-      ]);
-      expect(
-        Array.from(
-          await db.execute(
-            sql`select column_default from information_schema.columns where table_schema = 'public' and table_name = 'items' and column_name = 'metadata_state'`,
+    withDatabase(
+      async (db) => {
+        await migrateDatabase(db);
+        const before = await migrationState(db);
+        expect(before.journal).toHaveLength(18);
+        expect(before.tables).toHaveLength(36);
+        expect(before.extensions).toEqual([
+          { extname: "btree_gist" },
+          { extname: "pg_trgm" },
+        ]);
+        expect(before.groups).toMatchObject([
+          { name: "admins", builtIn: true, permissions: [...permissions] },
+          { name: "users", builtIn: true, permissions: ["view", "play"] },
+        ]);
+        expect(
+          Array.from(
+            await db.execute(
+              sql`select column_default from information_schema.columns where table_schema = 'public' and table_name = 'items' and column_name = 'metadata_state'`,
+            ),
           ),
-        ),
-      ).toEqual([{ column_default: "'pending'::metadata_state" }]);
-      await migrateDatabase(db);
-      expect(await migrationState(db)).toEqual(before);
-    }));
+        ).toEqual([{ column_default: "'pending'::metadata_state" }]);
+        await migrateDatabase(db);
+        expect(await migrationState(db)).toEqual(before);
+      },
+      { empty: true },
+    ));
 
   test(
     "two runner processes race and apply one migration set",
     () =>
-      withDatabase(async (db, url) => {
-        const runners = Array.from({ length: 2 }, () =>
-          Bun.spawn({
-            cmd: [
-              process.execPath,
-              new URL("./migrate.ts", import.meta.url).pathname,
-            ],
-            env: { ...process.env, DATABASE_URL: url },
-            stdout: "pipe",
-            stderr: "pipe",
-            timeout: 10_000,
-          }),
-        );
-        try {
-          const results = await Promise.all(
-            runners.map(async (runner) => ({
-              code: await runner.exited,
-              stderr: await new Response(runner.stderr).text(),
-            })),
+      withDatabase(
+        async (db, url) => {
+          const runners = Array.from({ length: 2 }, () =>
+            Bun.spawn({
+              cmd: [
+                process.execPath,
+                new URL("./migrate.ts", import.meta.url).pathname,
+              ],
+              env: { ...process.env, DATABASE_URL: url },
+              stdout: "pipe",
+              stderr: "pipe",
+              timeout: 10_000,
+            }),
           );
-          expect(results).toEqual([
-            { code: 0, stderr: "" },
-            { code: 0, stderr: "" },
-          ]);
-          const state = await migrationState(db);
-          expect(state.journal).toHaveLength(18);
-          expect(state.tables).toHaveLength(36);
-          expect(state.groups).toHaveLength(2);
-        } finally {
-          for (const runner of runners) runner.kill();
-          await Promise.all(runners.map((runner) => runner.exited));
-        }
-      }),
+          try {
+            const results = await Promise.all(
+              runners.map(async (runner) => ({
+                code: await runner.exited,
+                stderr: await new Response(runner.stderr).text(),
+              })),
+            );
+            expect(results).toEqual([
+              { code: 0, stderr: "" },
+              { code: 0, stderr: "" },
+            ]);
+            const state = await migrationState(db);
+            expect(state.journal).toHaveLength(18);
+            expect(state.tables).toHaveLength(36);
+            expect(state.groups).toHaveLength(2);
+          } finally {
+            for (const runner of runners) runner.kill();
+            await Promise.all(runners.map((runner) => runner.exited));
+          }
+        },
+        { empty: true },
+      ),
     15_000,
   );
 
@@ -995,4 +1001,38 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       expect(await db.select().from(sessions)).toEqual([]);
       expect(await db.select().from(favourites)).toEqual([]);
     }));
+
+  // Drops are fire-and-forget after a test's database closes; the flush hook
+  // at the module's top level waits for all of them when the file ends. Two
+  // tests create databases, a third proves both disappeared — an afterAll
+  // registered mid-test would fire early and leak the second.
+  const createdNames: string[] = [];
+  const rememberDatabase = async (_db: Database, url: string) => {
+    createdNames.push(new URL(url).pathname.slice(1));
+  };
+  test("a first test's database", async () => {
+    await withDatabase(rememberDatabase);
+  });
+  test("a second test's database", async () => {
+    await withDatabase(rememberDatabase);
+  });
+  test("drops the databases both tests created", async () => {
+    expect(createdNames).toHaveLength(2);
+    const admin = createDatabase(databaseUrl);
+    try {
+      const deadline = Date.now() + 10_000;
+      let left = createdNames.length;
+      while (left > 0 && Date.now() < deadline) {
+        const list = createdNames.map((name) => `'${name}'`).join(",");
+        const rows = await admin.db.execute(
+          sql.raw(`select datname from pg_database where datname in (${list})`),
+        );
+        left = rows.length;
+        if (left > 0) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(left).toBe(0);
+    } finally {
+      await admin.close();
+    }
+  });
 });

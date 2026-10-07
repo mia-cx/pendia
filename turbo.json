@@ -15,7 +15,12 @@
     "lint": {},
     "test": {
       "cache": false,
-      "passThroughEnv": ["DATABASE_URL", "CI"],
+      "passThroughEnv": [
+        "DATABASE_URL",
+        "TEST_S3_URL",
+        "CI",
+        "THALIA_TEST_WORKERS"
+      ],
       "dependsOn": ["build"]
     }
   }

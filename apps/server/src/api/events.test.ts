@@ -296,51 +296,57 @@ describe.skipIf(!databaseUrl)("api events", () => {
       }
     }));
 
-  test("a reconnect with Last-Event-ID replays the missed events in order", () =>
-    withDatabase(async (db, url) => {
-      await migrateDatabase(db);
-      const { token } = await seed(db);
-      const server = await startThalia("api", { databaseUrl: url, port: 0 });
-      try {
-        const base = `http://127.0.0.1:${server.apiServer?.port}`;
-        const first = await openEvents(base, token);
-        let lastId: string;
+  test(
+    "a reconnect with Last-Event-ID replays the missed events in order",
+    () =>
+      withDatabase(async (db, url) => {
+        await migrateDatabase(db);
+        const { token } = await seed(db);
+        const server = await startThalia("api", { databaseUrl: url, port: 0 });
         try {
-          await park(db, first);
-          const firstEvent: Event = {
-            kind: "segment.ready",
-            sessionId: Bun.randomUUIDv7(),
-            index: 1,
-          };
-          const want = first.frames.length + 1;
-          await publishEvent(db, firstEvent);
-          await first.waitFor(want, 3_000);
-          const frame = first.frames.at(-1);
-          expect(JSON.parse(frame?.data ?? "")).toEqual(firstEvent);
-          if (frame?.id === undefined)
-            throw new Error("The frame carries no event id.");
-          lastId = frame.id;
+          const base = `http://127.0.0.1:${server.apiServer?.port}`;
+          const first = await openEvents(base, token);
+          let lastId: string;
+          try {
+            await park(db, first);
+            const firstEvent: Event = {
+              kind: "segment.ready",
+              sessionId: Bun.randomUUIDv7(),
+              index: 1,
+            };
+            const want = first.frames.length + 1;
+            await publishEvent(db, firstEvent);
+            await first.waitFor(want, 3_000);
+            const frame = first.frames.at(-1);
+            expect(JSON.parse(frame?.data ?? "")).toEqual(firstEvent);
+            if (frame?.id === undefined)
+              throw new Error("The frame carries no event id.");
+            lastId = frame.id;
+          } finally {
+            await first.close();
+          }
+          const missed: Event[] = [
+            { kind: "segment.ready", sessionId: Bun.randomUUIDv7(), index: 2 },
+            { kind: "segment.ready", sessionId: Bun.randomUUIDv7(), index: 3 },
+          ];
+          for (const event of missed) await publishEvent(db, event);
+          const resumed = await openEvents(base, token, lastId);
+          try {
+            const frames = await resumed.waitFor(2, 3_000);
+            expect(frames.map((frame) => JSON.parse(frame.data))).toEqual(
+              missed,
+            );
+            const ids = frames.map((frame) => BigInt(frame.id ?? "0"));
+            expect(ids[0] ?? 0n).toBeLessThan(ids[1] ?? 0n);
+          } finally {
+            await resumed.close();
+          }
         } finally {
-          await first.close();
+          await server.stop();
         }
-        const missed: Event[] = [
-          { kind: "segment.ready", sessionId: Bun.randomUUIDv7(), index: 2 },
-          { kind: "segment.ready", sessionId: Bun.randomUUIDv7(), index: 3 },
-        ];
-        for (const event of missed) await publishEvent(db, event);
-        const resumed = await openEvents(base, token, lastId);
-        try {
-          const frames = await resumed.waitFor(2, 3_000);
-          expect(frames.map((frame) => JSON.parse(frame.data))).toEqual(missed);
-          const ids = frames.map((frame) => BigInt(frame.id ?? "0"));
-          expect(ids[0] ?? 0n).toBeLessThan(ids[1] ?? 0n);
-        } finally {
-          await resumed.close();
-        }
-      } finally {
-        await server.stop();
-      }
-    }));
+      }),
+    20_000,
+  );
 
   test("a stream without Last-Event-ID only sees events from now", () =>
     withDatabase(async (db, url) => {

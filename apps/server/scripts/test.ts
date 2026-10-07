@@ -4,6 +4,8 @@
  * under spawn/postgres load), so sharding files across real processes does the
  * same job reliably. File args pass straight through to a single `bun test`.
  */
+import { availableParallelism } from "node:os";
+
 const args = process.argv.slice(2);
 
 if (args.length > 0) {
@@ -15,7 +17,13 @@ if (args.length > 0) {
   process.exit(await child.exited);
 }
 
-const workers = Number(process.env.THALIA_TEST_WORKERS ?? 8) || 8;
+// Each worker also runs multithreaded ffmpeg processes; leave CPU headroom.
+const defaultWorkers = Math.min(
+  8,
+  Math.max(1, Math.floor(availableParallelism() / 2)),
+);
+const workers =
+  Number(process.env.THALIA_TEST_WORKERS ?? defaultWorkers) || defaultWorkers;
 
 const glob = new Bun.Glob("src/**/*.test.ts");
 const files: string[] = [];
@@ -39,15 +47,17 @@ const procs = shards
     }),
   );
 
-let failed = false;
-for (const proc of procs) {
-  const [out, err, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  process.stdout.write(out);
-  process.stderr.write(err);
-  if (code !== 0) failed = true;
-}
-process.exit(failed ? 1 : 0);
+// Drain every child immediately so a full pipe cannot stall a later shard.
+const codes = await Promise.all(
+  procs.map(async (proc) => {
+    const [out, err, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    process.stdout.write(out);
+    process.stderr.write(err);
+    return code;
+  }),
+);
+process.exit(codes.some((code) => code !== 0) ? 1 : 0);

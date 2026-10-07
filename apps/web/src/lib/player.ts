@@ -21,6 +21,8 @@ export type PlaybackOptions = {
   paused?: boolean;
   /** The audio and subtitle Streams to play; the server picks what is absent. */
   streams: StreamChoice;
+  /** The quality menu's choice: `"auto"`, `"original"` or a rung name. */
+  quality: string;
   onNotice: (notice: PlayerNotice) => void;
   /** Receives the Version's Streams and the ones the session plays. */
   onTracks: (tracks: PlannedTracks) => void;
@@ -39,6 +41,7 @@ export type PlannedTracks = Pick<
   | "subtitleStreams"
   | "audioStreamIndex"
   | "subtitleStreamIndex"
+  | "quality"
 >;
 
 const heartbeatMs = 10_000;
@@ -285,6 +288,7 @@ export function play(options: PlaybackOptions) {
         itemId,
         versionId,
         profile: browserProfile(),
+        quality: options.quality,
         ...options.streams,
       });
     } catch (error) {
@@ -336,6 +340,25 @@ export function play(options: PlaybackOptions) {
   const opened = open();
 
   return {
+    /** Caps ABR at the highest level whose URL names one of the variant ids; null clears. False without hls.js or a matching level. */
+    capLevels(variantIds: readonly string[] | null): boolean {
+      if (hls === undefined) return false;
+      if (variantIds === null) {
+        hls.autoLevelCapping = -1;
+        return true;
+      }
+      const top = hls.levels.reduce(
+        (highest, level, index) =>
+          level.url.some((url) => variantIds.some((id) => url.includes(id)))
+            ? index
+            : highest,
+        -1,
+      );
+      if (top < 0) return false;
+      hls.autoLevelCapping = top;
+      if (hls.currentLevel > top) hls.nextLevel = top;
+      return true;
+    },
     /** Stops the session with its last position and releases the video element. Safe to call twice. */
     close(): Promise<void> {
       closing ??= (async () => {

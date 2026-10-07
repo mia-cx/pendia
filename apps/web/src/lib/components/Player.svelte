@@ -15,6 +15,7 @@ import { onDestroy, untrack } from "svelte";
 import { afterNavigate, replaceState } from "$app/navigation";
 import { page } from "$app/state";
 import { client } from "$lib/api.ts";
+import { createBoost } from "$lib/audio-boost.ts";
 import { episodeCode, itemHref } from "$lib/browse.ts";
 import Failure from "$lib/components/Failure.svelte";
 import PlayerSettings from "$lib/components/PlayerSettings.svelte";
@@ -23,6 +24,7 @@ import { Button } from "$lib/components/ui/button/index.ts";
 import * as Slider from "$lib/components/ui/slider/index.ts";
 import { formatPosition, pickVersion } from "$lib/playback.ts";
 import { play } from "$lib/player.ts";
+import { playerPrefs } from "$lib/player-prefs.ts";
 import { createPlayer, type PlayerState } from "$lib/player-state.ts";
 import { resource } from "$lib/resource.svelte.ts";
 import { cn } from "$lib/utils.ts";
@@ -110,10 +112,13 @@ $effect(() => {
             )?.durationSeconds ?? null,
           startAt: request.startAt,
           streams: request.streams,
+          quality: request.quality,
           paused: request.paused,
           onNotice: request.onNotice,
           onTracks: request.onTracks,
         }),
+      prefs: playerPrefs,
+      amplify: createBoost(media),
     }),
   );
 });

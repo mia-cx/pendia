@@ -1,5 +1,6 @@
 import { type Readable, writable } from "svelte/store";
 import type { PlannedTracks, PlayerNotice, StreamChoice } from "./player.ts";
+import type { PrefsStore } from "./player-prefs.ts";
 
 /** The parts of a video element the player reads and drives; an HTMLVideoElement fits. */
 export type Media = Pick<
@@ -12,6 +13,11 @@ export type Media = Pick<
   readonly ended: boolean;
   volume: number;
   muted: boolean;
+  playbackRate: number;
+  defaultPlaybackRate: number;
+  preservesPitch: boolean;
+  readonly videoWidth: number;
+  readonly videoHeight: number;
   readonly buffered: {
     readonly length: number;
     start(index: number): number;
@@ -27,16 +33,23 @@ export type SessionRequest = {
   /** Seconds; null resumes where the viewer left off. */
   startAt: number | null;
   streams: StreamChoice;
+  /** The quality menu's choice sent to the plan. */
+  quality: string;
   /** Load without starting playback, so a paused viewer stays paused across a switch. */
   paused: boolean;
   onNotice: (notice: PlayerNotice) => void;
   onTracks: (tracks: PlannedTracks) => void;
 };
 
-/** Opens a session on the media; the browser passes `play` from player.ts. */
-export type OpenSession = (request: SessionRequest) => {
+/** One opened playback session. */
+export type Session = {
   close(): Promise<void>;
+  /** Caps ABR within the session's stored variants without a replan; null clears. */
+  capLevels?(variantIds: readonly string[] | null): boolean;
 };
+
+/** Opens a session on the media; the browser passes `play` from player.ts. */
+export type OpenSession = (request: SessionRequest) => Session;
 
 /** Why the controls stay up regardless of stillness. */
 export type Hold = "menu" | "focus" | "pointer";
@@ -58,6 +71,14 @@ export type PlayerState = {
   /** A restart or Version switch is in flight; menus disable. */
   switching: boolean;
   notice: PlayerNotice | undefined;
+  /** The quality menu's choice. */
+  quality: string;
+  /** The playing frame size, from the media's metadata; null before it loads. */
+  videoSize: { width: number; height: number } | null;
+  /** The playback rate the viewer picked. */
+  speed: number;
+  /** The extra gain applied over unity; 0 is Off. */
+  boost: number;
   /** Whether the controls show. */
   controls: boolean;
 };
@@ -71,6 +92,10 @@ export function createPlayer(options: {
   versionId: string;
   startAt: number | null;
   open: OpenSession;
+  /** Remembers quality, speed and boost on the device. */
+  prefs?: PrefsStore;
+  /** Applies a volume boost as a gain level over unity; 1 is Off. */
+  amplify?: (gain: number) => void;
   /** Stillness before the controls hide; default 3000 ms. */
   hideAfterMs?: number;
   /** Runs `run` after `ms` and returns a cancel; tests pass a manual clock. Default wraps setTimeout. */
@@ -88,6 +113,14 @@ export function createPlayer(options: {
   const initialVersion =
     options.versions.find((version) => version.id === options.versionId) ??
     options.versions[0];
+  const stored = options.prefs?.read();
+  let quality = stored?.quality ?? "auto";
+  let speed = stored?.speed ?? 1;
+  let boost = stored?.boost ?? 0;
+  /** The quality the open session was planned with; a local cap may follow. */
+  let sessionPlanned = quality;
+  /** The current session's levels are capped below the viewer's pick. */
+  let locallyCapped = false;
   const store = writable<PlayerState>({
     versionId: initialVersion?.id ?? options.versionId,
     playing: false,
@@ -101,6 +134,10 @@ export function createPlayer(options: {
     tracks: undefined,
     switching: false,
     notice: undefined,
+    quality,
+    videoSize: null,
+    speed,
+    boost,
     controls: true,
   });
   const state = { subscribe: store.subscribe } satisfies Readable<PlayerState>;
@@ -113,7 +150,7 @@ export function createPlayer(options: {
   let streams: StreamChoice = {};
   /** The subtitle Stream index C toggles back on. */
   let subtitlesOff: number | null = null;
-  let session: { close(): Promise<void> } | undefined;
+  let session: Session | undefined;
   let closed = false;
   let suspended = false;
   let suspendedAt: number | null = null;
@@ -190,10 +227,13 @@ export function createPlayer(options: {
     paused: boolean,
   ) {
     const mine = ++generation;
+    sessionPlanned = quality;
+    locallyCapped = false;
     session = open({
       versionId,
       startAt,
       streams: nextStreams,
+      quality,
       paused,
       onNotice: (notice) => {
         if (mine !== generation) return;
@@ -271,6 +311,26 @@ export function createPlayer(options: {
     ["timeupdate", () => updatePosition(media.currentTime)],
     ["seeked", () => updatePosition(media.currentTime)],
     ["durationchange", () => patch({ duration: readDuration() })],
+    [
+      "loadedmetadata",
+      () =>
+        patch({
+          videoSize:
+            media.videoWidth > 0
+              ? { width: media.videoWidth, height: media.videoHeight }
+              : null,
+        }),
+    ],
+    [
+      "resize",
+      () =>
+        patch({
+          videoSize:
+            media.videoWidth > 0
+              ? { width: media.videoWidth, height: media.videoHeight }
+              : null,
+        }),
+    ],
     ["progress", () => patch({ buffered: readBuffered() })],
     ["volumechange", () => patch({ volume: media.volume, muted: media.muted })],
   ];
@@ -315,6 +375,13 @@ export function createPlayer(options: {
     settleControls();
   }
 
+  const persist = () => options.prefs?.write({ quality, speed, boost });
+
+  // Stored prefs apply to this media and the first session's plan.
+  media.defaultPlaybackRate = speed;
+  media.playbackRate = speed;
+  media.preservesPitch = true;
+  if (boost > 0) options.amplify?.(1 + boost);
   openSession(current.versionId, options.startAt, streams, false);
   settleControls();
 
@@ -395,6 +462,59 @@ export function createPlayer(options: {
       streams = {};
       subtitlesOff = null;
       await restart(id, streams);
+    },
+    /** Picks a quality: caps locally inside a stored session when possible, else replans at the position. */
+    async chooseQuality(choice: string, versionId?: string) {
+      activity();
+      if (current.switching) return;
+      const switchingVersion =
+        versionId !== undefined && versionId !== current.versionId;
+      if (!switchingVersion && sessionPlanned === "auto") {
+        const rung = current.tracks?.quality.rungs.find(
+          (option) => option.name === choice,
+        );
+        const served = current.tracks?.quality.storedVariantIds ?? [];
+        const capped =
+          choice === "auto"
+            ? locallyCapped && (session?.capLevels?.(null) ?? false)
+            : rung?.source === "stored" &&
+              rung.storedVariantIds.every((id) => served.includes(id)) &&
+              (session?.capLevels?.(rung.storedVariantIds) ?? false);
+        if (capped) {
+          locallyCapped = choice !== "auto";
+          quality = choice;
+          persist();
+          patch({ quality: choice });
+          return;
+        }
+      }
+      quality = choice;
+      persist();
+      patch({ quality: choice });
+      if (switchingVersion) {
+        // A different Version brings different Streams; the old ones are invalid.
+        streams = {};
+        subtitlesOff = null;
+      }
+      await restart(versionId ?? current.versionId, streams);
+    },
+    /** Sets the playback rate without a replan; survives session reloads. */
+    setSpeed(rate: number) {
+      activity();
+      speed = rate;
+      persist();
+      media.defaultPlaybackRate = rate;
+      media.playbackRate = rate;
+      media.preservesPitch = true;
+      patch({ speed: rate });
+    },
+    /** Sets the extra volume gain over unity; 0 is Off. */
+    setBoost(level: number) {
+      activity();
+      boost = level;
+      persist();
+      options.amplify?.(1 + level);
+      patch({ boost: level });
     },
     /** Reopens the session at the current position after a notice. */
     async retry() {

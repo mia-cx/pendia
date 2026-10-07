@@ -305,6 +305,34 @@ describe("decidePlayback methods", () => {
 });
 
 describe("decidePlayback video", () => {
+  const sdrOutputCases: [string, string[] | undefined, string | null][] = [
+    ["h264", ["constrainedbaseline", "baseline", "main", "high"], "high"],
+    ["h264", ["high", "main", "baseline", "constrainedbaseline"], "high"],
+    ["h264", ["baseline", "high10", "high", "main"], "high"],
+    ["h264", ["constrainedbaseline", "baseline", "main"], "main"],
+    ["h264", ["constrainedbaseline", "baseline"], "baseline"],
+    ["h264", ["constrainedbaseline"], "constrainedbaseline"],
+    ["h264", undefined, null],
+    ["hevc", ["main10", "main"], "main"],
+  ];
+  test.each(sdrOutputCases)(
+    "selects the best accepted SDR %s profile from %o",
+    (codec, profiles, profile) => {
+      const result = decidePlayback(
+        { ...source, video: { ...source.video, codec: "vp9" } },
+        { ...client, videoCodecs: [{ codec, profiles }] },
+        { isLan: false },
+      );
+      expect(result.video).toMatchObject({
+        action: "transcode",
+        codec,
+        profile,
+        hdr: "sdr",
+        toneMap: null,
+      });
+    },
+  );
+
   test("transcodes an unsupported codec to the best client codec", () => {
     const result = decidePlayback(
       { ...source, video: { ...source.video, codec: "vp9" } },
@@ -488,6 +516,28 @@ describe("decidePlayback video", () => {
       {
         codec: "hevc",
         profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+    [
+      "hevc main10 before main",
+      [{ codec: "hevc", profiles: ["main10", "main"] }],
+      {
+        codec: "hevc",
+        profile: "main10",
+        hdr: "hdr10",
+        toneMap: null,
+        backend: "qsv",
+      },
+    ],
+    [
+      "h264 SDR profiles before high10",
+      [{ codec: "h264", profiles: ["baseline", "main", "high", "high10"] }],
+      {
+        codec: "h264",
+        profile: "high10",
         hdr: "hdr10",
         toneMap: null,
         backend: "qsv",

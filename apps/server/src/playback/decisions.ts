@@ -135,6 +135,22 @@ const hdrProfiles: Readonly<Record<string, readonly string[]>> = {
   vp9: ["2", "3"],
 };
 
+// Prefer compression efficiency for SDR, independently of client list order.
+const sdrProfiles: Readonly<Record<string, readonly string[]>> = {
+  h264: ["high", "main", "baseline", "constrainedbaseline"],
+  hevc: ["main"],
+};
+
+function sdrOutputProfile(candidate: ClientProfile["videoCodecs"][number]) {
+  return (
+    sdrProfiles[candidate.codec]?.find((profile) =>
+      candidate.profiles?.includes(profile),
+    ) ??
+    candidate.profiles?.[0] ??
+    null
+  );
+}
+
 function hdrOutputProfile(candidate: ClientProfile["videoCodecs"][number]) {
   const profiles = hdrProfiles[candidate.codec] ?? [];
   return candidate.profiles === undefined
@@ -222,7 +238,7 @@ function decideVideo(
       profile:
         hdr !== "sdr" && toneMap === null && hdrProfile !== null
           ? hdrProfile
-          : (candidate.profiles?.[0] ?? null),
+          : sdrOutputProfile(candidate),
       level: candidate.maxLevel ?? null,
       maxFrameRate,
       width,

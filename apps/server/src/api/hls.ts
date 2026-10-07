@@ -214,11 +214,6 @@ export function createHlsHandler(db: Database, local?: Transcoder) {
           404,
         );
       }
-      if (hls === null)
-        return respond(
-          { error: { code: "NOT_FOUND", message: "Not found." } },
-          404,
-        );
       if (progressive) {
         const ownerId =
           session.transcoderNodeId ??
@@ -265,6 +260,12 @@ export function createHlsHandler(db: Database, local?: Transcoder) {
           request,
         );
       }
+      // Progressive paths returned above; what is left is an HLS request.
+      if (hls === null)
+        return respond(
+          { error: { code: "NOT_FOUND", message: "Not found." } },
+          404,
+        );
       // Stored rungs live on the library share, which the api reads itself.
       // Their subtitles do not: those come from the transcoder like a live
       // session's, so subtitle requests fall through to it.

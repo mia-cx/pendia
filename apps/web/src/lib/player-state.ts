@@ -262,6 +262,15 @@ export function createPlayer(options: {
     patch({ position: time });
   }
 
+  function readSize() {
+    patch({
+      videoSize:
+        media.videoWidth > 0
+          ? { width: media.videoWidth, height: media.videoHeight }
+          : null,
+    });
+  }
+
   const listeners: [string, () => void][] = [
     [
       "play",
@@ -311,26 +320,8 @@ export function createPlayer(options: {
     ["timeupdate", () => updatePosition(media.currentTime)],
     ["seeked", () => updatePosition(media.currentTime)],
     ["durationchange", () => patch({ duration: readDuration() })],
-    [
-      "loadedmetadata",
-      () =>
-        patch({
-          videoSize:
-            media.videoWidth > 0
-              ? { width: media.videoWidth, height: media.videoHeight }
-              : null,
-        }),
-    ],
-    [
-      "resize",
-      () =>
-        patch({
-          videoSize:
-            media.videoWidth > 0
-              ? { width: media.videoWidth, height: media.videoHeight }
-              : null,
-        }),
-    ],
+    ["loadedmetadata", readSize],
+    ["resize", readSize],
     ["progress", () => patch({ buffered: readBuffered() })],
     ["volumechange", () => patch({ volume: media.volume, muted: media.muted })],
   ];

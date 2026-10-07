@@ -66,6 +66,60 @@ export async function startTranscoder(
   let nodeId: string | null = null;
   let stopping: Promise<void> | undefined;
 
+  /** The checks every session route shares: method, token auth and node ownership. */
+  const authenticateSession = async (
+    request: Request,
+    url: URL,
+    scope: { sessionId: string; itemId: string },
+  ): Promise<
+    | {
+        userId: string;
+        session: Awaited<ReturnType<typeof authorizeHlsRequest>>["session"];
+      }
+    | Response
+  > => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return Response.json(
+        {
+          error: { code: "METHOD_NOT_ALLOWED", message: "Method not allowed." },
+        },
+        {
+          status: 405,
+          headers: { ...standardHeaders, allow: "GET, HEAD" },
+        },
+      );
+    }
+    const { userId, session } = await authorizeHlsRequest(db, url, scope);
+    if (session.transcoderNodeId !== nodeId) {
+      // The drain released this node's sessions; a request already on its
+      // way here retries through the api, which assigns a live node.
+      if (stopping !== undefined) {
+        return Response.json(
+          {
+            error: {
+              code: "TRANSCODER_STOPPING",
+              message: "The transcoder is stopping.",
+            },
+          },
+          {
+            status: 503,
+            headers: { ...standardHeaders, "retry-after": "1" },
+          },
+        );
+      }
+      return Response.json(
+        {
+          error: {
+            code: "CONFLICT",
+            message: "Session belongs to another transcoder.",
+          },
+        },
+        { status: 409, headers: standardHeaders },
+      );
+    }
+    return { userId, session };
+  };
+
   const server = Bun.serve({
     port,
     async fetch(request, server) {
@@ -101,27 +155,15 @@ export async function startTranscoder(
           : null;
       if (streamPath !== null || subtitlePath !== null) {
         try {
-          if (request.method !== "GET" && request.method !== "HEAD") {
-            return Response.json(
-              {
-                error: {
-                  code: "METHOD_NOT_ALLOWED",
-                  message: "Method not allowed.",
-                },
-              },
-              {
-                status: 405,
-                headers: { ...standardHeaders, allow: "GET, HEAD" },
-              },
-            );
-          }
           // A paused viewer leaves the stream open and idle for minutes.
           server.timeout(request, 0);
           const scope = {
             sessionId: (streamPath ?? subtitlePath)?.[1] ?? "",
             itemId: (streamPath ?? subtitlePath)?.[2] ?? "",
           };
-          const { userId, session } = await authorizeHlsRequest(db, url, scope);
+          const authed = await authenticateSession(request, url, scope);
+          if (authed instanceof Response) return authed;
+          const { userId, session } = authed;
           if (session.decision?.delivery !== "progressive") {
             return Response.json(
               {
@@ -131,31 +173,6 @@ export async function startTranscoder(
                 },
               },
               { status: 404, headers: standardHeaders },
-            );
-          }
-          if (session.transcoderNodeId !== nodeId) {
-            if (stopping !== undefined) {
-              return Response.json(
-                {
-                  error: {
-                    code: "TRANSCODER_STOPPING",
-                    message: "The transcoder is stopping.",
-                  },
-                },
-                {
-                  status: 503,
-                  headers: { ...standardHeaders, "retry-after": "1" },
-                },
-              );
-            }
-            return Response.json(
-              {
-                error: {
-                  code: "CONFLICT",
-                  message: "Session belongs to another transcoder.",
-                },
-              },
-              { status: 409, headers: standardHeaders },
             );
           }
           const streamScope = {
@@ -186,53 +203,14 @@ export async function startTranscoder(
         );
       }
       try {
-        if (request.method !== "GET" && request.method !== "HEAD") {
-          return Response.json(
-            {
-              error: {
-                code: "METHOD_NOT_ALLOWED",
-                message: "Method not allowed.",
-              },
-            },
-            {
-              status: 405,
-              headers: { ...standardHeaders, allow: "GET, HEAD" },
-            },
-          );
-        }
         // A segment wait can outlive Bun's default ten second idle timeout.
         server.timeout(request, 30);
-        const { userId, session } = await authorizeHlsRequest(db, url, {
+        const authed = await authenticateSession(request, url, {
           sessionId: hls.sessionId,
           itemId: hls.itemId,
         });
-        if (session.transcoderNodeId !== nodeId) {
-          // The drain released this node's sessions; a request already on its
-          // way here retries through the api, which assigns a live node.
-          if (stopping !== undefined) {
-            return Response.json(
-              {
-                error: {
-                  code: "TRANSCODER_STOPPING",
-                  message: "The transcoder is stopping.",
-                },
-              },
-              {
-                status: 503,
-                headers: { ...standardHeaders, "retry-after": "1" },
-              },
-            );
-          }
-          return Response.json(
-            {
-              error: {
-                code: "CONFLICT",
-                message: "Session belongs to another transcoder.",
-              },
-            },
-            { status: 409, headers: standardHeaders },
-          );
-        }
+        if (authed instanceof Response) return authed;
+        const { userId, session } = authed;
         return await sessions.serve(
           {
             sessionId: hls.sessionId,

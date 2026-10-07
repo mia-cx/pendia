@@ -194,9 +194,9 @@ async function back() {
         closeOnSelect
         disabled={option.disabled === true || playerState.switching}
       >
-        {option.label}
+        <span class="shrink-0">{option.label}</span>
         {#if option.detail}
-          <span class="ml-auto shrink-0 whitespace-nowrap text-footnote text-label-secondary">{option.detail}</span>
+          <span class="ml-auto min-w-0 truncate text-footnote text-label-secondary">{option.detail}</span>
         {/if}
       </DropdownMenu.RadioItem>
     {/each}
@@ -252,8 +252,8 @@ async function back() {
             }
           }}
         >
-          {row.heading}
-          <span class="ml-auto truncate text-footnote text-label-secondary">{row.value}</span>
+          <span class="shrink-0">{row.heading}</span>
+          <span class="ml-auto min-w-0 truncate text-footnote text-label-secondary">{row.value}</span>
           <ChevronRightIcon aria-hidden="true" />
         </DropdownMenu.Item>
       {/each}

@@ -25,10 +25,10 @@ export function createBoost(
     if (gain === undefined || compressor === undefined) {
       gain = context.createGain();
       compressor = context.createDynamicsCompressor();
-      compressor.threshold.value = -1;
+      compressor.threshold.value = -3;
       compressor.knee.value = 0;
       compressor.ratio.value = 20;
-      compressor.attack.value = 0.003;
+      compressor.attack.value = 0.001;
       compressor.release.value = 0.25;
       context.createMediaElementSource(media).connect(gain);
     }

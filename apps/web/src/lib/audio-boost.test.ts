@@ -88,7 +88,7 @@ describe("audio boost", () => {
     expect(context.source.connected).toEqual([gain]);
     expect(gain?.connected).toEqual([compressor]);
     expect(compressor?.connected).toEqual([context.destination]);
-    expect(compressor?.threshold.value).toBe(-1);
+    expect(compressor?.threshold.value).toBe(-3);
     expect(compressor?.ratio.value).toBe(20);
     expect(gain?.gain.value).toBe(3);
     expect(context.state).toBe("running");

@@ -1,4 +1,5 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { posix } from "node:path";
+import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import {
   files,
@@ -11,6 +12,7 @@ import {
 } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
+import { reconcileStoredVersions } from "../stored/reconcile.ts";
 import { locateIn } from "./roots.ts";
 import { persistScanTimelines } from "./timelines.ts";
 import { MissingLibraryPathError } from "./walker.ts";
@@ -98,6 +100,7 @@ export async function runKeyframeIndexJob(
     still.modifiedNs !== target.modifiedNs
   )
     return;
+  let indexed = false;
   await db.transaction(async (tx) => {
     // The per-file lock probeLibraryFile takes, then the scan's library lock.
     await tx.execute(
@@ -144,10 +147,25 @@ export async function runKeyframeIndexJob(
       itemIds.add(itemId);
     }
     for (const itemId of itemIds) await persistScanTimelines(tx, itemId);
+    indexed = true;
   });
+  if (!indexed) return;
+  // The index may make stored outputs eligible; run the same reconciliation
+  // the scan runs, scoped to the file's folder.
+  const [library] = await db
+    .select()
+    .from(libraries)
+    .where(eq(libraries.id, payload.libraryId));
+  if (library !== undefined) {
+    await reconcileStoredVersions(db, library, posix.dirname(payload.path));
+  }
 }
 
-/** Queues one index job per file, unless a queued or running one already names it. */
+/**
+ * Queues one index job per file, unless a queued one already names it. A
+ * running job is no reason to skip: its read may predate a file replacement,
+ * and a duplicate for an unchanged file no-ops quickly in indexTarget.
+ */
 export async function queueKeyframeIndex(
   tx: Transaction,
   payload: Omit<Extract<JobPayload, { type: "keyframe-index" }>, "type">,
@@ -158,7 +176,7 @@ export async function queueKeyframeIndex(
     .where(
       and(
         eq(jobs.type, "keyframe-index"),
-        inArray(jobs.state, ["queued", "running"]),
+        eq(jobs.state, "queued"),
         sql`${jobs.payload}->>'rootId' = ${payload.rootId}`,
         sql`${jobs.payload}->>'path' = ${payload.path}`,
       ),

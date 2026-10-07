@@ -76,7 +76,12 @@ function ensureTemplate(admin: Admin): Promise<string> {
 }
 
 const pendingDrops = new Set<Promise<void>>();
-let flushRegistered = false;
+
+// Registered at module scope: an afterAll added while a test is running fires
+// at that test's end, which would leave later tests' databases behind.
+afterAll(async () => {
+  while (pendingDrops.size > 0) await Promise.allSettled([...pendingDrops]);
+});
 
 /** Drops a test database off the test's path; the flush hook waits for it at file end. */
 function scheduleDrop(name: string) {
@@ -91,12 +96,6 @@ function scheduleDrop(name: string) {
     )
     .finally(() => pendingDrops.delete(drop));
   pendingDrops.add(drop);
-  if (!flushRegistered) {
-    flushRegistered = true;
-    afterAll(async () => {
-      while (pendingDrops.size > 0) await Promise.allSettled([...pendingDrops]);
-    });
-  }
 }
 
 /**

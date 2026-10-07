@@ -6,7 +6,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { startApiServer } from "../api.ts";
 import { insertLibraries } from "../libraries/testing.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
-import { type Database, probeDatabase } from "./client.ts";
+import { createDatabase, type Database, probeDatabase } from "./client.ts";
 import { migrateDatabase } from "./migrate.ts";
 import {
   artwork,
@@ -1001,4 +1001,38 @@ describe.skipIf(!databaseUrl)("Postgres schema", () => {
       expect(await db.select().from(sessions)).toEqual([]);
       expect(await db.select().from(favourites)).toEqual([]);
     }));
+
+  // Drops are fire-and-forget after a test's database closes; the flush hook
+  // at the module's top level waits for all of them when the file ends. Two
+  // tests create databases, a third proves both disappeared — an afterAll
+  // registered mid-test would fire early and leak the second.
+  const createdNames: string[] = [];
+  const rememberDatabase = async (_db: Database, url: string) => {
+    createdNames.push(new URL(url).pathname.slice(1));
+  };
+  test("a first test's database", async () => {
+    await withDatabase(rememberDatabase);
+  });
+  test("a second test's database", async () => {
+    await withDatabase(rememberDatabase);
+  });
+  test("drops the databases both tests created", async () => {
+    expect(createdNames).toHaveLength(2);
+    const admin = createDatabase(databaseUrl);
+    try {
+      const deadline = Date.now() + 10_000;
+      let left = createdNames.length;
+      while (left > 0 && Date.now() < deadline) {
+        const list = createdNames.map((name) => `'${name}'`).join(",");
+        const rows = await admin.db.execute(
+          sql.raw(`select datname from pg_database where datname in (${list})`),
+        );
+        left = rows.length;
+        if (left > 0) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(left).toBe(0);
+    } finally {
+      await admin.close();
+    }
+  });
 });

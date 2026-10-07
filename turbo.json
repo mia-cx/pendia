@@ -15,7 +15,7 @@
     "lint": {},
     "test": {
       "cache": false,
-      "passThroughEnv": ["DATABASE_URL", "CI"],
+      "passThroughEnv": ["DATABASE_URL", "TEST_S3_URL", "CI"],
       "dependsOn": ["build"]
     }
   }

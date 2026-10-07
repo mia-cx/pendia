@@ -15,6 +15,7 @@ import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import {
   events,
+  files,
   items,
   libraries,
   probeCache,
@@ -29,12 +30,14 @@ import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createKeyframeFixture } from "../mediums/video-common/keyframe-fixtures.ts";
 import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
 import { probeVideo } from "../mediums/video-common/probe.ts";
+import { twoRungPolicy } from "../stored/testing.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import {
   keyframesConcurrencyKey,
   runKeyframeIndexJob,
 } from "./keyframe-index.ts";
-import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import type { RootedPath } from "./roots.ts";
+import { libraryScanSource, scanDirectory, scanShowDirectory } from "./scan.ts";
 import { insertLibraries } from "./testing.ts";
 
 /** An ffprobe plus index read, like a watcher-reported probe carries. */
@@ -797,6 +800,97 @@ describe.skipIf(!databaseUrl)("keyframe-index jobs", () => {
         const { library, job } = await scannedMovie(db, root);
         await db.delete(libraries).where(eq(libraries.id, library.id));
         await expect(runKeyframeIndexJob(db, job)).resolves.toBeUndefined();
+      });
+    }));
+
+  test("a rescan of a replaced file queues a second job while the old one runs", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { library } = await scannedMovie(db, root);
+        const queue = createJobQueue(db);
+        const claimed = await queue.claim(["keyframe-index"]);
+        if (claimed === undefined) {
+          throw new Error("Expected the scan's keyframe-index job.");
+        }
+        // The running job still reads the old file; the rescan's file is new.
+        await appendFile(join(root, path), "mutated");
+        await scanDirectory(db, library.id, folder);
+        const indexJobs = (await listJobs(db)).filter(
+          (row) => row.type === "keyframe-index",
+        );
+        expect(indexJobs).toHaveLength(2);
+        expect(indexJobs.map((row) => row.state).sort()).toEqual([
+          "queued",
+          "running",
+        ]);
+      });
+    }));
+
+  test("a rescan keeps an index that landed after its probe", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        const { library, version, job } = await scannedMovie(db, root);
+        // A rescan whose cache read predates the index job's commit: the
+        // write must take the index state from the cache row, not the stale
+        // probe snapshot.
+        const base = await libraryScanSource(db, library);
+        await scanDirectory(db, library.id, folder, {
+          source: {
+            ...base,
+            probe: async (file: RootedPath) => {
+              const member = await base.probe(file);
+              await runKeyframeIndexJob(db, job);
+              return member;
+            },
+          },
+        });
+        const [after] = await db.select().from(versions);
+        expect(after).toMatchObject({
+          id: version.id,
+          keyframesSeconds: [0, 2, 4, 6, 8, 10],
+          lazyIndexPending: false,
+        });
+      });
+    }));
+
+  test("an index that lands after the scan queues the stored outputs it made eligible", () =>
+    withDatabase(async (db) => {
+      await migrateDatabase(db);
+      await withTempRoot(async (root) => {
+        await mkdir(join(root, folder), { recursive: true });
+        await createKeyframeFixture(join(root, path));
+        const library = await insertLibrary(db, "Movies", root);
+        await db
+          .update(libraries)
+          .set({ configuration: { storedVersions: twoRungPolicy } })
+          .where(eq(libraries.id, library.id));
+        await scanDirectory(db, library.id, folder);
+        // bestSources needs an aligned timeline, so no store job exists yet.
+        expect(
+          (await listJobs(db)).some(
+            (row) =>
+              row.type === "store" &&
+              (row.payload as { sourceFileId?: string }).sourceFileId !==
+                undefined,
+          ),
+        ).toBe(false);
+        await runKeyframeIndexJob(db, {
+          type: "keyframe-index",
+          libraryId: library.id,
+          rootId: library.rootId,
+          path,
+        });
+        const [file] = await db.select().from(files);
+        expect(
+          (await listJobs(db)).filter(
+            (row) =>
+              row.type === "store" &&
+              (row.payload as { sourceFileId?: string }).sourceFileId ===
+                file?.id,
+          ),
+        ).not.toHaveLength(0);
       });
     }));
 

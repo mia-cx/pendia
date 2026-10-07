@@ -13,7 +13,7 @@ Planning. The architecture is decided ticket by ticket on the [Thalia v1 map](ht
 You need git and Docker with Compose. The image is private: log in to GHCR with a GitHub token that has `read:packages`.
 
 ```sh
-git clone https://github.com/mia-cx/thalia.git
+git clone https://github.com/mia-cx/thalia.git thalia
 cd thalia
 docker login ghcr.io
 docker compose up -d

@@ -19,7 +19,7 @@ const workers = Number(process.env.THALIA_TEST_WORKERS ?? 8) || 8;
 
 const glob = new Bun.Glob("src/**/*.test.ts");
 const files: string[] = [];
-for await (const file of glob.scan({ cwd: import.meta.dir + "/.." })) {
+for await (const file of glob.scan({ cwd: `${import.meta.dir}/..` })) {
   files.push(file);
 }
 files.sort();

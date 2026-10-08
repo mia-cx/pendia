@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { files, items, jobs, libraries, versions } from "../db/schema/index.ts";
 import { createJobQueue, scanEnqueueLockClass } from "../jobs/queue.ts";
@@ -289,8 +289,28 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
             ),
           ),
         ];
+        // Reused children keep their original runId. Their requesting root's
+        // recorded ids still connect completed siblings to pending work.
+        const relatedRuns =
+          pending.length === 0
+            ? []
+            : await tx
+                .select({ payload: jobs.payload })
+                .from(jobs)
+                .where(
+                  and(
+                    libraryScans,
+                    sql`exists (select 1 from jsonb_array_elements_text(${jobs.payload}->'childJobIds') as child(id) where ${inArray(
+                      sql`child.id`,
+                      pending.map((job) => job.id),
+                    )})`,
+                  ),
+                );
+        const childJobIds = relatedRuns.flatMap(({ payload }) =>
+          payload.type === "scan" ? (payload.childJobIds ?? []) : [],
+        );
         const completed =
-          runIds.length === 0
+          runIds.length === 0 && childJobIds.length === 0
             ? []
             : await tx
                 .select()
@@ -299,7 +319,14 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
                   and(
                     libraryScans,
                     eq(jobs.state, "completed"),
-                    inArray(sql`${jobs.payload}->>'runId'`, runIds),
+                    or(
+                      runIds.length === 0
+                        ? undefined
+                        : inArray(sql`${jobs.payload}->>'runId'`, runIds),
+                      childJobIds.length === 0
+                        ? undefined
+                        : inArray(jobs.id, childJobIds),
+                    ),
                   ),
                 );
         const coverage = new Map(

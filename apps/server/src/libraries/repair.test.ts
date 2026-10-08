@@ -88,78 +88,99 @@ async function waitForRepairScan(
 }
 
 describe.skipIf(!databaseUrl)("library repair", () => {
-  test("startup resumes an interrupted run without repeating completed or pending folders", () =>
-    withDatabase(async (db, url) => {
-      await withVideoFixture(async (root) => {
-        for (const path of [
-          "Loose (2000).mkv",
-          file1080,
-          "Heat (1995)/Heat.mkv",
-        ]) {
-          await mkdir(join(root, path, ".."), { recursive: true });
-          await createVideoFixture(join(root, path));
-        }
-        const library = await insertLibrary(db, root);
-        const queue = createJobQueue(db);
-        const registry = createJobRegistry();
-        registerLibraryJobs(db, registry);
-        const parent = await queue.enqueue(
-          { type: "scan", libraryId: library.id, path: "." },
-          { concurrencyKey: libraryConcurrencyKey(library.id) },
-        );
-        const rootJob = await queue.claim(["scan"]);
-        if (!rootJob) throw new Error("Root scan was not claimed.");
-        await registry.run(rootJob);
-        await queue.complete(rootJob);
-        const completed = await queue.claim(["scan"]);
-        if (!completed)
-          throw new Error("First directory scan was not claimed.");
-        await registry.run(completed);
-        await queue.complete(completed);
-        const interrupted = await queue.claim(["scan"]);
-        if (!interrupted) throw new Error("Interrupted scan was not claimed.");
-        await db
-          .update(jobs)
-          .set({
-            leaseExpiresAt: sql`statement_timestamp() - interval '1 second'`,
-          })
-          .where(eq(jobs.id, interrupted.id));
-        const before = await listJobs(db, { type: "scan" });
-        expect(before).toHaveLength(4);
-        const errors: unknown[] = [];
-        const server = await startThalia("api", {
-          databaseUrl: url,
-          port: 0,
-          repairOptions: {
-            intervalMs: 40,
-            onError: (error) => errors.push(error),
-          },
-        });
-        try {
-          // Also await a fresh controller's pass so the assertion cannot beat startup repair.
-          const restartedRepair = createLibraryRepair(db);
-          expect(await restartedRepair.run()).toBe(0);
-          expect(await listJobs(db, { type: "scan" })).toEqual(before);
-          await drainScanJobs(db);
-          expect(await restartedRepair.run()).toBe(0);
-          const finished = await listJobs(db, { type: "scan" });
-          expect(finished.map((job) => job.id)).toEqual(
-            before.map((job) => job.id),
+  test.each([false, true])(
+    "startup resumes an interrupted run without repeating folders, reused children %s",
+    (reuse) =>
+      withDatabase(async (db, url) => {
+        await withVideoFixture(async (root) => {
+          for (const path of [
+            "Loose (2000).mkv",
+            file1080,
+            "Heat (1995)/Heat.mkv",
+          ]) {
+            await mkdir(join(root, path, ".."), { recursive: true });
+            await createVideoFixture(join(root, path));
+          }
+          const library = await insertLibrary(db, root);
+          const queue = createJobQueue(db);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const parent = await queue.enqueue(
+            { type: "scan", libraryId: library.id, path: "." },
+            { concurrencyKey: libraryConcurrencyKey(library.id) },
           );
-          expect(finished.every((job) => job.state === "completed")).toBe(true);
-          expect(
-            finished
-              .filter((job) => job.id !== parent.id)
-              .map((job) =>
-                job.payload.type === "scan" ? job.payload.runId : undefined,
-              ),
-          ).toEqual([parent.id, parent.id, parent.id]);
-          expect(errors).toEqual([]);
-        } finally {
-          await server.stop();
-        }
-      });
-    }));
+          const rootJob = await queue.claim(["scan"]);
+          if (!rootJob) throw new Error("Root scan was not claimed.");
+          if (reuse) {
+            for (const path of [".", folder, "Heat (1995)"])
+              await queue.enqueue(
+                {
+                  type: "scan",
+                  libraryId: library.id,
+                  path,
+                  changes: [],
+                  reconcileMissing: true,
+                },
+                { concurrencyKey: libraryConcurrencyKey(library.id) },
+              );
+          }
+          await registry.run(rootJob);
+          await queue.complete(rootJob);
+          const completed = await queue.claim(["scan"]);
+          if (!completed)
+            throw new Error("First directory scan was not claimed.");
+          await registry.run(completed);
+          await queue.complete(completed);
+          const interrupted = await queue.claim(["scan"]);
+          if (!interrupted)
+            throw new Error("Interrupted scan was not claimed.");
+          await db
+            .update(jobs)
+            .set({
+              leaseExpiresAt: sql`statement_timestamp() - interval '1 second'`,
+            })
+            .where(eq(jobs.id, interrupted.id));
+          const before = await listJobs(db, { type: "scan" });
+          expect(before).toHaveLength(4);
+          const errors: unknown[] = [];
+          const server = await startThalia("api", {
+            databaseUrl: url,
+            port: 0,
+            repairOptions: {
+              intervalMs: 40,
+              onError: (error) => errors.push(error),
+            },
+          });
+          try {
+            // Also await a fresh controller's pass so the assertion cannot beat startup repair.
+            const restartedRepair = createLibraryRepair(db);
+            expect(await restartedRepair.run()).toBe(0);
+            expect(await listJobs(db, { type: "scan" })).toEqual(before);
+            await drainScanJobs(db);
+            expect(await restartedRepair.run()).toBe(0);
+            const finished = await listJobs(db, { type: "scan" });
+            expect(finished.map((job) => job.id)).toEqual(
+              before.map((job) => job.id),
+            );
+            expect(finished.every((job) => job.state === "completed")).toBe(
+              true,
+            );
+            expect(
+              finished
+                .filter((job) => job.id !== parent.id)
+                .map((job) =>
+                  job.payload.type === "scan" ? job.payload.runId : undefined,
+                ),
+            ).toEqual(
+              Array.from({ length: 3 }, () => (reuse ? undefined : parent.id)),
+            );
+            expect(errors).toEqual([]);
+          } finally {
+            await server.stop();
+          }
+        });
+      }),
+  );
 
   test.each(["queued", "running"] as const)(
     "repair defers to a %s whole-library job before fan-out",

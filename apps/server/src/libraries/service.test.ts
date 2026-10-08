@@ -644,6 +644,10 @@ describe.skipIf(!databaseUrl)("library service", () => {
 
       const first = await scanLibrary(db, admin.id, library.id);
       await failedJob(first.jobId, "Old (2001)", 4);
+      await db
+        .update(jobs)
+        .set({ state: "completed" })
+        .where(eq(jobs.id, first.jobId));
       const second = await scanLibrary(db, admin.id, library.id);
       await failedJob(second.jobId, "Heat (1995)", 2);
       const latest = await libraryScanStatus(db, admin.id, library.id);

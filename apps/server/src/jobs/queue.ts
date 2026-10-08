@@ -18,7 +18,7 @@ import {
   jobType,
   libraries,
 } from "../db/schema/index.ts";
-import { isLibraryScan } from "../libraries/scan-payload.ts";
+import { isLibraryScan, scanAssertions } from "../libraries/scan-payload.ts";
 
 /** A persisted queue job. */
 export type Job = typeof jobs.$inferSelect;
@@ -47,7 +47,11 @@ function scanContinuation(job: Job, completed = false) {
     payload: {
       ...payload,
       changes: [
-        ...(completed || exhausted ? [] : (payload.changes ?? [])),
+        // A delayed move can inherit an original off-snapshot assertion.
+        // Keep metadata without replaying acknowledged destructive events.
+        ...(completed || exhausted
+          ? scanAssertions(payload.changes ?? [])
+          : (payload.changes ?? [])),
         ...pendingScan.changes,
       ],
       reconcileMissing:

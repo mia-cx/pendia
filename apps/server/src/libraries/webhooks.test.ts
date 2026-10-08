@@ -78,6 +78,83 @@ async function waitForScanJobs(db: Database, count: number) {
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
   test.each([
+    ["movies", "before"],
+    ["movies", "after"],
+    ["shows", "before"],
+    ["shows", "after"],
+  ] as const)(
+    "%s preserves an original assertion when a watcher flushes %s the scan write",
+    (medium, flush) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const stem =
+            medium === "movies"
+              ? `${folder}/Alien`
+              : `${folder}/Season 01/Show S01E01`;
+          const previousPath = `${stem}.old.mkv`;
+          const path = `${stem}.new.mkv`;
+          await mkdir(dirname(join(root, path)), { recursive: true });
+          await createVideoFixture(join(root, previousPath));
+          const library = await insertLibrary(db, medium, root, medium);
+          const ids: Record<string, string> =
+            medium === "movies" ? { tmdb: "348" } : { tvdb: "12345" };
+          const queue = createJobQueue(db);
+          const job = await queue.enqueue({
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+            changes: [
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: previousPath,
+                providerIds: ids,
+              },
+            ],
+          });
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          await rename(join(root, previousPath), join(root, path));
+          const debouncer = createChangeDebouncer(db, { delayMs: 60_000 });
+          await debouncer.submitWatched(library.rootId, [
+            { kind: "move", previousPath, path },
+          ]);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          if (flush === "before") await debouncer.close();
+          await registry.run(held);
+          if (flush === "after") {
+            expect(await db.select().from(providerIds)).toEqual([]);
+            await debouncer.close();
+          }
+          await queue.complete(held);
+          const followUp = await queue.claim(["scan"]);
+          if (!followUp)
+            throw new Error("Fresh-read follow-up was not claimed.");
+          expect(followUp.id).toBe(job.id);
+          await registry.run(followUp);
+          await queue.complete(followUp);
+          expect(
+            (await db.select().from(files)).map((file) => file.path),
+          ).toEqual([path]);
+          expect(
+            (await db.select().from(providerIds)).map(
+              ({ provider, value }) => ({ provider, value }),
+            ),
+          ).toEqual([
+            {
+              provider: medium === "movies" ? "tmdb" : "tvdb",
+              value: medium === "movies" ? "348" : "12345",
+            },
+          ]);
+          expect(await queue.claim(["scan"])).toBeUndefined();
+        }),
+      ),
+  );
+
+  test.each([
     ["movies", 1, "keep"],
     ["movies", 2, "keep"],
     ["shows", 1, "keep"],

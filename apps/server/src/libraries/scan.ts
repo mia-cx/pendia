@@ -61,6 +61,7 @@ import {
   rootedKey,
   rootsOf,
 } from "./roots.ts";
+import { scanAssertions } from "./scan-payload.ts";
 import { persistScanTimelines } from "./timelines.ts";
 import {
   type LibraryFile,
@@ -123,41 +124,6 @@ export const inScope = (
       rules.itemFolder(posix.dirname(path)) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-
-// Assertions follow moves and disappear with deletes, in event arrival order.
-function scanAssertions(changes: readonly ScanChange[]) {
-  const assertions = new Map<string, Extract<ScanChange, { kind: "add" }>>();
-  for (const change of changes) {
-    const key = rootedKey(change);
-    if (change.kind === "delete") {
-      for (const [key, assertion] of assertions) {
-        if (assertion.rootId !== change.rootId) continue;
-        if (
-          assertion.path === change.path ||
-          (change.target === "item" &&
-            (change.path === "." ||
-              assertion.path.startsWith(`${change.path}/`)))
-        )
-          assertions.delete(key);
-      }
-      continue;
-    }
-    const previousKey =
-      change.kind === "move"
-        ? rootedKey({ rootId: change.rootId, path: change.previousPath })
-        : key;
-    const previous = assertions.get(previousKey);
-    assertions.delete(previousKey);
-    assertions.delete(key);
-    assertions.set(key, {
-      kind: "add",
-      rootId: change.rootId,
-      path: change.path,
-      providerIds: { ...previous?.providerIds, ...change.providerIds },
-    });
-  }
-  return [...assertions.values()];
-}
 
 async function scanInput(
   tx: Transaction,

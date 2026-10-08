@@ -16,6 +16,7 @@ import {
   files,
   itemAncestors,
   items,
+  jobs,
   libraries,
   libraryRoots,
   probeCache,
@@ -98,6 +99,8 @@ export type ScanDirectoryOptions = {
   source?: ScanSource;
   changes?: readonly ScanChange[];
   reconcileMissing?: boolean;
+  /** Reads and consumes later events under the scan's write transaction. */
+  jobClaim?: Pick<typeof jobs.$inferSelect, "id" | "claimToken">;
 };
 
 /** The scan rules one library-relative scope of a medium uses. */
@@ -120,6 +123,38 @@ export const inScope = (
       rules.itemFolder(posix.dirname(path)) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+async function scanInput(tx: Transaction, options: ScanDirectoryOptions) {
+  if (options.jobClaim === undefined)
+    return {
+      changes: options.changes ?? [],
+      reconcileMissing: options.reconcileMissing,
+    };
+  const claim = options.jobClaim;
+  const [job] = await tx
+    .select()
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.id, claim.id),
+        eq(jobs.claimToken, claim.claimToken),
+        eq(jobs.state, "running"),
+      ),
+    )
+    .for("update");
+  if (job?.payload.type !== "scan")
+    throw new Error("Lost scan job claim before write.");
+  const { pendingScan, ...payload } = job.payload;
+  const changes = [...(payload.changes ?? []), ...(pendingScan?.changes ?? [])];
+  const reconcileMissing =
+    payload.reconcileMissing === true || pendingScan?.reconcileMissing === true;
+  if (pendingScan !== undefined)
+    await tx
+      .update(jobs)
+      .set({ payload: { ...payload, changes, reconcileMissing } })
+      .where(eq(jobs.id, job.id));
+  return { changes, reconcileMissing };
+}
 
 /** Replace one File's Stream inventory from a probe, reusing (fileId, index) ids. */
 async function upsertFileStreams(
@@ -970,7 +1005,6 @@ export async function scanDirectory(
   probed: number;
 }> {
   const startedAt = performance.now();
-  const changes = options.changes ?? [];
   const [library] = await db
     .select()
     .from(libraries)
@@ -1018,6 +1052,8 @@ export async function scanDirectory(
     if (locked.rootsRevision !== source.rootsRevision)
       throw new Error("Library roots changed before scan write.");
 
+    // Root edits also lock the Library first. Read moves before reconciliation.
+    const { changes, reconcileMissing } = await scanInput(tx, options);
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
@@ -1200,7 +1236,7 @@ export async function scanDirectory(
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
 
-    if (options.reconcileMissing === true) {
+    if (reconcileMissing === true) {
       if (walked.length === 0) await source.confirmEmpty(path, false);
       const atFolder = await tx
         .select({ id: items.id })
@@ -1261,7 +1297,6 @@ export async function scanShowDirectory(
   probed: number;
 }> {
   const startedAt = performance.now();
-  const changes = options.changes ?? [];
   const [library] = await db
     .select()
     .from(libraries)
@@ -1333,6 +1368,7 @@ export async function scanShowDirectory(
     if (locked.rootsRevision !== source.rootsRevision)
       throw new Error("Library roots changed before scan write.");
 
+    const { changes, reconcileMissing } = await scanInput(tx, options);
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
@@ -1636,7 +1672,7 @@ export async function scanShowDirectory(
               retained = versionFiles.filter(
                 (file) =>
                   !versionGroup.paths.includes(file.path) &&
-                  (options.reconcileMissing !== true ||
+                  (reconcileMissing !== true ||
                     walkedKeys.has(rootedKey(file))),
               ).length;
               await tx
@@ -1775,7 +1811,7 @@ export async function scanShowDirectory(
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
 
-    if (options.reconcileMissing === true) {
+    if (reconcileMissing === true) {
       if (walked.length === 0) await source.confirmEmpty(path, false);
       const atFolder = await tx
         .select({ id: items.id })

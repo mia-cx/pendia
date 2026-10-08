@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { asc, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { files, items, providerIds, versions } from "../db/schema/index.ts";
+import {
+  files,
+  items,
+  jobs,
+  providerIds,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startThalia } from "../index.ts";
 import { createJobQueue, type Job, listJobs } from "../jobs/queue.ts";
@@ -66,7 +72,7 @@ async function waitForScanJobs(db: Database, count: number) {
 }
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
-  test.each(["queued", "running"] as const)(
+  test.each(["queued", "running", "before read", "retry", "lease"] as const)(
     "a later watcher move survives a %s scan of the same folder",
     (state) =>
       withDatabase(async (db) => {
@@ -85,6 +91,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             type: "scan",
             libraryId: library.id,
             path: folder,
+            reconcileMissing: true,
             changes: [
               {
                 kind: "add",
@@ -95,8 +102,8 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             ],
           });
           const held =
-            state === "running" ? await queue.claim(["scan"]) : undefined;
-          if (held) await registry.run(held);
+            state !== "queued" ? await queue.claim(["scan"]) : undefined;
+          if (held && state === "running") await registry.run(held);
           else await scanDirectory(db, library.id, folder);
           const [original] = await db.select().from(files);
           if (!original) throw new Error("Initial File was not imported.");
@@ -105,7 +112,23 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             { kind: "move", previousPath: oldPath, path: newPath },
           ]);
           await debouncer.close();
-          if (held) await queue.complete(held);
+          if (held && state === "retry") {
+            await queue.fail(held, new Error("Retry."));
+            await db
+              .update(jobs)
+              .set({ runAfter: sql`statement_timestamp()` })
+              .where(eq(jobs.id, held.id));
+          } else if (held && state === "lease") {
+            await db
+              .update(jobs)
+              .set({
+                leaseExpiresAt: sql`statement_timestamp() - interval '1 second'`,
+              })
+              .where(eq(jobs.id, held.id));
+          } else if (held) {
+            if (state === "before read") await registry.run(held);
+            await queue.complete(held);
+          }
           for (;;) {
             const job = await queue.claim(["scan"]);
             if (!job) break;

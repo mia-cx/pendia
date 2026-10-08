@@ -45,7 +45,7 @@ export function registerLibraryJobs(
 export async function runScanJob(
   db: Database,
   payload: Extract<JobPayload, { type: "scan" }>,
-  job: Pick<Job, "id">,
+  job: Pick<Job, "id"> & Partial<Pick<Job, "claimToken">>,
   source?: ScanSource,
 ) {
   const [library] = await db
@@ -59,6 +59,10 @@ export async function runScanJob(
       source: files,
       changes: payload.changes,
       reconcileMissing: payload.reconcileMissing,
+      jobClaim:
+        job.claimToken === undefined
+          ? undefined
+          : { id: job.id, claimToken: job.claimToken },
     };
     // Every Item the directory scan wrote may need its own metadata fetch.
     const itemIds =

@@ -74,6 +74,49 @@ test("rejects invalid retry delays and concurrency limits", async () => {
 });
 
 describe.skipIf(!databaseUrl)("Job queue", () => {
+  test.each(["failure", "lease"] as const)(
+    "pending scan events survive terminal %s with a fresh attempt budget",
+    (ending) =>
+      withDatabase(async (db) => {
+        const queue = createJobQueue(db);
+        const scope = {
+          type: "scan",
+          libraryId: Bun.randomUUIDv7(),
+          path: "Alien",
+          runId: Bun.randomUUIDv7(),
+        } as const;
+        const original = await queue.enqueue(
+          { ...scope, changes: [] },
+          { maxAttempts: 1 },
+        );
+        const held = await queue.claim(["scan"]);
+        if (!held) throw new Error("Scan was not claimed.");
+        const move = {
+          kind: "move",
+          rootId: Bun.randomUUIDv7(),
+          previousPath: "Alien/old.mkv",
+          path: "Alien/new.mkv",
+          providerIds: {},
+        } as const;
+        await queue.enqueueScanChanges({ ...scope, changes: [move] });
+        if (ending === "failure")
+          await queue.fail(held, new Error("Earlier input failed."));
+        else await expireLease(db, held.id);
+        const resumed = await queue.claim(["scan"]);
+        expect(resumed).toMatchObject({
+          id: original.id,
+          attempts: 1,
+          payload: { ...scope, changes: [move] },
+        });
+        expect(resumed?.error).toBe(
+          ending === "failure" ? "Earlier input failed." : leaseExpiredError,
+        );
+        if (!resumed) throw new Error("Pending events were not recovered.");
+        await queue.complete(resumed);
+        expect((await listJobs(db))[0]?.error).toBe(resumed.error);
+      }),
+  );
+
   test("a scan retry keeps changes in arrival order and its original run", () =>
     withDatabase(async (db) => {
       const queue = createJobQueue(db);

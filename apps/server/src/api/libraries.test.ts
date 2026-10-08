@@ -204,7 +204,14 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
                     ),
                   ),
               ).toEqual([
-                { type: "scan", libraryId: created.id, path: "." },
+                {
+                  type: "scan",
+                  libraryId: created.id,
+                  path: ".",
+                  childJobIds: jobs
+                    .filter((job) => job.id !== jobId)
+                    .map((job) => job.id),
+                },
                 {
                   type: "scan",
                   libraryId: created.id,
@@ -419,7 +426,14 @@ describe.skipIf(!databaseUrl)("libraries api", () => {
                   ),
                 ),
             ).toEqual([
-              { type: "scan", libraryId: library.id, path: "." },
+              {
+                type: "scan",
+                libraryId: library.id,
+                path: ".",
+                childJobIds: jobs
+                  .filter((job) => job.id !== jobId)
+                  .map((job) => job.id),
+              },
               {
                 type: "scan",
                 libraryId: library.id,

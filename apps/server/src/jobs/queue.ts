@@ -35,6 +35,27 @@ type EnqueueOptions = Partial<
 
 type ScanPayload = Extract<JobPayload, { type: "scan" }>;
 
+// A later batch has its own attempt budget; retain the earlier error on the job.
+function scanContinuation(job: Job, completed = false) {
+  if (job.payload.type !== "scan" || job.payload.pendingScan === undefined)
+    return undefined;
+  const { pendingScan, ...payload } = job.payload;
+  const exhausted = job.attempts >= job.maxAttempts;
+  return {
+    state: "queued" as const,
+    attempts: completed || exhausted ? 0 : job.attempts,
+    payload: {
+      ...payload,
+      changes: [
+        ...(completed || exhausted ? [] : (payload.changes ?? [])),
+        ...pendingScan.changes,
+      ],
+      reconcileMissing:
+        payload.reconcileMissing === true || pendingScan.reconcileMissing,
+    },
+  };
+}
+
 function scanMatch(payload: ScanPayload) {
   const libraryScan = sql`(${jobs.payload}->>'path' = '.' and ${jobs.payload}->>'runId' is null and ${jobs.payload}->'changes' is null)`;
   return and(
@@ -255,7 +276,24 @@ export function createJobQueue(
       const libraryId = sql`${jobs.payload}->>'libraryId'`;
       return db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(${claimLockKey})`);
-        // An expired lease on the last attempt leaves nothing to reclaim.
+        const interrupted = await tx
+          .select()
+          .from(jobs)
+          .where(and(leaseExpired, sql`${jobs.payload} ? 'pendingScan'`))
+          .for("update");
+        for (const job of interrupted) {
+          const continuation = scanContinuation(job);
+          if (continuation)
+            await tx
+              .update(jobs)
+              .set({
+                ...continuation,
+                error: leaseExpiredError,
+                runAfter: sql`statement_timestamp()`,
+              })
+              .where(eq(jobs.id, job.id));
+        }
+        // Exhausted input without later events leaves nothing to reclaim.
         await tx
           .update(jobs)
           .set({ state: "failed", error: leaseExpiredError })
@@ -323,25 +361,13 @@ export function createJobQueue(
           .where(held)
           .for("update");
         if (!current) return undefined;
-        if (
-          current.payload.type === "scan" &&
-          current.payload.pendingScan !== undefined
-        ) {
-          const { pendingScan, ...payload } = current.payload;
+        const continuation = scanContinuation(current, true);
+        if (continuation) {
           const [queued] = await tx
             .update(jobs)
             .set({
-              state: "queued",
-              attempts: 0,
-              error: null,
+              ...continuation,
               runAfter: sql`statement_timestamp()`,
-              payload: {
-                ...payload,
-                changes: pendingScan.changes,
-                reconcileMissing:
-                  payload.reconcileMissing === true ||
-                  pendingScan.reconcileMissing,
-              },
             })
             .where(held)
             .returning();
@@ -358,30 +384,48 @@ export function createJobQueue(
     },
 
     /**
-     * Retains the error and schedules a retry unless attempts are exhausted,
-     * only for the claim that holds the job.
+     * Retains the held claim's error and retries within its budget. Later
+     * scan events remain runnable with their own budget after exhaustion.
      */
     async fail(job: Claim & Pick<Job, "attempts">, error: unknown) {
       const delay = Math.min(
         maxRetryDelayMs,
         retryDelayMs * 2 ** (job.attempts - 1),
       );
-      const [failed] = await db
-        .update(jobs)
-        .set({
-          state: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then 'queued'::job_state else 'failed'::job_state end`,
-          error: error instanceof Error ? error.message : String(error),
-          runAfter: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then clock_timestamp() + ${delay} * interval '1 millisecond' else ${jobs.runAfter} end`,
-        })
-        .where(
-          and(
-            eq(jobs.id, job.id),
-            eq(jobs.claimToken, job.claimToken),
-            eq(jobs.state, "running"),
-          ),
-        )
-        .returning();
-      return failed ? { ...failed, retryDelayMs: delay } : undefined;
+      return db.transaction(async (tx) => {
+        const held = and(
+          eq(jobs.id, job.id),
+          eq(jobs.claimToken, job.claimToken),
+          eq(jobs.state, "running"),
+        );
+        const [current] = await tx
+          .select()
+          .from(jobs)
+          .where(held)
+          .for("update");
+        if (!current) return undefined;
+        const continuation = scanContinuation(current);
+        const [failed] = await tx
+          .update(jobs)
+          .set({
+            state: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then 'queued'::job_state else 'failed'::job_state end`,
+            error: error instanceof Error ? error.message : String(error),
+            runAfter:
+              continuation && current.attempts >= current.maxAttempts
+                ? sql`statement_timestamp()`
+                : sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then clock_timestamp() + ${delay} * interval '1 millisecond' else ${jobs.runAfter} end`,
+            ...continuation,
+          })
+          .where(
+            and(
+              eq(jobs.id, job.id),
+              eq(jobs.claimToken, job.claimToken),
+              eq(jobs.state, "running"),
+            ),
+          )
+          .returning();
+        return failed ? { ...failed, retryDelayMs: delay } : undefined;
+      });
     },
   };
 }

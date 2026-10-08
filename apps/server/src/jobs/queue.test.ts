@@ -197,14 +197,21 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
         expect(new Set(enqueued.map((job) => job.id)).size).toBe(1);
         const claimed = await queue.claim(["scan"]);
         if (!claimed) throw new Error("Scan was not claimed.");
-        expect((await enqueueScan(queue, payload)).id).toBe(claimed.id);
+        // A live run may hold a stale walk, so the request queues a follow-up.
+        const followUp = await enqueueScan(queue, payload);
+        expect(followUp.id).not.toBe(claimed.id);
+        // A dead-but-retryable run re-walks on reclaim, so it covers one.
         await expireLease(db, claimed.id);
         expect((await enqueueScan(queue, payload)).id).toBe(claimed.id);
         const recovered = await queue.claim(["scan"]);
         if (!recovered) throw new Error("Expired scan was not recovered.");
         await queue.complete(recovered);
+        const next = await queue.claim(["scan"]);
+        if (!next || next.id !== followUp.id)
+          throw new Error("Follow-up was not claimed.");
+        await queue.complete(next);
         expect((await enqueueScan(queue, payload)).id).not.toBe(claimed.id);
-        expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
+        expect(await listJobs(db, { type: "scan" })).toHaveLength(3);
         expect(
           (await enqueueScan(queue, { ...payload, path: "Heat (1995)" })).id,
         ).not.toBe(claimed.id);

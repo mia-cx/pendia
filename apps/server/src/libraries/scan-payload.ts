@@ -72,10 +72,15 @@ export function scanDedupe(payload: ScanPayload): Dedupe {
         merged.reconcileMissing = true;
       return merged;
     },
+    // Only a dead-but-retryable run covers a request: its reclaim re-walks
+    // the disk with this input. A live scan may already hold a stale walk.
     coveredBy: (running) =>
-      running.type === "scan" &&
+      running.payload.type === "scan" &&
+      running.leaseExpiresAt.getTime() <= Date.now() &&
+      running.attempts < running.maxAttempts &&
       (payload.changes?.length ?? 0) === 0 &&
-      (payload.reconcileMissing !== true || running.reconcileMissing === true),
+      (payload.reconcileMissing !== true ||
+        running.payload.reconcileMissing === true),
   };
 }
 

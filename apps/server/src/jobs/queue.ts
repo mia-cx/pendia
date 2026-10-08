@@ -32,7 +32,7 @@ export type Dedupe = {
   /** Folds a new request into the payload of a queued job with the same key. */
   merge: (queued: JobPayload) => JobPayload;
   /** Whether a running job with the same key already covers this request. */
-  coveredBy?: (running: JobPayload) => boolean;
+  coveredBy?: (running: Job) => boolean;
 };
 
 type EnqueueOptions = Partial<
@@ -174,7 +174,7 @@ export function createJobQueue(
           if (
             dedupe.coveredBy !== undefined &&
             running !== undefined &&
-            dedupe.coveredBy(running.payload)
+            dedupe.coveredBy(running)
           )
             return running;
           const queued = unsettled.find((job) => job.state === "queued");

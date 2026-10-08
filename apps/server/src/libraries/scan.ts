@@ -999,8 +999,11 @@ export async function scanDirectory(
   const { memberByKey, skipped, probed } = result;
   const walkedKeys = new Set(walked.map(rootedKey));
   // A move's assertion names the path the walk saw, so fold each chain's ids
-  // to its surviving destination before matching groups.
-  const providerChanges = scanAssertions(changes);
+  // to its surviving destination before matching groups. A destination the
+  // walk never saw asserts nothing; it waits for a later read.
+  const providerChanges = scanAssertions(changes).filter((change) =>
+    walkedKeys.has(rootedKey(change)),
+  );
   const groups = discovered
     .map((group) => ({
       ...group,
@@ -1283,8 +1286,11 @@ export async function scanShowDirectory(
   );
   const walkedKeys = new Set(walked.map(rootedKey));
   // A move's assertion names the path the walk saw, so fold each chain's ids
-  // to its surviving destination before matching groups.
-  const providerChanges = scanAssertions(changes);
+  // to its surviving destination before matching groups. A destination the
+  // walk never saw asserts nothing; it waits for a later read.
+  const providerChanges = scanAssertions(changes).filter((change) =>
+    walkedKeys.has(rootedKey(change)),
+  );
 
   const result = await probeScanMembers(
     db,

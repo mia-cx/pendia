@@ -84,7 +84,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
     ["shows", "before"],
     ["shows", "after"],
   ] as const)(
-    "%s preserves an original assertion when a watcher flushes %s the scan write",
+    "%s lands a watcher move flushed %s the scan write on the follow-up",
     (medium, flush) =>
       withDatabase((db) =>
         withVideoFixture(async (root) => {
@@ -138,16 +138,9 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           expect(
             (await db.select().from(files)).map((file) => file.path),
           ).toEqual([path]);
-          expect(
-            (await db.select().from(providerIds)).map(
-              ({ provider, value }) => ({ provider, value }),
-            ),
-          ).toEqual([
-            {
-              provider: medium === "movies" ? "tmdb" : "tvdb",
-              value: medium === "movies" ? "348" : "12345",
-            },
-          ]);
+          // The original assertion named a path no walk saw, so its provider
+          // ids drop rather than landing on the sole surviving group.
+          expect(await db.select().from(providerIds)).toEqual([]);
           expect(await queue.claim(["scan"])).toBeUndefined();
         }),
       ),

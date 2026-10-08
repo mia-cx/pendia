@@ -124,20 +124,39 @@ export const inScope = (
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
-// Committed moves leave destination assertions, so a later read keeps their ids.
-function scanAssertions(changes: readonly ScanChange[] | undefined) {
-  return changes?.flatMap((change) => {
-    if (change.kind === "delete") return [];
-    if (change.kind === "add") return [change];
-    return [
-      {
-        kind: "add" as const,
-        rootId: change.rootId,
-        path: change.path,
-        providerIds: change.providerIds,
-      },
-    ];
-  });
+// Assertions follow moves and disappear with deletes, in event arrival order.
+function scanAssertions(changes: readonly ScanChange[]) {
+  const assertions = new Map<string, Extract<ScanChange, { kind: "add" }>>();
+  for (const change of changes) {
+    const key = rootedKey(change);
+    if (change.kind === "delete") {
+      for (const [key, assertion] of assertions) {
+        if (assertion.rootId !== change.rootId) continue;
+        if (
+          assertion.path === change.path ||
+          (change.target === "item" &&
+            (change.path === "." ||
+              assertion.path.startsWith(`${change.path}/`)))
+        )
+          assertions.delete(key);
+      }
+      continue;
+    }
+    const previousKey =
+      change.kind === "move"
+        ? rootedKey({ rootId: change.rootId, path: change.previousPath })
+        : key;
+    const previous = assertions.get(previousKey);
+    assertions.delete(previousKey);
+    assertions.delete(key);
+    assertions.set(key, {
+      kind: "add",
+      rootId: change.rootId,
+      path: change.path,
+      providerIds: { ...previous?.providerIds, ...change.providerIds },
+    });
+  }
+  return [...assertions.values()];
 }
 
 async function scanInput(
@@ -182,6 +201,7 @@ async function scanInput(
   )
     throw new Error("Scan move arrived after the filesystem walk.");
   const changes = [...(payload.changes ?? []), ...(pendingScan?.changes ?? [])];
+  const assertions = scanAssertions(changes);
   const reconcileMissing =
     payload.reconcileMissing === true || pendingScan?.reconcileMissing === true;
   // Acknowledge destructive events with the write. Replaying a delete after a
@@ -192,13 +212,13 @@ async function scanInput(
       .set({
         payload: {
           ...payload,
-          changes: scanAssertions(payload.changes),
+          changes: pendingScan === undefined ? assertions : [],
           ...(pendingScan === undefined
             ? {}
             : {
                 pendingScan: {
                   ...pendingScan,
-                  changes: scanAssertions(pendingScan.changes) ?? [],
+                  changes: assertions,
                 },
               }),
         },
@@ -207,14 +227,11 @@ async function scanInput(
   // Completion keeps a fresh-read follow-up even after all moves were applied.
   return {
     changes,
-    // A late destination absent from this snapshot must not identify its lone
-    // existing group. The persisted assertion belongs to the next read.
-    providerChanges: [
-      ...(payload.changes ?? []),
-      ...(pendingScan?.changes.filter((change) =>
-        walkedKeys.has(rootedKey(change)),
-      ) ?? []),
-    ],
+    // Only surviving destinations assert ids. Off-snapshot input must not
+    // identify the lone existing group; it waits for the next read.
+    providerChanges: assertions.filter((change) =>
+      walkedKeys.has(rootedKey(change)),
+    ),
     reconcileMissing,
   };
 }

@@ -78,13 +78,17 @@ async function waitForScanJobs(db: Database, count: number) {
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
   test.each([
-    ["movies", 1],
-    ["movies", 2],
-    ["shows", 1],
-    ["shows", 2],
+    ["movies", 1, "keep"],
+    ["movies", 2, "keep"],
+    ["shows", 1, "keep"],
+    ["shows", 2, "keep"],
+    ["movies", 1, "delete"],
+    ["shows", 1, "delete"],
+    ["movies", 1, "move"],
+    ["shows", 1, "move"],
   ] as const)(
-    "%s retains provider IDs for a move imported after %s existing groups",
-    (medium, groupCount) =>
+    "%s retains provider IDs for a move imported after %s existing groups, then %s",
+    (medium, groupCount, ending) =>
       withDatabase((db) =>
         withVideoFixture(async (root) => {
           const paths =
@@ -95,6 +99,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           if (!first || !second || !destination)
             throw new Error("Fixture paths missing.");
           const previousPath = `Other/${destination}`;
+          const nextPath = destination.replace(".mkv", ".new.mkv");
           await mkdir(join(root, "Other"));
           const existing = groupCount === 1 ? [first] : [first, second];
           for (const path of [...existing, previousPath])
@@ -122,6 +127,9 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
               if (!submitted) {
                 submitted = true;
                 await rename(join(root, previousPath), join(root, destination));
+                if (ending === "delete") await rm(join(root, destination));
+                if (ending === "move")
+                  await rename(join(root, destination), join(root, nextPath));
                 await queue.enqueueScanChanges({
                   ...scope,
                   changes: [
@@ -132,12 +140,35 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
                       path: destination,
                       providerIds: ids,
                     },
+                    ...(ending === "delete"
+                      ? [
+                          {
+                            kind: "delete" as const,
+                            target: "file" as const,
+                            rootId: library.rootId,
+                            path: destination,
+                            providerIds: ids,
+                          },
+                        ]
+                      : []),
+                    ...(ending === "move"
+                      ? [
+                          {
+                            kind: "move" as const,
+                            rootId: library.rootId,
+                            previousPath: destination,
+                            path: nextPath,
+                            providerIds: {},
+                          },
+                        ]
+                      : []),
                   ],
                 });
               }
               return result;
             },
           });
+          expect(await db.select().from(providerIds)).toEqual([]);
           await queue.complete(held);
           const registry = createJobRegistry();
           registerLibraryJobs(db, registry);
@@ -149,7 +180,14 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           await queue.complete(followUp);
           expect(
             (await db.select().from(files)).map((file) => file.path).sort(),
-          ).toEqual([...existing, destination].sort());
+          ).toEqual(
+            [
+              ...existing,
+              ...(ending === "delete"
+                ? []
+                : [ending === "move" ? nextPath : destination]),
+            ].sort(),
+          );
           const assertions = await db
             .select({
               title: items.title,
@@ -158,13 +196,17 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             })
             .from(providerIds)
             .innerJoin(items, eq(items.id, providerIds.itemId));
-          expect(assertions).toEqual([
-            {
-              title: "Dune",
-              provider: medium === "movies" ? "tmdb" : "tvdb",
-              value: medium === "movies" ? "438631" : "12345",
-            },
-          ]);
+          expect(assertions).toEqual(
+            ending === "delete"
+              ? []
+              : [
+                  {
+                    title: "Dune",
+                    provider: medium === "movies" ? "tmdb" : "tvdb",
+                    value: medium === "movies" ? "438631" : "12345",
+                  },
+                ],
+          );
         }),
       ),
   );

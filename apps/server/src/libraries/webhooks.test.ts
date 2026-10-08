@@ -77,6 +77,98 @@ async function waitForScanJobs(db: Database, count: number) {
 }
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
+  test.each([
+    ["movies", 1],
+    ["movies", 2],
+    ["shows", 1],
+    ["shows", 2],
+  ] as const)(
+    "%s retains provider IDs for a move imported after %s existing groups",
+    (medium, groupCount) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const paths =
+            medium === "movies"
+              ? ["Alien.1979.mkv", "Heat.1995.mkv", "Dune.2021.mkv"]
+              : ["Alien S01E01.mkv", "Heat S01E01.mkv", "Dune S01E01.mkv"];
+          const [first, second, destination] = paths;
+          if (!first || !second || !destination)
+            throw new Error("Fixture paths missing.");
+          const previousPath = `Other/${destination}`;
+          await mkdir(join(root, "Other"));
+          const existing = groupCount === 1 ? [first] : [first, second];
+          for (const path of [...existing, previousPath])
+            await createVideoFixture(join(root, path));
+          const library = await insertLibrary(db, medium, root, medium);
+          const queue = createJobQueue(db);
+          const scope = {
+            type: "scan",
+            libraryId: library.id,
+            path: ".",
+            changes: [],
+            reconcileMissing: true,
+          } as const;
+          const job = await queue.enqueue({ ...scope, changes: [] });
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          const source = await libraryScanSource(db, library);
+          const ids: Record<string, string> =
+            medium === "movies" ? { tmdb: "438631" } : { tvdb: "12345" };
+          let submitted = false;
+          await runScanJob(db, { ...scope, changes: [] }, held, {
+            ...source,
+            probe: async (file) => {
+              const result = await source.probe(file);
+              if (!submitted) {
+                submitted = true;
+                await rename(join(root, previousPath), join(root, destination));
+                await queue.enqueueScanChanges({
+                  ...scope,
+                  changes: [
+                    {
+                      kind: "move",
+                      rootId: library.rootId,
+                      previousPath,
+                      path: destination,
+                      providerIds: ids,
+                    },
+                  ],
+                });
+              }
+              return result;
+            },
+          });
+          await queue.complete(held);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const followUp = await queue.claim(["scan"]);
+          if (!followUp)
+            throw new Error("Fresh-read follow-up was not claimed.");
+          expect(followUp.id).toBe(job.id);
+          await registry.run(followUp);
+          await queue.complete(followUp);
+          expect(
+            (await db.select().from(files)).map((file) => file.path).sort(),
+          ).toEqual([...existing, destination].sort());
+          const assertions = await db
+            .select({
+              title: items.title,
+              provider: providerIds.provider,
+              value: providerIds.value,
+            })
+            .from(providerIds)
+            .innerJoin(items, eq(items.id, providerIds.itemId));
+          expect(assertions).toEqual([
+            {
+              title: "Dune",
+              provider: medium === "movies" ? "tmdb" : "tvdb",
+              value: medium === "movies" ? "438631" : "12345",
+            },
+          ]);
+        }),
+      ),
+  );
+
   test.each(["movies", "shows"] as const)(
     "%s acknowledges a delete and replacement move before its follow-up",
     (medium) =>

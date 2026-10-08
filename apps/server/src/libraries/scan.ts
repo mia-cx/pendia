@@ -124,6 +124,22 @@ export const inScope = (
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
+// Committed moves leave destination assertions, so a later read keeps their ids.
+function scanAssertions(changes: readonly ScanChange[] | undefined) {
+  return changes?.flatMap((change) => {
+    if (change.kind === "delete") return [];
+    if (change.kind === "add") return [change];
+    return [
+      {
+        kind: "add" as const,
+        rootId: change.rootId,
+        path: change.path,
+        providerIds: change.providerIds,
+      },
+    ];
+  });
+}
+
 async function scanInput(
   tx: Transaction,
   options: ScanDirectoryOptions,
@@ -132,6 +148,7 @@ async function scanInput(
   if (options.jobClaim === undefined)
     return {
       changes: options.changes ?? [],
+      providerChanges: options.changes ?? [],
       reconcileMissing: options.reconcileMissing,
     };
   const claim = options.jobClaim;
@@ -175,22 +192,31 @@ async function scanInput(
       .set({
         payload: {
           ...payload,
-          changes: payload.changes?.filter((change) => change.kind === "add"),
+          changes: scanAssertions(payload.changes),
           ...(pendingScan === undefined
             ? {}
             : {
                 pendingScan: {
                   ...pendingScan,
-                  changes: pendingScan.changes.filter(
-                    (change) => change.kind === "add",
-                  ),
+                  changes: scanAssertions(pendingScan.changes) ?? [],
                 },
               }),
         },
       })
       .where(eq(jobs.id, job.id));
   // Completion keeps a fresh-read follow-up even after all moves were applied.
-  return { changes, reconcileMissing };
+  return {
+    changes,
+    // A late destination absent from this snapshot must not identify its lone
+    // existing group. The persisted assertion belongs to the next read.
+    providerChanges: [
+      ...(payload.changes ?? []),
+      ...(pendingScan?.changes.filter((change) =>
+        walkedKeys.has(rootedKey(change)),
+      ) ?? []),
+    ],
+    reconcileMissing,
+  };
 }
 
 /** Replace one File's Stream inventory from a probe, reusing (fileId, index) ids. */
@@ -1090,7 +1116,11 @@ export async function scanDirectory(
       throw new Error("Library roots changed before scan write.");
 
     // Root edits also lock the Library first. Read moves before reconciliation.
-    const { changes, reconcileMissing } = await scanInput(tx, options, walked);
+    const { changes, providerChanges, reconcileMissing } = await scanInput(
+      tx,
+      options,
+      walked,
+    );
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
@@ -1117,7 +1147,7 @@ export async function scanDirectory(
       // Only webhook ids may find an Item elsewhere in the Library. Folder
       // tags are stored but never relocate: two folders can carry the same tag.
       const webhookProviderIds = groupChangeProviderIds(
-        changes,
+        providerChanges,
         group.files,
         singleGroup,
       );
@@ -1405,7 +1435,11 @@ export async function scanShowDirectory(
     if (locked.rootsRevision !== source.rootsRevision)
       throw new Error("Library roots changed before scan write.");
 
-    const { changes, reconcileMissing } = await scanInput(tx, options, walked);
+    const { changes, providerChanges, reconcileMissing } = await scanInput(
+      tx,
+      options,
+      walked,
+    );
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
@@ -1437,7 +1471,7 @@ export async function scanShowDirectory(
         ),
       );
       const webhookProviderIds = groupChangeProviderIds(
-        changes,
+        providerChanges,
         groupFiles,
         singleGroup,
       );

@@ -55,13 +55,48 @@ export function scanState(status: ScanStatus | undefined): {
   if (queued > 0) return { label: "Queued", tone: "active" };
   if (failed > 0 && completed === 0)
     return { label: "Scan failed", tone: "error" };
-  if (failed > 0)
+  // The total counts failed jobs and skipped files alike.
+  const errors = status.failures.total;
+  if (errors > 0)
     return {
-      label: `Scanned with ${failed === 1 ? "1 error" : `${failed} errors`}`,
+      label: `Scanned with ${errors === 1 ? "1 error" : `${errors} errors`}`,
       tone: "error",
     };
   if (completed > 0) return { label: "Scanned", tone: "done" };
   return { label: "Not scanned", tone: "idle" };
+}
+
+/** One failure a scan status lists: a skipped file or a failed scan job. */
+export type ScanFailure = ScanStatus["failures"]["items"][number];
+
+/** The most of a job's error line a failure row shows. */
+const reasonLength = 120;
+
+const fileReasons = {
+  unreadable: "File is empty or corrupt",
+  "no-video": "No video stream",
+} as const;
+
+/** A failure's short reason: a phrase for a skipped file, or the first line of a job's error. */
+export function failureReason(
+  failure: Pick<ScanFailure, "reason" | "detail">,
+): string {
+  if (failure.reason !== "error") return fileReasons[failure.reason];
+  const line = failure.detail.trim().split("\n", 1)[0]?.trim() ?? "";
+  if (line === "") return "Unknown error";
+  return line.length > reasonLength
+    ? `${line.slice(0, reasonLength - 1).trimEnd()}…`
+    : line;
+}
+
+/** Where a failure happened, led by the root's folder name when the library has several roots. */
+export function failurePath(
+  failure: Pick<ScanFailure, "path" | "root">,
+  withRoot: boolean,
+): string {
+  if (failure.path === ".") return "Whole library";
+  const folder = failure.root?.split(/[\\/]/).findLast(Boolean);
+  return withRoot && folder ? `${folder}/${failure.path}` : failure.path;
 }
 
 /** The run's start time, decoded from its UUIDv7 id; null while no run is known. */

@@ -1,5 +1,15 @@
 import { isAbsolute, resolve } from "node:path";
-import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  ne,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
@@ -10,6 +20,7 @@ import {
   jobs,
   libraries,
   libraryRoots,
+  scanFailures,
   versions,
 } from "../db/schema/index.ts";
 import type { DeletedArtworkFile } from "../db/tree.ts";
@@ -417,7 +428,13 @@ export async function libraryScanStatus(
   }
   const empty = { queued: 0, running: 0, completed: 0, failed: 0 };
   if (run === null)
-    return { libraryId: id, counts: empty, latest: null, runId: null };
+    return {
+      libraryId: id,
+      counts: empty,
+      latest: null,
+      runId: null,
+      failures: await listScanFailures(db, id),
+    };
   const runWhere = and(
     where,
     sql`(${jobs.id} = ${run}::uuid or ${jobs.payload}->>'runId' = ${run})`,
@@ -435,5 +452,77 @@ export async function libraryScanStatus(
     .where(runWhere)
     .orderBy(desc(jobs.id))
     .limit(1);
-  return { libraryId: id, counts, latest: latest ?? null, runId: run };
+  return {
+    libraryId: id,
+    counts,
+    latest: latest ?? null,
+    runId: run,
+    failures: await listScanFailures(db, id, {
+      where: runWhere,
+      failed: counts.failed,
+    }),
+  };
+}
+
+/** The most failures a scan status lists; its total still counts them all. */
+const listedFailures = 100;
+
+/**
+ * Lists, newest first, the files any scan of the library skipped and the
+ * run's failed scan jobs. Skipped files stay until a rescan indexes them.
+ */
+async function listScanFailures(
+  db: Database,
+  libraryId: string,
+  run?: { where: SQL | undefined; failed: number },
+) {
+  const files = await db
+    .select({
+      id: scanFailures.id,
+      path: scanFailures.path,
+      root: libraryRoots.path,
+      reason: scanFailures.reason,
+      detail: scanFailures.detail,
+      at: scanFailures.failedAt,
+      total: sql<number>`(count(*) over ())::int`,
+    })
+    .from(scanFailures)
+    .innerJoin(libraryRoots, eq(scanFailures.rootId, libraryRoots.id))
+    .where(eq(libraryRoots.libraryId, libraryId))
+    .orderBy(desc(scanFailures.failedAt), desc(scanFailures.id))
+    .limit(listedFailures);
+  // Jobs keep no finish time; a failed job's run_after is when its last attempt was due.
+  const failedJobs = run
+    ? await db
+        .select({
+          id: jobs.id,
+          path: sql<string>`${jobs.payload}->>'path'`,
+          error: jobs.error,
+          at: jobs.runAfter,
+        })
+        .from(jobs)
+        .where(and(run.where, eq(jobs.state, "failed")))
+        .orderBy(desc(jobs.runAfter), desc(jobs.id))
+        .limit(listedFailures)
+    : [];
+  const items = [
+    ...files.map(({ total: _, at, ...row }) => ({
+      kind: "file" as const,
+      ...row,
+      at: at.toISOString(),
+    })),
+    ...failedJobs.map((row) => ({
+      kind: "job" as const,
+      id: row.id,
+      path: row.path,
+      root: null,
+      reason: "error" as const,
+      detail: row.error ?? "",
+      at: row.at.toISOString(),
+    })),
+  ].sort((a, b) => b.at.localeCompare(a.at));
+  return {
+    total: (files[0]?.total ?? 0) + (run?.failed ?? 0),
+    items: items.slice(0, listedFailures),
+  };
 }

@@ -20,6 +20,7 @@ import {
   jobs,
   libraries,
   probeCache,
+  scanFailures,
   segmentTimelines,
   versions,
 } from "../db/schema/index.ts";
@@ -92,6 +93,37 @@ async function expectHandlerError(
 }
 
 describe.skipIf(!databaseUrl)("library scan jobs", () => {
+  test("a full scan cleans up a vanished folder represented only by failures", () =>
+    withDatabase((db) =>
+      withTempRoot(async (root) => {
+        const folder = "Movie (2020)";
+        await mkdir(join(root, folder));
+        await writeFile(join(root, folder, "Movie.mkv"), "");
+        const library = await insertLibrary(db, "Movies", root);
+        await scanDirectory(db, library.id, folder);
+        expect(await db.select().from(scanFailures)).toHaveLength(1);
+        expect(await db.select().from(items)).toEqual([]);
+        await rm(join(root, folder), { recursive: true });
+        const queue = createJobQueue(db);
+        const registry = createJobRegistry();
+        registerLibraryJobs(db, registry);
+        await queue.enqueue({ type: "scan", libraryId: library.id, path: "." });
+        const job = await queue.claim(["scan"]);
+        if (!job) throw new Error("Fixture job missing.");
+        await registry.run(job);
+        await queue.complete(job);
+        const cleanup = await queue.claim(["scan"]);
+        expect(cleanup?.payload).toMatchObject({
+          path: folder,
+          reconcileMissing: true,
+        });
+        if (!cleanup) throw new Error("Cleanup job missing.");
+        await registry.run(cleanup);
+        await queue.complete(cleanup);
+        expect(await db.select().from(scanFailures)).toEqual([]);
+      }),
+    ));
+
   test("a root job fans out directory scans serialized per library", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);

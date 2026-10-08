@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { extname, isAbsolute } from "node:path";
 import { locateIn, type RootedPath } from "../libraries/roots.ts";
 import { scanScope } from "../libraries/scan.ts";
 import {
@@ -9,7 +9,11 @@ import {
 } from "../libraries/walker.ts";
 import type { WatchedChange } from "../libraries/webhooks.ts";
 import { readKeyframeIndex } from "../mediums/video-common/keyframes.ts";
-import { readFfprobe } from "../mediums/video-common/probe.ts";
+import {
+  parseProbeOutput,
+  readFfprobe,
+  UnreadableMediaError,
+} from "../mediums/video-common/probe.ts";
 import type { WatcherClaim, WatcherReport } from "./http.ts";
 import { watchTree } from "./tree.ts";
 
@@ -69,7 +73,7 @@ const encodeFile = (file: LibraryFile & { rootId: string }) => ({
 const cacheKey = (file: ReturnType<typeof encodeFile>) =>
   `${file.bytes}:${file.modifiedNs}:${file.rootId}:${file.path}`;
 
-/** Walks and probes one claimed scan in each root of its Library on local disk, skipping files with a current cached probe. */
+/** Walks and probes one claimed scan, reusing current probes and failures and reporting bad files individually. */
 async function runScan(
   roots: ReadonlyMap<string, string>,
   job: Job,
@@ -98,20 +102,49 @@ async function runScan(
           throw error;
       }
     }
-    const cached = new Set(job.cached.map(cacheKey));
+    const cached = new Set(
+      [...job.cached, ...(job.failed ?? [])].map(cacheKey),
+    );
     const probes: Extract<
       WatcherReport,
       { probes: unknown }
     >["probes"][number][] = [];
+    const failures: { rootId: string; path: string; detail: string }[] = [];
     // A Library scan only lists files; its directory scans probe them.
     for (const file of job.library ? [] : files) {
       if (cached.has(cacheKey(encodeFile(file)))) continue;
       const { absolute } = await locateIn(pathOf(file.rootId), file.path);
-      const ffprobe = await readFfprobe(absolute);
-      const { keyframesSeconds } = await readKeyframeIndex(absolute);
+      let ffprobe: unknown;
+      let keyframesSeconds: number[] | null = null;
+      let failure: UnreadableMediaError | undefined;
+      try {
+        ffprobe = await readFfprobe(absolute);
+        const parsed = parseProbeOutput(
+          ffprobe,
+          extname(file.path).toLowerCase(),
+        );
+        if (
+          parsed.streams.some(
+            (stream) =>
+              stream.kind === "video" && !stream.disposition.attached_pic,
+          )
+        )
+          ({ keyframesSeconds } = await readKeyframeIndex(absolute));
+      } catch (error) {
+        if (!(error instanceof UnreadableMediaError)) throw error;
+        failure = error;
+      }
       const after = await readLibraryFile(pathOf(file.rootId), file.path);
       if (after.bytes !== file.bytes || after.modifiedNs !== file.modifiedNs)
         throw new Error(`File changed during probe: ${file.path}`);
+      if (failure !== undefined) {
+        failures.push({
+          rootId: file.rootId,
+          path: file.path,
+          detail: failure.message,
+        });
+        continue;
+      }
       probes.push({
         rootId: file.rootId,
         path: file.path,
@@ -133,6 +166,7 @@ async function runScan(
       rootsRevision: job.rootsRevision,
       files: files.map(encodeFile),
       probes,
+      ...(failures.length === 0 ? {} : { failures }),
       missing,
     };
   } catch (error) {

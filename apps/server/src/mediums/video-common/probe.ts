@@ -18,6 +18,9 @@ export interface ProbeResult {
   streams: ProbeStream[];
 }
 
+/** A deterministic failure to read or decode a media file's probe. */
+export class UnreadableMediaError extends Error {}
+
 const Numberish = Schema.Union(Schema.Number, Schema.String);
 
 const RawTags = Schema.Struct({
@@ -275,7 +278,14 @@ const fromRaw = (raw: RawProbe, extension: string): ProbeResult => {
 
 /** Decode raw ffprobe JSON of a file with this lowercase extension into a normalized {@link ProbeResult}. */
 export function parseProbeOutput(input: unknown, extension = ""): ProbeResult {
-  return fromRaw(Schema.decodeUnknownSync(RawProbe)(input), extension);
+  try {
+    return fromRaw(Schema.decodeUnknownSync(RawProbe)(input), extension);
+  } catch (error) {
+    throw new UnreadableMediaError(
+      error instanceof Error ? error.message : String(error),
+      { cause: error },
+    );
+  }
 }
 
 /** Run ffprobe on a media file and return its raw JSON output. */
@@ -300,10 +310,23 @@ export async function readFfprobe(path: string): Promise<unknown> {
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+  if (proc.signalCode)
+    throw new Error(
+      `ffprobe terminated (${proc.signalCode}): ${stderr.trim()}`,
+    );
   if (exitCode !== 0) {
-    throw new Error(`ffprobe failed (${exitCode}): ${stderr.trim()}`);
+    throw new UnreadableMediaError(
+      `ffprobe failed (${exitCode}): ${stderr.trim()}`,
+    );
   }
-  return JSON.parse(output);
+  try {
+    return JSON.parse(output);
+  } catch (error) {
+    throw new UnreadableMediaError(
+      error instanceof Error ? error.message : String(error),
+      { cause: error },
+    );
+  }
 }
 
 /** Probe a media file with ffprobe and return normalized JSON-safe output. The keyframe index is a separate, slower read — see readKeyframeIndex. */

@@ -75,8 +75,6 @@ export type JobPayload =
       runId?: string;
       /** Folder jobs this whole-Library run created or reused. */
       childJobIds?: string[];
-      /** Changes arriving after a running scan captured its input. */
-      pendingScan?: { changes: ScanChange[]; reconcileMissing: boolean };
     }
   | { type: "probe"; fileId: string }
   // `weekly` marks the one refresh a continuing Show keeps queued a week ahead.
@@ -122,6 +120,8 @@ export const jobs = pgTable(
     maxAttempts: integer("max_attempts").notNull(),
     runAfter: instant("run_after").notNull().defaultNow(),
     concurrencyKey: text("concurrency_key"),
+    /** Set when the enqueue carried a dedupe option; unsettled jobs with the same key coalesce. */
+    dedupeKey: text("dedupe_key"),
     state: jobState("state").notNull().default("queued"),
     error: text("error"),
     /** Written fresh by each claim; only its holder may renew, complete or fail the job. */
@@ -150,6 +150,7 @@ export const jobs = pgTable(
     index("jobs_scan_library_idx")
       .on(sql`(${table.payload}->>'libraryId')`)
       .where(sql`${table.type} = 'scan'`),
+    index("jobs_dedupe_idx").on(table.dedupeKey, table.state),
     index("jobs_scan_run_idx")
       .on(sql`(${table.payload}->>'runId')`)
       .where(sql`${table.type} = 'scan'`),

@@ -30,6 +30,7 @@ import {
 } from "../mediums/video-common/fixtures.ts";
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { libraryScanSource, scanDirectory } from "./scan.ts";
+import { enqueueScan } from "./scan-payload.ts";
 import {
   createLibrary,
   deleteLibrary,
@@ -440,7 +441,8 @@ describe.skipIf(!databaseUrl)("library service", () => {
         });
         const parent = await scanLibrary(db, admin.id, library.id);
         const queue = createJobQueue(db);
-        const child = await queue.enqueue(
+        const child = await enqueueScan(
+          queue,
           { type: "scan", libraryId: library.id, path: folder },
           {
             concurrencyKey: libraryConcurrencyKey(library.id),

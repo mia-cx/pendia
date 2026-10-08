@@ -23,7 +23,7 @@ import {
   scanScope,
   scanShowDirectory,
 } from "./scan.ts";
-import { isLibraryScan } from "./scan-payload.ts";
+import { enqueueScan, isLibraryScan } from "./scan-payload.ts";
 
 /** The concurrency key that serializes every job for one library. */
 export function libraryConcurrencyKey(libraryId: string) {
@@ -45,7 +45,7 @@ export function registerLibraryJobs(
 export async function runScanJob(
   db: Database,
   payload: Extract<JobPayload, { type: "scan" }>,
-  job: Pick<Job, "id"> & Partial<Pick<Job, "claimToken">>,
+  job: Pick<Job, "id">,
   source?: ScanSource,
 ) {
   const [library] = await db
@@ -59,10 +59,6 @@ export async function runScanJob(
       source: files,
       changes: payload.changes,
       reconcileMissing: payload.reconcileMissing,
-      jobClaim:
-        job.claimToken === undefined
-          ? undefined
-          : { id: job.id, claimToken: job.claimToken },
     };
     // Every Item the directory scan wrote may need its own metadata fetch.
     const itemIds =
@@ -133,7 +129,8 @@ export async function runScanJob(
     const queue = createJobQueue(tx);
     const childJobIds: string[] = [];
     for (const path of paths) {
-      const child = await queue.enqueueScanChanges(
+      const child = await enqueueScan(
+        queue,
         {
           type: "scan",
           libraryId: library.id,

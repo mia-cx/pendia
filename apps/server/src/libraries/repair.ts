@@ -2,13 +2,13 @@ import { posix } from "node:path";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
 import { files, items, jobs, libraries, versions } from "../db/schema/index.ts";
-import { createJobQueue, scanEnqueueLockClass } from "../jobs/queue.ts";
+import { createJobQueue } from "../jobs/queue.ts";
 import type { ScanRules } from "../mediums/medium.ts";
 import { moviesMedium } from "../mediums/movies.ts";
 import { showsScan } from "../mediums/shows.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { type LibraryRoot, rootedKey, rootsOf } from "./roots.ts";
-import { isLibraryScan } from "./scan-payload.ts";
+import { enqueueScan, isLibraryScan } from "./scan-payload.ts";
 import {
   type LibraryDirectory,
   MissingLibraryPathError,
@@ -261,9 +261,6 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
       const queue = createJobQueue(tx);
       for (const plan of planned) {
         if (plan.scans.size === 0) continue;
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(${scanEnqueueLockClass}, hashtext(${plan.libraryId}))`,
-        );
         const libraryScans = and(
           eq(jobs.type, "scan"),
           sql`${jobs.payload}->>'libraryId' = ${plan.libraryId}`,
@@ -370,7 +367,8 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
           const job =
             covered?.state === "completed"
               ? covered
-              : await queue.enqueueScanChanges(
+              : await enqueueScan(
+                  queue,
                   {
                     type: "scan",
                     libraryId: plan.libraryId,

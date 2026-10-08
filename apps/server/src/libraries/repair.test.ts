@@ -16,6 +16,7 @@ import {
 import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
 import { createLibraryRepair } from "./repair.ts";
 import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import { enqueueScan } from "./scan-payload.ts";
 import { insertLibraries } from "./testing.ts";
 
 const folder = "Alien (1979) {tmdb-348}";
@@ -40,11 +41,24 @@ async function drainScanJobs(db: Database) {
   const queue = createJobQueue(db);
   const registry = createJobRegistry();
   registerLibraryJobs(db, registry);
+  const deadline = Date.now() + 5_000;
   for (;;) {
     const claimed = await queue.claim(["scan"]);
-    if (!claimed) return;
-    await registry.run(claimed);
-    await queue.complete(claimed);
+    if (claimed) {
+      await registry.run(claimed);
+      await queue.complete(claimed);
+      continue;
+    }
+    // A dedupe merge can briefly row-lock a queued scan past skipLocked.
+    if (
+      (await listJobs(db, { state: "queued", type: "scan" })).length === 0 &&
+      (await listJobs(db, { state: "running", type: "scan" })).every(
+        (job) => job.leaseExpiresAt.getTime() > Date.now(),
+      )
+    )
+      return;
+    if (Date.now() > deadline) throw new Error("Scan jobs did not settle.");
+    await Bun.sleep(50);
   }
 }
 
@@ -105,7 +119,8 @@ describe.skipIf(!databaseUrl)("library repair", () => {
           const queue = createJobQueue(db);
           const registry = createJobRegistry();
           registerLibraryJobs(db, registry);
-          const parent = await queue.enqueue(
+          const parent = await enqueueScan(
+            queue,
             { type: "scan", libraryId: library.id, path: "." },
             { concurrencyKey: libraryConcurrencyKey(library.id) },
           );
@@ -113,7 +128,8 @@ describe.skipIf(!databaseUrl)("library repair", () => {
           if (!rootJob) throw new Error("Root scan was not claimed.");
           if (reuse) {
             for (const path of [".", folder, "Heat (1995)"])
-              await queue.enqueue(
+              await enqueueScan(
+                queue,
                 {
                   type: "scan",
                   libraryId: library.id,
@@ -191,7 +207,7 @@ describe.skipIf(!databaseUrl)("library repair", () => {
           await createVideoFixture(join(root, file1080));
           const library = await insertLibrary(db, root);
           const queue = createJobQueue(db);
-          const parent = await queue.enqueue({
+          const parent = await enqueueScan(queue, {
             type: "scan",
             libraryId: library.id,
             path: ".",
@@ -212,7 +228,8 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         await createVideoFixture(join(root, file1080));
         const library = await insertLibrary(db, root);
         const queue = createJobQueue(db);
-        const original = await queue.enqueue(
+        const original = await enqueueScan(
+          queue,
           { type: "scan", libraryId: library.id, path: folder },
           { maxAttempts: 1 },
         );
@@ -240,7 +257,11 @@ describe.skipIf(!databaseUrl)("library repair", () => {
         const queue = createJobQueue(db);
         const registry = createJobRegistry();
         registerLibraryJobs(db, registry);
-        await queue.enqueue({ type: "scan", libraryId: library.id, path: "." });
+        await enqueueScan(queue, {
+          type: "scan",
+          libraryId: library.id,
+          path: ".",
+        });
         for (let index = 0; index < 2; index++) {
           const job = await queue.claim(["scan"]);
           if (!job) throw new Error("Scan was not claimed.");

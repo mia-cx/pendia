@@ -16,7 +16,6 @@ import {
   files,
   itemAncestors,
   items,
-  jobs,
   libraries,
   libraryRoots,
   probeCache,
@@ -100,8 +99,6 @@ export type ScanDirectoryOptions = {
   source?: ScanSource;
   changes?: readonly ScanChange[];
   reconcileMissing?: boolean;
-  /** Reads buffered moves before reconciliation and retains a fresh-read follow-up. */
-  jobClaim?: Pick<typeof jobs.$inferSelect, "id" | "claimToken">;
 };
 
 /** The scan rules one library-relative scope of a medium uses. */
@@ -124,83 +121,6 @@ export const inScope = (
       rules.itemFolder(posix.dirname(path)) === scope;
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
-
-async function scanInput(
-  tx: Transaction,
-  options: ScanDirectoryOptions,
-  walked: readonly RootedFile[],
-) {
-  if (options.jobClaim === undefined)
-    return {
-      changes: options.changes ?? [],
-      providerChanges: options.changes ?? [],
-      reconcileMissing: options.reconcileMissing,
-    };
-  const claim = options.jobClaim;
-  const [job] = await tx
-    .select()
-    .from(jobs)
-    .where(
-      and(
-        eq(jobs.id, claim.id),
-        eq(jobs.claimToken, claim.claimToken),
-        eq(jobs.state, "running"),
-      ),
-    )
-    .for("update");
-  if (job?.payload.type !== "scan")
-    throw new Error("Lost scan job claim before write.");
-  const { pendingScan, ...payload } = job.payload;
-  const walkedKeys = new Set(walked.map(rootedKey));
-  // A move after the walk needs a retry before stale groups can undo it.
-  if (
-    pendingScan?.changes.some(
-      (change) =>
-        change.kind === "move" &&
-        walkedKeys.has(
-          rootedKey({
-            rootId: change.rootId,
-            path: change.previousPath,
-          }),
-        ),
-    )
-  )
-    throw new Error("Scan move arrived after the filesystem walk.");
-  const changes = [...(payload.changes ?? []), ...(pendingScan?.changes ?? [])];
-  const assertions = scanAssertions(changes);
-  const reconcileMissing =
-    payload.reconcileMissing === true || pendingScan?.reconcileMissing === true;
-  // Acknowledge destructive events with the write. Replaying a delete after a
-  // replacement move would delete the moved File. Adds still need a fresh read.
-  if (changes.some((change) => change.kind !== "add"))
-    await tx
-      .update(jobs)
-      .set({
-        payload: {
-          ...payload,
-          changes: pendingScan === undefined ? assertions : [],
-          ...(pendingScan === undefined
-            ? {}
-            : {
-                pendingScan: {
-                  ...pendingScan,
-                  changes: assertions,
-                },
-              }),
-        },
-      })
-      .where(eq(jobs.id, job.id));
-  // Completion keeps a fresh-read follow-up even after all moves were applied.
-  return {
-    changes,
-    // Only surviving destinations assert ids. Off-snapshot input must not
-    // identify the lone existing group; it waits for the next read.
-    providerChanges: assertions.filter((change) =>
-      walkedKeys.has(rootedKey(change)),
-    ),
-    reconcileMissing,
-  };
-}
 
 /** Replace one File's Stream inventory from a probe, reusing (fileId, index) ids. */
 async function upsertFileStreams(
@@ -1051,6 +971,7 @@ export async function scanDirectory(
   probed: number;
 }> {
   const startedAt = performance.now();
+  const changes = options.changes ?? [];
   const [library] = await db
     .select()
     .from(libraries)
@@ -1076,6 +997,10 @@ export async function scanDirectory(
     discovered.flatMap((group) => group.files),
   );
   const { memberByKey, skipped, probed } = result;
+  const walkedKeys = new Set(walked.map(rootedKey));
+  // A move's assertion names the path the walk saw, so fold each chain's ids
+  // to its surviving destination before matching groups.
+  const providerChanges = scanAssertions(changes);
   const groups = discovered
     .map((group) => ({
       ...group,
@@ -1098,12 +1023,6 @@ export async function scanDirectory(
     if (locked.rootsRevision !== source.rootsRevision)
       throw new Error("Library roots changed before scan write.");
 
-    // Root edits also lock the Library first. Read moves before reconciliation.
-    const { changes, providerChanges, reconcileMissing } = await scanInput(
-      tx,
-      options,
-      walked,
-    );
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
@@ -1286,7 +1205,7 @@ export async function scanDirectory(
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
 
-    if (reconcileMissing === true) {
+    if (options.reconcileMissing === true) {
       if (walked.length === 0) await source.confirmEmpty(path, false);
       const atFolder = await tx
         .select({ id: items.id })
@@ -1299,7 +1218,6 @@ export async function scanDirectory(
             eq(items.canonicalFolder, path),
           ),
         );
-      const walkedKeys = new Set(walked.map(rootedKey));
       const touched = await reconcileStaleFiles(
         tx,
         source,
@@ -1347,6 +1265,7 @@ export async function scanShowDirectory(
   probed: number;
 }> {
   const startedAt = performance.now();
+  const changes = options.changes ?? [];
   const [library] = await db
     .select()
     .from(libraries)
@@ -1363,6 +1282,9 @@ export async function scanShowDirectory(
     (candidate) => candidate.canonicalFolder === path,
   );
   const walkedKeys = new Set(walked.map(rootedKey));
+  // A move's assertion names the path the walk saw, so fold each chain's ids
+  // to its surviving destination before matching groups.
+  const providerChanges = scanAssertions(changes);
 
   const result = await probeScanMembers(
     db,
@@ -1418,11 +1340,6 @@ export async function scanShowDirectory(
     if (locked.rootsRevision !== source.rootsRevision)
       throw new Error("Library roots changed before scan write.");
 
-    const { changes, providerChanges, reconcileMissing } = await scanInput(
-      tx,
-      options,
-      walked,
-    );
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
@@ -1726,7 +1643,7 @@ export async function scanShowDirectory(
               retained = versionFiles.filter(
                 (file) =>
                   !versionGroup.paths.includes(file.path) &&
-                  (reconcileMissing !== true ||
+                  (options.reconcileMissing !== true ||
                     walkedKeys.has(rootedKey(file))),
               ).length;
               await tx
@@ -1865,7 +1782,7 @@ export async function scanShowDirectory(
 
     await deleteEmptiedItems(tx, emptiedItemIds, deletedArtwork);
 
-    if (reconcileMissing === true) {
+    if (options.reconcileMissing === true) {
       if (walked.length === 0) await source.confirmEmpty(path, false);
       const atFolder = await tx
         .select({ id: items.id })

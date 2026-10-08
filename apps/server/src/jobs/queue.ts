@@ -18,7 +18,6 @@ import {
   jobType,
   libraries,
 } from "../db/schema/index.ts";
-import { isLibraryScan, scanAssertions } from "../libraries/scan-payload.ts";
 
 /** A persisted queue job. */
 export type Job = typeof jobs.$inferSelect;
@@ -26,57 +25,28 @@ export type Job = typeof jobs.$inferSelect;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
 
+/** Coalesces enqueue requests into unsettled jobs carrying the same key. */
+export type Dedupe = {
+  /** Jobs with the same key coalesce. */
+  key: string;
+  /** Folds a new request into the payload of a queued job with the same key. */
+  merge: (queued: JobPayload) => JobPayload;
+  /** Whether a running job with the same key already covers this request. */
+  coveredBy?: (running: JobPayload) => boolean;
+};
+
 type EnqueueOptions = Partial<
   Pick<
     typeof jobs.$inferInsert,
     "priority" | "maxAttempts" | "runAfter" | "concurrencyKey"
   >
->;
-
-type ScanPayload = Extract<JobPayload, { type: "scan" }>;
-
-// A later batch has its own attempt budget; retain the earlier error on the job.
-function scanContinuation(job: Job, completed = false) {
-  if (job.payload.type !== "scan" || job.payload.pendingScan === undefined)
-    return undefined;
-  const { pendingScan, ...payload } = job.payload;
-  const exhausted = job.attempts >= job.maxAttempts;
-  return {
-    state: "queued" as const,
-    attempts: completed || exhausted ? 0 : job.attempts,
-    payload: {
-      ...payload,
-      changes: [
-        // A delayed move can inherit an original off-snapshot assertion.
-        // Keep metadata without replaying acknowledged destructive events.
-        ...(completed || exhausted
-          ? scanAssertions(payload.changes ?? [])
-          : (payload.changes ?? [])),
-        ...pendingScan.changes,
-      ],
-      reconcileMissing:
-        payload.reconcileMissing === true || pendingScan.reconcileMissing,
-    },
-  };
-}
-
-function scanMatch(payload: ScanPayload) {
-  const libraryScan = sql`(${jobs.payload}->>'path' = '.' and ${jobs.payload}->>'runId' is null and ${jobs.payload}->'changes' is null)`;
-  return and(
-    eq(jobs.type, "scan"),
-    inArray(jobs.state, ["queued", "running"]),
-    sql`${jobs.payload}->>'libraryId' = ${payload.libraryId}`,
-    sql`${jobs.payload}->>'path' = ${payload.path}`,
-    // A root job must be able to queue its own `.` Item-folder child.
-    payload.path === "."
-      ? sql`${libraryScan} = ${isLibraryScan(payload)}`
-      : undefined,
-  );
-}
+> & {
+  dedupe?: Dedupe;
+};
 
 const claimLockKey = 0x70656e646a6fn;
-/** Serializes scan insertion and repair coverage checks within one Library. */
-export const scanEnqueueLockClass = 0x7363616e;
+/** Serializes dedupe checks and inserts within one key. */
+const dedupeLockClass = 0x64656475;
 const maxRetryDelayMs = 60_000;
 
 /** How long a watcher's claim keeps its Libraries' scans away from workers. */
@@ -177,92 +147,61 @@ export function createJobQueue(
       }
     },
 
-    /** Enqueues a typed payload, reusing an unsettled scan of the same Library and scope. */
+    /**
+     * Enqueues a typed payload with its scheduling options. A `dedupe` folds
+     * the request into an unsettled job with the same key: one a running job
+     * already covers, or the oldest queued one, whose payload it merges into.
+     */
     async enqueue(payload: JobPayload, options: EnqueueOptions = {}) {
+      const { dedupe, ...fields } = options;
       return db.transaction(async (tx) => {
-        if (payload.type === "scan") {
+        if (dedupe !== undefined) {
           await tx.execute(
-            sql`select pg_advisory_xact_lock(${scanEnqueueLockClass}, hashtext(${payload.libraryId}))`,
+            sql`select pg_advisory_xact_lock(${dedupeLockClass}, hashtext(${dedupe.key}))`,
           );
-          const [existing] = await tx
+          const unsettled = await tx
             .select()
             .from(jobs)
-            .where(scanMatch(payload))
+            .where(
+              and(
+                eq(jobs.dedupeKey, dedupe.key),
+                inArray(jobs.state, ["queued", "running"]),
+              ),
+            )
             .orderBy(jobs.id)
-            .limit(1);
-          if (existing !== undefined) return existing;
+            .for("update");
+          const running = unsettled.find((job) => job.state === "running");
+          if (
+            dedupe.coveredBy !== undefined &&
+            running !== undefined &&
+            dedupe.coveredBy(running.payload)
+          )
+            return running;
+          const queued = unsettled.find((job) => job.state === "queued");
+          if (queued !== undefined) {
+            const [updated] = await tx
+              .update(jobs)
+              .set({ payload: dedupe.merge(queued.payload) })
+              .where(eq(jobs.id, queued.id))
+              .returning();
+            if (!updated) throw new Error("Job update returned no row.");
+            await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
+            return updated;
+          }
         }
         const [job] = await tx
           .insert(jobs)
           .values({
-            ...options,
+            ...fields,
             type: payload.type,
             payload,
+            dedupeKey: dedupe?.key ?? null,
             maxAttempts: options.maxAttempts ?? 3,
           })
           .returning();
         if (!job) throw new Error("Job insertion returned no row.");
         await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
         return job;
-      });
-    },
-
-    /** Persists distinct changes on a reused scan; running jobs process them after their current input. */
-    async enqueueScanChanges(
-      payload: ScanPayload,
-      options: EnqueueOptions = {},
-    ) {
-      return db.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(${scanEnqueueLockClass}, hashtext(${payload.libraryId}))`,
-        );
-        const [existing] = await tx
-          .select()
-          .from(jobs)
-          .where(scanMatch(payload))
-          .orderBy(jobs.id)
-          .limit(1)
-          .for("update");
-        if (existing?.payload.type !== "scan")
-          return createJobQueue(tx).enqueue(payload, options);
-        const changes = payload.changes ?? [];
-        if (
-          changes.length === 0 &&
-          (!payload.reconcileMissing || existing.payload.reconcileMissing)
-        )
-          return existing;
-        const { pendingScan: pending, ...prior } = existing.payload;
-        const next =
-          existing.state === "running"
-            ? {
-                ...existing.payload,
-                pendingScan: {
-                  changes: [...(pending?.changes ?? []), ...changes],
-                  reconcileMissing:
-                    pending?.reconcileMissing === true ||
-                    payload.reconcileMissing === true,
-                },
-              }
-            : {
-                ...prior,
-                changes: [
-                  ...(prior.changes ?? []),
-                  ...(pending?.changes ?? []),
-                  ...changes,
-                ],
-                reconcileMissing:
-                  existing.payload.reconcileMissing === true ||
-                  pending?.reconcileMissing === true ||
-                  payload.reconcileMissing === true,
-              };
-        const [updated] = await tx
-          .update(jobs)
-          .set({ payload: next })
-          .where(eq(jobs.id, existing.id))
-          .returning();
-        if (!updated) throw new Error("Scan update returned no row.");
-        await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
-        return updated;
       });
     },
 
@@ -280,24 +219,7 @@ export function createJobQueue(
       const libraryId = sql`${jobs.payload}->>'libraryId'`;
       return db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(${claimLockKey})`);
-        const interrupted = await tx
-          .select()
-          .from(jobs)
-          .where(and(leaseExpired, sql`${jobs.payload} ? 'pendingScan'`))
-          .for("update");
-        for (const job of interrupted) {
-          const continuation = scanContinuation(job);
-          if (continuation)
-            await tx
-              .update(jobs)
-              .set({
-                ...continuation,
-                error: leaseExpiredError,
-                runAfter: sql`statement_timestamp()`,
-              })
-              .where(eq(jobs.id, job.id));
-        }
-        // Exhausted input without later events leaves nothing to reclaim.
+        // An expired lease on the last attempt leaves nothing to reclaim.
         await tx
           .update(jobs)
           .set({ state: "failed", error: leaseExpiredError })
@@ -351,85 +273,47 @@ export function createJobQueue(
       });
     },
 
-    /** Completes the held claim, or requeues that scan with changes received during its work. */
+    /** Completes the job only for the claim that holds it. */
     async complete(job: Claim) {
-      return db.transaction(async (tx) => {
-        const held = and(
-          eq(jobs.id, job.id),
-          eq(jobs.claimToken, job.claimToken),
-          eq(jobs.state, "running"),
-        );
-        const [current] = await tx
-          .select()
-          .from(jobs)
-          .where(held)
-          .for("update");
-        if (!current) return undefined;
-        const continuation = scanContinuation(current, true);
-        if (continuation) {
-          const [queued] = await tx
-            .update(jobs)
-            .set({
-              ...continuation,
-              runAfter: sql`statement_timestamp()`,
-            })
-            .where(held)
-            .returning();
-          await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
-          return queued;
-        }
-        const [completed] = await tx
-          .update(jobs)
-          .set({ state: "completed" })
-          .where(held)
-          .returning();
-        return completed;
-      });
+      const [completed] = await db
+        .update(jobs)
+        .set({ state: "completed" })
+        .where(
+          and(
+            eq(jobs.id, job.id),
+            eq(jobs.claimToken, job.claimToken),
+            eq(jobs.state, "running"),
+          ),
+        )
+        .returning();
+      return completed;
     },
 
     /**
-     * Retains the held claim's error and retries within its budget. Later
-     * scan events remain runnable with their own budget after exhaustion.
+     * Retains the error and schedules a retry unless attempts are exhausted,
+     * only for the claim that holds the job.
      */
     async fail(job: Claim & Pick<Job, "attempts">, error: unknown) {
       const delay = Math.min(
         maxRetryDelayMs,
         retryDelayMs * 2 ** (job.attempts - 1),
       );
-      return db.transaction(async (tx) => {
-        const held = and(
-          eq(jobs.id, job.id),
-          eq(jobs.claimToken, job.claimToken),
-          eq(jobs.state, "running"),
-        );
-        const [current] = await tx
-          .select()
-          .from(jobs)
-          .where(held)
-          .for("update");
-        if (!current) return undefined;
-        const continuation = scanContinuation(current);
-        const [failed] = await tx
-          .update(jobs)
-          .set({
-            state: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then 'queued'::job_state else 'failed'::job_state end`,
-            error: error instanceof Error ? error.message : String(error),
-            runAfter:
-              continuation && current.attempts >= current.maxAttempts
-                ? sql`statement_timestamp()`
-                : sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then clock_timestamp() + ${delay} * interval '1 millisecond' else ${jobs.runAfter} end`,
-            ...continuation,
-          })
-          .where(
-            and(
-              eq(jobs.id, job.id),
-              eq(jobs.claimToken, job.claimToken),
-              eq(jobs.state, "running"),
-            ),
-          )
-          .returning();
-        return failed ? { ...failed, retryDelayMs: delay } : undefined;
-      });
+      const [failed] = await db
+        .update(jobs)
+        .set({
+          state: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then 'queued'::job_state else 'failed'::job_state end`,
+          error: error instanceof Error ? error.message : String(error),
+          runAfter: sql`case when ${jobs.attempts} < ${jobs.maxAttempts} then clock_timestamp() + ${delay} * interval '1 millisecond' else ${jobs.runAfter} end`,
+        })
+        .where(
+          and(
+            eq(jobs.id, job.id),
+            eq(jobs.claimToken, job.claimToken),
+            eq(jobs.state, "running"),
+          ),
+        )
+        .returning();
+      return failed ? { ...failed, retryDelayMs: delay } : undefined;
     },
   };
 }

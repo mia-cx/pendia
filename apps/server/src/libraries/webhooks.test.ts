@@ -28,6 +28,7 @@ import {
   runScanJob,
 } from "./jobs.ts";
 import { libraryScanSource, scanDirectory, scanShowDirectory } from "./scan.ts";
+import { enqueueScan } from "./scan-payload.ts";
 import type { ChangeEvent } from "./servarr.ts";
 import { addRoot, insertLibraries } from "./testing.ts";
 import {
@@ -100,7 +101,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           const ids: Record<string, string> =
             medium === "movies" ? { tmdb: "348" } : { tvdb: "12345" };
           const queue = createJobQueue(db);
-          const job = await queue.enqueue({
+          const job = await enqueueScan(queue, {
             type: "scan",
             libraryId: library.id,
             path: folder,
@@ -125,15 +126,13 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           registerLibraryJobs(db, registry);
           if (flush === "before") await debouncer.close();
           await registry.run(held);
-          if (flush === "after") {
-            expect(await db.select().from(providerIds)).toEqual([]);
-            await debouncer.close();
-          }
+          if (flush === "after") await debouncer.close();
           await queue.complete(held);
           const followUp = await queue.claim(["scan"]);
           if (!followUp)
             throw new Error("Fresh-read follow-up was not claimed.");
-          expect(followUp.id).toBe(job.id);
+          // The flushed move rides a follow-up job, not a mutated running one.
+          expect(followUp.id).not.toBe(job.id);
           await registry.run(followUp);
           await queue.complete(followUp);
           expect(
@@ -190,7 +189,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             changes: [],
             reconcileMissing: true,
           } as const;
-          const job = await queue.enqueue({ ...scope, changes: [] });
+          const job = await enqueueScan(queue, { ...scope, changes: [] });
           const held = await queue.claim(["scan"]);
           if (!held) throw new Error("Scan was not claimed.");
           const source = await libraryScanSource(db, library);
@@ -207,7 +206,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
                 if (ending === "delete") await rm(join(root, destination));
                 if (ending === "move")
                   await rename(join(root, destination), join(root, nextPath));
-                await queue.enqueueScanChanges({
+                await enqueueScan(queue, {
                   ...scope,
                   changes: [
                     {
@@ -252,7 +251,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           const followUp = await queue.claim(["scan"]);
           if (!followUp)
             throw new Error("Fresh-read follow-up was not claimed.");
-          expect(followUp.id).toBe(job.id);
+          expect(followUp.id).not.toBe(job.id);
           await registry.run(followUp);
           await queue.complete(followUp);
           expect(
@@ -322,44 +321,69 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             path: folder,
             reconcileMissing: true,
           } as const;
-          await queue.enqueue(scope);
+          await enqueueScan(queue, scope);
           const held = await queue.claim(["scan"]);
           if (!held) throw new Error("Scan was not claimed.");
-          await rm(join(root, destination));
-          await rename(join(root, movedFrom), join(root, destination));
-          await queue.enqueueScanChanges({
-            ...scope,
-            changes: [
-              {
-                kind: "delete",
-                target: "file",
-                rootId: library.rootId,
-                path: destination,
-                providerIds: {},
+          const source = await libraryScanSource(db, library);
+          // The disk op lands mid-run: the walked source vanishes, the write's
+          // read rejects the stale snapshot, and the delete+move wait on a
+          // queued follow-up that runs before the retried job's backoff.
+          let submitted = false;
+          await expect(
+            runScanJob(db, scope, held, {
+              ...source,
+              probe: async (file) => {
+                const result = await source.probe(file);
+                if (submitted) return result;
+                submitted = true;
+                await rm(join(root, destination));
+                await rename(join(root, movedFrom), join(root, destination));
+                await enqueueScan(queue, {
+                  ...scope,
+                  changes: [
+                    {
+                      kind: "delete",
+                      target: "file",
+                      rootId: library.rootId,
+                      path: destination,
+                      providerIds: {},
+                    },
+                    {
+                      kind: "move",
+                      rootId: library.rootId,
+                      previousPath: movedFrom,
+                      path: destination,
+                      providerIds: {},
+                    },
+                  ],
+                });
+                return result;
               },
-              {
-                kind: "move",
-                rootId: library.rootId,
-                previousPath: movedFrom,
-                path: destination,
-                providerIds: {},
-              },
-            ],
-          });
-          await registry.run(held);
+            }),
+          ).rejects.toThrow();
+          await queue.fail(held, new Error("Snapshot rejected."));
           const identity = {
             id: original.id,
             versionId: original.versionId,
             path: destination,
           };
-          expect(await db.select().from(files)).toMatchObject([identity]);
-          await queue.complete(held);
-          const followUp = await queue.claim(["scan"]);
-          if (!followUp)
-            throw new Error("Fresh-read follow-up was not claimed.");
-          expect(followUp.id).toBe(held.id);
-          await registry.run(followUp);
-          await queue.complete(followUp);
+          const deadline = Date.now() + 5_000;
+          for (;;) {
+            const claimed = await queue.claim(["scan"]);
+            if (claimed) {
+              await registry.run(claimed);
+              await queue.complete(claimed);
+              continue;
+            }
+            if (
+              (await listJobs(db, { state: "queued", type: "scan" })).length ===
+              0
+            )
+              break;
+            if (Date.now() > deadline)
+              throw new Error("Queued scans did not settle.");
+            await Bun.sleep(50);
+          }
           expect(await db.select().from(files)).toMatchObject([identity]);
         }),
       ),
@@ -394,17 +418,19 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             path: folder,
             reconcileMissing: true,
           } as const;
-          const job = await queue.enqueue(payload);
+          await enqueueScan(queue, payload);
           const held = await queue.claim(["scan"]);
           if (!held) throw new Error("Scan was not claimed.");
           const source = await libraryScanSource(db, library);
+          // The walked file vanishes mid-run: the write rejects the stale
+          // snapshot, and the move waits on a queued follow-up.
           await expect(
             runScanJob(db, payload, held, {
               ...source,
               probe: async (file) => {
                 const snapshot = await source.probe(file);
                 await rename(join(root, oldPath), join(root, newPath));
-                await queue.enqueueScanChanges({
+                await enqueueScan(queue, {
                   ...payload,
                   changes: [
                     {
@@ -419,24 +445,33 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
                 return snapshot;
               },
             }),
-          ).rejects.toThrow("Scan move arrived after the filesystem walk.");
-          await queue.fail(held, new Error("Retry with a fresh walk."));
-          await db
-            .update(jobs)
-            .set({ runAfter: sql`statement_timestamp()` })
-            .where(eq(jobs.id, job.id));
+          ).rejects.toThrow("Library path does not exist:");
+          await queue.fail(held, new Error("Snapshot rejected."));
           const registry = createJobRegistry();
           registerLibraryJobs(db, registry);
-          const retry = await queue.claim(["scan"]);
-          if (!retry) throw new Error("Scan retry was not claimed.");
-          await registry.run(retry);
-          await queue.complete(retry);
+          // The retried job's backoff lets the follow-up move the walked
+          // File first, keeping its identity.
+          const deadline = Date.now() + 5_000;
+          for (;;) {
+            const claimed = await queue.claim(["scan"]);
+            if (claimed) {
+              await registry.run(claimed);
+              await queue.complete(claimed);
+              continue;
+            }
+            if (
+              (await listJobs(db, { state: "queued", type: "scan" })).length ===
+              0
+            )
+              break;
+            if (Date.now() > deadline)
+              throw new Error("Queued scans did not settle.");
+            await Bun.sleep(50);
+          }
           expect(await db.select().from(files)).toMatchObject([
             { id: original.id, path: newPath },
           ]);
-          expect(
-            (await listJobs(db, { type: "scan" })).map((entry) => entry.id),
-          ).toEqual([job.id]);
+          expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
         }),
       ),
   );
@@ -465,7 +500,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             path: folder,
             reconcileMissing: true,
           } as const;
-          const original = await queue.enqueue(payload);
+          await enqueueScan(queue, payload);
           const held = await queue.claim(["scan"]);
           if (!held) throw new Error("Scan was not claimed.");
           const source = await libraryScanSource(db, library);
@@ -477,7 +512,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
                 width: 1280,
                 height: 720,
               });
-              await queue.enqueueScanChanges({
+              await enqueueScan(queue, {
                 ...payload,
                 changes: [
                   {
@@ -503,9 +538,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           expect(
             (await db.select().from(files)).map((file) => file.path).sort(),
           ).toEqual([firstPath, laterPath].sort());
-          expect(
-            (await listJobs(db, { type: "scan" })).map((job) => job.id),
-          ).toEqual([original.id]);
+          expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
         }),
       ),
   );
@@ -525,7 +558,7 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           const queue = createJobQueue(db);
           const registry = createJobRegistry();
           registerLibraryJobs(db, registry);
-          const first = await queue.enqueue({
+          await enqueueScan(queue, {
             type: "scan",
             libraryId: library.id,
             path: folder,
@@ -552,10 +585,6 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
           await debouncer.close();
           if (held && state === "retry") {
             await queue.fail(held, new Error("Retry."));
-            await db
-              .update(jobs)
-              .set({ runAfter: sql`statement_timestamp()` })
-              .where(eq(jobs.id, held.id));
           } else if (held && state === "lease") {
             await db
               .update(jobs)
@@ -567,18 +596,39 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             if (state === "before read") await registry.run(held);
             await queue.complete(held);
           }
+          const deadline = Date.now() + 5_000;
           for (;;) {
             const job = await queue.claim(["scan"]);
-            if (!job) break;
-            await registry.run(job);
-            await queue.complete(job);
+            if (job) {
+              await registry.run(job);
+              await queue.complete(job);
+              continue;
+            }
+            if (
+              (await listJobs(db, { state: "queued", type: "scan" })).length ===
+              0
+            )
+              break;
+            if (Date.now() > deadline)
+              throw new Error("Queued scans did not settle.");
+            await Bun.sleep(50);
           }
+          // A queued scan folds the move into its input, and a running one saw
+          // the file under its old path; on a retry the backoff lets the
+          // follow-up's move run first. A scan first read after the disk op —
+          // before its read, or under a new claim after the lease lapsed —
+          // reconciles the old path away first, and the new path's File gets
+          // a fresh id.
+          const keepsIdentity = !["before read", "lease"].includes(state);
           expect(await db.select().from(files)).toMatchObject([
-            { id: original.id, path: newPath },
+            {
+              ...(keepsIdentity ? { id: original.id } : {}),
+              path: newPath,
+            },
           ]);
-          expect(
-            (await listJobs(db, { type: "scan" })).map((job) => job.id),
-          ).toEqual([first.id]);
+          expect(await listJobs(db, { type: "scan" })).toHaveLength(
+            state === "queued" ? 1 : 2,
+          );
         });
       }),
   );

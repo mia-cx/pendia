@@ -14,6 +14,7 @@ import { createJobQueue } from "../jobs/queue.ts";
 import { leavesRoot } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { scanScope } from "./scan.ts";
+import { enqueueScan } from "./scan-payload.ts";
 import { type ChangeEvent, radarrChanges, sonarrChanges } from "./servarr.ts";
 import { acceptsLibraryFile } from "./walker.ts";
 
@@ -103,17 +104,16 @@ export function createChangeDebouncer(
     clearTimeout(batch.timer);
     batch.timer = undefined;
     const persisted = batch.changes.slice();
-    const flushing = queue
-      .enqueueScanChanges(
-        {
-          type: "scan",
-          libraryId: batch.libraryId,
-          path: batch.path,
-          changes: persisted,
-        },
-        { concurrencyKey: libraryConcurrencyKey(batch.libraryId) },
-      )
-      .then(() => undefined);
+    const flushing = enqueueScan(
+      queue,
+      {
+        type: "scan",
+        libraryId: batch.libraryId,
+        path: batch.path,
+        changes: persisted,
+      },
+      { concurrencyKey: libraryConcurrencyKey(batch.libraryId) },
+    ).then(() => undefined);
     batch.flushing = flushing;
     inFlight.add(flushing);
     void flushing.then(

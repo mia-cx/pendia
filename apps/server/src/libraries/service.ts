@@ -34,6 +34,7 @@ import { removeFile } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { rootsOf } from "./roots.ts";
 import { pruneEmptiedItems } from "./scan.ts";
+import { enqueueScan } from "./scan-payload.ts";
 
 const maxNameLength = 128;
 
@@ -328,7 +329,8 @@ export async function updateLibrary(
     }
     // One full scan covers every added and repointed root.
     if (repointed.length > 0 || requested.some((root) => root.id === undefined))
-      await createJobQueue(tx).enqueue(
+      await enqueueScan(
+        createJobQueue(tx),
         { type: "scan", libraryId: id, path: "." },
         { concurrencyKey: libraryConcurrencyKey(id) },
       );
@@ -382,7 +384,8 @@ export async function scanLibrary(db: Database, actorId: string, id: string) {
     .from(libraries)
     .where(eq(libraries.id, id));
   if (!library) throw new AuthError("NOT_FOUND");
-  const job = await createJobQueue(db).enqueue(
+  const job = await enqueueScan(
+    createJobQueue(db),
     { type: "scan", libraryId: id, path: "." },
     { concurrencyKey: libraryConcurrencyKey(id) },
   );

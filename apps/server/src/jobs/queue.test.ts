@@ -4,6 +4,7 @@ import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { type JobPayload, jobs } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { enqueueScan } from "../libraries/scan-payload.ts";
 import { createJobQueue, leaseExpiredError, listJobs } from "./queue.ts";
 
 function probePayload(): JobPayload {
@@ -75,7 +76,7 @@ test("rejects invalid retry delays and concurrency limits", async () => {
 
 describe.skipIf(!databaseUrl)("Job queue", () => {
   test.each(["failure", "lease"] as const)(
-    "pending scan events survive terminal %s with a fresh attempt budget",
+    "changes arriving during a %s scan run wait as a follow-up job",
     (ending) =>
       withDatabase(async (db) => {
         const queue = createJobQueue(db);
@@ -85,7 +86,8 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
           path: "Alien",
           runId: Bun.randomUUIDv7(),
         } as const;
-        const original = await queue.enqueue(
+        const original = await enqueueScan(
+          queue,
           { ...scope, changes: [] },
           { maxAttempts: 1 },
         );
@@ -98,26 +100,29 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
           path: "Alien/new.mkv",
           providerIds: {},
         } as const;
-        await queue.enqueueScanChanges({ ...scope, changes: [move] });
+        const followUp = await enqueueScan(queue, {
+          ...scope,
+          changes: [move],
+        });
+        expect(followUp.id).not.toBe(original.id);
         if (ending === "failure")
           await queue.fail(held, new Error("Earlier input failed."));
         else await expireLease(db, held.id);
         const resumed = await queue.claim(["scan"]);
         expect(resumed).toMatchObject({
-          id: original.id,
-          attempts: 1,
+          id: followUp.id,
           payload: { ...scope, changes: [move] },
         });
-        expect(resumed?.error).toBe(
+        if (!resumed) throw new Error("The follow-up was not claimed.");
+        await queue.complete(resumed);
+        const [failed] = await listJobs(db, { state: "failed" });
+        expect(failed?.error).toBe(
           ending === "failure" ? "Earlier input failed." : leaseExpiredError,
         );
-        if (!resumed) throw new Error("Pending events were not recovered.");
-        await queue.complete(resumed);
-        expect((await listJobs(db))[0]?.error).toBe(resumed.error);
       }),
   );
 
-  test("a scan retry keeps changes in arrival order and its original run", () =>
+  test("a scan retry and its follow-up stay queued; no change is lost", () =>
     withDatabase(async (db) => {
       const queue = createJobQueue(db);
       const rootId = Bun.randomUUIDv7();
@@ -148,15 +153,17 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
         target: "file",
         providerIds: {},
       } as const;
-      const original = await queue.enqueueScanChanges({
-        ...scope,
-        changes: [first],
-      });
+      const original = await enqueueScan(queue, { ...scope, changes: [first] });
       const held = await queue.claim(["scan"]);
       if (!held) throw new Error("Scan was not claimed.");
-      await queue.enqueueScanChanges({ ...scope, changes: [second] });
+      const followUp = await enqueueScan(queue, {
+        ...scope,
+        changes: [second],
+      });
+      expect(followUp.id).not.toBe(original.id);
       await queue.fail(held, new Error("Retry."));
-      const updated = await queue.enqueueScanChanges({
+      // The oldest queued job with the key takes the merge: the retried original.
+      const updated = await enqueueScan(queue, {
         ...scope,
         changes: [third],
         reconcileMissing: true,
@@ -164,15 +171,18 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
       expect(updated.id).toBe(original.id);
       expect(updated.payload).toEqual({
         ...scope,
-        changes: [first, second, third],
+        changes: [first, third],
         reconcileMissing: true,
       });
+      expect(
+        await listJobs(db, { state: "queued", type: "scan" }),
+      ).toHaveLength(2);
     }));
 
   test("concurrent scan enqueues reuse the queued or running job until it settles", () =>
     withDatabase(async (db, url) => {
       const other = createDatabase(url);
-      const payload: JobPayload = {
+      const payload: Extract<JobPayload, { type: "scan" }> = {
         type: "scan",
         libraryId: Bun.randomUUIDv7(),
         path: "Alien (1979)",
@@ -180,31 +190,59 @@ describe.skipIf(!databaseUrl)("Job queue", () => {
       const queue = createJobQueue(db);
       try {
         const enqueued = await Promise.all([
-          queue.enqueue(payload),
-          createJobQueue(other.db).enqueue(payload),
-          queue.enqueue(payload),
+          enqueueScan(queue, payload),
+          enqueueScan(createJobQueue(other.db), payload),
+          enqueueScan(queue, payload),
         ]);
         expect(new Set(enqueued.map((job) => job.id)).size).toBe(1);
         const claimed = await queue.claim(["scan"]);
         if (!claimed) throw new Error("Scan was not claimed.");
-        expect((await queue.enqueue(payload)).id).toBe(claimed.id);
+        expect((await enqueueScan(queue, payload)).id).toBe(claimed.id);
         await expireLease(db, claimed.id);
-        expect((await queue.enqueue(payload)).id).toBe(claimed.id);
+        expect((await enqueueScan(queue, payload)).id).toBe(claimed.id);
         const recovered = await queue.claim(["scan"]);
         if (!recovered) throw new Error("Expired scan was not recovered.");
         await queue.complete(recovered);
-        expect((await queue.enqueue(payload)).id).not.toBe(claimed.id);
+        expect((await enqueueScan(queue, payload)).id).not.toBe(claimed.id);
         expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
         expect(
-          (await queue.enqueue({ ...payload, path: "Heat (1995)" })).id,
+          (await enqueueScan(queue, { ...payload, path: "Heat (1995)" })).id,
         ).not.toBe(claimed.id);
         expect(
-          (await queue.enqueue({ ...payload, libraryId: Bun.randomUUIDv7() }))
-            .id,
+          (
+            await enqueueScan(queue, {
+              ...payload,
+              libraryId: Bun.randomUUIDv7(),
+            })
+          ).id,
         ).not.toBe(claimed.id);
       } finally {
         await other.close();
       }
+    }));
+
+  test("a library scan and its own `.` folder child coexist", () =>
+    withDatabase(async (db) => {
+      const queue = createJobQueue(db);
+      const libraryId = Bun.randomUUIDv7();
+      const parent = await enqueueScan(queue, {
+        type: "scan",
+        libraryId,
+        path: ".",
+      });
+      const childPayload: Extract<JobPayload, { type: "scan" }> = {
+        type: "scan",
+        libraryId,
+        path: ".",
+        changes: [],
+        reconcileMissing: true,
+        runId: parent.id,
+      };
+      const child = await enqueueScan(queue, childPayload);
+      expect(child.id).not.toBe(parent.id);
+      expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
+      // A repeat of the child's request merges into the queued child.
+      expect((await enqueueScan(queue, childPayload)).id).toBe(child.id);
     }));
 
   test("enqueues typed payloads and lists them with filters and paging", () =>

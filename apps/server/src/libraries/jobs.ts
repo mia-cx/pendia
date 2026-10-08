@@ -6,6 +6,7 @@ import {
   itemAncestors,
   items,
   type JobPayload,
+  jobs,
   libraries,
   libraryRoots,
   scanFailures,
@@ -16,13 +17,13 @@ import { queueProviderFetch } from "../metadata/jobs.ts";
 import { reconcileStoredVersions } from "../stored/reconcile.ts";
 import { runKeyframeIndexJob } from "./keyframe-index.ts";
 import {
-  isLibraryScan,
   libraryScanSource,
   type ScanSource,
   scanDirectory,
   scanScope,
   scanShowDirectory,
 } from "./scan.ts";
+import { enqueueScan, isLibraryScan } from "./scan-payload.ts";
 
 /** The concurrency key that serializes every job for one library. */
 export function libraryConcurrencyKey(libraryId: string) {
@@ -126,8 +127,10 @@ export async function runScanJob(
   const concurrencyKey = libraryConcurrencyKey(library.id);
   await db.transaction(async (tx) => {
     const queue = createJobQueue(tx);
-    for (const path of paths)
-      await queue.enqueue(
+    const childJobIds: string[] = [];
+    for (const path of paths) {
+      const child = await enqueueScan(
+        queue,
         {
           type: "scan",
           libraryId: library.id,
@@ -137,5 +140,11 @@ export async function runScanJob(
         },
         { concurrencyKey },
       );
+      childJobIds.push(child.id);
+    }
+    await tx
+      .update(jobs)
+      .set({ payload: { ...payload, childJobIds } })
+      .where(eq(jobs.id, job.id));
   });
 }

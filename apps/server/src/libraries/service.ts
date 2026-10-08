@@ -34,6 +34,7 @@ import { removeFile } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { rootsOf } from "./roots.ts";
 import { pruneEmptiedItems } from "./scan.ts";
+import { enqueueScan } from "./scan-payload.ts";
 
 const maxNameLength = 128;
 
@@ -328,7 +329,8 @@ export async function updateLibrary(
     }
     // One full scan covers every added and repointed root.
     if (repointed.length > 0 || requested.some((root) => root.id === undefined))
-      await createJobQueue(tx).enqueue(
+      await enqueueScan(
+        createJobQueue(tx),
         { type: "scan", libraryId: id, path: "." },
         { concurrencyKey: libraryConcurrencyKey(id) },
       );
@@ -382,7 +384,8 @@ export async function scanLibrary(db: Database, actorId: string, id: string) {
     .from(libraries)
     .where(eq(libraries.id, id));
   if (!library) throw new AuthError("NOT_FOUND");
-  const job = await createJobQueue(db).enqueue(
+  const job = await enqueueScan(
+    createJobQueue(db),
     { type: "scan", libraryId: id, path: "." },
     { concurrencyKey: libraryConcurrencyKey(id) },
   );
@@ -407,24 +410,28 @@ export async function libraryScanStatus(
     sql`${jobs.payload}->>'libraryId' = ${id}`,
   );
   let run: string | null;
+  let childJobIds: string[] = [];
+  const rootScope = sql`${jobs.payload}->>'path' = '.' and ${jobs.payload}->>'runId' is null and ${jobs.payload}->'changes' is null`;
   if (runId === undefined) {
     const [root] = await db
-      .select({ id: jobs.id })
+      .select({ id: jobs.id, payload: jobs.payload })
       .from(jobs)
-      .where(and(where, sql`${jobs.payload}->>'path' = '.'`))
+      .where(and(where, rootScope))
       .orderBy(desc(jobs.id))
       .limit(1);
     run = root?.id ?? null;
+    if (root?.payload.type === "scan")
+      childJobIds = root.payload.childJobIds ?? [];
   } else {
     const [named] = await db
-      .select({ id: jobs.id })
+      .select({ id: jobs.id, payload: jobs.payload })
       .from(jobs)
-      .where(
-        and(where, eq(jobs.id, runId), sql`${jobs.payload}->>'path' = '.'`),
-      )
+      .where(and(where, eq(jobs.id, runId), rootScope))
       .limit(1);
     if (!named) throw new AuthError("NOT_FOUND");
     run = named.id;
+    if (named.payload.type === "scan")
+      childJobIds = named.payload.childJobIds ?? [];
   }
   const empty = { queued: 0, running: 0, completed: 0, failed: 0 };
   if (run === null)
@@ -437,7 +444,10 @@ export async function libraryScanStatus(
     };
   const runWhere = and(
     where,
-    sql`(${jobs.id} = ${run}::uuid or ${jobs.payload}->>'runId' = ${run})`,
+    or(
+      sql`(${jobs.id} = ${run}::uuid or ${jobs.payload}->>'runId' = ${run})`,
+      childJobIds.length > 0 ? inArray(jobs.id, childJobIds) : undefined,
+    ),
   );
   const grouped = await db
     .select({ state: jobs.state, count: sql<number>`count(*)::int` })

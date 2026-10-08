@@ -20,12 +20,8 @@ import { createJobQueue } from "../jobs/queue.ts";
 import { runScanJob } from "../libraries/jobs.ts";
 import { cacheProbe } from "../libraries/probe-cache.ts";
 import { type RootedPath, rootedKey, rootsOf } from "../libraries/roots.ts";
-import {
-  inScope,
-  isLibraryScan,
-  type ScanSource,
-  scanScope,
-} from "../libraries/scan.ts";
+import { inScope, type ScanSource, scanScope } from "../libraries/scan.ts";
+import { isLibraryScan } from "../libraries/scan-payload.ts";
 import type {
   createChangeDebouncer,
   WatchedChange,

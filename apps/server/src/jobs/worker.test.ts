@@ -21,6 +21,7 @@ function fakeJob(payload: JobPayload): Job {
     maxAttempts: 3,
     runAfter: new Date(),
     concurrencyKey: null,
+    dedupeKey: null,
     state: "running",
     error: null,
     claimToken: crypto.randomUUID(),

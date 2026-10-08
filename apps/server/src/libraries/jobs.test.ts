@@ -40,7 +40,7 @@ import {
 } from "./keyframe-index.ts";
 import type { RootedPath } from "./roots.ts";
 import { libraryScanSource, scanDirectory, scanShowDirectory } from "./scan.ts";
-import { insertLibraries } from "./testing.ts";
+import { addRoot, insertLibraries } from "./testing.ts";
 
 /** An ffprobe plus index read, like a watcher-reported probe carries. */
 const probeWithIndex = async (path: string) => ({
@@ -123,6 +123,58 @@ describe.skipIf(!databaseUrl)("library scan jobs", () => {
         expect(await db.select().from(scanFailures)).toEqual([]);
       }),
     ));
+
+  test("an unscoped dot scan reconciles folders and loose files in every root", () =>
+    withDatabase(async (db) => {
+      await withTempRoot(async (first) =>
+        withTempRoot(async (second) => {
+          const library = await insertLibrary(db, "Movies", first);
+          await addRoot(db, library.id, second);
+          for (const [root, path] of [
+            [first, "Alien (1979)/Alien.mkv"],
+            [second, "Heat (1995)/Heat.mkv"],
+            [second, "Loose (2000).mkv"],
+          ] as const) {
+            await mkdir(join(root, path, ".."), { recursive: true });
+            await createVideoFixture(join(root, path));
+          }
+          const queue = createJobQueue(db);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const parent = await queue.enqueue(
+            {
+              type: "scan",
+              libraryId: library.id,
+              path: ".",
+              reconcileMissing: true,
+            },
+            { concurrencyKey: libraryConcurrencyKey(library.id) },
+          );
+          for (;;) {
+            const job = await queue.claim(["scan"]);
+            if (!job) break;
+            await registry.run(job);
+            await queue.complete(job);
+          }
+          expect(
+            (await db.select().from(items))
+              .map((item) => item.canonicalFolder)
+              .sort(),
+          ).toEqual([".", "Alien (1979)", "Heat (1995)"]);
+          const scans = await listJobs(db, { type: "scan" });
+          expect(scans).toHaveLength(4);
+          expect(
+            scans
+              .filter((job) => job.id !== parent.id)
+              .every(
+                (job) =>
+                  job.payload.type === "scan" &&
+                  job.payload.runId === parent.id,
+              ),
+          ).toBe(true);
+        }),
+      );
+    }));
 
   test("a root job fans out directory scans serialized per library", () =>
     withDatabase(async (db) => {

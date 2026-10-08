@@ -60,6 +60,7 @@ import {
   rootedKey,
   rootsOf,
 } from "./roots.ts";
+import { scanAssertions } from "./scan-payload.ts";
 import { persistScanTimelines } from "./timelines.ts";
 import {
   type LibraryFile,
@@ -99,22 +100,6 @@ export type ScanDirectoryOptions = {
   changes?: readonly ScanChange[];
   reconcileMissing?: boolean;
 };
-
-/**
- * Whether a scan job is the Library scan that fans out. Every other scan
- * job is a directory scan, `.` included.
- */
-export function isLibraryScan(payload: {
-  path: string;
-  changes?: readonly unknown[];
-  reconcileMissing?: boolean;
-}): boolean {
-  return (
-    payload.path === "." &&
-    (payload.changes?.length ?? 0) === 0 &&
-    payload.reconcileMissing !== true
-  );
-}
 
 /** The scan rules one library-relative scope of a medium uses. */
 export function scanScope(medium: (typeof libraries.$inferSelect)["medium"]) {
@@ -1012,6 +997,13 @@ export async function scanDirectory(
     discovered.flatMap((group) => group.files),
   );
   const { memberByKey, skipped, probed } = result;
+  const walkedKeys = new Set(walked.map(rootedKey));
+  // A move's assertion names the path the walk saw, so fold each chain's ids
+  // to its surviving destination before matching groups. A destination the
+  // walk never saw asserts nothing; it waits for a later read.
+  const providerChanges = scanAssertions(changes).filter((change) =>
+    walkedKeys.has(rootedKey(change)),
+  );
   const groups = discovered
     .map((group) => ({
       ...group,
@@ -1060,7 +1052,7 @@ export async function scanDirectory(
       // Only webhook ids may find an Item elsewhere in the Library. Folder
       // tags are stored but never relocate: two folders can carry the same tag.
       const webhookProviderIds = groupChangeProviderIds(
-        changes,
+        providerChanges,
         group.files,
         singleGroup,
       );
@@ -1229,7 +1221,6 @@ export async function scanDirectory(
             eq(items.canonicalFolder, path),
           ),
         );
-      const walkedKeys = new Set(walked.map(rootedKey));
       const touched = await reconcileStaleFiles(
         tx,
         source,
@@ -1294,6 +1285,12 @@ export async function scanShowDirectory(
     (candidate) => candidate.canonicalFolder === path,
   );
   const walkedKeys = new Set(walked.map(rootedKey));
+  // A move's assertion names the path the walk saw, so fold each chain's ids
+  // to its surviving destination before matching groups. A destination the
+  // walk never saw asserts nothing; it waits for a later read.
+  const providerChanges = scanAssertions(changes).filter((change) =>
+    walkedKeys.has(rootedKey(change)),
+  );
 
   const result = await probeScanMembers(
     db,
@@ -1380,7 +1377,7 @@ export async function scanShowDirectory(
         ),
       );
       const webhookProviderIds = groupChangeProviderIds(
-        changes,
+        providerChanges,
         groupFiles,
         singleGroup,
       );

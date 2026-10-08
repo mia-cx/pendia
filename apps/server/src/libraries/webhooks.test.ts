@@ -1,12 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, readFile, rename } from "node:fs/promises";
+import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { asc, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import { createApiKey, login } from "../auth/sessions.ts";
 import { createDatabase, type Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
-import { files, items, providerIds, versions } from "../db/schema/index.ts";
+import {
+  files,
+  items,
+  jobs,
+  probeCache,
+  providerIds,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { startThalia } from "../index.ts";
 import { createJobQueue, type Job, listJobs } from "../jobs/queue.ts";
@@ -15,8 +22,13 @@ import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
-import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
-import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import {
+  libraryConcurrencyKey,
+  registerLibraryJobs,
+  runScanJob,
+} from "./jobs.ts";
+import { libraryScanSource, scanDirectory, scanShowDirectory } from "./scan.ts";
+import { enqueueScan } from "./scan-payload.ts";
 import type { ChangeEvent } from "./servarr.ts";
 import { addRoot, insertLibraries } from "./testing.ts";
 import {
@@ -66,6 +78,554 @@ async function waitForScanJobs(db: Database, count: number) {
 }
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
+  test.each([
+    ["movies", "before"],
+    ["movies", "after"],
+    ["shows", "before"],
+    ["shows", "after"],
+  ] as const)(
+    "%s lands a watcher move flushed %s the scan write on the follow-up",
+    (medium, flush) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const stem =
+            medium === "movies"
+              ? `${folder}/Alien`
+              : `${folder}/Season 01/Show S01E01`;
+          const previousPath = `${stem}.old.mkv`;
+          const path = `${stem}.new.mkv`;
+          await mkdir(dirname(join(root, path)), { recursive: true });
+          await createVideoFixture(join(root, previousPath));
+          const library = await insertLibrary(db, medium, root, medium);
+          const ids: Record<string, string> =
+            medium === "movies" ? { tmdb: "348" } : { tvdb: "12345" };
+          const queue = createJobQueue(db);
+          const job = await enqueueScan(queue, {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+            changes: [
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: previousPath,
+                providerIds: ids,
+              },
+            ],
+          });
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          await rename(join(root, previousPath), join(root, path));
+          const debouncer = createChangeDebouncer(db, { delayMs: 60_000 });
+          await debouncer.submitWatched(library.rootId, [
+            { kind: "move", previousPath, path },
+          ]);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          if (flush === "before") await debouncer.close();
+          await registry.run(held);
+          if (flush === "after") await debouncer.close();
+          await queue.complete(held);
+          const followUp = await queue.claim(["scan"]);
+          if (!followUp)
+            throw new Error("Fresh-read follow-up was not claimed.");
+          // The flushed move rides a follow-up job, not a mutated running one.
+          expect(followUp.id).not.toBe(job.id);
+          await registry.run(followUp);
+          await queue.complete(followUp);
+          expect(
+            (await db.select().from(files)).map((file) => file.path),
+          ).toEqual([path]);
+          // The original assertion named a path no walk saw, so its provider
+          // ids drop rather than landing on the sole surviving group.
+          expect(await db.select().from(providerIds)).toEqual([]);
+          expect(await queue.claim(["scan"])).toBeUndefined();
+        }),
+      ),
+  );
+
+  test.each([
+    ["movies", 1, "keep"],
+    ["movies", 2, "keep"],
+    ["shows", 1, "keep"],
+    ["shows", 2, "keep"],
+    ["movies", 1, "delete"],
+    ["shows", 1, "delete"],
+    ["movies", 1, "move"],
+    ["shows", 1, "move"],
+  ] as const)(
+    "%s retains provider IDs for a move imported after %s existing groups, then %s",
+    (medium, groupCount, ending) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const paths =
+            medium === "movies"
+              ? ["Alien.1979.mkv", "Heat.1995.mkv", "Dune.2021.mkv"]
+              : ["Alien S01E01.mkv", "Heat S01E01.mkv", "Dune S01E01.mkv"];
+          const [first, second, destination] = paths;
+          if (!first || !second || !destination)
+            throw new Error("Fixture paths missing.");
+          const previousPath = `Other/${destination}`;
+          const nextPath = destination.replace(".mkv", ".new.mkv");
+          await mkdir(join(root, "Other"));
+          const existing = groupCount === 1 ? [first] : [first, second];
+          for (const path of [...existing, previousPath])
+            await createVideoFixture(join(root, path));
+          const library = await insertLibrary(db, medium, root, medium);
+          const queue = createJobQueue(db);
+          const scope = {
+            type: "scan",
+            libraryId: library.id,
+            path: ".",
+            changes: [],
+            reconcileMissing: true,
+          } as const;
+          const job = await enqueueScan(queue, { ...scope, changes: [] });
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          const source = await libraryScanSource(db, library);
+          const ids: Record<string, string> =
+            medium === "movies" ? { tmdb: "438631" } : { tvdb: "12345" };
+          let submitted = false;
+          await runScanJob(db, { ...scope, changes: [] }, held, {
+            ...source,
+            probe: async (file) => {
+              const result = await source.probe(file);
+              if (!submitted) {
+                submitted = true;
+                await rename(join(root, previousPath), join(root, destination));
+                if (ending === "delete") await rm(join(root, destination));
+                if (ending === "move")
+                  await rename(join(root, destination), join(root, nextPath));
+                await enqueueScan(queue, {
+                  ...scope,
+                  changes: [
+                    {
+                      kind: "move",
+                      rootId: library.rootId,
+                      previousPath,
+                      path: destination,
+                      providerIds: ids,
+                    },
+                    ...(ending === "delete"
+                      ? [
+                          {
+                            kind: "delete" as const,
+                            target: "file" as const,
+                            rootId: library.rootId,
+                            path: destination,
+                            providerIds: ids,
+                          },
+                        ]
+                      : []),
+                    ...(ending === "move"
+                      ? [
+                          {
+                            kind: "move" as const,
+                            rootId: library.rootId,
+                            previousPath: destination,
+                            path: nextPath,
+                            providerIds: {},
+                          },
+                        ]
+                      : []),
+                  ],
+                });
+              }
+              return result;
+            },
+          });
+          expect(await db.select().from(providerIds)).toEqual([]);
+          await queue.complete(held);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const followUp = await queue.claim(["scan"]);
+          if (!followUp)
+            throw new Error("Fresh-read follow-up was not claimed.");
+          expect(followUp.id).not.toBe(job.id);
+          await registry.run(followUp);
+          await queue.complete(followUp);
+          expect(
+            (await db.select().from(files)).map((file) => file.path).sort(),
+          ).toEqual(
+            [
+              ...existing,
+              ...(ending === "delete"
+                ? []
+                : [ending === "move" ? nextPath : destination]),
+            ].sort(),
+          );
+          const assertions = await db
+            .select({
+              title: items.title,
+              provider: providerIds.provider,
+              value: providerIds.value,
+            })
+            .from(providerIds)
+            .innerJoin(items, eq(items.id, providerIds.itemId));
+          expect(assertions).toEqual(
+            ending === "delete"
+              ? []
+              : [
+                  {
+                    title: "Dune",
+                    provider: medium === "movies" ? "tmdb" : "tvdb",
+                    value: medium === "movies" ? "438631" : "12345",
+                  },
+                ],
+          );
+        }),
+      ),
+  );
+
+  test.each(["movies", "shows"] as const)(
+    "%s acknowledges a delete and replacement move before its follow-up",
+    (medium) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const stem =
+            medium === "movies"
+              ? `${folder}/Alien`
+              : `${folder}/Season 01/Show S01E01`;
+          const destination = `${stem}.1080p.mkv`;
+          const movedFrom = `${stem}.720p.mkv`;
+          await mkdir(dirname(join(root, destination)), { recursive: true });
+          await createVideoFixture(join(root, destination));
+          await createVideoFixture(join(root, movedFrom), {
+            width: 1280,
+            height: 720,
+          });
+          const library = await insertLibrary(db, medium, root, medium);
+          const scan = medium === "movies" ? scanDirectory : scanShowDirectory;
+          await scan(db, library.id, folder);
+          const original = (await db.select().from(files)).find(
+            (file) => file.path === movedFrom,
+          );
+          if (!original) throw new Error("Source File was not imported.");
+          const queue = createJobQueue(db);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const scope = {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+          } as const;
+          await enqueueScan(queue, scope);
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          const source = await libraryScanSource(db, library);
+          // The disk op lands mid-run: the walked source vanishes, the write's
+          // read rejects the stale snapshot, and the delete+move wait on a
+          // queued follow-up that runs before the retried job's backoff.
+          let submitted = false;
+          await expect(
+            runScanJob(db, scope, held, {
+              ...source,
+              probe: async (file) => {
+                const result = await source.probe(file);
+                if (submitted) return result;
+                submitted = true;
+                await rm(join(root, destination));
+                await rename(join(root, movedFrom), join(root, destination));
+                await enqueueScan(queue, {
+                  ...scope,
+                  changes: [
+                    {
+                      kind: "delete",
+                      target: "file",
+                      rootId: library.rootId,
+                      path: destination,
+                      providerIds: {},
+                    },
+                    {
+                      kind: "move",
+                      rootId: library.rootId,
+                      previousPath: movedFrom,
+                      path: destination,
+                      providerIds: {},
+                    },
+                  ],
+                });
+                return result;
+              },
+            }),
+          ).rejects.toThrow();
+          await queue.fail(held, new Error("Snapshot rejected."));
+          const identity = {
+            id: original.id,
+            versionId: original.versionId,
+            path: destination,
+          };
+          const deadline = Date.now() + 5_000;
+          for (;;) {
+            const claimed = await queue.claim(["scan"]);
+            if (claimed) {
+              await registry.run(claimed);
+              await queue.complete(claimed);
+              continue;
+            }
+            if (
+              (await listJobs(db, { state: "queued", type: "scan" })).length ===
+              0
+            )
+              break;
+            if (Date.now() > deadline)
+              throw new Error("Queued scans did not settle.");
+            await Bun.sleep(50);
+          }
+          expect(await db.select().from(files)).toMatchObject([identity]);
+        }),
+      ),
+  );
+
+  test.each(["movies", "shows"] as const)(
+    "%s preserves File identity when a move arrives after the walk",
+    (medium) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const oldPath =
+            medium === "movies"
+              ? `${folder}/Alien.1080p.mkv`
+              : `${folder}/Season 01/Show S01E01.mkv`;
+          const newPath =
+            medium === "movies"
+              ? `${folder}/Alien.720p.mkv`
+              : `${folder}/Season 01/Show S01E01.new.mkv`;
+          await mkdir(dirname(join(root, oldPath)), { recursive: true });
+          await createVideoFixture(join(root, oldPath));
+          const library = await insertLibrary(db, medium, root, medium);
+          const scan = medium === "movies" ? scanDirectory : scanShowDirectory;
+          await scan(db, library.id, folder);
+          const [original] = await db.select().from(files);
+          if (!original) throw new Error("Initial File was not imported.");
+          await db.delete(probeCache);
+          const queue = createJobQueue(db);
+          const payload = {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+          } as const;
+          await enqueueScan(queue, payload);
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          const source = await libraryScanSource(db, library);
+          // The walked file vanishes mid-run: the write rejects the stale
+          // snapshot, and the move waits on a queued follow-up.
+          await expect(
+            runScanJob(db, payload, held, {
+              ...source,
+              probe: async (file) => {
+                const snapshot = await source.probe(file);
+                await rename(join(root, oldPath), join(root, newPath));
+                await enqueueScan(queue, {
+                  ...payload,
+                  changes: [
+                    {
+                      kind: "move",
+                      rootId: library.rootId,
+                      previousPath: oldPath,
+                      path: newPath,
+                      providerIds: {},
+                    },
+                  ],
+                });
+                return snapshot;
+              },
+            }),
+          ).rejects.toThrow("Library path does not exist:");
+          await queue.fail(held, new Error("Snapshot rejected."));
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          // The retried job's backoff lets the follow-up move the walked
+          // File first, keeping its identity.
+          const deadline = Date.now() + 5_000;
+          for (;;) {
+            const claimed = await queue.claim(["scan"]);
+            if (claimed) {
+              await registry.run(claimed);
+              await queue.complete(claimed);
+              continue;
+            }
+            if (
+              (await listJobs(db, { state: "queued", type: "scan" })).length ===
+              0
+            )
+              break;
+            if (Date.now() > deadline)
+              throw new Error("Queued scans did not settle.");
+            await Bun.sleep(50);
+          }
+          expect(await db.select().from(files)).toMatchObject([
+            { id: original.id, path: newPath },
+          ]);
+          expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
+        }),
+      ),
+  );
+
+  test.each(["movies", "shows"] as const)(
+    "%s imports an add buffered after the filesystem walk",
+    (medium) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const firstPath =
+            medium === "movies"
+              ? `${folder}/Alien.1080p.mkv`
+              : `${folder}/Season 01/Show S01E01.mkv`;
+          const laterPath =
+            medium === "movies"
+              ? `${folder}/Alien.720p.mkv`
+              : `${folder}/Season 01/Show S01E02.mkv`;
+          await mkdir(dirname(join(root, firstPath)), { recursive: true });
+          await createVideoFixture(join(root, firstPath));
+          const library = await insertLibrary(db, medium, root, medium);
+          const queue = createJobQueue(db);
+          const payload = {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+          } as const;
+          await enqueueScan(queue, payload);
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          const source = await libraryScanSource(db, library);
+          await runScanJob(db, payload, held, {
+            ...source,
+            probe: async (file) => {
+              const result = await source.probe(file);
+              await createVideoFixture(join(root, laterPath), {
+                width: 1280,
+                height: 720,
+              });
+              await enqueueScan(queue, {
+                ...payload,
+                changes: [
+                  {
+                    kind: "add",
+                    rootId: library.rootId,
+                    path: laterPath,
+                    providerIds: {},
+                  },
+                ],
+              });
+              return result;
+            },
+          });
+          await queue.complete(held);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          for (;;) {
+            const job = await queue.claim(["scan"]);
+            if (!job) break;
+            await registry.run(job);
+            await queue.complete(job);
+          }
+          expect(
+            (await db.select().from(files)).map((file) => file.path).sort(),
+          ).toEqual([firstPath, laterPath].sort());
+          expect(await listJobs(db, { type: "scan" })).toHaveLength(2);
+        }),
+      ),
+  );
+
+  test.each(["queued", "running", "before read", "retry", "lease"] as const)(
+    "a later watcher move survives a %s scan of the same folder",
+    (state) =>
+      withDatabase(async (db) => {
+        await withVideoFixture(async (root) => {
+          const folder = "Alien (1979)";
+          const oldPath = `${folder}/old.mkv`;
+          const newPath = `${folder}/new.mkv`;
+          await mkdir(join(root, folder));
+          await createVideoFixture(join(root, oldPath));
+          const library = await insertLibrary(db, "Movies", root);
+          const debouncer = createChangeDebouncer(db);
+          const queue = createJobQueue(db);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          await enqueueScan(queue, {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+            changes: [
+              {
+                kind: "add",
+                rootId: library.rootId,
+                path: oldPath,
+                providerIds: {},
+              },
+            ],
+          });
+          const held =
+            state !== "queued" ? await queue.claim(["scan"]) : undefined;
+          if (held && state === "running") await registry.run(held);
+          else await scanDirectory(db, library.id, folder);
+          const [original] = await db.select().from(files);
+          if (!original) throw new Error("Initial File was not imported.");
+          await rename(join(root, oldPath), join(root, newPath));
+          await debouncer.submitWatched(library.rootId, [
+            { kind: "move", previousPath: oldPath, path: newPath },
+          ]);
+          await debouncer.close();
+          if (held && state === "retry") {
+            await queue.fail(held, new Error("Retry."));
+          } else if (held && state === "lease") {
+            await db
+              .update(jobs)
+              .set({
+                leaseExpiresAt: sql`statement_timestamp() - interval '1 second'`,
+              })
+              .where(eq(jobs.id, held.id));
+          } else if (held) {
+            if (state === "before read") await registry.run(held);
+            await queue.complete(held);
+          }
+          const deadline = Date.now() + 5_000;
+          for (;;) {
+            const job = await queue.claim(["scan"]);
+            if (job) {
+              await registry.run(job);
+              await queue.complete(job);
+              continue;
+            }
+            if (
+              (await listJobs(db, { state: "queued", type: "scan" })).length ===
+              0
+            )
+              break;
+            if (Date.now() > deadline)
+              throw new Error("Queued scans did not settle.");
+            await Bun.sleep(50);
+          }
+          // A queued scan folds the move into its input, and a running one saw
+          // the file under its old path; on a retry the backoff lets the
+          // follow-up's move run first. A scan first read after the disk op —
+          // before its read, or under a new claim after the lease lapsed —
+          // reconciles the old path away first, and the new path's File gets
+          // a fresh id.
+          const keepsIdentity = !["before read", "lease"].includes(state);
+          expect(await db.select().from(files)).toMatchObject([
+            {
+              ...(keepsIdentity ? { id: original.id } : {}),
+              path: newPath,
+            },
+          ]);
+          expect(await listJobs(db, { type: "scan" })).toHaveLength(
+            state === "queued" ? 1 : 2,
+          );
+        });
+      }),
+  );
+
   test("three changes for one movie directory become one scan job", () =>
     withDatabase(async (db) => {
       await migrateDatabase(db);
@@ -777,7 +1337,8 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
             )
           ).status,
         ).toBe(202);
-        const all = await waitForScanJobs(db, 3);
+        const all = await waitForScanJobs(db, 2);
+        expect(all).toHaveLength(2);
         expect(
           all.some(
             (job) =>
@@ -850,6 +1411,15 @@ describe.skipIf(!databaseUrl)("servarr webhooks", () => {
         });
         let debouncedJobId: string | undefined;
         try {
+          // Finish startup repair before testing a new webhook's change payload.
+          await waitForScanJobs(db, 1);
+          const startupQueue = createJobQueue(db);
+          const startupRegistry = createJobRegistry();
+          registerLibraryJobs(db, startupRegistry);
+          const startupJob = await startupQueue.claim(["scan"]);
+          if (!startupJob) throw new Error("Startup repair was not claimed.");
+          await startupRegistry.run(startupJob);
+          await startupQueue.complete(startupJob);
           const response = await fetch(
             `http://127.0.0.1:${server.apiServer?.port}/api/webhooks/sonarr/${token}`,
             {

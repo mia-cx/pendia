@@ -1,14 +1,18 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { posix } from "node:path";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.ts";
-import { items, jobs, libraries } from "../db/schema/index.ts";
+import { files, items, jobs, libraries, versions } from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
+import type { ScanRules } from "../mediums/medium.ts";
 import { moviesMedium } from "../mediums/movies.ts";
 import { showsScan } from "../mediums/shows.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
-import { rootedKey, rootsOf } from "./roots.ts";
+import { type LibraryRoot, rootedKey, rootsOf } from "./roots.ts";
+import { enqueueScan, isLibraryScan } from "./scan-payload.ts";
 import {
   type LibraryDirectory,
   MissingLibraryPathError,
+  readLibraryFile,
   walkLibraryDirectories,
 } from "./walker.ts";
 
@@ -23,6 +27,54 @@ type TrackedJob = { jobId: string; updates: SnapshotUpdate[] };
 type ReservedConnection = Awaited<ReturnType<Database["$client"]["reserve"]>>;
 
 const repairLockKey = 0x70656e6469617270n;
+
+type ImportedFile = Pick<
+  typeof files.$inferSelect,
+  "rootId" | "path" | "bytes" | "modifiedAt"
+>;
+
+/** A completed sibling covers the current scope only when its imported files still match the disk. */
+async function matchesCompletedScan(
+  roots: readonly LibraryRoot[],
+  walked: ReadonlyMap<string, LibraryDirectory>,
+  rules: ScanRules,
+  path: string,
+  imported: readonly ImportedFile[],
+) {
+  const present = new Set(
+    [...walked].flatMap(([key, directory]) =>
+      rules.itemFolder(directory.path) === path
+        ? directory.files.map((file) =>
+            rootedKey({ rootId: key.slice(0, key.indexOf(":")), path: file }),
+          )
+        : [],
+    ),
+  );
+  const expected = new Map(
+    imported
+      .filter((file) => rules.itemFolder(posix.dirname(file.path)) === path)
+      .map((file) => [rootedKey(file), file]),
+  );
+  if (present.size !== expected.size) return false;
+  for (const [key, file] of expected) {
+    if (!present.has(key)) return false;
+    const root = roots.find((candidate) => candidate.id === file.rootId);
+    if (!root) return false;
+    try {
+      const current = await readLibraryFile(root.path, file.path);
+      if (
+        current.bytes !== file.bytes ||
+        current.modifiedAt.getTime() !== file.modifiedAt.getTime()
+      )
+        return false;
+    } catch (error) {
+      if (error instanceof MissingLibraryPathError && error.scope === "entry")
+        return false;
+      throw error;
+    }
+  }
+  return true;
+}
 
 /** Creates the startup and nightly library repair pass. */
 export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
@@ -61,6 +113,9 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
       libraryId: string;
       next: Map<string, bigint>;
       scans: Map<string, Map<string, bigint | undefined>>;
+      roots: LibraryRoot[];
+      walked: Map<string, LibraryDirectory>;
+      rules: ScanRules;
     }[] = [];
     for (const library of rows) {
       const medium =
@@ -75,8 +130,9 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
             };
       // Snapshots key each directory by its root; scans name root-relative folders.
       const walked = new Map<string, LibraryDirectory>();
+      const roots = await rootsOf(db, library.id);
       try {
-        for (const root of await rootsOf(db, library.id))
+        for (const root of roots)
           for await (const directory of walkLibraryDirectories(
             root.path,
             medium.rules,
@@ -186,7 +242,14 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
       for (const scanPath of live) {
         scans.delete(scanPath);
       }
-      planned.push({ libraryId: library.id, next, scans });
+      planned.push({
+        libraryId: library.id,
+        next,
+        scans,
+        roots,
+        walked,
+        rules: medium.rules,
+      });
     }
     let enqueued = 0;
     const recorded: {
@@ -197,16 +260,125 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
     await db.transaction(async (tx) => {
       const queue = createJobQueue(tx);
       for (const plan of planned) {
+        if (plan.scans.size === 0) continue;
+        const libraryScans = and(
+          eq(jobs.type, "scan"),
+          sql`${jobs.payload}->>'libraryId' = ${plan.libraryId}`,
+        );
+        const pending = await tx
+          .select()
+          .from(jobs)
+          .where(and(libraryScans, inArray(jobs.state, ["queued", "running"])));
+        // A pending root job will discover the folders itself. After fan-out,
+        // reuse its children, including siblings completed before the restart.
+        if (
+          pending.some(
+            (job) => job.payload.type === "scan" && isLibraryScan(job.payload),
+          )
+        )
+          continue;
+        const runIds = [
+          ...new Set(
+            pending.flatMap((job) =>
+              job.payload.type === "scan" && job.payload.runId !== undefined
+                ? [job.payload.runId]
+                : [],
+            ),
+          ),
+        ];
+        // Reused children keep their original runId. Their requesting root's
+        // recorded ids still connect completed siblings to pending work.
+        const relatedRuns =
+          pending.length === 0
+            ? []
+            : await tx
+                .select({ payload: jobs.payload })
+                .from(jobs)
+                .where(
+                  and(
+                    libraryScans,
+                    sql`exists (select 1 from jsonb_array_elements_text(${jobs.payload}->'childJobIds') as child(id) where ${inArray(
+                      sql`child.id`,
+                      pending.map((job) => job.id),
+                    )})`,
+                  ),
+                );
+        const childJobIds = relatedRuns.flatMap(({ payload }) =>
+          payload.type === "scan" ? (payload.childJobIds ?? []) : [],
+        );
+        const completed =
+          runIds.length === 0 && childJobIds.length === 0
+            ? []
+            : await tx
+                .select()
+                .from(jobs)
+                .where(
+                  and(
+                    libraryScans,
+                    eq(jobs.state, "completed"),
+                    or(
+                      runIds.length === 0
+                        ? undefined
+                        : inArray(sql`${jobs.payload}->>'runId'`, runIds),
+                      childJobIds.length === 0
+                        ? undefined
+                        : inArray(jobs.id, childJobIds),
+                    ),
+                  ),
+                );
+        const coverage = new Map(
+          [...completed, ...pending].flatMap((job) =>
+            job.payload.type === "scan"
+              ? [[job.payload.path, job] as const]
+              : [],
+          ),
+        );
+        const imported =
+          completed.length === 0
+            ? []
+            : await tx
+                .select({
+                  rootId: files.rootId,
+                  path: files.path,
+                  bytes: files.bytes,
+                  modifiedAt: files.modifiedAt,
+                })
+                .from(files)
+                .innerJoin(versions, eq(versions.id, files.versionId))
+                .where(
+                  and(
+                    eq(files.libraryId, plan.libraryId),
+                    eq(versions.origin, "imported"),
+                  ),
+                );
         for (const [path, updates] of plan.scans) {
-          const job = await queue.enqueue(
-            {
-              type: "scan",
-              libraryId: plan.libraryId,
+          let covered = coverage.get(path);
+          if (
+            covered?.state === "completed" &&
+            !(await matchesCompletedScan(
+              plan.roots,
+              plan.walked,
+              plan.rules,
               path,
-              reconcileMissing: true,
-            },
-            { concurrencyKey: libraryConcurrencyKey(plan.libraryId) },
-          );
+              imported,
+            ))
+          )
+            covered = undefined;
+          const job =
+            covered?.state === "completed"
+              ? covered
+              : await enqueueScan(
+                  queue,
+                  {
+                    type: "scan",
+                    libraryId: plan.libraryId,
+                    path,
+                    reconcileMissing: true,
+                    // Repair names an Item folder; `.` can hold loose media.
+                    ...(path === "." ? { changes: [] } : {}),
+                  },
+                  { concurrencyKey: libraryConcurrencyKey(plan.libraryId) },
+                );
           recorded.push({
             libraryId: plan.libraryId,
             path,
@@ -220,7 +392,7 @@ export function createLibraryRepair(db: Database, options: RepairOptions = {}) {
               ),
             },
           });
-          enqueued += 1;
+          if (covered === undefined) enqueued += 1;
         }
       }
     });

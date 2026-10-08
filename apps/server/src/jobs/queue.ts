@@ -25,14 +25,28 @@ export type Job = typeof jobs.$inferSelect;
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 type Connection = Database | Transaction;
 
+/** Coalesces enqueue requests into unsettled jobs carrying the same key. */
+export type Dedupe = {
+  /** Jobs with the same key coalesce. */
+  key: string;
+  /** Folds a new request into the payload of a queued job with the same key. */
+  merge: (queued: JobPayload) => JobPayload;
+  /** Whether a running job with the same key already covers this request. */
+  coveredBy?: (running: Job) => boolean;
+};
+
 type EnqueueOptions = Partial<
   Pick<
     typeof jobs.$inferInsert,
     "priority" | "maxAttempts" | "runAfter" | "concurrencyKey"
   >
->;
+> & {
+  dedupe?: Dedupe;
+};
 
 const claimLockKey = 0x70656e646a6fn;
+/** Serializes dedupe checks and inserts within one key. */
+const dedupeLockClass = 0x64656475;
 const maxRetryDelayMs = 60_000;
 
 /** How long a watcher's claim keeps its Libraries' scans away from workers. */
@@ -133,15 +147,55 @@ export function createJobQueue(
       }
     },
 
-    /** Enqueues a typed payload with its scheduling options. */
+    /**
+     * Enqueues a typed payload with its scheduling options. A `dedupe` folds
+     * the request into an unsettled job with the same key: one a running job
+     * already covers, or the oldest queued one, whose payload it merges into.
+     */
     async enqueue(payload: JobPayload, options: EnqueueOptions = {}) {
+      const { dedupe, ...fields } = options;
       return db.transaction(async (tx) => {
+        if (dedupe !== undefined) {
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(${dedupeLockClass}, hashtext(${dedupe.key}))`,
+          );
+          const unsettled = await tx
+            .select()
+            .from(jobs)
+            .where(
+              and(
+                eq(jobs.dedupeKey, dedupe.key),
+                inArray(jobs.state, ["queued", "running"]),
+              ),
+            )
+            .orderBy(jobs.id)
+            .for("update");
+          const running = unsettled.find((job) => job.state === "running");
+          if (
+            dedupe.coveredBy !== undefined &&
+            running !== undefined &&
+            dedupe.coveredBy(running)
+          )
+            return running;
+          const queued = unsettled.find((job) => job.state === "queued");
+          if (queued !== undefined) {
+            const [updated] = await tx
+              .update(jobs)
+              .set({ payload: dedupe.merge(queued.payload) })
+              .where(eq(jobs.id, queued.id))
+              .returning();
+            if (!updated) throw new Error("Job update returned no row.");
+            await tx.execute(sql`select pg_notify(${jobChannel}, '')`);
+            return updated;
+          }
+        }
         const [job] = await tx
           .insert(jobs)
           .values({
-            ...options,
+            ...fields,
             type: payload.type,
             payload,
+            dedupeKey: dedupe?.key ?? null,
             maxAttempts: options.maxAttempts ?? 3,
           })
           .returning();

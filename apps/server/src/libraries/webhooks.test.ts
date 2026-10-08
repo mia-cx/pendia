@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, readFile, rename } from "node:fs/promises";
+import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { asc, eq, sql } from "drizzle-orm";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
@@ -77,6 +77,83 @@ async function waitForScanJobs(db: Database, count: number) {
 }
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
+  test.each(["movies", "shows"] as const)(
+    "%s acknowledges a delete and replacement move before its follow-up",
+    (medium) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const stem =
+            medium === "movies"
+              ? `${folder}/Alien`
+              : `${folder}/Season 01/Show S01E01`;
+          const destination = `${stem}.1080p.mkv`;
+          const movedFrom = `${stem}.720p.mkv`;
+          await mkdir(dirname(join(root, destination)), { recursive: true });
+          await createVideoFixture(join(root, destination));
+          await createVideoFixture(join(root, movedFrom), {
+            width: 1280,
+            height: 720,
+          });
+          const library = await insertLibrary(db, medium, root, medium);
+          const scan = medium === "movies" ? scanDirectory : scanShowDirectory;
+          await scan(db, library.id, folder);
+          const original = (await db.select().from(files)).find(
+            (file) => file.path === movedFrom,
+          );
+          if (!original) throw new Error("Source File was not imported.");
+          const queue = createJobQueue(db);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const scope = {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+          } as const;
+          await queue.enqueue(scope);
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          await rm(join(root, destination));
+          await rename(join(root, movedFrom), join(root, destination));
+          await queue.enqueueScanChanges({
+            ...scope,
+            changes: [
+              {
+                kind: "delete",
+                target: "file",
+                rootId: library.rootId,
+                path: destination,
+                providerIds: {},
+              },
+              {
+                kind: "move",
+                rootId: library.rootId,
+                previousPath: movedFrom,
+                path: destination,
+                providerIds: {},
+              },
+            ],
+          });
+          await registry.run(held);
+          const identity = {
+            id: original.id,
+            versionId: original.versionId,
+            path: destination,
+          };
+          expect(await db.select().from(files)).toMatchObject([identity]);
+          await queue.complete(held);
+          const followUp = await queue.claim(["scan"]);
+          if (!followUp)
+            throw new Error("Fresh-read follow-up was not claimed.");
+          expect(followUp.id).toBe(held.id);
+          await registry.run(followUp);
+          await queue.complete(followUp);
+          expect(await db.select().from(files)).toMatchObject([identity]);
+        }),
+      ),
+  );
+
   test.each(["movies", "shows"] as const)(
     "%s preserves File identity when a move arrives after the walk",
     (medium) =>

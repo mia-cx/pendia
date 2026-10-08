@@ -167,7 +167,29 @@ async function scanInput(
   const changes = [...(payload.changes ?? []), ...(pendingScan?.changes ?? [])];
   const reconcileMissing =
     payload.reconcileMissing === true || pendingScan?.reconcileMissing === true;
-  // The walk can predate these events. Completion must still read their files.
+  // Acknowledge destructive events with the write. Replaying a delete after a
+  // replacement move would delete the moved File. Adds still need a fresh read.
+  if (changes.some((change) => change.kind !== "add"))
+    await tx
+      .update(jobs)
+      .set({
+        payload: {
+          ...payload,
+          changes: payload.changes?.filter((change) => change.kind === "add"),
+          ...(pendingScan === undefined
+            ? {}
+            : {
+                pendingScan: {
+                  ...pendingScan,
+                  changes: pendingScan.changes.filter(
+                    (change) => change.kind === "add",
+                  ),
+                },
+              }),
+        },
+      })
+      .where(eq(jobs.id, job.id));
+  // Completion keeps a fresh-read follow-up even after all moves were applied.
   return { changes, reconcileMissing };
 }
 

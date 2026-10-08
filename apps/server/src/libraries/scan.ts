@@ -99,7 +99,7 @@ export type ScanDirectoryOptions = {
   source?: ScanSource;
   changes?: readonly ScanChange[];
   reconcileMissing?: boolean;
-  /** Reads and consumes later events under the scan's write transaction. */
+  /** Reads buffered moves before reconciliation and retains a fresh-read follow-up. */
   jobClaim?: Pick<typeof jobs.$inferSelect, "id" | "claimToken">;
 };
 
@@ -124,7 +124,11 @@ export const inScope = (
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
-async function scanInput(tx: Transaction, options: ScanDirectoryOptions) {
+async function scanInput(
+  tx: Transaction,
+  options: ScanDirectoryOptions,
+  walked: readonly RootedFile[],
+) {
   if (options.jobClaim === undefined)
     return {
       changes: options.changes ?? [],
@@ -145,14 +149,25 @@ async function scanInput(tx: Transaction, options: ScanDirectoryOptions) {
   if (job?.payload.type !== "scan")
     throw new Error("Lost scan job claim before write.");
   const { pendingScan, ...payload } = job.payload;
+  const walkedKeys = new Set(walked.map(rootedKey));
+  // A move after the walk needs a retry before stale groups can undo it.
+  if (
+    pendingScan?.changes.some(
+      (change) =>
+        change.kind === "move" &&
+        walkedKeys.has(
+          rootedKey({
+            rootId: change.rootId,
+            path: change.previousPath,
+          }),
+        ),
+    )
+  )
+    throw new Error("Scan move arrived after the filesystem walk.");
   const changes = [...(payload.changes ?? []), ...(pendingScan?.changes ?? [])];
   const reconcileMissing =
     payload.reconcileMissing === true || pendingScan?.reconcileMissing === true;
-  if (pendingScan !== undefined)
-    await tx
-      .update(jobs)
-      .set({ payload: { ...payload, changes, reconcileMissing } })
-      .where(eq(jobs.id, job.id));
+  // The walk can predate these events. Completion must still read their files.
   return { changes, reconcileMissing };
 }
 
@@ -1053,7 +1068,7 @@ export async function scanDirectory(
       throw new Error("Library roots changed before scan write.");
 
     // Root edits also lock the Library first. Read moves before reconciliation.
-    const { changes, reconcileMissing } = await scanInput(tx, options);
+    const { changes, reconcileMissing } = await scanInput(tx, options, walked);
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,
@@ -1368,7 +1383,7 @@ export async function scanShowDirectory(
     if (locked.rootsRevision !== source.rootsRevision)
       throw new Error("Library roots changed before scan write.");
 
-    const { changes, reconcileMissing } = await scanInput(tx, options);
+    const { changes, reconcileMissing } = await scanInput(tx, options, walked);
     const emptiedItemIds = await applyScanChanges(
       tx,
       libraryId,

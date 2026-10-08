@@ -10,6 +10,7 @@ import {
   files,
   items,
   jobs,
+  probeCache,
   providerIds,
   versions,
 } from "../db/schema/index.ts";
@@ -21,8 +22,12 @@ import {
   createVideoFixture,
   withVideoFixture,
 } from "../mediums/video-common/fixtures.ts";
-import { libraryConcurrencyKey, registerLibraryJobs } from "./jobs.ts";
-import { scanDirectory, scanShowDirectory } from "./scan.ts";
+import {
+  libraryConcurrencyKey,
+  registerLibraryJobs,
+  runScanJob,
+} from "./jobs.ts";
+import { libraryScanSource, scanDirectory, scanShowDirectory } from "./scan.ts";
 import type { ChangeEvent } from "./servarr.ts";
 import { addRoot, insertLibraries } from "./testing.ts";
 import {
@@ -72,6 +77,151 @@ async function waitForScanJobs(db: Database, count: number) {
 }
 
 describe.skipIf(!databaseUrl)("servarr webhooks", () => {
+  test.each(["movies", "shows"] as const)(
+    "%s preserves File identity when a move arrives after the walk",
+    (medium) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const oldPath =
+            medium === "movies"
+              ? `${folder}/Alien.1080p.mkv`
+              : `${folder}/Season 01/Show S01E01.mkv`;
+          const newPath =
+            medium === "movies"
+              ? `${folder}/Alien.720p.mkv`
+              : `${folder}/Season 01/Show S01E01.new.mkv`;
+          await mkdir(dirname(join(root, oldPath)), { recursive: true });
+          await createVideoFixture(join(root, oldPath));
+          const library = await insertLibrary(db, medium, root, medium);
+          const scan = medium === "movies" ? scanDirectory : scanShowDirectory;
+          await scan(db, library.id, folder);
+          const [original] = await db.select().from(files);
+          if (!original) throw new Error("Initial File was not imported.");
+          await db.delete(probeCache);
+          const queue = createJobQueue(db);
+          const payload = {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+          } as const;
+          const job = await queue.enqueue(payload);
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          const source = await libraryScanSource(db, library);
+          await expect(
+            runScanJob(db, payload, held, {
+              ...source,
+              probe: async (file) => {
+                const snapshot = await source.probe(file);
+                await rename(join(root, oldPath), join(root, newPath));
+                await queue.enqueueScanChanges({
+                  ...payload,
+                  changes: [
+                    {
+                      kind: "move",
+                      rootId: library.rootId,
+                      previousPath: oldPath,
+                      path: newPath,
+                      providerIds: {},
+                    },
+                  ],
+                });
+                return snapshot;
+              },
+            }),
+          ).rejects.toThrow("Scan move arrived after the filesystem walk.");
+          await queue.fail(held, new Error("Retry with a fresh walk."));
+          await db
+            .update(jobs)
+            .set({ runAfter: sql`statement_timestamp()` })
+            .where(eq(jobs.id, job.id));
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          const retry = await queue.claim(["scan"]);
+          if (!retry) throw new Error("Scan retry was not claimed.");
+          await registry.run(retry);
+          await queue.complete(retry);
+          expect(await db.select().from(files)).toMatchObject([
+            { id: original.id, path: newPath },
+          ]);
+          expect(
+            (await listJobs(db, { type: "scan" })).map((entry) => entry.id),
+          ).toEqual([job.id]);
+        }),
+      ),
+  );
+
+  test.each(["movies", "shows"] as const)(
+    "%s imports an add buffered after the filesystem walk",
+    (medium) =>
+      withDatabase((db) =>
+        withVideoFixture(async (root) => {
+          const folder = medium === "movies" ? "Alien (1979)" : "Show";
+          const firstPath =
+            medium === "movies"
+              ? `${folder}/Alien.1080p.mkv`
+              : `${folder}/Season 01/Show S01E01.mkv`;
+          const laterPath =
+            medium === "movies"
+              ? `${folder}/Alien.720p.mkv`
+              : `${folder}/Season 01/Show S01E02.mkv`;
+          await mkdir(dirname(join(root, firstPath)), { recursive: true });
+          await createVideoFixture(join(root, firstPath));
+          const library = await insertLibrary(db, medium, root, medium);
+          const queue = createJobQueue(db);
+          const payload = {
+            type: "scan",
+            libraryId: library.id,
+            path: folder,
+            reconcileMissing: true,
+          } as const;
+          const original = await queue.enqueue(payload);
+          const held = await queue.claim(["scan"]);
+          if (!held) throw new Error("Scan was not claimed.");
+          const source = await libraryScanSource(db, library);
+          await runScanJob(db, payload, held, {
+            ...source,
+            probe: async (file) => {
+              const result = await source.probe(file);
+              await createVideoFixture(join(root, laterPath), {
+                width: 1280,
+                height: 720,
+              });
+              await queue.enqueueScanChanges({
+                ...payload,
+                changes: [
+                  {
+                    kind: "add",
+                    rootId: library.rootId,
+                    path: laterPath,
+                    providerIds: {},
+                  },
+                ],
+              });
+              return result;
+            },
+          });
+          await queue.complete(held);
+          const registry = createJobRegistry();
+          registerLibraryJobs(db, registry);
+          for (;;) {
+            const job = await queue.claim(["scan"]);
+            if (!job) break;
+            await registry.run(job);
+            await queue.complete(job);
+          }
+          expect(
+            (await db.select().from(files)).map((file) => file.path).sort(),
+          ).toEqual([firstPath, laterPath].sort());
+          expect(
+            (await listJobs(db, { type: "scan" })).map((job) => job.id),
+          ).toEqual([original.id]);
+        }),
+      ),
+  );
+
   test.each(["queued", "running", "before read", "retry", "lease"] as const)(
     "a later watcher move survives a %s scan of the same folder",
     (state) =>

@@ -16,6 +16,7 @@ import { readArtworkOriginal } from "./artwork-store.ts";
 export type ArtworkResize = (
   input: Uint8Array,
   width: number,
+  options?: { format?: "jpeg" | "png" | "webp"; quality?: number },
 ) => Promise<{ bytes: Uint8Array; contentType: string }>;
 
 type ArtworkResult = {
@@ -44,11 +45,25 @@ const imageTypes: Record<string, string> = {
 };
 
 // Bun.Image needs no native addon, so it works inside the compiled binary.
-const bunResize: ArtworkResize = async (input, width) => {
+const bunResize: ArtworkResize = async (
+  input,
+  width,
+  { format, quality } = {},
+) => {
   const image = new Bun.Image(input);
   const source = await image.metadata();
   // Never enlarge: a small original is served at its own width.
-  const bytes = await image.resize(Math.min(width, source.width)).bytes();
+  const resized = image.resize(Math.min(width, source.width));
+  const outputFormat = format ?? source.format;
+  const encoded =
+    outputFormat === "jpeg"
+      ? resized.jpeg({ quality })
+      : outputFormat === "png"
+        ? resized.png()
+        : outputFormat === "webp"
+          ? resized.webp({ quality })
+          : resized;
+  const bytes = await encoded.bytes();
   // Some formats re-encode differently (GIF becomes PNG), so the type
   // comes from the output header, not the original.
   const output = await new Bun.Image(bytes).metadata();
@@ -210,6 +225,28 @@ export function createArtworkHandler(
           : Number(value);
       if (!Number.isSafeInteger(width) || width < 1 || width > maxArtworkWidth)
         return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
+      const maxHeight = Number(
+        url.searchParams.get("maxHeight") ?? maxArtworkWidth,
+      );
+      const quality = Number(url.searchParams.get("quality") ?? 90);
+      const requestedFormat = url.searchParams.get("format");
+      if (
+        !Number.isSafeInteger(maxHeight) ||
+        maxHeight < 1 ||
+        maxHeight > maxArtworkWidth ||
+        !Number.isSafeInteger(quality) ||
+        quality < 1 ||
+        quality > 100 ||
+        (requestedFormat !== null &&
+          !["jpeg", "png", "webp"].includes(requestedFormat))
+      )
+        return jsonError(400, "INVALID_INPUT", "Invalid artwork request.");
+      const format =
+        requestedFormat === "jpeg" ||
+        requestedFormat === "png" ||
+        requestedFormat === "webp"
+          ? requestedFormat
+          : undefined;
       if (caller !== undefined) {
         // Auth enabled: the caller needs view on the artwork owner's Library.
         const [row] = await db
@@ -249,13 +286,25 @@ export function createArtworkHandler(
         if (original === null)
           return jsonError(404, "NOT_FOUND", "Artwork not found.");
 
-        const effectiveWidth =
-          original.artwork.width === null
-            ? width
-            : Math.min(width, original.artwork.width);
+        const dimensions =
+          original.artwork.width !== null && original.artwork.height !== null
+            ? { width: original.artwork.width, height: original.artwork.height }
+            : await new Bun.Image(original.bytes).metadata();
+        const effectiveWidth = Math.max(
+          1,
+          Math.floor(
+            Math.min(
+              width,
+              dimensions.width,
+              (maxHeight * dimensions.width) / dimensions.height,
+            ),
+          ),
+        );
         const hasher = new Bun.CryptoHasher("sha256");
         hasher.update(original.bytes);
-        hasher.update(`;w=${effectiveWidth}`);
+        hasher.update(
+          `;w=${effectiveWidth};f=${format ?? "original"};q=${quality}`,
+        );
         const sourceKey = hasher.digest("hex");
 
         let result = cache.get(sourceKey);
@@ -265,7 +314,10 @@ export function createArtworkHandler(
         } else {
           let pending = inFlight.get(sourceKey);
           if (pending === undefined) {
-            pending = resize(original.bytes, effectiveWidth).then((resized) => {
+            pending = resize(original.bytes, effectiveWidth, {
+              format,
+              quality,
+            }).then((resized) => {
               const etagHasher = new Bun.CryptoHasher("sha256");
               etagHasher.update(resized.contentType);
               etagHasher.update(":");

@@ -34,7 +34,8 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 | ItemLookup | Real / neutral | Search configured movie/show metadata providers, read external-id descriptors, and apply a chosen identity and metadata. Missing credentials retain selected ids and queue a fetch. Music, books, box sets, trailers, and remote person lookup have no matching core provider capability. |
 | RemoteImage | Real / neutral | List configured item artwork providers, fetch candidates for stored identifiers, page/filter candidates, and download a selected original. Library/person/facet image owners do not exist in the core. |
 | Movie, Suggestion | Real | Suggestions use unplayed items. Movie recommendations and similar lists use available movies and matching genres. |
-| Image, MediaInfo, UserData, Video, Subtitle | Gap | Existing artwork/playback/marks; complete aliases, HEAD, and seeded proof. |
+| Image | Real / neutral | Read selected item originals and image info, upload base64 or raw images, replace/delete originals, and serve GET/HEAD aliases. Resize respects width/height bounds and encodes JPEG, PNG, or WebP; other format requests use PNG. One original per core image kind; reordering and other image owners are neutral. |
+| MediaInfo, UserData, Video, Subtitle | Gap | Existing playback/marks; complete aliases, HEAD, and seeded proof. |
 | Artist, Audio, MusicGenre, InstantMix, Lyric | Neutral | No music medium. Empty lists/defaults, accepted writes, empty binary responses. |
 | LiveTv, Channel | Neutral | No tuner, channels, programmes, recordings, or listing providers. |
 | SyncPlay | Neutral | No synchronized playback groups. Empty group lists and accepted no-op controls. |
@@ -58,3 +59,4 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 - Library roots retain Thalia's absolute-path and non-overlap rules. Catalogue deletion removes database entries and stored artwork while retaining source media files.
 - Manual metadata edits use the same library/item locks and contributor creation lock as provider metadata. Explicit provider ids replace the editor's supplied set.
 - Interactive lookup and background jobs share credentialed built-in/plugin providers. Identifying a Show queues its descendants to follow the chosen root identity, preserving explicitly pinned children. Artwork replacement removes obsolete selections; preservation fills missing types only. Queued fetches retain that choice. One original per core artwork type is selected.
+- Item artwork covers Primary, Backdrop, Logo, and Thumb at index zero. Uploads share bounded decoding and original storage with provider downloads. HEAD returns GET headers without a body, including on errors. JPEG/PNG/WebP and quality choices belong to the core resize cache key. Image effects and playback overlays have no core renderer and leave the image undecorated.

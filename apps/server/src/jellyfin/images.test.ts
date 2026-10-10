@@ -14,12 +14,8 @@ import { storeArtworkOriginal } from "../metadata/artwork-store.ts";
 import { createJellyfinHandler } from "./http.ts";
 import { toGuid } from "./request.ts";
 import { jellyfinRoutes } from "./routes.ts";
+import { fixturePng as png } from "./testing.ts";
 
-// An 8 by 8 PNG.
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
-  "base64",
-);
 const findroid =
   'MediaBrowser Client="Findroid", Version="0.15.4", DeviceId="pixel-1", Device="Pixel"';
 
@@ -56,14 +52,21 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
           db,
           jellyfinRoutes(createArtworkHandler(db), createHlsHandler(db)),
         );
-        const send = async (path: string, headers: HeadersInit = {}) => {
+        const send = async (
+          path: string,
+          headers: HeadersInit = {},
+          options: { method?: string; body?: BodyInit } = {},
+        ) => {
           const response = await handle(
             new Request(`http://thalia.test${path}`, {
-              method: path.startsWith("/Users/") ? "POST" : "GET",
+              method:
+                options.method ?? (path.startsWith("/Users/") ? "POST" : "GET"),
               headers: { "content-type": "application/json", ...headers },
-              body: path.startsWith("/Users/")
-                ? JSON.stringify({ Username: "mia", Pw: "secret-pass" })
-                : undefined,
+              body:
+                options.body ??
+                (path.startsWith("/Users/")
+                  ? JSON.stringify({ Username: "mia", Pw: "secret-pass" })
+                  : undefined),
             }),
             "127.0.0.1",
           );
@@ -93,6 +96,40 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
         expect((await send(`${images}/Primary/1`)).status).toBe(404);
         expect((await send(`${images}/Banner`)).status).toBe(404);
         expect((await send(`${images}/Backdrop`)).status).toBe(404);
+        const head = await send(
+          `${images}/Primary?maxWidth=4`,
+          {},
+          { method: "HEAD" },
+        );
+        expect(head.status).toBe(200);
+        expect(head.headers.get("etag")).toBe(etag);
+        expect(Number(head.headers.get("content-length"))).toBeGreaterThan(0);
+        expect(await head.text()).toBe("");
+        const missingHead = await send(
+          `${images}/Backdrop`,
+          {},
+          { method: "HEAD" },
+        );
+        expect(missingHead.status).toBe(404);
+        expect(await missingHead.text()).toBe("");
+        const jpeg = await send(
+          `${images}/Primary/0/${toGuid(poster.id)}/Jpg/0/3/0/0`,
+        );
+        expect(jpeg.headers.get("content-type")).toBe("image/jpeg");
+        expect(
+          await new Bun.Image(
+            new Uint8Array(await jpeg.arrayBuffer()),
+          ).metadata(),
+        ).toMatchObject({ format: "jpeg", width: 3, height: 3 });
+        const limited = await send(
+          `${images}/Primary?width=7&maxWidth=4&maxHeight=2&format=Webp`,
+        );
+        expect(limited.headers.get("content-type")).toBe("image/webp");
+        expect(
+          await new Bun.Image(
+            new Uint8Array(await limited.arrayBuffer()),
+          ).metadata(),
+        ).toMatchObject({ format: "webp", width: 2, height: 2 });
 
         await db
           .insert(settings)
@@ -105,6 +142,64 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
           Authorization: `${findroid}, Token="${login.AccessToken}"`,
         });
         expect(signedIn.status).toBe(200);
+        const auth = { "X-Emby-Token": login.AccessToken };
+        expect(await (await send(images, auth)).json()).toMatchObject([
+          { ImageType: "Primary", Width: 8, Height: 8, Size: png.byteLength },
+        ]);
+        const uploaded = await send(
+          `${images}/Primary/0`,
+          { ...auth, "content-type": "image/png" },
+          { method: "POST", body: png.toString("base64") },
+        );
+        expect(uploaded.status).toBe(204);
+        expect(await Bun.file(join(root, poster.storageKey)).exists()).toBe(
+          false,
+        );
+        expect((await send(`${images}/Primary`, auth)).status).toBe(200);
+        expect(
+          (
+            await send(
+              `${images}/Primary`,
+              { ...auth, "content-type": "image/png" },
+              { method: "POST", body: "invalid" },
+            )
+          ).status,
+        ).toBe(400);
+        expect(
+          (
+            await send(
+              `${images}/Primary`,
+              { ...auth, "content-type": "image/png" },
+              { method: "POST", body: png },
+            )
+          ).status,
+        ).toBe(204);
+        for (const format of ["jpeg", "webp"] as const) {
+          const original = await new Bun.Image(png)
+            [format]({ quality: 100 })
+            .bytes();
+          expect(
+            (
+              await send(
+                `${images}/Primary`,
+                { ...auth, "content-type": `image/${format}` },
+                { method: "POST", body: new Uint8Array(original) },
+              )
+            ).status,
+          ).toBe(204);
+          const low = await send(`${images}/Primary?quality=1`, auth);
+          const high = await send(`${images}/Primary?quality=100`, auth);
+          expect(low.headers.get("content-type")).toBe(`image/${format}`);
+          expect(high.headers.get("content-type")).toBe(`image/${format}`);
+          expect(Buffer.from(await low.arrayBuffer())).not.toEqual(
+            Buffer.from(await high.arrayBuffer()),
+          );
+        }
+        expect(
+          (await send(`${images}/Primary`, auth, { method: "DELETE" })).status,
+        ).toBe(204);
+        expect(await (await send(images, auth)).json()).toEqual([]);
+        expect((await send(`${images}/Primary`, auth)).status).toBe(404);
       } finally {
         await rm(root, { recursive: true, force: true });
       }

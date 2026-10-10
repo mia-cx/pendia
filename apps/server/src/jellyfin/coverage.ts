@@ -4,7 +4,6 @@ import type { ApiOperation } from "./openapi.ts";
 export const gaps: Record<string, string> = {
   Session: "Read sessions and exercise playback reports.",
   Library: "Exercise real item downloads and files.",
-  Image: "Exercise real artwork and HEAD/image aliases.",
   MediaInfo: "Exercise GET/POST playback info and bitrate test.",
   UserData: "Complete progress and rating adapters.",
   Video: "Exercise real files and HEAD/container aliases.",

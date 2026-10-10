@@ -7,6 +7,7 @@ import { locateVersionFile, serveVersionFile } from "../playback/direct.ts";
 import { planPlayback, toSubtitleStream } from "../playback/planning.ts";
 import { parseHlsName } from "../playback/playlists.ts";
 import { readWebvtt } from "../transcoder/subtitles.ts";
+import { browseAsUser } from "./browse.ts";
 import { json, noTimeouts, type RequestContext, type Route } from "./http.ts";
 import { mediaSource, type PlannedSource } from "./media.ts";
 import { readDeviceProfile } from "./profile.ts";
@@ -132,137 +133,216 @@ async function subtitle(context: RequestContext) {
  * without headers; each checks its own credential.
  */
 export function playbackRoutes(hls: HlsHandler): Route[] {
-  return [
-    {
-      method: "POST",
-      path: "/Items/{id}/PlaybackInfo",
-      handle: async ({ db, request, query, params, caller, peerAddress }) => {
-        const itemId = requiredGuid(params.id);
-        const body = await readBody(request, maxPlaybackInfoBytes);
-        const versions = await listVersionViews(db, caller.user.id, itemId);
-        // A Jellyfin item's first source shares the item's id.
-        const requested =
-          body.optionalString("MediaSourceId") ?? query.get("mediaSourceId");
-        const sourceId =
-          requested === undefined ? undefined : parseGuid(requested);
-        const version =
-          sourceId === undefined || sourceId === itemId
-            ? versions[0]
-            : versions.find((candidate) => candidate.id === sourceId);
-        if (version === undefined) throw new AuthError("NOT_FOUND");
-        const profile = readDeviceProfile(
-          body.value("DeviceProfile") ?? {},
-          body.number("MaxStreamingBitrate") ??
-            query.count("maxStreamingBitrate"),
-        );
-        // Jellyfin numbers Streams across the File, as Thalia does. A
-        // negative audio index asks for the default; -1 turns subtitles off.
-        const audioIndex =
-          body.number("AudioStreamIndex") ?? query.integer("AudioStreamIndex");
-        const subtitleIndex =
-          body.number("SubtitleStreamIndex") ??
-          query.integer("SubtitleStreamIndex");
-        const subtitleStreamIndex =
-          subtitleIndex === undefined
-            ? undefined
-            : subtitleIndex < 0
-              ? null
-              : subtitleIndex;
-        let planned: PlannedSource | null = null;
-        let sessionId: string | undefined;
-        try {
-          const plan = await planPlayback(
-            db,
-            caller,
-            {
-              itemId,
-              versionId: version.id,
-              profile,
-              tokenLifetimeSeconds: jellyfinTokenLifetimeSeconds,
-              ...(audioIndex === undefined || audioIndex < 0
+  return (
+    [
+      {
+        method: "GET",
+        path: "/Items/{id}/PlaybackInfo",
+        handle: async ({ db, caller, params }) => {
+          const itemId = requiredGuid(params.id);
+          return json({
+            MediaSources: (
+              await listVersionViews(db, caller.user.id, itemId)
+            ).map((version) => mediaSource(itemId, version)),
+          });
+        },
+      },
+      {
+        method: "POST",
+        path: "/Items/{id}/PlaybackInfo",
+        handle: async ({ db, request, query, params, caller, peerAddress }) => {
+          const itemId = requiredGuid(params.id);
+          const body = await readBody(request, maxPlaybackInfoBytes);
+          const versions = await listVersionViews(db, caller.user.id, itemId);
+          // A Jellyfin item's first source shares the item's id.
+          const requested =
+            body.optionalString("MediaSourceId") ?? query.get("mediaSourceId");
+          const sourceId =
+            requested === undefined ? undefined : parseGuid(requested);
+          const version =
+            sourceId === undefined || sourceId === itemId
+              ? versions[0]
+              : versions.find((candidate) => candidate.id === sourceId);
+          if (version === undefined) throw new AuthError("NOT_FOUND");
+          const profile = readDeviceProfile(
+            body.value("DeviceProfile") ?? {},
+            body.number("MaxStreamingBitrate") ??
+              query.count("maxStreamingBitrate"),
+          );
+          // Jellyfin numbers Streams across the File, as Thalia does. A
+          // negative audio index asks for the default; -1 turns subtitles off.
+          const audioIndex =
+            body.number("AudioStreamIndex") ??
+            query.integer("AudioStreamIndex");
+          const subtitleIndex =
+            body.number("SubtitleStreamIndex") ??
+            query.integer("SubtitleStreamIndex");
+          const subtitleStreamIndex =
+            subtitleIndex === undefined
+              ? undefined
+              : subtitleIndex < 0
+                ? null
+                : subtitleIndex;
+          let planned: PlannedSource | null = null;
+          let sessionId: string | undefined;
+          try {
+            const plan = await planPlayback(
+              db,
+              caller,
+              {
+                itemId,
+                versionId: version.id,
+                profile,
+                tokenLifetimeSeconds: jellyfinTokenLifetimeSeconds,
+                ...(audioIndex === undefined || audioIndex < 0
+                  ? {}
+                  : { audioStreamIndex: audioIndex }),
+                ...(subtitleStreamIndex === undefined
+                  ? {}
+                  : { subtitleStreamIndex }),
+              },
+              { request, peerAddress },
+            );
+            sessionId = plan.sessionId;
+            const token =
+              plan.url === null
+                ? null
+                : new URL(plan.url, request.url).searchParams.get("token");
+            // The URLs keep the selection, as Jellyfin's own do.
+            const selection = {
+              ...(plan.audioStreamIndex === null
                 ? {}
-                : { audioStreamIndex: audioIndex }),
+                : { AudioStreamIndex: String(plan.audioStreamIndex) }),
               ...(subtitleStreamIndex === undefined
                 ? {}
-                : { subtitleStreamIndex }),
+                : { SubtitleStreamIndex: String(subtitleStreamIndex ?? -1) }),
+            };
+            planned = {
+              method: plan.method,
+              query:
+                token === null
+                  ? null
+                  : new URLSearchParams({
+                      PlaySessionId: toGuid(plan.sessionId),
+                      MediaSourceId: toGuid(version.id),
+                      ...selection,
+                      token,
+                    }),
+              audioStreamIndex: plan.audioStreamIndex,
+              subtitleStreamIndex,
+            };
+          } catch (error) {
+            // No path plays for this profile. The source still answers, with
+            // every flag off; Findroid plays the file regardless.
+            if (
+              !(error instanceof AuthError) ||
+              !["INVALID_INPUT", "CONFLICT", "PREPARING"].includes(error.code)
+            )
+              throw error;
+          }
+          return json({
+            MediaSources: [mediaSource(itemId, version, planned)],
+            PlaySessionId:
+              sessionId === undefined ? undefined : toGuid(sessionId),
+          });
+        },
+      },
+      {
+        method: "GET",
+        path: "/Videos/{id}/{name}",
+        anonymous: true,
+        handle: (context) => {
+          const itemId = requiredGuid(context.params.id);
+          const name = context.params.name ?? "";
+          // `stream`, or `stream.mkv` as jellyfin-web and Kodi spell it.
+          return /^stream(\.[a-z0-9]+)?$/i.test(name)
+            ? directStream(context, itemId)
+            : sessionHls(hls, context, itemId, undefined, name);
+        },
+      },
+      ...["/Videos/{id}/stream", "/Videos/{id}/stream.{container}"].flatMap(
+        (path) =>
+          [
+            {
+              method: "GET",
+              path,
+              anonymous: true,
+              handle: (context) =>
+                directStream(context, requiredGuid(context.params.id)),
             },
-            { request, peerAddress },
-          );
-          sessionId = plan.sessionId;
-          const token =
-            plan.url === null
-              ? null
-              : new URL(plan.url, request.url).searchParams.get("token");
-          // The URLs keep the selection, as Jellyfin's own do.
-          const selection = {
-            ...(plan.audioStreamIndex === null
-              ? {}
-              : { AudioStreamIndex: String(plan.audioStreamIndex) }),
-            ...(subtitleStreamIndex === undefined
-              ? {}
-              : { SubtitleStreamIndex: String(subtitleStreamIndex ?? -1) }),
-          };
-          planned = {
-            method: plan.method,
-            query:
-              token === null
-                ? null
-                : new URLSearchParams({
-                    PlaySessionId: toGuid(plan.sessionId),
-                    MediaSourceId: toGuid(version.id),
-                    ...selection,
-                    token,
-                  }),
-            audioStreamIndex: plan.audioStreamIndex,
-            subtitleStreamIndex,
-          };
-        } catch (error) {
-          // No path plays for this profile. The source still answers, with
-          // every flag off; Findroid plays the file regardless.
-          if (
-            !(error instanceof AuthError) ||
-            !["INVALID_INPUT", "CONFLICT", "PREPARING"].includes(error.code)
-          )
-            throw error;
-        }
-        return json({
-          MediaSources: [mediaSource(itemId, version, planned)],
-          PlaySessionId:
-            sessionId === undefined ? undefined : toGuid(sessionId),
-        });
+            {
+              method: "HEAD",
+              path,
+              anonymous: true,
+              handle: (context) =>
+                directStream(context, requiredGuid(context.params.id)),
+            },
+          ] satisfies Route[],
+      ),
+      ...["File", "Download"].map(
+        (kind): Route => ({
+          method: "GET",
+          path: `/Items/{id}/${kind}`,
+          handle: async (context) => {
+            const itemId = requiredGuid(context.params.id);
+            const version = await versionOf(
+              context,
+              context.caller.user.id,
+              itemId,
+              undefined,
+            );
+            const response = await serveVersionFile(
+              context.db,
+              context.caller.user.id,
+              itemId,
+              version.id,
+            );
+            if (kind === "Download" && response.ok)
+              response.headers.set(
+                "content-disposition",
+                `attachment; filename="${toGuid(itemId)}.${version.file.container ?? "mkv"}"`,
+              );
+            return response;
+          },
+        }),
+      ),
+      {
+        method: "GET",
+        path: "/Playback/BitrateTest",
+        handle: ({ query }) => {
+          const size = query.count("size") ?? 102400;
+          if (size < 1 || size > 100_000_000)
+            throw new AuthError("INVALID_INPUT");
+          return new Response(new Uint8Array(size), {
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": String(size),
+              "Cache-Control": "no-store",
+            },
+          });
+        },
       },
-    },
-    {
-      method: "GET",
-      path: "/Videos/{id}/{name}",
-      anonymous: true,
-      handle: (context) => {
-        const itemId = requiredGuid(context.params.id);
-        const name = context.params.name ?? "";
-        // `stream`, or `stream.mkv` as jellyfin-web and Kodi spell it.
-        return /^stream(\.[a-z0-9]+)?$/i.test(name)
-          ? directStream(context, itemId)
-          : sessionHls(hls, context, itemId, undefined, name);
+      {
+        method: "GET",
+        path: "/Videos/{id}/{variant}/{name}",
+        anonymous: true,
+        handle: (context) =>
+          sessionHls(
+            hls,
+            context,
+            requiredGuid(context.params.id),
+            context.params.variant,
+            context.params.name ?? "",
+          ),
       },
-    },
-    {
-      method: "GET",
-      path: "/Videos/{id}/{variant}/{name}",
-      anonymous: true,
-      handle: (context) =>
-        sessionHls(
-          hls,
-          context,
-          requiredGuid(context.params.id),
-          context.params.variant,
-          context.params.name ?? "",
-        ),
-    },
-    {
-      method: "GET",
-      path: "/Videos/{id}/{source}/Subtitles/{index}/Stream.vtt",
-      anonymous: true,
-      handle: subtitle,
-    },
-  ];
+      {
+        method: "GET",
+        path: "/Videos/{id}/{source}/Subtitles/{index}/Stream.vtt",
+        anonymous: true,
+        handle: subtitle,
+      },
+    ] satisfies Route[]
+  ).map((route) =>
+    route.path.endsWith("/PlaybackInfo") ? browseAsUser(route) : route,
+  );
 }

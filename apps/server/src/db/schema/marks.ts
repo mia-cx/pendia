@@ -93,7 +93,9 @@ export const ratings = pgTable(
     itemId: uuid("item_id")
       .notNull()
       .references(() => items.id, owned),
-    value: numeric("value", { precision: 3, scale: 1 }).notNull(),
+    value: numeric("value", { precision: 3, scale: 1 }),
+    /** A binary opinion is independent of the optional numeric rating. */
+    liked: boolean("liked"),
     updatedAt: instant("updated_at").notNull().defaultNow(),
   },
   (table) => [
@@ -101,6 +103,10 @@ export const ratings = pgTable(
     check(
       "ratings_value_check",
       sql`${table.value} >= 0 and ${table.value} <= 10`,
+    ),
+    check(
+      "ratings_opinion_check",
+      sql`${table.value} is not null or ${table.liked} is not null`,
     ),
   ],
 );

@@ -1,12 +1,23 @@
 import { listItemViews } from "../api/views.ts";
 import { AuthError } from "../auth/errors.ts";
-import { setFavourite, setPlayed } from "../playback/marks.ts";
+import {
+  readClientPreference,
+  writeClientPreference,
+} from "../auth/profile.ts";
+import { pingPlayback } from "../playback/activity.ts";
+import {
+  setFavourite,
+  setLiked,
+  setPlayed,
+  updateItemState,
+} from "../playback/marks.ts";
 import {
   resolvePlaySession,
   startPlayback,
   stopPlayback,
   updatePlayback,
 } from "../playback/progress.ts";
+import { browseAsUser } from "./browse.ts";
 import { json, noContent, type Route, type UserContext } from "./http.ts";
 import { userData } from "./items.ts";
 import {
@@ -15,6 +26,7 @@ import {
   requiredGuid,
   ticksPerSecond,
 } from "./request.ts";
+import { readDto } from "./schema.ts";
 
 // Jellyfin counts a play finished past 90 % of the runtime, its MaxResumePct default.
 const finishedFraction = 0.9;
@@ -46,11 +58,32 @@ async function readReport({ db, request, caller }: UserContext) {
     ticks === undefined
       ? undefined
       : Math.min(Math.max(ticks / ticksPerSecond, 0), duration);
+  const state: Record<string, boolean | number> = {};
+  if (position !== undefined) state.positionSeconds = position;
+  for (const [field, key] of [
+    ["IsPaused", "paused"],
+    ["IsMuted", "muted"],
+    ["CanSeek", "canSeek"],
+  ] as const) {
+    const value = body.value(field);
+    if (value === undefined) continue;
+    if (typeof value !== "boolean") throw new AuthError("INVALID_INPUT");
+    state[key] = value;
+  }
+  for (const [field, key] of [
+    ["VolumeLevel", "volume"],
+    ["AudioStreamIndex", "audioStreamIndex"],
+    ["SubtitleStreamIndex", "subtitleStreamIndex"],
+  ] as const) {
+    const value = body.number(field);
+    if (value !== undefined) state[key] = value;
+  }
   return {
     scope: { sessionId: session.sessionId, itemId },
     state: session.state,
     position,
     finished: position !== undefined && position >= duration * finishedFraction,
+    clientState: state,
   };
 }
 
@@ -79,6 +112,30 @@ function reportRoute(
           report.position,
         );
       await apply(context, report);
+      if (Object.keys(report.clientState).length > 0) {
+        const previous = await readClientPreference(
+          context.db,
+          context.caller.user.id,
+          context.caller.user.id,
+          "playback-state",
+          report.scope.sessionId,
+        );
+        await writeClientPreference(
+          context.db,
+          context.caller.user.id,
+          context.caller.user.id,
+          "playback-state",
+          report.scope.sessionId,
+          {
+            ...(previous !== null &&
+            typeof previous === "object" &&
+            !Array.isArray(previous)
+              ? previous
+              : {}),
+            ...report.clientState,
+          },
+        );
+      }
       return noContent();
     },
   };
@@ -107,34 +164,116 @@ function markRoute(
   };
 }
 
-/** The three progress reports and the played and favourite marks. */
-export const progressRoutes: Route[] = [
-  // Playing without a position resumes where the play left off.
-  reportRoute("/Sessions/Playing", ({ db, caller }, report) =>
-    startPlayback(db, caller.user.id, report.scope, report.position),
-  ),
-  reportRoute("/Sessions/Playing/Progress", async ({ db, caller }, report) => {
-    if (report.position !== undefined)
-      await updatePlayback(db, caller.user.id, report.scope, {
+/** Playback reports, heartbeat, and personal progress, opinions, played and favourite marks. */
+export const progressRoutes: Route[] = (
+  [
+    // Playing without a position resumes where the play left off.
+    reportRoute("/Sessions/Playing", ({ db, caller }, report) =>
+      startPlayback(db, caller.user.id, report.scope, report.position),
+    ),
+    reportRoute(
+      "/Sessions/Playing/Progress",
+      async ({ db, caller }, report) => {
+        if (report.position !== undefined)
+          await updatePlayback(db, caller.user.id, report.scope, {
+            positionSeconds: report.position,
+          });
+        else await pingPlayback(db, caller.user.id, report.scope.sessionId);
+      },
+    ),
+    reportRoute("/Sessions/Playing/Stopped", ({ db, caller }, report) =>
+      stopPlayback(db, caller.user.id, report.scope, {
         positionSeconds: report.position,
-      });
-  }),
-  reportRoute("/Sessions/Playing/Stopped", ({ db, caller }, report) =>
-    stopPlayback(db, caller.user.id, report.scope, {
-      positionSeconds: report.position,
-      completed: report.finished,
-    }),
-  ),
-  markRoute("POST", "/UserPlayedItems/{id}", ({ db, caller }, itemId) =>
-    setPlayed(db, caller.user.id, itemId, true),
-  ),
-  markRoute("DELETE", "/UserPlayedItems/{id}", ({ db, caller }, itemId) =>
-    setPlayed(db, caller.user.id, itemId, false),
-  ),
-  markRoute("POST", "/UserFavoriteItems/{id}", ({ db, caller }, itemId) =>
-    setFavourite(db, caller.user.id, itemId, true),
-  ),
-  markRoute("DELETE", "/UserFavoriteItems/{id}", ({ db, caller }, itemId) =>
-    setFavourite(db, caller.user.id, itemId, false),
-  ),
-];
+        completed: report.finished,
+      }),
+    ),
+    {
+      method: "POST",
+      path: "/Sessions/Playing/Ping",
+      handle: async ({ db, caller, query }) => {
+        await pingPlayback(
+          db,
+          caller.user.id,
+          requiredGuid(query.get("playSessionId")),
+        );
+        return noContent();
+      },
+    },
+    {
+      method: "GET",
+      path: "/UserItems/{id}/UserData",
+      handle: (context) => userDataOf(context, requiredGuid(context.params.id)),
+    },
+    {
+      method: "POST",
+      path: "/UserItems/{id}/UserData",
+      handle: async (context) => {
+        const value = await readDto(context.request, "UpdateUserItemDataDto");
+        const itemId = requiredGuid(context.params.id);
+        await updateItemState(context.db, context.caller.user.id, itemId, {
+          positionSeconds:
+            typeof value.PlaybackPositionTicks === "number"
+              ? value.PlaybackPositionTicks / ticksPerSecond
+              : undefined,
+          completed:
+            typeof value.Played === "boolean" ? value.Played : undefined,
+          playCount:
+            typeof value.PlayCount === "number" ? value.PlayCount : undefined,
+          playedAt:
+            typeof value.LastPlayedDate === "string"
+              ? new Date(value.LastPlayedDate)
+              : value.LastPlayedDate === null
+                ? null
+                : undefined,
+          favourite:
+            typeof value.IsFavorite === "boolean"
+              ? value.IsFavorite
+              : undefined,
+          rating:
+            typeof value.Rating === "number" || value.Rating === null
+              ? value.Rating
+              : undefined,
+          liked:
+            typeof value.Likes === "boolean" || value.Likes === null
+              ? value.Likes
+              : undefined,
+        });
+        return userDataOf(context, itemId);
+      },
+    },
+    markRoute(
+      "POST",
+      "/UserItems/{id}/Rating",
+      ({ db, caller, query }, itemId) =>
+        setLiked(db, caller.user.id, itemId, query.flag("likes") ?? null),
+    ),
+    markRoute("DELETE", "/UserItems/{id}/Rating", ({ db, caller }, itemId) =>
+      setLiked(db, caller.user.id, itemId, null),
+    ),
+    markRoute(
+      "POST",
+      "/UserPlayedItems/{id}",
+      ({ db, caller, query }, itemId) =>
+        setPlayed(
+          db,
+          caller.user.id,
+          itemId,
+          true,
+          query.get("datePlayed") === undefined
+            ? undefined
+            : new Date(query.get("datePlayed") ?? ""),
+        ),
+    ),
+    markRoute("DELETE", "/UserPlayedItems/{id}", ({ db, caller }, itemId) =>
+      setPlayed(db, caller.user.id, itemId, false),
+    ),
+    markRoute("POST", "/UserFavoriteItems/{id}", ({ db, caller }, itemId) =>
+      setFavourite(db, caller.user.id, itemId, true),
+    ),
+    markRoute("DELETE", "/UserFavoriteItems/{id}", ({ db, caller }, itemId) =>
+      setFavourite(db, caller.user.id, itemId, false),
+    ),
+  ] satisfies Route[]
+).map((route) =>
+  route.path.startsWith("/User") ? browseAsUser(route) : route,
+);

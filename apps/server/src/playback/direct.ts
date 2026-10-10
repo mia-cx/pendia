@@ -114,7 +114,9 @@ export async function serveVersionFile(
     );
   const headers = new Headers(standardHeaders);
   headers.set("accept-ranges", "bytes");
-  return new Response(Bun.file(path), { headers });
+  const file = Bun.file(path);
+  headers.set("content-length", String(file.size));
+  return new Response(file, { headers });
 }
 
 /** Creates the direct-play file handler matched ahead of the API router. */

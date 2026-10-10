@@ -164,6 +164,7 @@ const viewFields = {
   playedAt: progress.playedAt,
   favourite: sql<boolean>`${favourites.id} is not null`,
   rating: ratings.value,
+  liked: ratings.liked,
 };
 
 const sortColumns: Record<ItemViewSort, SQL[]> = {
@@ -347,6 +348,7 @@ function toView(row: ViewRow) {
     playedAt,
     favourite,
     rating,
+    liked,
     ...item
   } = row;
   return {
@@ -367,6 +369,7 @@ function toView(row: ViewRow) {
       playedAt,
       favourite,
       rating: rating === null ? null : Number(rating),
+      liked,
     },
   };
 }

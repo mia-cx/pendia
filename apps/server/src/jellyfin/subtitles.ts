@@ -11,6 +11,7 @@ import {
   uploadSubtitle,
 } from "../subtitles/service.ts";
 import { subtitleFormats } from "../subtitles/store.ts";
+import { webvttEvents } from "../transcoder/subtitles.ts";
 import { json, noContent, type RequestContext, type Route } from "./http.ts";
 import { mediaUserId } from "./playback.ts";
 import { readQuery, requiredGuid, ticksPerSecond } from "./request.ts";
@@ -48,7 +49,10 @@ export function subtitleRoutes(options: SubtitleProviderOptions = {}): Route[] {
       params.format ??
       "vtt"
     ).toLowerCase();
-    const format = subtitleFormats.find((known) => known === requested);
+    const format =
+      requested === "js" || requested === "json"
+        ? "json"
+        : subtitleFormats.find((known) => known === requested);
     if (format === undefined) throw new AuthError("INVALID_INPUT");
     const start =
       readQuery(
@@ -59,24 +63,31 @@ export function subtitleRoutes(options: SubtitleProviderOptions = {}): Route[] {
     const end = query.count("endPositionTicks");
     if (end !== undefined && end < start) throw new AuthError("INVALID_INPUT");
     const userId = await mediaUserId(context, itemId);
-    return textResponse(
-      await readItemSubtitle(
-        context.db,
-        userId,
-        itemId,
-        sourceId,
-        index,
-        format,
-        {
-          startSeconds: start / ticksPerSecond,
-          endSeconds: end === undefined ? undefined : end / ticksPerSecond,
-          copyTimestamps: query.flag("copyTimestamps") ?? false,
-          addTimeMap: query.flag("addVttTimeMap") ?? false,
-        },
-        context.request.signal,
-      ),
-      format,
+    const text = await readItemSubtitle(
+      context.db,
+      userId,
+      itemId,
+      sourceId,
+      index,
+      format === "json" ? "vtt" : format,
+      {
+        startSeconds: start / ticksPerSecond,
+        endSeconds: end === undefined ? undefined : end / ticksPerSecond,
+        copyTimestamps: query.flag("copyTimestamps") ?? false,
+        addTimeMap: query.flag("addVttTimeMap") ?? false,
+      },
+      context.request.signal,
     );
+    if (format === "json")
+      return json({
+        TrackEvents: webvttEvents(text).map((event, index) => ({
+          Id: event.id || String(index),
+          Text: event.text,
+          StartPositionTicks: Math.round(event.startSeconds * ticksPerSecond),
+          EndPositionTicks: Math.round(event.endSeconds * ticksPerSecond),
+        })),
+      });
+    return textResponse(text, format);
   };
   return [
     {
@@ -118,6 +129,13 @@ export function subtitleRoutes(options: SubtitleProviderOptions = {}): Route[] {
         for (let start = 0; start < duration; start += length) {
           const end = Math.min(start + length, duration);
           const query = new URLSearchParams(context.url.searchParams);
+          // Players need a credential when subsequent segment requests lack headers.
+          if (context.client.token !== undefined) {
+            for (const key of [...query.keys()])
+              if (["apikey", "api_key"].includes(key.toLowerCase()))
+                query.delete(key);
+            query.set("api_key", context.client.token);
+          }
           // Window parameters belong to each segment, not the playlist request.
           for (const key of [...query.keys()])
             if (

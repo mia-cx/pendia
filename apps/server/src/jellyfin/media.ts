@@ -49,14 +49,15 @@ const frameRate = (stream: Stream) =>
     ? undefined
     : stream.frameRateNumerator / stream.frameRateDenominator;
 
-/** The Jellyfin route that serves one text subtitle Stream as WebVTT. */
+/** The Jellyfin route that serves a text track in its client delivery format. */
 export function subtitleUrl(
   itemId: string,
   versionId: string,
   index: number,
   query: URLSearchParams | null,
+  format: "vtt" | "ass" = "vtt",
 ) {
-  const path = `/videos/${toGuid(itemId)}/${toGuid(versionId)}/Subtitles/${index}/Stream.vtt`;
+  const path = `/videos/${toGuid(itemId)}/${toGuid(versionId)}/Subtitles/${index}/Stream.${format}`;
   return query === null ? path : `${path}?${query}`;
 }
 
@@ -114,7 +115,13 @@ function mediaStream(
     SupportsExternalStream: text,
     DeliveryMethod: delivery,
     DeliveryUrl: text
-      ? subtitleUrl(itemId, versionId, stream.index, planned?.query ?? null)
+      ? subtitleUrl(
+          itemId,
+          versionId,
+          stream.index,
+          planned?.query ?? null,
+          stream.codec === "ass" || stream.codec === "ssa" ? "ass" : "vtt",
+        )
       : undefined,
   };
 }
@@ -199,6 +206,7 @@ export function mediaSource(
           version.id,
           track.index,
           planned?.query ?? null,
+          track.format === "ass" ? "ass" : "vtt",
         ),
       })),
     ],

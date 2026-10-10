@@ -5,16 +5,21 @@ const maxCachedSubtitleTracks = 128;
 const subtitleCache = new Map<string, { text: string; bytes: number }>();
 let cachedSubtitleBytes = 0;
 
-async function cachedWebvtt(path: string, index: number, signal?: AbortSignal) {
+async function cachedSubtitle(
+  path: string,
+  index: number,
+  format: "webvtt" | "ass",
+  signal?: AbortSignal,
+) {
   const file = await stat(path, { bigint: true });
-  const key = `${path}:${index}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`;
+  const key = `${path}:${index}:${format}:${file.ino}:${file.size}:${file.mtimeNs}:${file.ctimeNs}`;
   const cached = subtitleCache.get(key);
   if (cached !== undefined) {
     subtitleCache.delete(key);
     subtitleCache.set(key, cached);
     return cached.text;
   }
-  const text = await readWebvtt(path, index, signal);
+  const text = await extractSubtitle(path, index, format, signal);
   // Another segment may have finished the same extraction while this one ran.
   const populated = subtitleCache.get(key);
   if (populated !== undefined) return populated.text;
@@ -50,7 +55,7 @@ function subtitleClock(seconds: number) {
   return `${String(Math.floor(milliseconds / 3_600_000)).padStart(2, "0")}:${String(Math.floor(milliseconds / 60_000) % 60).padStart(2, "0")}:${String(Math.floor(milliseconds / 1000) % 60).padStart(2, "0")}.${String(milliseconds % 1000).padStart(3, "0")}`;
 }
 
-function windowedWebvtt(text: string, window: SubtitleWindow) {
+function subtitleInterval(window: SubtitleWindow) {
   const start = window.startSeconds ?? 0;
   const end = window.endSeconds ?? Infinity;
   if (
@@ -60,13 +65,38 @@ function windowedWebvtt(text: string, window: SubtitleWindow) {
     (end !== Infinity && !Number.isFinite(end))
   )
     throw new RangeError("Invalid subtitle interval.");
-  const blocks = text.trimEnd().split(/\r?\n\r?\n/);
   const offset = window.copyTimestamps ? 0 : start;
+  return { start, end, offset };
+}
+
+const cueTiming =
+  /^((?:\d+:)?\d{2}:\d{2}\.\d{3}) --> ((?:\d+:)?\d{2}:\d{2}\.\d{3})(.*)$/m;
+
+/** Reads text cue events from converted WebVTT in source seconds. */
+export function webvttEvents(text: string) {
+  return text
+    .trimEnd()
+    .split(/\r?\n\r?\n/)
+    .slice(1)
+    .flatMap((block) => {
+      const match = cueTiming.exec(block);
+      if (match === null) return [];
+      return [
+        {
+          id: block.slice(0, match.index).trim(),
+          text: block.slice(match.index + match[0].length).trim(),
+          startSeconds: clockSeconds(match[1] ?? ""),
+          endSeconds: clockSeconds(match[2] ?? ""),
+        },
+      ];
+    });
+}
+
+function windowedWebvtt(text: string, window: SubtitleWindow) {
+  const { start, end, offset } = subtitleInterval(window);
+  const blocks = text.trimEnd().split(/\r?\n\r?\n/);
   const cues = blocks.slice(1).flatMap((block) => {
-    const match =
-      /^((?:\d+:)?\d{2}:\d{2}\.\d{3}) --> ((?:\d+:)?\d{2}:\d{2}\.\d{3})(.*)$/m.exec(
-        block,
-      );
+    const match = cueTiming.exec(block);
     if (match === null) return [];
     const from = Math.max(clockSeconds(match[1] ?? ""), start);
     const to = Math.min(clockSeconds(match[2] ?? ""), end);
@@ -84,6 +114,30 @@ function windowedWebvtt(text: string, window: SubtitleWindow) {
   return `WEBVTT${map}\n\n${cues.join("\n\n")}\n`;
 }
 
+function assClock(seconds: number) {
+  const centiseconds = Math.round(seconds * 100);
+  return `${Math.floor(centiseconds / 360_000)}:${String(Math.floor(centiseconds / 6000) % 60).padStart(2, "0")}:${String(Math.floor(centiseconds / 100) % 60).padStart(2, "0")}.${String(centiseconds % 100).padStart(2, "0")}`;
+}
+
+function windowedAss(text: string, window: SubtitleWindow) {
+  const { start, end, offset } = subtitleInterval(window);
+  // FFmpeg emits the standard Layer, Start, End, ... dialogue fields. Keep all
+  // styles, headers, and override tags while changing only those two clocks.
+  return text
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const match = /^Dialogue: ([^,]+),([^,]+),([^,]+),(.*)$/.exec(line);
+      if (match === null) return [line];
+      const from = Math.max(clockSeconds(match[2] ?? ""), start);
+      const to = Math.min(clockSeconds(match[3] ?? ""), end);
+      if (to <= from) return [];
+      return [
+        `Dialogue: ${match[1]},${assClock(from - offset)},${assClock(to - offset)},${match[4]}`,
+      ];
+    })
+    .join("\n");
+}
+
 /** Converts a text track to WebVTT, SRT, or ASS after applying its source-time interval. */
 export async function readSubtitle(
   inputPath: string,
@@ -92,10 +146,15 @@ export async function readSubtitle(
   window: SubtitleWindow = {},
   signal?: AbortSignal,
 ) {
+  if (format === "ass")
+    return windowedAss(
+      await cachedSubtitle(inputPath, subtitleIndex, "ass", signal),
+      window,
+    );
   // HLS asks for many windows of one track. Extract once per file revision,
   // rather than reading an entire film again for each six-second segment.
   const text = windowedWebvtt(
-    await cachedWebvtt(inputPath, subtitleIndex, signal),
+    await cachedSubtitle(inputPath, subtitleIndex, "webvtt", signal),
     window,
   );
   if (format === "vtt") return text;
@@ -138,6 +197,15 @@ export function webvttArguments(
   subtitleIndex: number,
   outputPath: string,
 ) {
+  return subtitleArguments(inputPath, subtitleIndex, outputPath, "webvtt");
+}
+
+function subtitleArguments(
+  inputPath: string,
+  subtitleIndex: number,
+  outputPath: string,
+  format: "webvtt" | "ass",
+) {
   if (!Number.isInteger(subtitleIndex) || subtitleIndex < 0) {
     throw new RangeError("Subtitle index out of range.");
   }
@@ -153,9 +221,9 @@ export function webvttArguments(
     "-map",
     `0:s:${subtitleIndex}`,
     "-c:s",
-    "webvtt",
+    format,
     "-f",
-    "webvtt",
+    format,
     outputPath,
   ];
 }
@@ -166,8 +234,20 @@ export async function readWebvtt(
   subtitleIndex: number,
   signal?: AbortSignal,
 ) {
+  return extractSubtitle(inputPath, subtitleIndex, "webvtt", signal);
+}
+
+async function extractSubtitle(
+  inputPath: string,
+  subtitleIndex: number,
+  format: "webvtt" | "ass",
+  signal?: AbortSignal,
+) {
   const proc = Bun.spawn(
-    ["ffmpeg", ...webvttArguments(inputPath, subtitleIndex, "pipe:1")],
+    [
+      "ffmpeg",
+      ...subtitleArguments(inputPath, subtitleIndex, "pipe:1", format),
+    ],
     { stdin: "ignore", stdout: "pipe", stderr: "pipe", signal },
   );
   const [text, stderr, code] = await Promise.all([
@@ -177,7 +257,7 @@ export async function readWebvtt(
   ]);
   if (code !== 0)
     throw new Error(
-      `WebVTT conversion failed (${code}): ${stderr.trim().slice(-2000)}`,
+      `${format} conversion failed (${code}): ${stderr.trim().slice(-2000)}`,
     );
   return text;
 }

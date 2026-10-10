@@ -23,6 +23,7 @@ import {
 } from "../metadata/edit.ts";
 import { refreshItem } from "../metadata/jobs.ts";
 import { json, noContent, type Route, type UserContext } from "./http.ts";
+import { providerIdsDto } from "./items.ts";
 import { defaultValue, openapi } from "./openapi.ts";
 import { requiredGuid, toGuid } from "./request.ts";
 import { readDto } from "./schema.ts";
@@ -457,7 +458,7 @@ const innerRoutes: Extract<Route, { anonymous?: false }>[] = [
         Countries: [],
         Cultures: [],
         ExternalIdInfos: Object.keys(
-          item?.providerIds ?? person?.providerIds ?? {},
+          providerIdsDto(item?.providerIds ?? person?.providerIds ?? {}),
         ).map((Key) => ({
           Name: Key,
           Key,

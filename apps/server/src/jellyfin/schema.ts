@@ -50,14 +50,36 @@ const validators = new Map<string, ValidateFunction<JsonObject>>();
 
 function dtoSchema(input: Schema): Schema {
   const schema = resolveSchema(input);
-  if (schema.allOf?.length === 1) return dtoSchema(schema.allOf[0] ?? {});
+  if (schema.allOf?.length === 1)
+    return { ...dtoSchema(schema.allOf[0] ?? {}), ...schema, allOf: undefined };
   return schema;
 }
 
-function canonicalDto(value: unknown, input: Schema): unknown {
+function canonicalDto(
+  value: unknown,
+  input: Schema,
+  bindForm = false,
+): unknown {
   const schema = dtoSchema(input);
+  // Jellyfin Web serializes numeric input values as strings and new dates without a time.
+  if (bindForm && typeof value === "string") {
+    if (value === "" && schema.nullable && schema.enum !== undefined)
+      return null;
+    if (schema.type === "integer" || schema.type === "number") {
+      const text = value.trim();
+      if (text === "" && schema.nullable) return null;
+      if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) {
+        const number = Number(text);
+        if (Number.isFinite(number)) return number;
+      }
+    }
+    if (schema.format === "date-time" && /^\d{4}-\d{2}-\d{2}$/.test(value))
+      return `${value}T00:00:00Z`;
+  }
   if (Array.isArray(value))
-    return value.map((entry) => canonicalDto(entry, schema.items ?? {}));
+    return value.map((entry) =>
+      canonicalDto(entry, schema.items ?? {}, bindForm),
+    );
   if (value === null || typeof value !== "object") return value;
   if (schema.properties === undefined) {
     if (typeof schema.additionalProperties !== "object") return value;
@@ -65,7 +87,7 @@ function canonicalDto(value: unknown, input: Schema): unknown {
     return Object.fromEntries(
       Object.entries(value).map(([key, entry]) => [
         key,
-        canonicalDto(entry, entries),
+        canonicalDto(entry, entries, bindForm),
       ]),
     );
   }
@@ -80,12 +102,12 @@ function canonicalDto(value: unknown, input: Schema): unknown {
       const canonical = fields.get(key.toLowerCase());
       return canonical === undefined
         ? []
-        : [[canonical.key, canonicalDto(entry, canonical.field)]];
+        : [[canonical.key, canonicalDto(entry, canonical.field, bindForm)]];
     }),
   );
 }
 
-/** Reads an object DTO with case-insensitive names at every nesting level, ignoring unknown fields as ASP.NET does. */
+/** Reads case-insensitive DTOs, binding metadata editor form values before contract validation. */
 export async function readDto(
   request: Request,
   name: string,
@@ -94,7 +116,7 @@ export async function readDto(
   if (schema?.properties === undefined)
     throw new Error(`Unknown object DTO ${name}.`);
   const input = await readJsonObject(request, 262_144);
-  const value = canonicalDto(input, schema);
+  const value = canonicalDto(input, schema, name === "BaseItemDto");
   const validate =
     validators.get(name) ??
     contractValidator.compile<JsonObject>({

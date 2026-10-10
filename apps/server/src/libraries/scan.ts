@@ -1402,6 +1402,15 @@ export async function scanShowDirectory(
             })),
           ),
         );
+        // Existing Files retain their Season lineage when an editor changes its display number.
+        const owningSeasons = await tx
+          .selectDistinct({ id: seasons.itemId })
+          .from(files)
+          .innerJoin(episodes, eq(episodes.itemId, files.itemId))
+          .innerJoin(seasons, eq(seasons.itemId, episodes.seasonId))
+          .where(and(eq(seasons.showId, showId), rootedPairs(seasonFiles)));
+        if (owningSeasons.length > 1) throw new AuthError("CONFLICT");
+        const owner = owningSeasons[0];
         const [existingSeason] = await tx
           .select({ item: items, season: seasons })
           .from(seasons)
@@ -1409,7 +1418,9 @@ export async function scanShowDirectory(
           .where(
             and(
               eq(seasons.showId, showId),
-              eq(seasons.seasonNumber, seasonGroup.seasonNumber),
+              owner === undefined
+                ? eq(seasons.seasonNumber, seasonGroup.seasonNumber)
+                : eq(seasons.itemId, owner.id),
             ),
           );
         let seasonId: string;

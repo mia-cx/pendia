@@ -329,6 +329,11 @@ export async function updateItemState(
       )[0];
     if (version === undefined) return;
     const patch = {
+      // An explicit position names this Version's timeline. An unrelated
+      // count/date edit must not rebind an old, incompatible position.
+      ...(input.positionSeconds === undefined
+        ? {}
+        : { versionId: version.id, format: version.format }),
       ...(input.positionSeconds === undefined
         ? {}
         : {

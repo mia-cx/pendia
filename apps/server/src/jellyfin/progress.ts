@@ -222,21 +222,13 @@ export const progressRoutes: Route[] = (
           playedAt:
             typeof value.LastPlayedDate === "string"
               ? new Date(value.LastPlayedDate)
-              : value.LastPlayedDate === null
-                ? null
-                : undefined,
+              : undefined,
           favourite:
             typeof value.IsFavorite === "boolean"
               ? value.IsFavorite
               : undefined,
-          rating:
-            typeof value.Rating === "number" || value.Rating === null
-              ? value.Rating
-              : undefined,
-          liked:
-            typeof value.Likes === "boolean" || value.Likes === null
-              ? value.Likes
-              : undefined,
+          rating: typeof value.Rating === "number" ? value.Rating : undefined,
+          liked: typeof value.Likes === "boolean" ? value.Likes : undefined,
         });
         return userDataOf(context, itemId);
       },

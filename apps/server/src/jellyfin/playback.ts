@@ -7,7 +7,7 @@ import { locateVersionFile, serveVersionFile } from "../playback/direct.ts";
 import { planPlayback, toSubtitleStream } from "../playback/planning.ts";
 import { parseHlsName } from "../playback/playlists.ts";
 import { readWebvtt } from "../transcoder/subtitles.ts";
-import { browseAsUser } from "./browse.ts";
+import { browseAsUser, browseUser } from "./browse.ts";
 import { json, noTimeouts, type RequestContext, type Route } from "./http.ts";
 import { mediaSource, type PlannedSource } from "./media.ts";
 import { readDeviceProfile } from "./profile.ts";
@@ -150,10 +150,12 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
       {
         method: "POST",
         path: "/Items/{id}/PlaybackInfo",
-        handle: async ({ db, request, query, params, caller, peerAddress }) => {
+        handle: async (context) => {
+          const { db, request, query, params, caller, peerAddress } = context;
           const itemId = requiredGuid(params.id);
           const body = await readBody(request, maxPlaybackInfoBytes);
-          const versions = await listVersionViews(db, caller.user.id, itemId);
+          const subject = await browseUser(context);
+          const versions = await listVersionViews(db, subject.id, itemId);
           // A Jellyfin item's first source shares the item's id.
           const requested =
             body.optionalString("MediaSourceId") ?? query.get("mediaSourceId");
@@ -186,6 +188,8 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
           let planned: PlannedSource | null = null;
           let sessionId: string | undefined;
           try {
+            // Requested-user visibility is separate from the authenticated
+            // player. Its session and token retain their credential owner.
             const plan = await planPlayback(
               db,
               caller,
@@ -343,6 +347,8 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
       },
     ] satisfies Route[]
   ).map((route) =>
-    route.path.endsWith("/PlaybackInfo") ? browseAsUser(route) : route,
+    route.method === "GET" && route.path.endsWith("/PlaybackInfo")
+      ? browseAsUser(route)
+      : route,
   );
 }

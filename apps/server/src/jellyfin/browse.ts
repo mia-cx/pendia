@@ -20,21 +20,22 @@ import {
 } from "./items.ts";
 import { requiredGuid, ticksPerSecond, toGuid } from "./request.ts";
 
+/** Resolves an authorized browse subject without changing the authenticated credential owner. */
+export async function browseUser(context: UserContext) {
+  const requested = context.query.get("userId");
+  if (requested === undefined) return context.caller.user;
+  const userId = requiredGuid(requested);
+  if (userId === context.caller.user.id) return context.caller.user;
+  return readAccount(context.db, context.caller.user.id, userId);
+}
+
 /** Reads use the requested user's library permissions; only administrators may browse for someone else. */
 export function browseAsUser(route: Route): Route {
   if (route.anonymous) return route;
   return {
     ...route,
     handle: async (context) => {
-      const requested = context.query.get("userId");
-      if (requested === undefined) return route.handle(context);
-      const userId = requiredGuid(requested);
-      if (userId === context.caller.user.id) return route.handle(context);
-      const user = await readAccount(
-        context.db,
-        context.caller.user.id,
-        userId,
-      );
+      const user = await browseUser(context);
       return route.handle({ ...context, caller: { ...context.caller, user } });
     },
   };

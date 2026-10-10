@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
@@ -83,7 +84,7 @@ async function fixtureOf(
       parameters: {
         name: "Coverage added",
         collectionType: "movies",
-        paths: `${Bun.env.TMPDIR}/coverage-added`,
+        paths: `${tmpdir()}/coverage-added`,
       },
       body: { LibraryOptions: {} },
     };
@@ -97,7 +98,7 @@ async function fixtureOf(
       "UpdateMediaPath",
     ].includes(id)
   ) {
-    const root = `${Bun.env.TMPDIR}/coverage-${id}-${Bun.randomUUIDv7()}`;
+    const root = `${tmpdir()}/coverage-${id}-${Bun.randomUUIDv7()}`;
     const library = await createLibrary(db, adminId, {
       name: id,
       medium: "movies",
@@ -132,7 +133,7 @@ async function fixtureOf(
     const library = await createLibrary(db, adminId, {
       name: `${id} fixture`,
       medium: "movies",
-      roots: [`${Bun.env.TMPDIR}/coverage-items-${id}`],
+      roots: [`${tmpdir()}/coverage-items-${id}`],
     });
     const item = await insertItem(db, {
       libraryId: library.id,

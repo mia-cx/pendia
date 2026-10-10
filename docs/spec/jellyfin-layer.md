@@ -23,13 +23,15 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 | Authentication | Real / neutral | Real local login, Quick Connect, and admin-managed recoverable integration keys. Password recovery requests direct clients to the administrator. |
 | User | Real | Account listing, creation, rename, deletion, password changes, disabled/admin/play/subtitle/bitrate policy, and stored configuration. Public users remain hidden. Unsupported policy capabilities stay disabled. |
 | UserView, Show | Real | Authorized library views, grouping options, seasons, episodes, next-up, and upcoming episodes. |
-| Library | Real / gap / neutral | Real items/details, latest, resume, counts, ancestors, similar items, root, and media folders. Administration/download/file coverage remains explicit. Themes, intros, collections, and extras have no core model and return empty results. |
+| Library | Real / gap / neutral | Real browse/detail, catalogue removal, physical paths, scan/refresh, and media/provider notifications. Download/file proof remains explicit. Themes, intros, collections, extras, and Jellyfin-only provider option pages return neutral results. |
 | Device | Real | Live session-backed devices, custom names, and revocation. |
 | DisplayPreference | Real | Schema-validated preferences stored per user, client, and preference id. Owners and administrators have access. |
 | Session | Gap | Real live sessions and stored client capabilities; complete playback reports. Remote commands remain neutral. |
 | Filter, Genre, Person, Year, Search | Real | Authorized genre/tag/rating/year/language facets, contributor credits, and paged item/person/genre search hints. Genre and year ids remain stable across restarts. |
 | Studio | Neutral | No studio model. Empty lists and default item responses. |
-| LibraryStructure, ItemUpdate, ItemLookup, RemoteImage | Gap | Adapt core administration and metadata where supported. |
+| LibraryStructure | Real / neutral | Create, rename, remove, and scan movie/show libraries; add/remove roots and round-trip library options. Other media have no core medium. Jellyfin-only options are stored client preferences and do not change core scanning. |
+| ItemUpdate | Real / neutral | Edit movie/show/season/episode and contributor metadata, dates, provider ids, genres/tags, and credits. Library item names rename the library. Legacy content-type overrides have no separate core model and are accepted no-ops. |
+| ItemLookup, RemoteImage | Gap | Adapt core external lookup and remote artwork where supported. |
 | Movie, Suggestion | Real | Suggestions use unplayed items. Movie recommendations and similar lists use available movies and matching genres. |
 | Image, MediaInfo, UserData, Video, Subtitle | Gap | Existing artwork/playback/marks; complete aliases, HEAD, and seeded proof. |
 | Artist, Audio, MusicGenre, InstantMix, Lyric | Neutral | No music medium. Empty lists/defaults, accepted writes, empty binary responses. |
@@ -38,7 +40,7 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 | Collection, Playlist | Neutral | No collection or playlist model. Empty results and accepted no-op writes. |
 | Plugin, ScheduledTask, Backup, Environment | Neutral | Jellyfin-specific plugins, tasks, backups, and host configuration have no Thalia equivalent. |
 | Branding, Localization, Startup | Neutral | Default branding/localization/setup responses. Thalia is already configured. |
-| MediaSegment, Trailer, TrickPlay | Neutral | No chapters/segments, trailers, or trickplay tiles. Empty results and valid neutral media. |
+| MediaSegment, Trailer, TrickPlay | Neutral | No detected intro/outro segments, trailers, or trickplay tiles. Empty results and valid neutral media. Core file chapters belong in item detail. |
 
 ## Mapping
 
@@ -52,3 +54,5 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 - Device sessions and ordinary API keys remain hash-only. Administrator-created integration keys also retain an authenticated encrypted copy for Jellyfin's key listing workflow.
 - Password changes verify the owner's current password and revoke other device sessions atomically. Administrator resets require a session credential. Intentionally passwordless local accounts remain distinct from external-auth accounts.
 - Policy changes apply atomically, including re-enabling disabled accounts. Account deletion, disabling, and group changes preserve an enabled administrator.
+- Library roots retain Thalia's absolute-path and non-overlap rules. Catalogue deletion removes database entries and stored artwork while retaining source media files.
+- Manual metadata edits use the same library/item locks and contributor creation lock as provider metadata. Explicit provider ids replace the editor's supplied set.

@@ -1393,6 +1393,7 @@ export async function scanShowDirectory(
       const showId = show.id;
       itemIds.push(showId);
 
+      const claimedSeasons = new Set<string>();
       for (const seasonGroup of group.seasons) {
         const seasonFiles = seasonGroup.episodes.flatMap((episode) =>
           episode.versions.flatMap((version) =>
@@ -1402,6 +1403,15 @@ export async function scanShowDirectory(
             })),
           ),
         );
+        // Existing Files retain their Season lineage when an editor changes its display number.
+        const owningSeasons = await tx
+          .selectDistinct({ id: seasons.itemId })
+          .from(files)
+          .innerJoin(episodes, eq(episodes.itemId, files.itemId))
+          .innerJoin(seasons, eq(seasons.itemId, episodes.seasonId))
+          .where(and(eq(seasons.showId, showId), rootedPairs(seasonFiles)));
+        if (owningSeasons.length > 1) throw new AuthError("CONFLICT");
+        const owner = owningSeasons[0];
         const [existingSeason] = await tx
           .select({ item: items, season: seasons })
           .from(seasons)
@@ -1409,7 +1419,9 @@ export async function scanShowDirectory(
           .where(
             and(
               eq(seasons.showId, showId),
-              eq(seasons.seasonNumber, seasonGroup.seasonNumber),
+              owner === undefined
+                ? eq(seasons.seasonNumber, seasonGroup.seasonNumber)
+                : eq(seasons.itemId, owner.id),
             ),
           );
         let seasonId: string;
@@ -1447,6 +1459,10 @@ export async function scanShowDirectory(
           });
           seasonId = created.id;
         }
+
+        // An edited display number must not make two filename Seasons share Episodes and progress.
+        if (claimedSeasons.has(seasonId)) throw new AuthError("CONFLICT");
+        claimedSeasons.add(seasonId);
 
         const persistedEpisodes = await tx
           .select({

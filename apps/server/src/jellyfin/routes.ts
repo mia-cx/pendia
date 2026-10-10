@@ -6,6 +6,7 @@ import { deviceRoutes } from "./devices.ts";
 import { type RequestContext, type Route, routePattern } from "./http.ts";
 import { imageRoutes } from "./images.ts";
 import { browseRoutes } from "./items.ts";
+import { libraryRoutes } from "./libraries.ts";
 import { neutralResponse } from "./neutral.ts";
 import { accessOf, operations } from "./openapi.ts";
 import { playbackRoutes } from "./playback.ts";
@@ -22,6 +23,7 @@ export function jellyfinRoutes(
   const implemented = [
     ...[...additionalBrowseRoutes, ...browseRoutes].map(browseAsUser),
     ...accountRoutes,
+    ...libraryRoutes,
     ...preferenceRoutes,
     ...deviceRoutes,
     ...systemRoutes,

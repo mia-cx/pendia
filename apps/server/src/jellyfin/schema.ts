@@ -3,7 +3,7 @@ import addFormats from "ajv-formats";
 import { AuthError } from "../auth/errors.ts";
 import { readJsonObject } from "../auth/http.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { openapi } from "./openapi.ts";
+import { openapi, resolveSchema, type Schema } from "./openapi.ts";
 import { parseGuid } from "./request.ts";
 
 /** Converts OpenAPI 3.0 nullable refs and compositions into JSON Schema unions. */
@@ -48,7 +48,66 @@ contractValidator.addSchema({
 });
 const validators = new Map<string, ValidateFunction<JsonObject>>();
 
-/** Reads an object DTO with case-insensitive top-level names, ignoring unknown fields as ASP.NET does. */
+function dtoSchema(input: Schema): Schema {
+  const schema = resolveSchema(input);
+  if (schema.allOf?.length === 1)
+    return { ...dtoSchema(schema.allOf[0] ?? {}), ...schema, allOf: undefined };
+  return schema;
+}
+
+function canonicalDto(
+  value: unknown,
+  input: Schema,
+  bindForm = false,
+): unknown {
+  const schema = dtoSchema(input);
+  // Jellyfin Web serializes numeric input values as strings and new dates without a time.
+  if (bindForm && typeof value === "string") {
+    if (value === "" && schema.nullable && schema.enum !== undefined)
+      return null;
+    if (schema.type === "integer" || schema.type === "number") {
+      const text = value.trim();
+      if (text === "" && schema.nullable) return null;
+      if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) {
+        const number = Number(text);
+        if (Number.isFinite(number)) return number;
+      }
+    }
+    if (schema.format === "date-time" && /^\d{4}-\d{2}-\d{2}$/.test(value))
+      return `${value}T00:00:00Z`;
+  }
+  if (Array.isArray(value))
+    return value.map((entry) =>
+      canonicalDto(entry, schema.items ?? {}, bindForm),
+    );
+  if (value === null || typeof value !== "object") return value;
+  if (schema.properties === undefined) {
+    if (typeof schema.additionalProperties !== "object") return value;
+    const entries = schema.additionalProperties;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        canonicalDto(entry, entries, bindForm),
+      ]),
+    );
+  }
+  const fields = new Map(
+    Object.entries(schema.properties).map(([key, field]) => [
+      key.toLowerCase(),
+      { key, field },
+    ]),
+  );
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) => {
+      const canonical = fields.get(key.toLowerCase());
+      return canonical === undefined
+        ? []
+        : [[canonical.key, canonicalDto(entry, canonical.field, bindForm)]];
+    }),
+  );
+}
+
+/** Reads case-insensitive DTOs, binding metadata editor form values before contract validation. */
 export async function readDto(
   request: Request,
   name: string,
@@ -56,16 +115,8 @@ export async function readDto(
   const schema = openapi.components.schemas[name];
   if (schema?.properties === undefined)
     throw new Error(`Unknown object DTO ${name}.`);
-  const fields = new Map(
-    Object.keys(schema.properties).map((key) => [key.toLowerCase(), key]),
-  );
   const input = await readJsonObject(request, 262_144);
-  const value = Object.fromEntries(
-    Object.entries(input).flatMap(([key, value]) => {
-      const canonical = fields.get(key.toLowerCase());
-      return canonical === undefined ? [] : [[canonical, value]];
-    }),
-  );
+  const value = canonicalDto(input, schema, name === "BaseItemDto");
   const validate =
     validators.get(name) ??
     contractValidator.compile<JsonObject>({

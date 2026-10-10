@@ -161,11 +161,28 @@ async function persistMatch(
           .values({ itemId, provider, value, metadataDerived: true });
       }
     }
+    await replaceItemCredits(tx, itemId, result.credits);
+    const application: MetadataApplication = {
+      state: "matched",
+      provider,
+      providerId,
+      confidence,
+      artwork: [...result.artwork],
+    };
+    return application;
+  });
+}
+
+/** Replaces an item's credits, sharing contributor identities with scans and manual metadata edits. */
+export async function replaceItemCredits(
+  db: Connection,
+  itemId: string,
+  entries: MetadataResult["credits"],
+) {
+  await db.transaction(async (tx) => {
     await tx.delete(credits).where(eq(credits.itemId, itemId));
     const contributorIds = new Map<string, string>();
-    const names = [
-      ...new Set(result.credits.map((credit) => credit.name)),
-    ].sort();
+    const names = [...new Set(entries.map((credit) => credit.name))].sort();
     // One lock serializes Contributor creation. A lock per name would let a
     // response with many credits exhaust Postgres's shared lock table.
     if (names.length > 0)
@@ -191,9 +208,9 @@ async function persistMatch(
           contributorIds.set(contributor.name, contributor.id);
       }
     }
-    if (result.credits.length > 0)
+    if (entries.length > 0)
       await tx.insert(credits).values(
-        result.credits.map((credit) => {
+        entries.map((credit) => {
           const contributorId = contributorIds.get(credit.name);
           if (contributorId === undefined)
             throw new Error("Invalid provider metadata.");
@@ -206,14 +223,6 @@ async function persistMatch(
           };
         }),
       );
-    const application: MetadataApplication = {
-      state: "matched",
-      provider,
-      providerId,
-      confidence,
-      artwork: [...result.artwork],
-    };
-    return application;
   });
 }
 

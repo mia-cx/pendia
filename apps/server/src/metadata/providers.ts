@@ -9,7 +9,7 @@ import { createTvdbMetadataProvider } from "./tvdb.ts";
 /** Provider dependencies shared by background jobs and interactive metadata lookup. */
 export type MetadataProviderOptions = {
   request?: typeof fetch;
-  plugins?: PluginRuntime;
+  plugins?: Pick<PluginRuntime, "metadataProviders">;
 };
 
 /** Loads credentialed built-in and plugin providers; credentials stay inside their instances. */

@@ -376,11 +376,12 @@ async function persistUnmatched(
   });
 }
 
-/** Matches one Item and applies provider metadata transactionally. */
+/** Matches an Item transactionally, using the automatic order unless a manual selection names its provider. */
 export async function applyMetadata(
   db: Database,
   itemId: string,
   providers: readonly MetadataProvider[],
+  { provider: selectedProvider }: { provider?: string } = {},
 ): Promise<MetadataApplication> {
   const [item] = await db
     .select()
@@ -403,7 +404,11 @@ export async function applyMetadata(
       .map((row) => row.provider),
   );
   let consulted = false;
-  for (const providerId of providersForLibrary(config, item.libraryId)) {
+  const enabled =
+    selectedProvider === undefined
+      ? providersForLibrary(config, item.libraryId)
+      : [selectedProvider];
+  for (const providerId of enabled) {
     const provider = providers.find((candidate) => candidate.id === providerId);
     if (provider === undefined || !provider.kinds.includes(item.kind)) continue;
     consulted = true;

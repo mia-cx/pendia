@@ -78,7 +78,15 @@ export type JobPayload =
     }
   | { type: "probe"; fileId: string }
   // `weekly` marks the one refresh a continuing Show keeps queued a week ahead.
-  | { type: "provider-fetch"; itemId: string; weekly?: true }
+  | {
+      type: "provider-fetch";
+      itemId: string;
+      weekly?: true;
+      /** Manual identification may select a configured provider outside the automatic order. */
+      provider?: string;
+      /** Keep existing selections while filling missing types; absent means the automatic replacement policy. */
+      artworkPolicy?: "keep" | "replace";
+    }
   // Fetches the configured subtitle languages an Item has no track for yet.
   | { type: "subtitle-fetch"; itemId: string }
   // A store job encodes one rung, or sweeps a library folder's stored output.

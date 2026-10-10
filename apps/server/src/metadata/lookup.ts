@@ -9,7 +9,8 @@ import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import { items, providerIds } from "../db/schema/index.ts";
-import { selectedArtworkId, storeArtworkOriginal } from "./artwork-store.ts";
+import { applyArtworkSelection } from "./artwork-selection.ts";
+import { storeArtworkOriginal } from "./artwork-store.ts";
 import { editItemMetadata } from "./edit.ts";
 import { queueProviderFetch } from "./jobs.ts";
 import {
@@ -187,7 +188,10 @@ export async function selectRemoteMetadata(
       providerIds: input.providerIds,
       metadataState: "pending",
     });
-    await queueProviderFetch(db, itemId, 1);
+    await queueProviderFetch(db, itemId, 1, {
+      artworkPolicy: input.replaceArtwork ? "replace" : "keep",
+      provider: input.providerName?.toLowerCase(),
+    });
     return;
   }
   const id = input.providerIds[provider.id];
@@ -207,17 +211,14 @@ export async function selectRemoteMetadata(
     providerIds: { ...result.providerIds, ...input.providerIds },
     metadataState: "matched",
   });
-  const selected = new Set<string>();
-  for (const image of result.artwork) {
-    if (selected.has(image.type)) continue;
-    selected.add(image.type);
-    if (
-      !input.replaceArtwork &&
-      (await selectedArtworkId(db, itemId, image.type)) !== undefined
-    )
-      continue;
-    await storeArtworkOriginal(db, itemId, image, options.request);
-  }
+  await applyArtworkSelection(db, itemId, result.artwork, options.request, {
+    preserveExisting: !input.replaceArtwork,
+  });
+  if (item.kind === "show")
+    await queueProviderFetch(db, itemId, 1, {
+      artworkPolicy: input.replaceArtwork ? "replace" : "keep",
+      provider: provider.id,
+    });
   await publishEvent(db, {
     kind: "library.changed",
     libraryId: item.libraryId,

@@ -8,24 +8,35 @@ import { publishEvent } from "../api/events.ts";
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
-import { episodes, items, jobs, seasons, shows } from "../db/schema/index.ts";
+import {
+  episodes,
+  items,
+  type JobPayload,
+  jobs,
+  seasons,
+  shows,
+} from "../db/schema/index.ts";
 import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { emitPluginEvents } from "../plugins/events.ts";
 import type { PluginRuntime } from "../plugins/runtime.ts";
 import { queueSubtitleFetch } from "../subtitles/jobs.ts";
-import {
-  removeSelectedArtwork,
-  storeArtworkOriginal,
-} from "./artwork-store.ts";
+import { applyArtworkSelection } from "./artwork-selection.ts";
 import { metadataProviders } from "./providers.ts";
 import { applyMetadata } from "./service.ts";
 
-/** Queues one Item's provider-fetch at `priority`, or returns the due one already queued, raised to it. */
+/** Options a manual selection carries through deferred fetching and Show descendants. */
+export type ProviderFetchOptions = Pick<
+  Extract<JobPayload, { type: "provider-fetch" }>,
+  "provider" | "artworkPolicy"
+>;
+
+/** Queues a fetch or updates a due one, retaining explicit selection options across ordinary scan requests. */
 export async function queueProviderFetch(
   db: Database,
   itemId: string,
   priority = 0,
+  options: ProviderFetchOptions = {},
 ) {
   const concurrencyKey = `provider:${itemId}`;
   // A running fetch never blocks: a pending Item after a provider change
@@ -45,16 +56,21 @@ export async function queueProviderFetch(
     .limit(1);
   if (due === undefined)
     return createJobQueue(db).enqueue(
-      { type: "provider-fetch", itemId },
+      { type: "provider-fetch", itemId, ...options },
       { concurrencyKey, priority },
     );
-  if (due.priority >= priority) return due;
+  if (due.priority >= priority && Object.keys(options).length === 0) return due;
   const [raised] = await db
     .update(jobs)
-    .set({ priority })
+    .set({
+      priority: sql`greatest(${jobs.priority}, ${priority})`,
+      payload: sql`${jobs.payload} || ${JSON.stringify(options)}::text::jsonb`,
+    })
     .where(and(eq(jobs.id, due.id), eq(jobs.state, "queued")))
     .returning();
-  return raised ?? due;
+  if (raised !== undefined) return raised;
+  // A worker claimed the due job during the update; the manual selection still needs a successor.
+  return queueProviderFetch(db, itemId, priority, options);
 }
 
 // Background scans queue at 0, so a manual refresh runs ahead of them.
@@ -152,7 +168,7 @@ export function registerMetadataJobs(
   db: Database,
   registry: ReturnType<typeof createJobRegistry>,
   request: typeof fetch = fetch,
-  plugins?: PluginRuntime,
+  plugins?: Pick<PluginRuntime, "metadataProviders">,
 ): void {
   const markPending = (itemId: string) =>
     db
@@ -165,29 +181,28 @@ export function registerMetadataJobs(
     item: { id: string; kind: ItemKind },
     providers: readonly MetadataProvider[],
     publish: () => Promise<unknown>,
+    options: ProviderFetchOptions,
   ) => {
-    const application = await applyMetadata(db, item.id, providers);
+    const application = await applyMetadata(db, item.id, providers, {
+      provider: options.provider,
+    });
     await publish();
     if (application.state !== "matched") return false;
     await emitItemUpdated(db, item.id);
     await queueSubtitleFetch(db, item);
-    for (const type of storedArtwork[item.kind]) {
-      const candidate = application.artwork.find(
-        (artwork) => artwork.type === type,
-      );
-      if (candidate === undefined) {
-        if (await removeSelectedArtwork(db, item.id, type)) await publish();
-        continue;
-      }
-      try {
-        await storeArtworkOriginal(db, item.id, candidate, request);
-      } catch (error) {
-        // Metadata already committed as matched; pending lets the next scan
-        // retry the artwork after this job's own attempts run out.
-        await markPending(item.id);
-        await publish();
-        throw error;
-      }
+    try {
+      await applyArtworkSelection(db, item.id, application.artwork, request, {
+        preserveExisting: options.artworkPolicy === "keep",
+        types:
+          options.artworkPolicy === undefined
+            ? storedArtwork[item.kind]
+            : undefined,
+      });
+    } catch (error) {
+      // Metadata already committed as matched; pending lets the next scan retry artwork after failed attempts.
+      await markPending(item.id);
+      await publish();
+      throw error;
     }
     await publish();
     return true;
@@ -205,13 +220,13 @@ export function registerMetadataJobs(
       publishEvent(db, { kind: "library.changed", libraryId: item.libraryId });
     try {
       const providers = await metadataProviders(db, { request, plugins });
-      const matched = await fetchItem(item, providers, publish);
+      const matched = await fetchItem(item, providers, publish, payload);
       if (!matched || item.kind !== "show") return;
       // One job covers the whole Show, so its Seasons and Episodes publish
       // one event at the end instead of one each.
       try {
         for (const child of await showChildren(db, item.id))
-          await fetchItem(child, providers, async () => {});
+          await fetchItem(child, providers, async () => {}, payload);
       } catch (error) {
         // Pending lets the next scan retry the tree after this job gives up.
         await markPending(item.id);

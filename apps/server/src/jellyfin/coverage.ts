@@ -2,11 +2,6 @@ import type { ApiOperation } from "./openapi.ts";
 
 /** These tag groups need real core adapters. Each later stack layer removes its explicit gap group. */
 export const gaps: Record<string, string> = {
-  Session: "Read sessions and exercise playback reports.",
-  Library: "Exercise real item downloads and files.",
-  MediaInfo: "Exercise GET/POST playback info and bitrate test.",
-  UserData: "Complete progress and rating adapters.",
-  Video: "Exercise real files and HEAD/container aliases.",
   Subtitle: "Exercise real subtitle streams and management where supported.",
 };
 

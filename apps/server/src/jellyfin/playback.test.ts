@@ -108,6 +108,45 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
 
       // Infuse sends its header as X-Emby-Authorization.
       const infuseToken = await jellyfinLogin(send, infuse);
+      const sourceUrl = `/Items/${toGuid(movie.itemId)}`;
+      const discovery = await send(
+        new Request(`http://thalia.test${sourceUrl}/PlaybackInfo`, {
+          headers: { "X-Emby-Token": infuseToken },
+        }),
+      );
+      expect(discovery.status).toBe(200);
+      expect(await discovery.json()).toMatchObject({
+        MediaSources: [{ Id: toGuid(movie.versionId), Container: "mkv" }],
+      });
+      for (const path of [
+        `${sourceUrl}/File`,
+        `${sourceUrl}/Download`,
+        `/Videos/${toGuid(movie.itemId)}/stream`,
+        `/Videos/${toGuid(movie.itemId)}/stream.mkv`,
+      ]) {
+        const file = await send(
+          new Request(`http://thalia.test${path}`, {
+            headers: { "X-Emby-Token": infuseToken },
+          }),
+        );
+        expect(file.status).toBe(200);
+        expect(file.headers.get("accept-ranges")).toBe("bytes");
+        const bytes = await file.arrayBuffer();
+        expect(bytes.byteLength).toBeGreaterThan(0);
+        if (path.endsWith("Download"))
+          expect(file.headers.get("content-disposition")).toStartWith(
+            "attachment;",
+          );
+      }
+      const head = await send(
+        new Request(
+          `http://thalia.test/Videos/${toGuid(movie.itemId)}/stream.mkv`,
+          { method: "HEAD", headers: { "X-Emby-Token": infuseToken } },
+        ),
+      );
+      expect(head.status).toBe(200);
+      expect(Number(head.headers.get("content-length"))).toBeGreaterThan(0);
+      expect(await head.text()).toBe("");
       const direct = await playbackInfo(
         "X-Emby-Authorization",
         infuse,

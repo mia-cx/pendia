@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
 import type { Database } from "../db/client.ts";
-import { sessionRegistry, versions } from "../db/schema/index.ts";
+import { progress, sessionRegistry, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { continueWatching } from "../playback/marks.ts";
@@ -175,6 +175,40 @@ describe.skipIf(!databaseUrl)("jellyfin progress and marks", () => {
         PositionTicks: ticks(60),
       });
       expect(await states()).toEqual(["playing", "stopped"]);
+      expect(
+        (
+          await tv("POST", "/Sessions/Playing/Progress", {
+            ItemId: item,
+            PositionTicks: ticks(15),
+            IsPaused: true,
+            VolumeLevel: 35,
+          })
+        ).status,
+      ).toBe(204);
+      expect(
+        (await tv("POST", `/Sessions/Viewing?itemId=${item}`)).status,
+      ).toBe(204);
+      const active = (await (await tv("GET", "/Sessions")).json()) as {
+        DeviceId: string;
+        NowPlayingItem: { Id: string } | null;
+        NowViewingItem: { Id: string } | null;
+        PlayState: object;
+      }[];
+      expect(
+        active.find((session) => session.DeviceId === "kodi-1"),
+      ).toMatchObject({
+        NowPlayingItem: { Id: item },
+        NowViewingItem: { Id: item },
+        PlayState: {
+          PositionTicks: ticks(15),
+          IsPaused: true,
+          VolumeLevel: 35,
+        },
+      });
+      expect(
+        active.find((session) => session.DeviceId === "findroid-1")
+          ?.NowPlayingItem,
+      ).toBeNull();
       // The sessions dashboard names each device.
       expect(
         (
@@ -201,6 +235,14 @@ describe.skipIf(!databaseUrl)("jellyfin progress and marks", () => {
         PlaySessionId: toGuid(tvSession?.id ?? ""),
         PositionTicks: ticks(8000),
       };
+      expect(
+        (
+          await tv(
+            "POST",
+            `/Sessions/Playing/Ping?playSessionId=${toGuid(tvSession?.id ?? "")}`,
+          )
+        ).status,
+      ).toBe(204);
       expect((await tv("POST", "/Sessions/Playing/Stopped", stop)).status).toBe(
         204,
       );
@@ -263,12 +305,89 @@ describe.skipIf(!databaseUrl)("jellyfin progress and marks", () => {
       ]);
 
       const matrix = toGuid(s.matrix.id);
+      const [selected] = await db
+        .select({ id: versions.id })
+        .from(versions)
+        .where(eq(versions.itemId, s.matrix.id));
+      await db.insert(versions).values({
+        itemId: s.matrix.id,
+        itemKind: "movie",
+        libraryId: s.films.id,
+        label: "000-short",
+        format: "video",
+        bytes: 1n,
+        durationSeconds: 10,
+      });
+      await db
+        .update(progress)
+        .set({ versionId: selected?.id, playedAt: null })
+        .where(
+          and(
+            eq(progress.userId, s.viewer.id),
+            eq(progress.itemId, s.matrix.id),
+          ),
+        );
+      expect(
+        (
+          await call("POST", `/UserItems/${matrix}/UserData`, {
+            PlaybackPositionTicks: ticks(321),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (await continueWatching(db, s.viewer.id, {})).items.find(
+          (item) => item.item.id === s.matrix.id,
+        )?.progress,
+      ).toMatchObject({
+        versionId: selected?.id,
+        positionSeconds: 321,
+      });
+      const updated = await call("POST", `/UserItems/${matrix}/UserData`, {
+        PlaybackPositionTicks: ticks(321),
+        PlayCount: 4,
+        Played: false,
+        IsFavorite: true,
+        Rating: 8.5,
+        Likes: false,
+        LastPlayedDate: "2024-01-02T03:04:05Z",
+      });
+      expect(updated.status).toBe(200);
+      expect(await updated.json()).toMatchObject({
+        PlaybackPositionTicks: ticks(321),
+        PlayCount: 4,
+        Rating: 8.5,
+        Likes: false,
+        LastPlayedDate: "2024-01-02T03:04:05.000Z",
+      });
+      expect(
+        await (
+          await call("POST", `/UserItems/${matrix}/Rating?likes=true`)
+        ).json(),
+      ).toMatchObject({ Rating: 8.5, Likes: true });
+      expect(
+        await (await call("DELETE", `/UserItems/${matrix}/Rating`)).json(),
+      ).toMatchObject({ Rating: 8.5, Likes: null });
+      expect(
+        (
+          await call(
+            "GET",
+            `/UserItems/${matrix}/UserData?userId=${toGuid(s.admin.id)}`,
+          )
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await call("POST", `/UserItems/${matrix}/UserData`, {
+            PlaybackPositionTicks: -1,
+          })
+        ).status,
+      ).toBe(400);
       const favourite = await call("POST", `/UserFavoriteItems/${matrix}`);
       const favouriteData = await favourite.json();
       expect(contractErrors("UserItemDataDto", favouriteData)).toEqual([]);
       expect(favouriteData).toMatchObject({
         IsFavorite: true,
-        PlaybackPositionTicks: ticks(600),
+        PlaybackPositionTicks: ticks(321),
       });
       expect(
         await (await call("DELETE", `/UserFavoriteItems/${matrix}`)).json(),

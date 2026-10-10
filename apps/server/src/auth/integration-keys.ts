@@ -45,16 +45,14 @@ export async function createIntegrationKey(
       cipher.update(issued.token, "utf8"),
       cipher.final(),
     ]);
-    await tx
-      .insert(settings)
-      .values({
-        key: `${keyPrefix}${issued.key.id}`,
-        value: {
-          nonce: nonce.toString("base64url"),
-          ciphertext: encrypted.toString("base64url"),
-          tag: cipher.getAuthTag().toString("base64url"),
-        },
-      });
+    await tx.insert(settings).values({
+      key: `${keyPrefix}${issued.key.id}`,
+      value: {
+        nonce: nonce.toString("base64url"),
+        ciphertext: encrypted.toString("base64url"),
+        tag: cipher.getAuthTag().toString("base64url"),
+      },
+    });
     return issued;
   });
 }

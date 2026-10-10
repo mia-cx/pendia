@@ -288,7 +288,10 @@ describe.skipIf(!databaseUrl)("pre-117 scan identity", () => {
             );
             for (const table of ["progress", "favourites", "ratings"]) {
               expect(await snapshot(db, table)).toEqual(
-                before.get(table) ?? [],
+                (before.get(table) ?? []).map((row) =>
+                  // Existing numeric ratings gain no binary opinion during migration.
+                  table === "ratings" ? { ...row, liked: null } : row,
+                ),
               );
             }
           } finally {

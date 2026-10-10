@@ -67,7 +67,9 @@ export type ItemViewQuery = {
   readonly contentRatings?: readonly string[];
   readonly hasOverview?: boolean;
   readonly hasContentRating?: boolean;
-  readonly providerNames?: readonly string[];
+  readonly providerPresence?: Readonly<Record<string, boolean>>;
+  readonly audioLanguages?: readonly string[];
+  readonly subtitleLanguages?: readonly string[];
   readonly nameStartsWithOrGreater?: string;
   /** Titles starting with this text, ignoring case. */
   readonly nameStartsWith?: string;
@@ -103,6 +105,17 @@ const premiereDate = sql<
 const seasonNumber = sql<
   number | null
 >`coalesce(${ownSeason.seasonNumber}, ${episodeSeason.seasonNumber})`;
+
+function streamLanguages(
+  kind: "audio" | "subtitle",
+  languages: readonly string[] | undefined,
+) {
+  if (languages === undefined) return undefined;
+  return sql`exists (select 1 from ${streams}
+    inner join ${versions} on ${versions.id} = ${streams.versionId}
+    where ${versions.itemId} = ${items.id} and ${streams.kind} = ${kind}
+      and ${inArray(streams.language, [...languages])})`;
+}
 
 const viewFields = {
   id: items.id,
@@ -207,10 +220,14 @@ function filtersOf(viewable: string[], query: ItemViewQuery) {
       : undefined,
     query.genres === undefined
       ? undefined
-      : arrayOverlaps(items.genres, [...query.genres]),
+      : query.genres.length
+        ? arrayOverlaps(items.genres, [...query.genres])
+        : sql`false`,
     query.tags === undefined
       ? undefined
-      : arrayOverlaps(items.tags, [...query.tags]),
+      : query.tags.length
+        ? arrayOverlaps(items.tags, [...query.tags])
+        : sql`false`,
     query.years === undefined
       ? undefined
       : inArray(items.year, [...query.years]),
@@ -238,10 +255,12 @@ function filtersOf(viewable: string[], query: ItemViewQuery) {
     query.hasContentRating === undefined
       ? undefined
       : sql`(${items.contentRating} is not null) = ${query.hasContentRating}`,
-    ...(query.providerNames ?? []).map(
-      (provider) =>
-        sql`exists (select 1 from ${providerIds} where ${providerIds.itemId} = ${items.id} and ${providerIds.provider} = ${provider})`,
+    ...Object.entries(query.providerPresence ?? {}).map(
+      ([provider, present]) =>
+        sql`exists (select 1 from ${providerIds} where ${providerIds.itemId} = ${items.id} and ${providerIds.provider} = ${provider}) = ${present}`,
     ),
+    streamLanguages("audio", query.audioLanguages),
+    streamLanguages("subtitle", query.subtitleLanguages),
     search === undefined
       ? undefined
       : sql`(${items.title} % ${search} or ${search} <% ${items.title})`,

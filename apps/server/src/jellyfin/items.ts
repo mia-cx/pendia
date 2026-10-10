@@ -328,9 +328,18 @@ export async function browseSelection({
     hasOverview: query.flag("hasOverview"),
     hasContentRating:
       query.flag("hasOfficialRating") ?? query.flag("hasParentalRating"),
-    providerNames: ["tmdb", "tvdb", "imdb"].filter(
-      (provider) => query.flag(`has${provider}Id`) === true,
+    providerPresence: Object.fromEntries(
+      ["tmdb", "tvdb", "imdb"].flatMap((provider) => {
+        const present = query.flag(`has${provider}Id`);
+        return present === undefined ? [] : [[provider, present]];
+      }),
     ),
+    audioLanguages: query.list("audioLanguages").length
+      ? query.list("audioLanguages").flatMap((value) => value.split("|"))
+      : undefined,
+    subtitleLanguages: query.list("subtitleLanguages").length
+      ? query.list("subtitleLanguages").flatMap((value) => value.split("|"))
+      : undefined,
     nameStartsWithOrGreater: query.get("nameStartsWithOrGreater"),
     nameStartsWith: query.get("nameStartsWith"),
     nameLessThan: query.get("nameLessThan"),

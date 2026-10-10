@@ -76,7 +76,7 @@ async function selection(context: UserContext): Promise<ItemViewQuery> {
   return query;
 }
 
-async function facets(context: UserContext) {
+async function facets(context: UserContext, identities = false) {
   const {
     search: _search,
     nameStartsWith: _starts,
@@ -84,11 +84,19 @@ async function facets(context: UserContext) {
     nameStartsWithOrGreater: _greater,
     ...query
   } = await selection(context);
-  return listLibraryFacets(context.db, context.caller.user.id, query);
+  return listLibraryFacets(
+    context.db,
+    context.caller.user.id,
+    identities ? { ...query, kinds: undefined } : query,
+  );
 }
 
-async function names(context: UserContext, type: "Genre" | "Year") {
-  const values = await facets(context);
+async function names(
+  context: UserContext,
+  type: "Genre" | "Year",
+  identities = false,
+) {
+  const values = await facets(context, identities);
   const entries = type === "Genre" ? values.genres : values.years.map(String);
   return entries
     .filter((name) => matches(name, context))
@@ -102,7 +110,7 @@ async function names(context: UserContext, type: "Genre" | "Year") {
     }));
 }
 
-async function people(context: UserContext) {
+async function people(context: UserContext, identities = false) {
   const {
     search: _search,
     nameStartsWith: _starts,
@@ -116,6 +124,7 @@ async function people(context: UserContext) {
     context.caller.user.id,
     {
       ...query,
+      kinds: identities ? undefined : query.kinds,
       ids: itemId === undefined ? query.ids : [requiredGuid(itemId)],
     },
   );
@@ -485,9 +494,19 @@ export const additionalBrowseRoutes: Route[] = [
         };
       });
       const mediaCount = hints.length;
-      if (context.query.flag("includePeople") !== false)
+      // Search restricts the returned identity type, not the media carrying its credits or genres.
+      const includes = context.query
+        .list("includeItemTypes")
+        .map((type) => type.toLowerCase());
+      const excludes = context.query
+        .list("excludeItemTypes")
+        .map((type) => type.toLowerCase());
+      const allowed = (type: string) =>
+        (!includes.length || includes.includes(type)) &&
+        !excludes.includes(type);
+      if (context.query.flag("includePeople") !== false && allowed("person"))
         hints.push(
-          ...(await people(context)).map((person) => ({
+          ...(await people(context, true)).map((person) => ({
             Id: person.Id,
             ItemId: person.Id,
             Name: person.Name,
@@ -496,9 +515,9 @@ export const additionalBrowseRoutes: Route[] = [
             IsFolder: true,
           })),
         );
-      if (context.query.flag("includeGenres") !== false)
+      if (context.query.flag("includeGenres") !== false && allowed("genre"))
         hints.push(
-          ...(await names(context, "Genre")).map((genre) => ({
+          ...(await names(context, "Genre", true)).map((genre) => ({
             Id: genre.Id,
             ItemId: genre.Id,
             Name: genre.Name,

@@ -5,6 +5,7 @@
       "**",
       "!docs",
       "!**/*.d.ts",
+      "!apps/server/src/jellyfin/openapi/jellyfin-*.json",
       "!!**/.svelte-kit",
       "!!**/.turbo",
       "!!**/build",

@@ -1,12 +1,8 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createThaliaClient } from "../../../web/src/lib/api.ts";
 import { setupAdmin } from "../auth/accounts.ts";
-import { sessionCookieName } from "../auth/http.ts";
 import { login } from "../auth/sessions.ts";
 import { migrateDatabase } from "../db/migrate.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
@@ -16,18 +12,7 @@ import {
   withFolder,
   writeFixture,
 } from "../plugins/testing.ts";
-
-// Google Chrome comes first: Chromium builds without proprietary codecs.
-const browser =
-  Bun.env.THALIA_BROWSER ??
-  ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
-    .map((name) => Bun.which(name))
-    .find((path) => path !== null) ??
-  undefined;
-
-const webBuild = fileURLToPath(
-  new URL("../../../web/build/200.html", import.meta.url),
-);
+import { browser, openPage, signIn, webBuild } from "./browser-testing.ts";
 
 const older: FixturePlugin = {
   name: "thalia-plugin-older",
@@ -39,167 +24,6 @@ const fresher: FixturePlugin = {
   capabilities: [],
   source: "export default () => {};",
 };
-
-type Pending = {
-  resolve: (value: CdpResult) => void;
-  reject: (e: Error) => void;
-};
-
-type CdpResult = {
-  exceptionDetails?: { exception?: { description?: string }; text?: string };
-  result?: { value?: unknown };
-};
-
-/** A page target of a Chromium started with --remote-debugging-port=0. */
-class Page {
-  #id = 0;
-  #pending = new Map<number, Pending>();
-  #listeners = new Map<string, ((params: never) => void)[]>();
-  constructor(
-    readonly ws: WebSocket,
-    readonly proc: Bun.Subprocess,
-  ) {
-    ws.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (message.id !== undefined) {
-        const pending = this.#pending.get(message.id);
-        this.#pending.delete(message.id);
-        if (message.error)
-          pending?.reject(new Error(JSON.stringify(message.error)));
-        else pending?.resolve(message.result as CdpResult);
-        return;
-      }
-      for (const listener of this.#listeners.get(message.method) ?? [])
-        listener(message.params as never);
-    });
-  }
-  send(method: string, params: Record<string, unknown> = {}) {
-    return new Promise<CdpResult>((resolve, reject) => {
-      const id = ++this.#id;
-      this.ws.send(JSON.stringify({ id, method, params }));
-      this.#pending.set(id, { resolve, reject });
-    });
-  }
-  on<T = Record<string, unknown>>(
-    method: string,
-    listener: (params: T) => void,
-  ) {
-    this.#listeners.set(method, [
-      ...(this.#listeners.get(method) ?? []),
-      listener as (params: never) => void,
-    ]);
-  }
-  async eval<T = unknown>(expression: string): Promise<T> {
-    const result = await this.send("Runtime.evaluate", {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true,
-    });
-    if (result.exceptionDetails)
-      throw new Error(JSON.stringify(result.exceptionDetails));
-    return result.result?.value as T;
-  }
-  async goto(url: string) {
-    await this.send("Page.navigate", { url });
-    await this.waitFor("document.readyState === 'complete'");
-  }
-  async waitFor(expression: string, timeoutMs = 20_000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        if (await this.eval<boolean>(`Boolean(${expression})`)) return;
-      } catch {}
-      await Bun.sleep(150);
-    }
-    const body = await this.eval<string>(
-      "document.body.innerText.slice(0, 800) + ' ||| slots: ' + [...document.querySelectorAll('[data-slot]')].map(e => e.getAttribute('data-slot')).join(',') + ' ||| url: ' + location.href",
-    ).catch(() => "");
-    throw new Error(`Timed out waiting for ${expression}; page says: ${body}`);
-  }
-  async close() {
-    this.ws.close();
-    this.proc.kill();
-    await this.proc.exited;
-  }
-}
-
-async function openPage(): Promise<Page> {
-  const profileDir = await mkdtemp(join(tmpdir(), "thalia-admin-browser-"));
-  const proc = Bun.spawn(
-    [
-      browser as string,
-      "--headless=new",
-      "--no-sandbox",
-      "--disable-gpu",
-      "--disable-dev-shm-usage",
-      "--no-first-run",
-      "--mute-audio",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profileDir}`,
-      "about:blank",
-    ],
-    { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
-  );
-  let port: number | undefined;
-  for (let i = 0; i < 100; i++) {
-    const text = await Bun.file(join(profileDir, "DevToolsActivePort"))
-      .text()
-      .catch(() => null);
-    const first = text?.split("\n")[0];
-    if (first) {
-      port = Number(first);
-      break;
-    }
-    await Bun.sleep(100);
-  }
-  if (port === undefined) {
-    proc.kill();
-    throw new Error("Chromium opened no debug port.");
-  }
-  let targets: { type: string; webSocketDebuggerUrl: string }[] = [];
-  for (let i = 0; i < 100; i++) {
-    targets = await fetch(`http://127.0.0.1:${port}/json`)
-      .then((response) => response.json())
-      .catch(() => []);
-    if (targets.some((target) => target.type === "page")) break;
-    await Bun.sleep(100);
-  }
-  const target = targets.find((entry) => entry.type === "page");
-  if (target === undefined) {
-    proc.kill();
-    throw new Error("Chromium opened no page target.");
-  }
-  const ws = new WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    ws.addEventListener("open", resolve, { once: true });
-    ws.addEventListener("error", () => reject(new Error("CDP failed")), {
-      once: true,
-    });
-  });
-  const page = new Page(ws, proc);
-  await page.send("Page.enable");
-  await page.send("Runtime.enable");
-  const closed = page.close.bind(page);
-  page.close = async () => {
-    await closed();
-    await rm(profileDir, { recursive: true, force: true });
-  };
-  return page;
-}
-
-async function signIn(page: Page, base: string, token: string) {
-  await page.send("Network.enable");
-  await page.send("Network.setCookie", {
-    name: sessionCookieName,
-    value: token,
-    url: base,
-    path: "/",
-    httpOnly: true,
-  });
-  await page.goto(`${base}/admin/plugins`);
-  await page.waitFor("document.querySelector('h1')");
-}
 
 const switchState =
   "document.querySelector('[data-slot=switch]')?.getAttribute('aria-checked')";
@@ -259,7 +83,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
                 source: preview.source,
                 integrity: preview.integrity,
               });
-              await signIn(page, base, token);
+              await signIn(page, base, token, "/admin/plugins");
               await page.waitFor(
                 "document.querySelector('[data-slot=switch]')",
               );
@@ -284,10 +108,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               await page.eval(
                 "document.querySelector('[data-slot=switch]').click()",
               );
-              await page.waitFor(
-                "document.querySelector('[role=alert]')",
-                10_000,
-              );
+              await page.waitFor("document.querySelector('[role=alert]')");
               // The card's text still says On, and the switch went back.
               expect(await page.eval<string>(switchState)).toBe("true");
               expect(
@@ -309,7 +130,8 @@ describe.skipIf(!databaseUrl || browser === undefined)(
                 if (enabled) await Bun.sleep(200);
               }
               expect(enabled).toBe(false);
-              expect(await page.eval<string>(switchState)).toBe("false");
+              // The save's answer can reach the API before the page renders it.
+              await page.waitFor(`${switchState} === "false"`);
             } finally {
               await page.close();
               await server.stop();
@@ -381,7 +203,7 @@ describe.skipIf(!databaseUrl || browser === undefined)(
               await api.registries.add({
                 url: `http://127.0.0.1:${registry.port}/registry`,
               });
-              await signIn(page, base, token);
+              await signIn(page, base, token, "/admin/plugins");
               await page.waitFor(
                 `[...document.querySelectorAll('button')].some(b => (b.getAttribute('aria-label') ?? '').includes(${JSON.stringify(older.name)}))`,
               );

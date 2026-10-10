@@ -9,6 +9,7 @@ import {
   users,
   versions,
 } from "../db/schema/index.ts";
+import { playbackActivitySeconds } from "../playback/activity.ts";
 import type { SessionDecision } from "../playback/decisions.ts";
 import { authenticated } from "./context.ts";
 import { fromHost, runApi } from "./errors.ts";
@@ -16,7 +17,7 @@ import { browseCardsById } from "./items.ts";
 import { PlaybackSession } from "./schema.ts";
 
 /** How long a session that is not stopped stays listed without a report from its player. */
-export const sessionStaleSeconds = 300;
+export const sessionStaleSeconds = playbackActivitySeconds;
 
 function rungsOf(
   decision: SessionDecision | null,

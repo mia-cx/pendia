@@ -69,6 +69,7 @@ export function userData(view: ItemView) {
   const { marks, durationSeconds } = view;
   return {
     Rating: marks.rating ?? undefined,
+    Likes: marks.liked,
     PlayedPercentage:
       durationSeconds && !marks.completed && marks.positionSeconds > 0
         ? (marks.positionSeconds / durationSeconds) * 100

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
 import { createLocalUser } from "../auth/accounts.ts";
@@ -12,11 +12,20 @@ import {
 } from "../auth/quick-connect.ts";
 import { issueSession } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
-import { contributors, credits, items } from "../db/schema/index.ts";
+import {
+  contributors,
+  credits,
+  items,
+  sessionRegistry,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
+import { scanDirectory } from "../libraries/scan.ts";
 import { createLibrary } from "../libraries/service.ts";
-import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
+import {
+  createVideoFixture,
+  withVideoFixture,
+} from "../mediums/video-common/fixtures.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { storeArtworkOriginal } from "../metadata/artwork-store.ts";
 import { coveredOperations, gapOf, gaps } from "./coverage.ts";
@@ -30,6 +39,7 @@ import {
   type Schema,
   specificationSource,
 } from "./openapi.ts";
+import { deviceProfiles } from "./profile-fixtures.ts";
 import { jellyfinRoutes } from "./routes.ts";
 import { contractValidator as ajv, jsonSchema } from "./schema.ts";
 import { fixturePng, jellyfinLogin } from "./testing.ts";
@@ -39,6 +49,7 @@ type Fixture = {
   body?: unknown;
   rawBody?: BodyInit;
   contentType?: string;
+  token?: string;
 };
 const header =
   'MediaBrowser Client="Coverage", Device="Coverage", DeviceId="coverage"';
@@ -87,8 +98,80 @@ async function fixtureOf(
   adminId: string,
   operation: ApiOperation,
   root: string,
+  mediaId: string,
 ): Promise<Fixture> {
   const id = operation.operationId;
+  if (
+    [
+      "GetDownload",
+      "GetFile",
+      "GetPlaybackInfo",
+      "GetPostedPlaybackInfo",
+      "GetVideoStream",
+      "HeadVideoStream",
+      "GetVideoStreamByContainer",
+      "HeadVideoStreamByContainer",
+    ].includes(id)
+  )
+    return {
+      parameters: { itemId: mediaId, container: "mkv" },
+      body: { DeviceProfile: deviceProfiles.infuse },
+    };
+  if (
+    [
+      "ReportPlaybackStart",
+      "ReportPlaybackProgress",
+      "ReportPlaybackStopped",
+    ].includes(id)
+  )
+    return {
+      body: {
+        ItemId: mediaId,
+        PositionTicks: 0,
+        CanSeek: true,
+        IsPaused: false,
+        IsMuted: false,
+      },
+    };
+  if (id === "PingPlaybackSession") {
+    const [play] = await db
+      .select({ id: sessionRegistry.id })
+      .from(sessionRegistry)
+      .where(
+        and(
+          eq(sessionRegistry.userId, adminId),
+          eq(sessionRegistry.itemId, mediaId),
+        ),
+      );
+    if (play === undefined)
+      throw new Error("Missing coverage playback session");
+    return { parameters: { playSessionId: play.id } };
+  }
+  if (id === "ReportSessionEnded") {
+    const session = await issueSession(
+      db,
+      adminId,
+      { clientName: "Coverage logout", deviceId: id, deviceName: id },
+      null,
+    );
+    return { token: session.token };
+  }
+  if (id === "DisplayContent") {
+    const session = await issueSession(
+      db,
+      adminId,
+      { clientName: "Coverage viewing", deviceId: id, deviceName: id },
+      null,
+    );
+    return {
+      parameters: {
+        sessionId: session.session.id,
+        itemId: mediaId,
+        itemType: "Movie",
+        itemName: "Coverage",
+      },
+    };
+  }
   if (
     operation.tags.includes("Image") &&
     operation.path.startsWith("/Items/")
@@ -374,6 +457,23 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
       withDatabase(async (db) =>
         withVideoFixture(async (root) => {
           const seeded = await seedBrowse(db);
+          const mediaRoot = `${root}/media`;
+          await mkdir(`${mediaRoot}/Coverage (2026)`, { recursive: true });
+          await createVideoFixture(
+            `${mediaRoot}/Coverage (2026)/Coverage.mkv`,
+            { width: 64, height: 64 },
+          );
+          const mediaLibrary = await createLibrary(db, seeded.admin.id, {
+            name: "Coverage media",
+            medium: "movies",
+            roots: [mediaRoot],
+          });
+          const media = await scanDirectory(
+            db,
+            mediaLibrary.id,
+            "Coverage (2026)",
+          );
+          if (media.itemId === null) throw new Error("Missing coverage media");
           await db
             .update(items)
             .set({ genres: ["Science Fiction"], tags: ["Classic"] })
@@ -418,6 +518,7 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
               seeded.admin.id,
               operation,
               root,
+              media.itemId,
             );
             fixture.parameters = {
               itemId: seeded.matrix.id,
@@ -428,7 +529,9 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
               searchTerm: "Matrix",
               ...fixture.parameters,
             };
-            const response = await send(requestOf(operation, admin, fixture));
+            const response = await send(
+              requestOf(operation, fixture.token ?? admin, fixture),
+            );
             expect(response, operation.operationId).toBeDefined();
             if (response === undefined) continue;
             const declared = operation.responses[String(response.status)];

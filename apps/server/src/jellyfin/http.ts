@@ -70,6 +70,16 @@ function failure(status: number, code: string, message: string): Response {
   return json({ error: { code, message } }, status);
 }
 
+async function responseFor(request: Request, response: Response) {
+  if (request.method !== "HEAD") return response;
+  await response.body?.cancel();
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 function decodeParam(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -120,13 +130,16 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
     });
     if (candidates.length === 0)
       return roots.has(url.pathname.split("/")[1])
-        ? failure(404, "NOT_FOUND", "Not found.")
+        ? responseFor(request, failure(404, "NOT_FOUND", "Not found."))
         : undefined;
     const found = candidates.find(
       ({ route }) => route.method === request.method,
     );
     if (found === undefined)
-      return failure(405, "METHOD_NOT_ALLOWED", "Method not allowed.");
+      return responseFor(
+        request,
+        failure(405, "METHOD_NOT_ALLOWED", "Method not allowed."),
+      );
     try {
       const params = Object.fromEntries(
         Object.entries(found.params).map(([name, value]) => [
@@ -144,7 +157,8 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
         peerAddress,
         server,
       };
-      if (found.route.anonymous) return await found.route.handle(context);
+      if (found.route.anonymous)
+        return responseFor(request, await found.route.handle(context));
       const token = context.client.token;
       if (token === undefined) throw new AuthError("UNAUTHENTICATED");
       const caller = await authenticate(db, token);
@@ -153,13 +167,16 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
           throw new AuthError("FORBIDDEN");
         await requireAdmin(db, caller.user.id);
       }
-      return await found.route.handle({ ...context, caller, token });
+      return responseFor(
+        request,
+        await found.route.handle({ ...context, caller, token }),
+      );
     } catch (error) {
       if (error instanceof AuthError) {
         const response = failure(error.status, error.code, error.message);
         if (error.retryAfterSeconds !== undefined)
           response.headers.set("Retry-After", String(error.retryAfterSeconds));
-        return response;
+        return responseFor(request, response);
       }
       console.error(
         JSON.stringify({
@@ -168,7 +185,10 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
           error: error instanceof Error ? error.message : String(error),
         }),
       );
-      return failure(500, "INTERNAL_ERROR", "Request failed.");
+      return responseFor(
+        request,
+        failure(500, "INTERNAL_ERROR", "Request failed."),
+      );
     }
   };
 }

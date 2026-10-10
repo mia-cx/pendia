@@ -27,6 +27,15 @@ type ArtworkCandidate = MetadataResult["artwork"][number];
 const maxArtworkDimension = 8192;
 const maxArtworkPixels = 40_000_000;
 const maxArtworkAspectRatio = 20;
+/** Maximum size of an uploaded or downloaded artwork original. */
+export const maxArtworkBytes = 32 * 1024 * 1024;
+
+/** Invalid image input, distinct from storage and provider failures. */
+export class ArtworkInputError extends Error {
+  constructor() {
+    super("Invalid artwork response.");
+  }
+}
 
 async function readBoundedBody(
   response: Response,
@@ -76,7 +85,7 @@ export async function storeArtworkOriginal(
   {
     store = artworkStoreConfig(),
     timeoutMs = 30_000,
-    maxDownloadBytes = 32 * 1024 * 1024,
+    maxDownloadBytes = maxArtworkBytes,
   }: {
     store?: ArtworkStoreConfig;
     timeoutMs?: number;
@@ -89,9 +98,6 @@ export async function storeArtworkOriginal(
     throw new Error("Invalid artwork download limit.");
   const [item] = await db.select().from(items).where(eq(items.id, itemId));
   if (!item) throw new AuthError("NOT_FOUND");
-  // Colocated originals live in the Item folder of its home root.
-  const home = await homeRoot(db, itemId);
-
   const [selected] = await db
     .select()
     .from(artwork)
@@ -123,6 +129,38 @@ export async function storeArtworkOriginal(
   if (!response.ok)
     throw new Error(`Artwork request failed with status ${response.status}.`);
   const bytes = await readBoundedBody(response, maxDownloadBytes);
+  return storeArtworkBytes(db, itemId, candidate.type, bytes, {
+    sourceUrl: candidate.url,
+    store,
+  });
+}
+
+/** Stores validated image bytes as the selected original, retaining its id and cleaning up the old generation. */
+export async function storeArtworkBytes(
+  db: Database,
+  itemId: string,
+  type: ArtworkCandidate["type"],
+  bytes: Uint8Array,
+  {
+    sourceUrl = null,
+    store = artworkStoreConfig(),
+  }: { sourceUrl?: string | null; store?: ArtworkStoreConfig } = {},
+) {
+  if (bytes.byteLength > maxArtworkBytes) throw new ArtworkInputError();
+  const [item] = await db.select().from(items).where(eq(items.id, itemId));
+  if (!item) throw new AuthError("NOT_FOUND");
+  // Colocated originals live in the Item folder of its home root.
+  const home = await homeRoot(db, itemId);
+  const [selected] = await db
+    .select()
+    .from(artwork)
+    .where(
+      and(
+        eq(artwork.itemId, itemId),
+        eq(artwork.type, type),
+        eq(artwork.selected, true),
+      ),
+    );
   let dimensions: { width: number; height: number };
   try {
     // metadata() reads the header only, so the size limits apply before decoding.
@@ -146,7 +184,7 @@ export async function storeArtworkOriginal(
     await image.resize(1).bytes();
     dimensions = { width, height };
   } catch {
-    throw new Error("Invalid artwork response.");
+    throw new ArtworkInputError();
   }
 
   // A replacement keeps the selected row's id, whichever backend held it.
@@ -186,7 +224,7 @@ export async function storeArtworkOriginal(
         .where(
           and(
             eq(artwork.itemId, itemId),
-            eq(artwork.type, candidate.type),
+            eq(artwork.type, type),
             eq(artwork.selected, true),
           ),
         );
@@ -197,7 +235,7 @@ export async function storeArtworkOriginal(
         artworkId,
       );
       const values = {
-        sourceUrl: candidate.url,
+        sourceUrl,
         ...fresh,
         width: dimensions.width,
         height: dimensions.height,
@@ -219,7 +257,7 @@ export async function storeArtworkOriginal(
           id: artworkId,
           itemId,
           versionId: null,
-          type: candidate.type,
+          type,
           ...values,
         })
         .returning();

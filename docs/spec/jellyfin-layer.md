@@ -22,13 +22,15 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 | System | Real / neutral | Real identity, endpoint locality, ping, and UTC time. Default configuration; empty logs/storage; accepted configuration/restart/shutdown writes. |
 | Authentication | Real / neutral | Real local login, Quick Connect, and admin-managed recoverable integration keys. Password recovery requests direct clients to the administrator. |
 | User | Real | Account listing, creation, rename, deletion, password changes, disabled/admin/play/subtitle/bitrate policy, and stored configuration. Public users remain hidden. Unsupported policy capabilities stay disabled. |
-| UserView, Library, Show | Gap | Existing library/item browsing, resume, next-up; complete remaining browse calls. |
+| UserView, Show | Real | Authorized library views, grouping options, seasons, episodes, next-up, and upcoming episodes. |
+| Library | Real / gap / neutral | Real items/details, latest, resume, counts, ancestors, similar items, root, and media folders. Administration/download/file coverage remains explicit. Themes, intros, collections, and extras have no core model and return empty results. |
 | Device | Real | Live session-backed devices, custom names, and revocation. |
 | DisplayPreference | Real | Schema-validated preferences stored per user, client, and preference id. Owners and administrators have access. |
 | Session | Gap | Real live sessions and stored client capabilities; complete playback reports. Remote commands remain neutral. |
-| Filter, Genre, Person, Studio, Year, Search | Gap | Adapt core search and library metadata. |
+| Filter, Genre, Person, Year, Search | Real | Authorized genre/tag/rating/year/language facets, contributor credits, and paged item/person/genre search hints. Genre and year ids remain stable across restarts. |
+| Studio | Neutral | No studio model. Empty lists and default item responses. |
 | LibraryStructure, ItemUpdate, ItemLookup, RemoteImage | Gap | Adapt core administration and metadata where supported. |
-| Movie, Suggestion | Gap | Return available movies/items as recommendations. |
+| Movie, Suggestion | Real | Suggestions use unplayed items. Movie recommendations and similar lists use available movies and matching genres. |
 | Image, MediaInfo, UserData, Video, Subtitle | Gap | Existing artwork/playback/marks; complete aliases, HEAD, and seeded proof. |
 | Artist, Audio, MusicGenre, InstantMix, Lyric | Neutral | No music medium. Empty lists/defaults, accepted writes, empty binary responses. |
 | LiveTv, Channel | Neutral | No tuner, channels, programmes, recordings, or listing providers. |
@@ -46,6 +48,7 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 - PlaybackInfo takes `AudioStreamIndex` and `SubtitleStreamIndex` from the body or the query and plans the session with them; `SubtitleStreamIndex=-1` turns subtitles off. Both indexes stay on the transcode URL, and `DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` name the session's choice.
 - Query parameter names are matched case-insensitively, as ASP.NET does and clients rely on.
 - Specific literal routes precede parameter routes. `/Items/Latest` never resolves as an Item id.
+- Browse requests use the signed-in user's permissions. Administrators may specify another user id; that user's library access still applies.
 - Device sessions and ordinary API keys remain hash-only. Administrator-created integration keys also retain an authenticated encrypted copy for Jellyfin's key listing workflow.
 - Password changes verify the owner's current password and revoke other device sessions atomically. Administrator resets require a session credential. Intentionally passwordless local accounts remain distinct from external-auth accounts.
 - Policy changes apply atomically, including re-enabling disabled accounts. Account deletion, disabling, and group changes preserve an enabled administrator.

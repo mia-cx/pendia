@@ -1,10 +1,12 @@
 import {
   and,
+  arrayOverlaps,
   asc,
   count,
   eq,
   inArray,
   isNull,
+  notInArray,
   type SQL,
   sql,
 } from "drizzle-orm";
@@ -13,6 +15,8 @@ import { viewableLibraryIds } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
 import {
   artwork,
+  contributors,
+  credits,
   episodes,
   favourites,
   files,
@@ -50,6 +54,23 @@ export type ItemViewQuery = {
   readonly kinds?: readonly ItemKind[];
   readonly ids?: readonly string[];
   readonly search?: string;
+  readonly genres?: readonly string[];
+  readonly tags?: readonly string[];
+  readonly years?: readonly number[];
+  readonly contributorIds?: readonly string[];
+  readonly contributorRoles?: readonly string[];
+  readonly excludeIds?: readonly string[];
+  readonly premiereBefore?: string;
+  readonly premiereAfter?: string;
+  readonly seasonNumber?: number;
+  readonly indexNumber?: number;
+  readonly contentRatings?: readonly string[];
+  readonly hasOverview?: boolean;
+  readonly hasContentRating?: boolean;
+  readonly providerPresence?: Readonly<Record<string, boolean>>;
+  readonly audioLanguages?: readonly string[];
+  readonly subtitleLanguages?: readonly string[];
+  readonly nameStartsWithOrGreater?: string;
   /** Titles starting with this text, ignoring case. */
   readonly nameStartsWith?: string;
   /** Titles that sort before this text, ignoring case. */
@@ -84,6 +105,17 @@ const premiereDate = sql<
 const seasonNumber = sql<
   number | null
 >`coalesce(${ownSeason.seasonNumber}, ${episodeSeason.seasonNumber})`;
+
+function streamLanguages(
+  kind: "audio" | "subtitle",
+  languages: readonly string[] | undefined,
+) {
+  if (languages === undefined) return undefined;
+  return sql`exists (select 1 from ${streams}
+    inner join ${versions} on ${versions.id} = ${streams.versionId}
+    where ${versions.itemId} = ${items.id} and ${streams.kind} = ${kind}
+      and ${inArray(streams.language, [...languages])})`;
+}
 
 const viewFields = {
   id: items.id,
@@ -183,6 +215,52 @@ function filtersOf(viewable: string[], query: ItemViewQuery) {
         )`,
     kinds === undefined ? undefined : inArray(items.kind, [...kinds]),
     ids === undefined ? undefined : inArray(items.id, [...ids]),
+    query.excludeIds?.length
+      ? notInArray(items.id, [...query.excludeIds])
+      : undefined,
+    query.genres === undefined
+      ? undefined
+      : query.genres.length
+        ? arrayOverlaps(items.genres, [...query.genres])
+        : sql`false`,
+    query.tags === undefined
+      ? undefined
+      : query.tags.length
+        ? arrayOverlaps(items.tags, [...query.tags])
+        : sql`false`,
+    query.years === undefined
+      ? undefined
+      : inArray(items.year, [...query.years]),
+    query.contributorIds === undefined
+      ? undefined
+      : sql`exists (select 1 from ${credits} where ${credits.itemId} = ${items.id} and ${inArray(credits.contributorId, [...query.contributorIds])} ${query.contributorRoles?.length ? sql`and ${inArray(sql`lower(regexp_replace(${credits.role}, '[^a-zA-Z]', '', 'g'))`, [...query.contributorRoles])}` : sql``})`,
+    query.premiereBefore === undefined
+      ? undefined
+      : sql`${premiereDate} <= ${query.premiereBefore}`,
+    query.premiereAfter === undefined
+      ? undefined
+      : sql`${premiereDate} >= ${query.premiereAfter}`,
+    query.seasonNumber === undefined
+      ? undefined
+      : sql`${seasonNumber} = ${query.seasonNumber}`,
+    query.indexNumber === undefined
+      ? undefined
+      : sql`coalesce(${ownSeason.seasonNumber}, ${episodes.episodeNumber}) = ${query.indexNumber}`,
+    query.contentRatings === undefined
+      ? undefined
+      : inArray(items.contentRating, [...query.contentRatings]),
+    query.hasOverview === undefined
+      ? undefined
+      : sql`(coalesce(length(trim(${items.overview})), 0) > 0) = ${query.hasOverview}`,
+    query.hasContentRating === undefined
+      ? undefined
+      : sql`(${items.contentRating} is not null) = ${query.hasContentRating}`,
+    ...Object.entries(query.providerPresence ?? {}).map(
+      ([provider, present]) =>
+        sql`exists (select 1 from ${providerIds} where ${providerIds.itemId} = ${items.id} and ${providerIds.provider} = ${provider}) = ${present}`,
+    ),
+    streamLanguages("audio", query.audioLanguages),
+    streamLanguages("subtitle", query.subtitleLanguages),
     search === undefined
       ? undefined
       : sql`(${items.title} % ${search} or ${search} <% ${items.title})`,
@@ -193,6 +271,9 @@ function filtersOf(viewable: string[], query: ItemViewQuery) {
     query.nameLessThan === undefined
       ? undefined
       : sql`lower(${items.title}) collate "C" < lower(${query.nameLessThan}) collate "C"`,
+    query.nameStartsWithOrGreater === undefined
+      ? undefined
+      : sql`lower(${items.title}) collate "C" >= lower(${query.nameStartsWithOrGreater}) collate "C"`,
     query.favourite === undefined
       ? undefined
       : sql`(${favourites.id} is not null) = ${query.favourite}`,
@@ -386,4 +467,114 @@ export async function viewableLibraries(db: Database, userId: string) {
     .from(libraries)
     .where(inArray(libraries.id, viewable))
     .orderBy(asc(libraries.name), asc(libraries.id));
+}
+
+/** Lists distinct browse facets from matching, authorized items and their file streams. */
+export async function listLibraryFacets(
+  db: Database,
+  userId: string,
+  query: ItemViewQuery = {},
+) {
+  const viewable = await viewableLibraryIds(db, userId);
+  const where = filtersOf(viewable, query);
+  const matching = withJoins(
+    db.select({ id: items.id }).from(items).$dynamic(),
+    userId,
+  ).where(where);
+  const values = await withJoins(
+    db
+      .select({
+        genres: sql<
+          string[]
+        >`coalesce(array_agg(distinct genre) filter (where genre is not null), '{}')`,
+        tags: sql<
+          string[]
+        >`coalesce(array_agg(distinct tag) filter (where tag is not null), '{}')`,
+        years: sql<
+          number[] | Int32Array
+        >`coalesce(array_agg(distinct ${items.year}) filter (where ${items.year} is not null), '{}')`,
+        ratings: sql<
+          string[]
+        >`coalesce(array_agg(distinct ${items.contentRating}) filter (where ${items.contentRating} is not null), '{}')`,
+      })
+      .from(items)
+      .$dynamic(),
+    userId,
+  )
+    .leftJoin(sql`lateral unnest(${items.genres}) as genre`, sql`true`)
+    .leftJoin(sql`lateral unnest(${items.tags}) as tag`, sql`true`)
+    .where(where);
+  const languages = await db
+    .selectDistinct({ kind: streams.kind, language: streams.language })
+    .from(streams)
+    .innerJoin(files, eq(files.id, streams.fileId))
+    .where(
+      and(
+        inArray(files.itemId, matching),
+        sql`${streams.language} is not null`,
+      ),
+    );
+  const facets = values[0] ?? { genres: [], tags: [], years: [], ratings: [] };
+  return {
+    genres: facets.genres.sort(),
+    tags: facets.tags.sort(),
+    // Bun decodes aggregate integer arrays as Int32Array; adapters need ordinary JSON arrays.
+    years: Array.from(facets.years).sort((a, b) => a - b),
+    ratings: facets.ratings.sort(),
+    audioLanguages: languages
+      .filter((row) => row.kind === "audio")
+      .flatMap((row) => row.language ?? [])
+      .sort(),
+    subtitleLanguages: languages
+      .filter((row) => row.kind === "subtitle")
+      .flatMap((row) => row.language ?? [])
+      .sort(),
+  };
+}
+
+/** Reads contributor metadata and credits only for items the user may view. */
+export async function listContributorCredits(
+  db: Database,
+  userId: string,
+  query: ItemViewQuery = {},
+) {
+  const viewable = await viewableLibraryIds(db, userId);
+  const matching = withJoins(
+    db.select({ id: items.id }).from(items).$dynamic(),
+    userId,
+  ).where(filtersOf(viewable, query));
+  return db
+    .select({
+      id: contributors.id,
+      name: contributors.name,
+      overview: contributors.overview,
+      itemId: credits.itemId,
+      role: credits.role,
+      character: credits.character,
+      order: credits.order,
+    })
+    .from(credits)
+    .innerJoin(contributors, eq(contributors.id, credits.contributorId))
+    .where(inArray(credits.itemId, matching))
+    .orderBy(
+      asc(contributors.name),
+      asc(credits.role),
+      asc(credits.order),
+      asc(credits.id),
+    );
+}
+
+/** Counts matching authorized items by their core kind without loading item rows. */
+export async function countItemKinds(
+  db: Database,
+  userId: string,
+  query: ItemViewQuery = {},
+) {
+  const viewable = await viewableLibraryIds(db, userId);
+  return withJoins(
+    db.select({ kind: items.kind, total: count() }).from(items).$dynamic(),
+    userId,
+  )
+    .where(filtersOf(viewable, query))
+    .groupBy(items.kind);
 }

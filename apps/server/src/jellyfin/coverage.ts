@@ -2,20 +2,10 @@ import type { ApiOperation } from "./openapi.ts";
 
 /** These tag groups need real core adapters. Each later stack layer removes its explicit gap group. */
 export const gaps: Record<string, string> = {
-  UserView: "Real views and grouping options.",
   Session: "Read sessions and exercise playback reports.",
   Library:
-    "Complete browse, latest, counts, ancestors, similar, refresh, and file routes.",
+    "Complete library administration, refresh, notifications, and file routes.",
   LibraryStructure: "Adapt core library management.",
-  Show: "Complete show browsing and upcoming episodes.",
-  Filter: "Read real library facets.",
-  Genre: "Read real genre facets.",
-  Person: "Read real credits where present.",
-  Studio: "Read real studios where present.",
-  Year: "Read real years.",
-  Search: "Return real search hints.",
-  Movie: "Recommend from available movies.",
-  Suggestion: "Suggest available items.",
   ItemUpdate: "Adapt core metadata updates.",
   ItemLookup: "Adapt core metadata lookup where supported.",
   Image: "Exercise real artwork and HEAD/image aliases.",
@@ -26,8 +16,34 @@ export const gaps: Record<string, string> = {
   RemoteImage: "Adapt real artwork lookup where supported.",
 };
 
+/** Library operations completed by the browse layer while administration and file adapters remain explicit gaps. */
+export const coveredOperations = new Set([
+  "GetItems",
+  "GetItem",
+  "GetResumeItems",
+  "GetAncestors",
+  "GetItemCounts",
+  "GetMediaFolders",
+  "GetLatestMedia",
+  "GetRootFolder",
+  "GetSimilarItems",
+  "GetSimilarMovies",
+  "GetSimilarShows",
+  "GetSimilarAlbums",
+  "GetSimilarArtists",
+  "GetSimilarTrailers",
+  "GetItemCollections",
+  "GetThemeMedia",
+  "GetThemeSongs",
+  "GetThemeVideos",
+  "GetIntros",
+  "GetLocalTrailers",
+  "GetSpecialFeatures",
+]);
+
 /** A visible gap is never silently counted as neutral coverage. */
 export function gapOf(operation: ApiOperation) {
+  if (coveredOperations.has(operation.operationId)) return undefined;
   return operation.tags
     .map((tag) => gaps[tag])
     .find((reason) => reason !== undefined);

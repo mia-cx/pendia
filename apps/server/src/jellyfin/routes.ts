@@ -1,6 +1,7 @@
 import type { createHlsHandler } from "../api/hls.ts";
 import type { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { accountRoutes, preferenceRoutes } from "./accounts.ts";
+import { additionalBrowseRoutes, browseAsUser } from "./browse.ts";
 import { deviceRoutes } from "./devices.ts";
 import { type RequestContext, type Route, routePattern } from "./http.ts";
 import { imageRoutes } from "./images.ts";
@@ -19,13 +20,13 @@ export function jellyfinRoutes(
   hls: ReturnType<typeof createHlsHandler>,
 ): Route[] {
   const implemented = [
+    ...[...additionalBrowseRoutes, ...browseRoutes].map(browseAsUser),
     ...accountRoutes,
     ...preferenceRoutes,
     ...deviceRoutes,
     ...systemRoutes,
     ...userRoutes,
     ...quickConnectRoutes,
-    ...browseRoutes,
     ...imageRoutes(artwork),
     ...playbackRoutes(hls),
     ...progressRoutes,

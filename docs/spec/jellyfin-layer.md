@@ -31,7 +31,8 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 | Studio | Neutral | No studio model. Empty lists and default item responses. |
 | LibraryStructure | Real / neutral | Create, rename, remove, and scan movie/show libraries; add/remove roots and round-trip library options. Other media have no core medium. Jellyfin-only options are stored client preferences and do not change core scanning. |
 | ItemUpdate | Real / neutral | Edit movie/show/season/episode and contributor metadata, dates, provider ids, genres/tags, and credits. Library item names rename the library. Legacy content-type overrides have no separate core model and are accepted no-ops. |
-| ItemLookup, RemoteImage | Gap | Adapt core external lookup and remote artwork where supported. |
+| ItemLookup | Real / neutral | Search configured movie/show metadata providers, read external-id descriptors, and apply a chosen identity and metadata. Missing credentials retain selected ids and queue a fetch. Music, books, box sets, trailers, and remote person lookup have no matching core provider capability. |
+| RemoteImage | Real / neutral | List configured item artwork providers, fetch candidates for stored identifiers, page/filter candidates, and download a selected original. Library/person/facet image owners do not exist in the core. |
 | Movie, Suggestion | Real | Suggestions use unplayed items. Movie recommendations and similar lists use available movies and matching genres. |
 | Image, MediaInfo, UserData, Video, Subtitle | Gap | Existing artwork/playback/marks; complete aliases, HEAD, and seeded proof. |
 | Artist, Audio, MusicGenre, InstantMix, Lyric | Neutral | No music medium. Empty lists/defaults, accepted writes, empty binary responses. |
@@ -56,3 +57,4 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 - Policy changes apply atomically, including re-enabling disabled accounts. Account deletion, disabling, and group changes preserve an enabled administrator.
 - Library roots retain Thalia's absolute-path and non-overlap rules. Catalogue deletion removes database entries and stored artwork while retaining source media files.
 - Manual metadata edits use the same library/item locks and contributor creation lock as provider metadata. Explicit provider ids replace the editor's supplied set.
+- Interactive lookup and background jobs share credentialed built-in/plugin providers. Identifying a Show queues its descendants to follow the chosen root identity, preserving explicitly pinned children. Artwork replacement removes obsolete selections; preservation fills missing types only. Queued fetches retain that choice. One original per core artwork type is selected.

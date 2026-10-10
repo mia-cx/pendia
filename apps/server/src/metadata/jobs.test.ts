@@ -847,9 +847,8 @@ describe.skipIf(!databaseUrl)("provider-fetch job", () => {
           calls.filter((url) => url.hostname === "image.tmdb.org"),
         ).toHaveLength(3);
         expect(calls).toHaveLength(5);
-        // The poster's removal publishes its own change.
+        // Each fetch publishes metadata and artwork completion, including removals.
         expect(await db.select().from(events)).toMatchObject([
-          { kind: "library.changed" },
           { kind: "library.changed" },
           { kind: "library.changed" },
           { kind: "library.changed" },

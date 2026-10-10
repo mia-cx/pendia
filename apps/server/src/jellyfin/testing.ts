@@ -63,6 +63,12 @@ export async function jellyfinLogin(
 const schemas: Record<string, Record<string, string>> = fixture.schemas;
 const enums: Record<string, string[]> = fixture.enums;
 
+/** Small decoded PNG for request-level artwork tests. */
+export const fixturePng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGP4y8CAFWEXHbQSAPZwP0G2GkFNAAAAAElFTkSuQmCC",
+  "base64",
+);
+
 function valueErrors(type: string, value: unknown, at: string): string[] {
   if (type === "string" || type === "boolean")
     return typeof value === type ? [] : [`${at} is not a ${type}`];

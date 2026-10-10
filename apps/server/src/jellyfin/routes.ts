@@ -1,5 +1,6 @@
 import type { createHlsHandler } from "../api/hls.ts";
 import type { createArtworkHandler } from "../metadata/artwork-http.ts";
+import type { MetadataProviderOptions } from "../metadata/providers.ts";
 import { accountRoutes, preferenceRoutes } from "./accounts.ts";
 import { additionalBrowseRoutes, browseAsUser } from "./browse.ts";
 import { deviceRoutes } from "./devices.ts";
@@ -7,6 +8,7 @@ import { type RequestContext, type Route, routePattern } from "./http.ts";
 import { imageRoutes } from "./images.ts";
 import { browseRoutes } from "./items.ts";
 import { libraryRoutes } from "./libraries.ts";
+import { metadataLookupRoutes } from "./metadata.ts";
 import { neutralResponse } from "./neutral.ts";
 import { accessOf, operations } from "./openapi.ts";
 import { playbackRoutes } from "./playback.ts";
@@ -19,11 +21,13 @@ import { userRoutes } from "./users.ts";
 export function jellyfinRoutes(
   artwork: ReturnType<typeof createArtworkHandler>,
   hls: ReturnType<typeof createHlsHandler>,
+  metadata: MetadataProviderOptions = {},
 ): Route[] {
   const implemented = [
     ...[...additionalBrowseRoutes, ...browseRoutes].map(browseAsUser),
     ...accountRoutes,
     ...libraryRoutes,
+    ...metadataLookupRoutes(metadata),
     ...preferenceRoutes,
     ...deviceRoutes,
     ...systemRoutes,

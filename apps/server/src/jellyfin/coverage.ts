@@ -4,13 +4,11 @@ import type { ApiOperation } from "./openapi.ts";
 export const gaps: Record<string, string> = {
   Session: "Read sessions and exercise playback reports.",
   Library: "Exercise real item downloads and files.",
-  ItemLookup: "Adapt core metadata lookup where supported.",
   Image: "Exercise real artwork and HEAD/image aliases.",
   MediaInfo: "Exercise GET/POST playback info and bitrate test.",
   UserData: "Complete progress and rating adapters.",
   Video: "Exercise real files and HEAD/container aliases.",
   Subtitle: "Exercise real subtitle streams and management where supported.",
-  RemoteImage: "Adapt real artwork lookup where supported.",
 };
 
 /** Library operations completed by the browse layer while administration and file adapters remain explicit gaps. */

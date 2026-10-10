@@ -42,6 +42,8 @@ export type Route = {
   method: "GET" | "POST" | "DELETE" | "HEAD";
   path: string;
   admin?: boolean;
+  /** Contract coverage distinguishes real core adapters from valid neutral responses. */
+  behaviour?: "real" | "neutral";
 } & (
   | { anonymous: true; handle: Handler<RequestContext> }
   | { anonymous?: false; handle: Handler<UserContext> }

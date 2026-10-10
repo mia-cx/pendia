@@ -6,8 +6,7 @@ import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { readMetadataSettings } from "../metadata/settings.ts";
 import { PluginFailed, type PluginRuntime } from "../plugins/runtime.ts";
-import { readProviderKey } from "../providers/keys.ts";
-import { createOpenSubtitlesProvider } from "./opensubtitles.ts";
+import { subtitleProviders } from "./providers.ts";
 import {
   listSubtitles,
   readLanguage,
@@ -44,19 +43,6 @@ export async function queueSubtitleFetch(
   );
 }
 
-async function subtitleProviders(
-  db: Database,
-  request: typeof fetch,
-  plugins: PluginRuntime | undefined,
-): Promise<SubtitleProvider[]> {
-  const providers: SubtitleProvider[] = [];
-  const key = (await readProviderKey(db, "opensubtitles"))?.trim();
-  if (key) providers.push(createOpenSubtitlesProvider(db, key, request));
-  if (plugins !== undefined)
-    providers.push(...(await plugins.subtitleProviders()));
-  return providers;
-}
-
 /** Runs plugin code that may have failed the plugin; its failure is already logged, so it counts as no answer. */
 async function unlessFailed<T>(run: () => Promise<T>): Promise<T | null> {
   try {
@@ -72,7 +58,7 @@ export function registerSubtitleJobs(
   db: Database,
   registry: ReturnType<typeof createJobRegistry>,
   request: typeof fetch = fetch,
-  plugins?: PluginRuntime,
+  plugins?: Pick<PluginRuntime, "subtitleProviders">,
 ): void {
   registry.register("subtitle-fetch", async ({ itemId }) => {
     const [item] = await db
@@ -83,7 +69,9 @@ export function registerSubtitleJobs(
     if (item === undefined || !subtitleKinds.has(item.kind)) return;
     const { subtitleLanguages } = await readMetadataSettings(db);
     const stored = new Set(
-      (await listSubtitles(db, itemId)).map((track) => track.language),
+      (await listSubtitles(db, itemId))
+        .filter((track) => !track.forced)
+        .map((track) => track.language),
     );
     const missing = subtitleLanguages.filter(
       (language) => !stored.has(language),
@@ -94,7 +82,7 @@ export function registerSubtitleJobs(
       string,
       { provider: SubtitleProvider; match: SubtitleMatch }
     >();
-    for (const provider of await subtitleProviders(db, request, plugins)) {
+    for (const provider of await subtitleProviders(db, { request, plugins })) {
       const matches = await unlessFailed(() =>
         provider.search({ itemId, languages: missing }),
       );

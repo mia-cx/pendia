@@ -111,11 +111,12 @@ function canonicalDto(
 export async function readDto(
   request: Request,
   name: string,
+  maxBytes = 262_144,
 ): Promise<JsonObject> {
   const schema = openapi.components.schemas[name];
   if (schema?.properties === undefined)
     throw new Error(`Unknown object DTO ${name}.`);
-  const input = await readJsonObject(request, 262_144);
+  const input = await readJsonObject(request, maxBytes);
   const value = canonicalDto(input, schema, name === "BaseItemDto");
   const validate =
     validators.get(name) ??

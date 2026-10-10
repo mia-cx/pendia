@@ -8,6 +8,7 @@ import {
   readTrackName,
   type StoredSubtitle,
   subtitleFolders,
+  trackName,
 } from "./store.ts";
 
 const routePattern =
@@ -21,7 +22,7 @@ const contentTypes: Record<StoredSubtitle["format"], string> = {
 
 /** The URL the play plan gives for one stored track. */
 export function subtitleUrl(itemId: string, track: StoredSubtitle): string {
-  return `/api/subtitles/${itemId}/${track.language}.${track.format}`;
+  return `/api/subtitles/${itemId}/${trackName(track)}`;
 }
 
 function failure(status: number, message: string): Response {

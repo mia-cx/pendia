@@ -32,6 +32,7 @@ import {
   streams,
   versions,
 } from "../db/schema/index.ts";
+import { listSubtitles } from "../subtitles/store.ts";
 
 type ItemKind = (typeof items.kind.enumValues)[number];
 
@@ -448,9 +449,21 @@ export async function listVersionViews(
       ),
     )
     .orderBy(asc(streams.index));
+  // Stored tracks belong to the Item, so every Version exposes the same indexes.
+  const firstExternalIndex = fileStreams.reduce(
+    (index, stream) => Math.max(index, stream.index + 1),
+    0,
+  );
+  const externalSubtitles = (await listSubtitles(db, itemId)).map(
+    (track, offset) => ({
+      ...track,
+      index: firstExternalIndex + offset,
+    }),
+  );
   return single.map((row) => ({
     ...row,
     streams: fileStreams.filter((stream) => stream.fileId === row.file.id),
+    externalSubtitles,
   }));
 }
 

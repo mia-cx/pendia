@@ -1,3 +1,4 @@
+import type { SubtitleProvider } from "@thalia/plugin-api";
 import { createLocalUser, setupAdmin } from "../auth/accounts.ts";
 import type { Database } from "../db/client.ts";
 import { migrateDatabase } from "../db/migrate.ts";
@@ -61,6 +62,25 @@ export async function jellyfinLogin(
 }
 
 const schemas: Record<string, Record<string, string>> = fixture.schemas;
+/** A deterministic configured provider keeps subtitle contract checks offline. */
+export const fixtureSubtitleProvider: SubtitleProvider = {
+  id: "fixture-subtitles",
+  async search({ languages }) {
+    return languages.map((language) => ({
+      providerId: "one",
+      language,
+      forced: false,
+      score: 1,
+    }));
+  },
+  async download() {
+    return {
+      format: "srt",
+      text: "1\n00:00:00,000 --> 00:00:01,000\nProvider subtitle.\n",
+    };
+  },
+};
+
 const enums: Record<string, string[]> = fixture.enums;
 
 /** Small decoded PNG for request-level artwork tests. */

@@ -13,6 +13,8 @@ export const subtitleFormats = ["srt", "ass", "vtt"] as const;
 export type StoredSubtitle = {
   language: string;
   format: (typeof subtitleFormats)[number];
+  forced?: boolean;
+  hearingImpaired?: boolean;
 };
 
 // ISO 639 with an optional region, as providers write them: en, pob, pt-br, zh-cn.
@@ -24,18 +26,30 @@ export function readLanguage(language: string): string | null {
   return languagePattern.test(lower) ? lower : null;
 }
 
-/** Reads a track file name, `<language>.<format>`, or null when it is not one. */
+/** Reads a track name, including optional forced/sdh flags, or null for an unknown name. */
 export function readTrackName(name: string): StoredSubtitle | null {
   const dot = name.lastIndexOf(".");
-  const language = readLanguage(name.slice(0, dot));
+  const [code = "", ...flags] = name.slice(0, dot).split(".");
+  const language = readLanguage(code);
   const format = subtitleFormats.find((known) => known === name.slice(dot + 1));
-  if (dot < 1 || language === null || format === undefined) return null;
-  return { language, format };
+  if (
+    dot < 1 ||
+    language === null ||
+    format === undefined ||
+    flags.some((flag) => flag !== "forced" && flag !== "sdh")
+  )
+    return null;
+  return {
+    language,
+    format,
+    ...(flags.includes("forced") ? { forced: true } : {}),
+    ...(flags.includes("sdh") ? { hearingImpaired: true } : {}),
+  };
 }
 
-/** The file name of a track: `<language>.<format>`. */
+/** A track's file name keeps full, forced, and hearing-impaired tracks distinct. */
 export function trackName(track: StoredSubtitle): string {
-  return `${track.language}.${track.format}`;
+  return `${track.language}${track.forced ? ".forced" : ""}${track.hearingImpaired ? ".sdh" : ""}.${track.format}`;
 }
 
 /**
@@ -102,7 +116,7 @@ export async function listSubtitles(
   // A folder that cannot be read counts as none; only if none could is it an error.
   if (!answered && firstError !== undefined) throw firstError;
   return [...tracks.values()].sort((a, b) =>
-    a.language.localeCompare(b.language),
+    trackName(a).localeCompare(trackName(b)),
   );
 }
 

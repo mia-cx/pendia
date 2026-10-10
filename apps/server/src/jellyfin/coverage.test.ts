@@ -18,6 +18,7 @@ import { insertItem } from "../db/tree.ts";
 import { createLibrary } from "../libraries/service.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
+import { storeArtworkOriginal } from "../metadata/artwork-store.ts";
 import { coveredOperations, gapOf, gaps } from "./coverage.ts";
 import { createJellyfinHandler } from "./http.ts";
 import {
@@ -33,7 +34,12 @@ import { jellyfinRoutes } from "./routes.ts";
 import { contractValidator as ajv, jsonSchema } from "./schema.ts";
 import { fixturePng, jellyfinLogin } from "./testing.ts";
 
-type Fixture = { parameters?: Record<string, string>; body?: unknown };
+type Fixture = {
+  parameters?: Record<string, string>;
+  body?: unknown;
+  rawBody?: BodyInit;
+  contentType?: string;
+};
 const header =
   'MediaBrowser Client="Coverage", Device="Coverage", DeviceId="coverage"';
 
@@ -62,15 +68,16 @@ function requestOf(
     method: operation.method,
     headers: {
       "X-Emby-Token": token,
-      "Content-Type": "application/json",
+      "Content-Type": fixture.contentType ?? "application/json",
       Authorization: header,
     },
     body:
-      bodySchema === undefined ||
+      fixture.rawBody ??
+      (bodySchema === undefined ||
       operation.method === "GET" ||
       operation.method === "HEAD"
         ? undefined
-        : JSON.stringify(fixture.body ?? defaultValue(bodySchema)),
+        : JSON.stringify(fixture.body ?? defaultValue(bodySchema))),
   });
 }
 
@@ -82,6 +89,51 @@ async function fixtureOf(
   root: string,
 ): Promise<Fixture> {
   const id = operation.operationId;
+  if (
+    operation.tags.includes("Image") &&
+    operation.path.startsWith("/Items/")
+  ) {
+    const folder = `${root}/${id}`;
+    await mkdir(folder);
+    const library = await createLibrary(db, adminId, {
+      name: id,
+      medium: "movies",
+      roots: [folder],
+    });
+    const item = await insertItem(db, {
+      libraryId: library.id,
+      kind: "movie",
+      title: "Image subject",
+      canonicalFolder: ".",
+      extension: {},
+    });
+    const image = await storeArtworkOriginal(
+      db,
+      item.id,
+      { type: "poster", url: "https://image.example/fixture.png" },
+      (async (_input: RequestInfo | URL) =>
+        new Response(fixturePng)) as typeof fetch,
+    );
+    return {
+      parameters: {
+        itemId: item.id,
+        imageType: "Primary",
+        imageIndex: "0",
+        tag: image.id.replaceAll("-", ""),
+        format: "Png",
+        maxWidth: "4",
+        maxHeight: "4",
+        percentPlayed: "0",
+        unplayedCount: "0",
+        newIndex: "0",
+      },
+      rawBody:
+        operation.method === "POST" && id !== "UpdateItemImageIndex"
+          ? fixturePng.toString("base64")
+          : undefined,
+      contentType: "image/png",
+    };
+  }
   if (id === "ApplySearchCriteria")
     return {
       body: { ProviderIds: { Tmdb: "999" }, SearchProviderName: "tmdb" },
@@ -390,7 +442,17 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
               response.status,
               response.headers.get("Content-Type"),
             );
-            const text = await response.text();
+            const imageResponse =
+              operation.method !== "HEAD" &&
+              response.headers.get("Content-Type")?.startsWith("image/");
+            let text: string;
+            if (imageResponse) {
+              const bytes = Buffer.from(await response.arrayBuffer());
+              const image = await new Bun.Image(bytes).metadata();
+              expect(image.width, operation.operationId).toBeGreaterThan(0);
+              expect(image.height, operation.operationId).toBeGreaterThan(0);
+              text = bytes.toString();
+            } else text = await response.text();
             if (operation.method === "HEAD" || response.status === 204) {
               expect(text, operation.operationId).toBe("");
             } else if (schema !== undefined) {
@@ -400,7 +462,7 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
                   .get("Content-Type")
                   ?.startsWith("application/json")
                   ? JSON.parse(text)
-                  : text;
+                  : String(text);
               const validate = ajv.compile(jsonSchema(schema) as object);
               if (!validate(value))
                 failures.push(

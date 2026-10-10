@@ -390,7 +390,7 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
           },
           {
             itemId: seed.episodeTwo.id,
-            provider: "mock",
+            provider: "other",
             value: "pinned-episode",
             metadataDerived: false,
           },
@@ -426,7 +426,26 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
             };
           },
         };
-        const plugins = { metadataProviders: async () => [provider] };
+        const other: MetadataProvider = {
+          ...provider,
+          id: "other",
+          async search() {
+            throw new Error("An explicitly pinned child must not be searched");
+          },
+          async fetch({ providerId }) {
+            const result = await provider.fetch({
+              providerId,
+              kind: "episode",
+            });
+            if (result === null) return null;
+            return {
+              ...result,
+              title: `Other ${providerId}`,
+              providerIds: { other: providerId },
+            };
+          },
+        };
+        const plugins = { metadataProviders: async () => [provider, other] };
         const request = (async (_input: RequestInfo | URL) =>
           new Response(fixturePng)) as typeof fetch;
         const handle = createJellyfinHandler(
@@ -479,12 +498,20 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
             derived: providerIds.metadataDerived,
           })
           .from(providerIds)
-          .where(eq(providerIds.provider, "mock"));
+          .where(inArray(providerIds.provider, ["mock", "other"]));
         expect(ids).toContainEqual({
           itemId: seed.show.id,
           value: "new-show",
           derived: false,
         });
+        expect(
+          ids.filter((row) => row.itemId === seed.episodeTwo.id),
+        ).toHaveLength(1);
+        const [pinnedChild] = await db
+          .select()
+          .from(items)
+          .where(eq(items.id, seed.episodeTwo.id));
+        expect(pinnedChild?.title).toBe("Other pinned-episode");
         expect(ids).toContainEqual({
           itemId: seed.seasonOne.id,
           value: "new-season-1",

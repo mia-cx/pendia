@@ -1,5 +1,5 @@
 import { readUserAccess } from "../auth/admin.ts";
-import { checkPermission, isBuiltInAdmin } from "../auth/permissions.ts";
+import { checkPermission } from "../auth/permissions.ts";
 import { readAccount, readClientPreference } from "../auth/profile.ts";
 import {
   type issueSession,
@@ -22,21 +22,14 @@ const passwordResetProvider =
 
 /** Builds a Jellyfin UserDto. Name is the login name, since clients sign in with it. */
 export async function userDto(db: Database, user: User, serverId: string) {
-  const [
-    isAdministrator,
-    canPlay,
-    preference,
-    account,
-    access,
-    canManageSubtitles,
-  ] = await Promise.all([
-    isBuiltInAdmin(db, user.id),
-    checkPermission(db, user.id, "play"),
-    readClientPreference(db, user.id, user.id, "jellyfin", "configuration"),
-    readAccount(db, user.id, user.id),
-    readUserAccess(db, user.id),
-    checkPermission(db, user.id, "manage-subtitles"),
-  ]);
+  const [canPlay, preference, account, access, canManageSubtitles] =
+    await Promise.all([
+      checkPermission(db, user.id, "play"),
+      readClientPreference(db, user.id, user.id, "jellyfin", "configuration"),
+      readAccount(db, user.id, user.id),
+      readUserAccess(db, user.id),
+      checkPermission(db, user.id, "manage-subtitles"),
+    ]);
   return {
     Name: user.username,
     ServerId: toGuid(serverId),
@@ -67,7 +60,7 @@ export async function userDto(db: Database, user: User, serverId: string) {
         : {}),
     },
     Policy: {
-      IsAdministrator: isAdministrator,
+      IsAdministrator: account.administrator,
       IsHidden: true,
       EnableCollectionManagement: false,
       EnableSubtitleManagement: canManageSubtitles,

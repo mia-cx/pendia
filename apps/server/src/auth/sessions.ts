@@ -76,12 +76,14 @@ export function prepareDevice(input: DeviceInput) {
 let dummyHash: Promise<string> | undefined;
 
 async function verifyPassword(password: string, stored: string | null) {
+  if (stored === "") return password === "";
   dummyHash ??= Bun.password.hash(randomBytes(32).toString("hex"), {
     algorithm: "argon2id",
   });
   const hash = stored ?? (await dummyHash);
   try {
-    return await Bun.password.verify(password, hash);
+    const verified = await Bun.password.verify(password, hash);
+    return stored !== null && verified;
   } catch {
     return false;
   }
@@ -162,9 +164,22 @@ export async function login(db: Database, input: LoginInput, address: string) {
   if (!found || found.disabledAt || !verified)
     throw new AuthError("INVALID_CREDENTIALS");
 
-  return db.transaction((tx) =>
-    issueSession(tx, found.id, input, config.sessionMaxAgeSeconds),
-  );
+  return db.transaction(async (tx) => {
+    // A password change may finish while hashing runs. Its row lock also orders new session issuance against revocation.
+    const [current] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(
+        and(
+          eq(users.id, found.id),
+          eq(users.passwordHash, found.passwordHash ?? ""),
+          isNull(users.disabledAt),
+        ),
+      )
+      .for("update");
+    if (current === undefined) throw new AuthError("INVALID_CREDENTIALS");
+    return issueSession(tx, found.id, input, config.sessionMaxAgeSeconds);
+  });
 }
 
 const enabledOwner = (userId: unknown) =>

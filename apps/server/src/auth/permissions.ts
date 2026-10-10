@@ -209,7 +209,7 @@ export async function setUserGroups(
 
 /** Sets or clears a per-user permission override; the actor must be a built-in admin. */
 export async function setPermissionOverride(
-  db: Database,
+  db: Pick<Database, "select" | "insert" | "delete">,
   actorId: string,
   userId: string,
   permission: Permission,

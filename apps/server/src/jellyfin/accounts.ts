@@ -1,21 +1,12 @@
 import { createLocalUser } from "../auth/accounts.ts";
-import {
-  getUserAccess,
-  listGroups,
-  listUsers,
-  writeUserSettings,
-} from "../auth/admin.ts";
+import { listUsers } from "../auth/admin.ts";
 import { AuthError } from "../auth/errors.ts";
 import {
   createIntegrationKey,
   listIntegrationKeys,
   revokeIntegrationKey,
 } from "../auth/integration-keys.ts";
-import {
-  isBuiltInAdmin,
-  setPermissionOverride,
-  setUserGroups,
-} from "../auth/permissions.ts";
+import { isBuiltInAdmin } from "../auth/permissions.ts";
 import {
   changePassword,
   readAccount,
@@ -23,6 +14,7 @@ import {
   removeAccount,
   renameAccount,
   requireAccountAccess,
+  updateAccountAccess,
   writeClientPreference,
 } from "../auth/profile.ts";
 import { readServerId } from "../server-id.ts";
@@ -130,6 +122,13 @@ export const accountRoutes: Route[] = [
     path: "/Users/Password",
     handle: async (context) => {
       const body = await readDto(context.request, "UpdateUserPassword");
+      const currentPassword =
+        typeof body.CurrentPw === "string" ? body.CurrentPw : undefined;
+      if (
+        currentPassword === undefined &&
+        context.caller.credential.kind !== "session"
+      )
+        throw new AuthError("FORBIDDEN");
       await changePassword(
         context.db,
         context.caller.user.id,
@@ -139,7 +138,10 @@ export const accountRoutes: Route[] = [
           : typeof body.NewPw === "string"
             ? body.NewPw
             : "",
-        typeof body.CurrentPw === "string" ? body.CurrentPw : undefined,
+        currentPassword,
+        context.caller.credential.kind === "session"
+          ? context.caller.credential.id
+          : undefined,
       );
       return noContent();
     },
@@ -166,54 +168,32 @@ export const accountRoutes: Route[] = [
     handle: async (context) => {
       const userId = await targetUser(context);
       const policy = await readDto(context.request, "UserPolicy");
-      const { db, caller } = context;
-      if (typeof policy.IsAdministrator === "boolean") {
-        const [access, groups] = await Promise.all([
-          getUserAccess(db, caller.user.id, userId),
-          listGroups(db, caller.user.id),
-        ]);
-        const admins = groups.find(
-          (group) => group.builtIn && group.name === "admins",
-        );
-        if (admins === undefined)
-          throw new Error("Seeded admins group missing.");
-        await setUserGroups(
-          db,
-          caller.user.id,
-          userId,
-          policy.IsAdministrator
-            ? [...new Set([...access.groupIds, admins.id])]
-            : access.groupIds.filter((id) => id !== admins.id),
-        );
-      }
-      if (typeof policy.EnableMediaPlayback === "boolean")
-        await setPermissionOverride(
-          db,
-          caller.user.id,
-          userId,
-          "play",
-          policy.EnableMediaPlayback,
-        );
-      if (typeof policy.EnableSubtitleManagement === "boolean")
-        await setPermissionOverride(
-          db,
-          caller.user.id,
-          userId,
-          "manage-subtitles",
-          policy.EnableSubtitleManagement,
-        );
-      if (typeof policy.RemoteClientBitrateLimit === "number") {
-        const { settings } = await getUserAccess(db, caller.user.id, userId);
-        await writeUserSettings(db, caller.user.id, userId, {
-          ...settings,
-          bitrateCapBps:
-            policy.RemoteClientBitrateLimit > 0
+      await updateAccountAccess(context.db, context.caller.user.id, userId, {
+        administrator:
+          typeof policy.IsAdministrator === "boolean"
+            ? policy.IsAdministrator
+            : undefined,
+        disabled:
+          typeof policy.IsDisabled === "boolean"
+            ? policy.IsDisabled
+            : undefined,
+        permissionOverrides: {
+          play:
+            typeof policy.EnableMediaPlayback === "boolean"
+              ? policy.EnableMediaPlayback
+              : undefined,
+          "manage-subtitles":
+            typeof policy.EnableSubtitleManagement === "boolean"
+              ? policy.EnableSubtitleManagement
+              : undefined,
+        },
+        bitrateCapBps:
+          typeof policy.RemoteClientBitrateLimit === "number"
+            ? policy.RemoteClientBitrateLimit > 0
               ? BigInt(policy.RemoteClientBitrateLimit)
-              : null,
-        });
-      }
-      if (typeof policy.IsDisabled === "boolean")
-        await removeAccount(db, caller.user.id, userId, policy.IsDisabled);
+              : null
+            : undefined,
+      });
       return noContent();
     },
   },

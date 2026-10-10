@@ -21,6 +21,13 @@ const usernamePattern = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const setupCompleteKey = "auth.setupComplete";
 const setupLockKey = 0x70656e646175n;
 
+/** Empty-string hashes mark intentionally passwordless local accounts; null remains external-auth-only. */
+export function hashLocalPassword(password: string) {
+  return password === ""
+    ? Promise.resolve("")
+    : Bun.password.hash(password, { algorithm: "argon2id" });
+}
+
 /** Validates and hashes a local account before its transaction starts. */
 export async function prepareLocalAccount(
   input: LocalAccountInput,
@@ -37,9 +44,7 @@ export async function prepareLocalAccount(
     displayName.includes("\0")
   )
     throw new AuthError("INVALID_INPUT");
-  const passwordHash = await Bun.password.hash(input.password, {
-    algorithm: "argon2id",
-  });
+  const passwordHash = await hashLocalPassword(input.password);
   return { username, displayName, passwordHash };
 }
 

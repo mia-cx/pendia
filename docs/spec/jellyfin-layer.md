@@ -47,4 +47,5 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 - Query parameter names are matched case-insensitively, as ASP.NET does and clients rely on.
 - Specific literal routes precede parameter routes. `/Items/Latest` never resolves as an Item id.
 - Device sessions and ordinary API keys remain hash-only. Administrator-created integration keys also retain an authenticated encrypted copy for Jellyfin's key listing workflow.
-- Password changes verify the owner's current password. Administrators can reset passwords. Account deletion, disabling, and group changes preserve an enabled administrator.
+- Password changes verify the owner's current password and revoke other device sessions atomically. Administrator resets require a session credential. Intentionally passwordless local accounts remain distinct from external-auth accounts.
+- Policy changes apply atomically, including re-enabling disabled accounts. Account deletion, disabling, and group changes preserve an enabled administrator.

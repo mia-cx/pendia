@@ -52,17 +52,26 @@ async function runShard(shard: string[]) {
   ]);
   process.stdout.write(out);
   process.stderr.write(err);
-  return { code, signal: proc.signalCode };
+  // Bun keeps going after a failed test, so a crash can follow a real failure.
+  const failed = /^\(fail\) /m.test(out) || /^\(fail\) /m.test(err);
+  return { code, signal: proc.signalCode, failed };
 }
 
 // Bun itself sometimes segfaults under this suite's load. A crash says nothing
-// about the tests, so a crashed shard runs once more; a failing test does not.
+// about the tests, so a crashed shard runs once more, unless a test in it had
+// already failed.
 const codes = await Promise.all(
   shards
     .filter((shard) => shard.length > 0)
     .map(async (shard) => {
       const first = await runShard(shard);
       if (first.signal === null) return first.code;
+      if (first.failed) {
+        console.error(
+          `\nA test shard crashed (${first.signal}) after a test failed: ${shard.join(" ")}\n`,
+        );
+        return 1;
+      }
       console.error(
         `\nA test shard crashed (${first.signal}); running it again: ${shard.join(" ")}\n`,
       );

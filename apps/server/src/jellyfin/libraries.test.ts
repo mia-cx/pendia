@@ -233,6 +233,19 @@ describe.skipIf(!databaseUrl)("Jellyfin library administration", () => {
         expect(await call(`/Items/${seasonId}`)).toMatchObject({
           IndexNumber: 3,
         });
+        await createVideoFixture(
+          join(showRoot, "Example", "Example S03E01.mkv"),
+          { width: 64, height: 64 },
+        );
+        await expect(
+          scanShowDirectory(db, showLibrary.id, "Example"),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(
+          await db
+            .select()
+            .from(files)
+            .where(eq(files.libraryId, showLibrary.id)),
+        ).toEqual([originalFile]);
         expect(
           (
             await db

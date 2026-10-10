@@ -1,15 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import type { MetadataProvider } from "@thalia/plugin-api";
+import { and, eq, inArray } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
-import { artwork } from "../db/schema/index.ts";
+import { artwork, items, providerIds } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { createJobQueue } from "../jobs/queue.ts";
+import { createJobRegistry } from "../jobs/registry.ts";
 import { updateLibrary } from "../libraries/service.ts";
 import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
-import { setProviderKey } from "../providers/keys.ts";
+import { queueProviderFetch, registerMetadataJobs } from "../metadata/jobs.ts";
+import { removeProviderKey, setProviderKey } from "../providers/keys.ts";
 import { createJellyfinHandler } from "./http.ts";
 import { jellyfinRoutes } from "./routes.ts";
 import { fixturePng, jellyfinLogin } from "./testing.ts";
@@ -28,6 +32,7 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
         });
         await setProviderKey(db, seed.admin.id, "tmdb", "test-key");
         const requested: string[] = [];
+        let artworkAvailable = true;
         const request = (async (input: RequestInfo | URL) => {
           const url = new URL(String(input));
           requested.push(url.href);
@@ -55,8 +60,12 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
                 crew: [],
               },
               external_ids: { imdb_id: "tt0777" },
-              poster_path: "/selected.png",
-              images: { posters: [{ file_path: "/alternate.png" }] },
+              poster_path: artworkAvailable ? "/selected.png" : null,
+              images: {
+                posters: artworkAvailable
+                  ? [{ file_path: "/alternate.png" }]
+                  : [],
+              },
             });
           if (
             url.hostname === "image.example" ||
@@ -158,8 +167,25 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
         const [before] = await db
           .select()
           .from(artwork)
-          .where(eq(artwork.itemId, seed.matrix.id));
+          .where(
+            and(eq(artwork.itemId, seed.matrix.id), eq(artwork.type, "poster")),
+          );
         if (before === undefined) throw new Error("Missing artwork");
+        expect(
+          (
+            await call(
+              `/Items/${seed.matrix.id}/RemoteImages/Download?type=Logo&imageUrl=https%3A%2F%2Fimage.example%2Flogo.png`,
+              "POST",
+            )
+          ).status,
+        ).toBe(204);
+        const [logo] = await db
+          .select()
+          .from(artwork)
+          .where(
+            and(eq(artwork.itemId, seed.matrix.id), eq(artwork.type, "logo")),
+          );
+        if (logo === undefined) throw new Error("Missing logo");
         expect(
           (
             await call(
@@ -172,8 +198,13 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
         const [kept] = await db
           .select()
           .from(artwork)
-          .where(eq(artwork.itemId, seed.matrix.id));
+          .where(
+            and(eq(artwork.itemId, seed.matrix.id), eq(artwork.type, "poster")),
+          );
         expect(kept?.storageKey).toBe(before.storageKey);
+        expect(
+          await db.select().from(artwork).where(eq(artwork.id, logo.id)),
+        ).toHaveLength(1);
         expect(
           await (await call(`/Items/${seed.matrix.id}`)).json(),
         ).toMatchObject({
@@ -210,16 +241,106 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
         const [replaced] = await db
           .select()
           .from(artwork)
-          .where(eq(artwork.itemId, seed.matrix.id));
+          .where(
+            and(eq(artwork.itemId, seed.matrix.id), eq(artwork.type, "poster")),
+          );
         expect(replaced?.id).toBe(before.id);
         expect(replaced?.sourceUrl).toBe(
           "https://image.tmdb.org/t/p/original/selected.png",
         );
         expect(
+          await db.select().from(artwork).where(eq(artwork.id, logo.id)),
+        ).toHaveLength(0);
+        expect(
+          await Bun.file(join(root, seed.films.id, logo.storageKey)).exists(),
+        ).toBe(false);
+        expect(
           requested.filter(
             (value) => new URL(value).hostname === "image.tmdb.org",
           ),
         ).toHaveLength(1);
+        if (replaced === undefined) throw new Error("Missing replaced artwork");
+        artworkAvailable = false;
+        expect(
+          (
+            await call(
+              `/Items/RemoteSearch/Apply/${seed.matrix.id}?replaceAllImages=false`,
+              "POST",
+              results[0],
+            )
+          ).status,
+        ).toBe(204);
+        expect(
+          await db
+            .select()
+            .from(artwork)
+            .where(eq(artwork.itemId, seed.matrix.id)),
+        ).toHaveLength(1);
+        expect(
+          (
+            await call(
+              `/Items/RemoteSearch/Apply/${seed.matrix.id}?replaceAllImages=true`,
+              "POST",
+              results[0],
+            )
+          ).status,
+        ).toBe(204);
+        expect(
+          await db
+            .select()
+            .from(artwork)
+            .where(eq(artwork.itemId, seed.matrix.id)),
+        ).toHaveLength(0);
+        expect(
+          await Bun.file(
+            join(root, seed.films.id, replaced.storageKey),
+          ).exists(),
+        ).toBe(false);
+        expect(
+          (
+            await call(
+              `/Items/${seed.matrix.id}/RemoteImages/Download?type=Primary&imageUrl=https%3A%2F%2Fimage.example%2Fkept.png`,
+              "POST",
+            )
+          ).status,
+        ).toBe(204);
+        const [retained] = await db
+          .select()
+          .from(artwork)
+          .where(eq(artwork.itemId, seed.matrix.id));
+        if (retained === undefined) throw new Error("Missing retained artwork");
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request);
+        const queue = createJobQueue(db);
+        for (const available of [false, true]) {
+          artworkAvailable = available;
+          await removeProviderKey(db, seed.admin.id, "tmdb");
+          await queueProviderFetch(db, seed.matrix.id);
+          expect(
+            (
+              await call(
+                `/Items/RemoteSearch/Apply/${seed.matrix.id}?replaceAllImages=false`,
+                "POST",
+                results[0],
+              )
+            ).status,
+          ).toBe(204);
+          await setProviderKey(db, seed.admin.id, "tmdb", "test-key");
+          const job = await queue.claim(["provider-fetch"]);
+          if (job === undefined) throw new Error("Missing deferred fetch");
+          expect(job.payload).toMatchObject({
+            artworkPolicy: "keep",
+            provider: "tmdb",
+          });
+          await registry.run(job);
+          await queue.complete(job);
+          const [kept] = await db
+            .select()
+            .from(artwork)
+            .where(eq(artwork.itemId, seed.matrix.id));
+          expect(kept?.storageKey).toBe(retained.storageKey);
+          expect(kept?.sourceUrl).toBe(retained.sourceUrl);
+        }
         expect(
           (
             await call(
@@ -230,6 +351,168 @@ describe.skipIf(!databaseUrl)("Jellyfin remote metadata", () => {
             )
           ).status,
         ).toBe(403);
+      }),
+    ));
+
+  test("refreshes derived Show identities while retaining pinned children and selected artwork", () =>
+    withDatabase((db) =>
+      withVideoFixture(async (root) => {
+        const seed = await seedBrowse(db);
+        for (const library of [seed.films, seed.tv, seed.hidden])
+          await updateLibrary(db, seed.admin.id, library.id, {
+            roots: [{ id: library.rootId, path: join(root, library.id) }],
+          });
+        await mkdir(join(root, seed.tv.id, "Severance"), { recursive: true });
+        await db
+          .update(items)
+          .set({ metadataState: "matched" })
+          .where(
+            inArray(items.id, [
+              seed.show.id,
+              seed.seasonOne.id,
+              seed.episodeOne.id,
+              seed.episodeTwo.id,
+            ]),
+          );
+        await db.insert(providerIds).values([
+          { itemId: seed.show.id, provider: "mock", value: "old-show" },
+          {
+            itemId: seed.seasonOne.id,
+            provider: "mock",
+            value: "old-season",
+            metadataDerived: true,
+          },
+          {
+            itemId: seed.episodeOne.id,
+            provider: "mock",
+            value: "old-episode",
+            metadataDerived: true,
+          },
+          {
+            itemId: seed.episodeTwo.id,
+            provider: "mock",
+            value: "pinned-episode",
+            metadataDerived: false,
+          },
+        ]);
+        const searched: Parameters<MetadataProvider["search"]>[0][] = [];
+        const provider: MetadataProvider = {
+          id: "mock",
+          kinds: ["show", "season", "episode"],
+          async search(query) {
+            searched.push(query);
+            return [
+              {
+                providerId: `new-${query.kind}-${query.show?.episodeNumber ?? query.show?.seasonNumber}`,
+                title: "New child",
+                year: 2026,
+                confidence: 1,
+              },
+            ];
+          },
+          async fetch({ providerId }) {
+            return {
+              title: `Remote ${providerId}`,
+              overview: null,
+              year: 2026,
+              contentRating: null,
+              genres: [],
+              credits: [],
+              artwork: [
+                { type: "poster", url: "https://image.example/new.png" },
+              ],
+              providerIds: { mock: providerId },
+              status: "ended",
+            };
+          },
+        };
+        const plugins = { metadataProviders: async () => [provider] };
+        const request = (async (_input: RequestInfo | URL) =>
+          new Response(fixturePng)) as typeof fetch;
+        const handle = createJellyfinHandler(
+          db,
+          jellyfinRoutes(createArtworkHandler(db), createHlsHandler(db), {
+            plugins,
+            request,
+          }),
+        );
+        const send = (request: Request) => handle(request, "127.0.0.1");
+        const token = await jellyfinLogin(
+          send,
+          'MediaBrowser Client="Metadata", Device="Browser", DeviceId="metadata-show"',
+          "admin",
+          "admin-pass",
+        );
+        await queueProviderFetch(db, seed.show.id);
+        const response = await send(
+          new Request(
+            `http://thalia.test/Items/RemoteSearch/Apply/${seed.show.id}?replaceAllImages=false`,
+            {
+              method: "POST",
+              headers: {
+                "X-Emby-Token": token,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                ProviderIds: { Mock: "new-show" },
+                SearchProviderName: "mock",
+              }),
+            },
+          ),
+        );
+        expect(response?.status).toBe(204);
+        const registry = createJobRegistry();
+        registerMetadataJobs(db, registry, request, plugins);
+        const queue = createJobQueue(db);
+        const job = await queue.claim(["provider-fetch"]);
+        if (job === undefined) throw new Error("Missing Show refresh");
+        expect(job.payload).toMatchObject({
+          provider: "mock",
+          artworkPolicy: "keep",
+        });
+        await registry.run(job);
+        await queue.complete(job);
+        const ids = await db
+          .select({
+            itemId: providerIds.itemId,
+            value: providerIds.value,
+            derived: providerIds.metadataDerived,
+          })
+          .from(providerIds)
+          .where(eq(providerIds.provider, "mock"));
+        expect(ids).toContainEqual({
+          itemId: seed.show.id,
+          value: "new-show",
+          derived: false,
+        });
+        expect(ids).toContainEqual({
+          itemId: seed.seasonOne.id,
+          value: "new-season-1",
+          derived: true,
+        });
+        expect(ids).toContainEqual({
+          itemId: seed.episodeOne.id,
+          value: "new-episode-1",
+          derived: true,
+        });
+        expect(ids).toContainEqual({
+          itemId: seed.episodeTwo.id,
+          value: "pinned-episode",
+          derived: false,
+        });
+        expect(
+          searched.every(
+            (query) => query.show?.providerIds.mock === "new-show",
+          ),
+        ).toBe(true);
+        expect(searched.some((query) => query.show?.episodeNumber === 2)).toBe(
+          false,
+        );
+        const [poster] = await db
+          .select()
+          .from(artwork)
+          .where(eq(artwork.id, seed.showPoster.id));
+        expect(poster?.storageKey).toBe(seed.showPoster.storageKey);
       }),
     ));
 });

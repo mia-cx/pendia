@@ -15,6 +15,7 @@ import {
   baseItemDto,
   browseSelection,
   libraryDto,
+  providerIdsDto,
   viewsResult,
 } from "./items.ts";
 import { requiredGuid, ticksPerSecond, toGuid } from "./request.ts";
@@ -148,6 +149,7 @@ async function people(context: UserContext, identities = false) {
           Id: toGuid(person.id),
           Name: person.name,
           Overview: person.overview,
+          ProviderIds: providerIdsDto(person.providerIds),
           Type: "Person",
           IsFolder: true,
           ImageTags: {},

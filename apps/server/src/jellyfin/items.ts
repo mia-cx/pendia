@@ -57,6 +57,13 @@ const date = (day: string | null) =>
 const capitalised = (name: string) =>
   `${name.charAt(0).toUpperCase()}${name.slice(1)}`;
 
+/** Converts core provider names to the dictionary keys used by item and person DTOs. */
+export function providerIdsDto(ids: Record<string, string>) {
+  return Object.fromEntries(
+    Object.entries(ids).map(([name, value]) => [capitalised(name), value]),
+  );
+}
+
 /** Builds a Jellyfin UserItemDataDto from the caller's marks on an Item view. */
 export function userData(view: ItemView) {
   const { marks, durationSeconds } = view;
@@ -106,12 +113,7 @@ export function baseItemDto(view: ItemView, serverId: string) {
     IndexNumberEnd: view.episodeEndNumber ?? undefined,
     ParentIndexNumber:
       view.kind === "episode" ? (view.seasonNumber ?? undefined) : undefined,
-    ProviderIds: Object.fromEntries(
-      Object.entries(view.providerIds).map(([name, value]) => [
-        capitalised(name),
-        value,
-      ]),
-    ),
+    ProviderIds: providerIdsDto(view.providerIds),
     IsFolder: !playable,
     // Roots sit in their library's view, as Jellyfin's CollectionFolder.
     ParentId: toGuid(view.parentId ?? view.libraryId),
@@ -473,6 +475,7 @@ export const browseRoutes: Route[] = [
             Id: toGuid(person.id),
             Name: person.name,
             Overview: person.overview,
+            ProviderIds: providerIdsDto(person.providerIds),
             Type: "Person",
             ServerId: toGuid(serverId),
             IsFolder: true,

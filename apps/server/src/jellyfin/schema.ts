@@ -3,7 +3,7 @@ import addFormats from "ajv-formats";
 import { AuthError } from "../auth/errors.ts";
 import { readJsonObject } from "../auth/http.ts";
 import type { JsonObject } from "../db/schema/common.ts";
-import { openapi } from "./openapi.ts";
+import { openapi, resolveSchema, type Schema } from "./openapi.ts";
 import { parseGuid } from "./request.ts";
 
 /** Converts OpenAPI 3.0 nullable refs and compositions into JSON Schema unions. */
@@ -48,7 +48,44 @@ contractValidator.addSchema({
 });
 const validators = new Map<string, ValidateFunction<JsonObject>>();
 
-/** Reads an object DTO with case-insensitive top-level names, ignoring unknown fields as ASP.NET does. */
+function dtoSchema(input: Schema): Schema {
+  const schema = resolveSchema(input);
+  if (schema.allOf?.length === 1) return dtoSchema(schema.allOf[0] ?? {});
+  return schema;
+}
+
+function canonicalDto(value: unknown, input: Schema): unknown {
+  const schema = dtoSchema(input);
+  if (Array.isArray(value))
+    return value.map((entry) => canonicalDto(entry, schema.items ?? {}));
+  if (value === null || typeof value !== "object") return value;
+  if (schema.properties === undefined) {
+    if (typeof schema.additionalProperties !== "object") return value;
+    const entries = schema.additionalProperties;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        canonicalDto(entry, entries),
+      ]),
+    );
+  }
+  const fields = new Map(
+    Object.entries(schema.properties).map(([key, field]) => [
+      key.toLowerCase(),
+      { key, field },
+    ]),
+  );
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, entry]) => {
+      const canonical = fields.get(key.toLowerCase());
+      return canonical === undefined
+        ? []
+        : [[canonical.key, canonicalDto(entry, canonical.field)]];
+    }),
+  );
+}
+
+/** Reads an object DTO with case-insensitive names at every nesting level, ignoring unknown fields as ASP.NET does. */
 export async function readDto(
   request: Request,
   name: string,
@@ -56,16 +93,8 @@ export async function readDto(
   const schema = openapi.components.schemas[name];
   if (schema?.properties === undefined)
     throw new Error(`Unknown object DTO ${name}.`);
-  const fields = new Map(
-    Object.keys(schema.properties).map((key) => [key.toLowerCase(), key]),
-  );
   const input = await readJsonObject(request, 262_144);
-  const value = Object.fromEntries(
-    Object.entries(input).flatMap(([key, value]) => {
-      const canonical = fields.get(key.toLowerCase());
-      return canonical === undefined ? [] : [[canonical, value]];
-    }),
-  );
+  const value = canonicalDto(input, schema);
   const validate =
     validators.get(name) ??
     contractValidator.compile<JsonObject>({

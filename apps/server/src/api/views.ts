@@ -548,6 +548,10 @@ export async function listContributorCredits(
       id: contributors.id,
       name: contributors.name,
       overview: contributors.overview,
+      providerIds: sql<Record<string, string>>`(
+        select coalesce(jsonb_object_agg(${providerIds.provider}, ${providerIds.value}), '{}'::jsonb)
+        from ${providerIds} where ${providerIds.contributorId} = ${contributors.id}
+      )`,
       itemId: credits.itemId,
       role: credits.role,
       character: credits.character,

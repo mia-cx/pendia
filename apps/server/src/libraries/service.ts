@@ -13,6 +13,7 @@ import {
 import { AuthError } from "../auth/errors.ts";
 import { requirePermission } from "../auth/permissions.ts";
 import type { Database } from "../db/client.ts";
+import type { JsonValue } from "../db/schema/common.ts";
 import {
   artwork,
   files,
@@ -20,7 +21,9 @@ import {
   jobs,
   libraries,
   libraryRoots,
+  providerIds,
   scanFailures,
+  settings,
   versions,
 } from "../db/schema/index.ts";
 import type { DeletedArtworkFile } from "../db/tree.ts";
@@ -30,6 +33,7 @@ import {
   artworkStoreConfig,
 } from "../metadata/artwork-backends.ts";
 import { removeArtworkFiles } from "../metadata/artwork-store.ts";
+import { queueProviderFetch } from "../metadata/jobs.ts";
 import { removeFile } from "./changes.ts";
 import { libraryConcurrencyKey } from "./jobs.ts";
 import { rootsOf } from "./roots.ts";
@@ -37,6 +41,7 @@ import { pruneEmptiedItems } from "./scan.ts";
 import { enqueueScan } from "./scan-payload.ts";
 
 const maxNameLength = 128;
+const preferenceKey = (id: string) => `library-preferences:${id}`;
 
 /** The advisory lock class serialising root writes, so overlap checks see every committed root. */
 const rootsLockClass = 0x726f6f74;
@@ -369,6 +374,7 @@ export async function deleteLibrary(
         ),
       );
     await tx.delete(libraries).where(eq(libraries.id, id));
+    await tx.delete(settings).where(eq(settings.key, preferenceKey(id)));
     // Only colocated keys resolve in a root, and those are not removed here.
     return stored.map((row) => ({ ...row, rootPaths: [""] }));
   });
@@ -390,6 +396,92 @@ export async function scanLibrary(db: Database, actorId: string, id: string) {
     { concurrencyKey: libraryConcurrencyKey(id) },
   );
   return { jobId: job.id };
+}
+
+/** Reads opaque client preferences for a managed library, independently of its roots and medium. */
+export async function readLibraryPreference(
+  db: Database,
+  actorId: string,
+  id: string,
+) {
+  await getLibrary(db, actorId, id);
+  const [row] = await db
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, preferenceKey(id)));
+  return row?.value ?? null;
+}
+
+/** Stores validated client preferences without allowing them to replace the library's core identity or roots. */
+export async function writeLibraryPreference(
+  db: Database,
+  actorId: string,
+  id: string,
+  value: JsonValue,
+) {
+  await requirePermission(db, actorId, "manage-libraries");
+  await db.transaction(async (tx) => {
+    const [library] = await tx
+      .select({ id: libraries.id })
+      .from(libraries)
+      .where(eq(libraries.id, id))
+      .for("update");
+    if (library === undefined) throw new AuthError("NOT_FOUND");
+    await tx
+      .insert(settings)
+      .values({ key: preferenceKey(id), value })
+      .onConflictDoUpdate({ target: settings.key, set: { value } });
+  });
+}
+
+/** Queues scans for affected folders/medium and refreshes items named by external provider notifications. */
+export async function rescanLibraries(
+  db: Database,
+  actorId: string,
+  input: {
+    medium?: "movies" | "shows";
+    paths?: readonly string[];
+    providerIds?: Record<string, string>;
+  } = {},
+) {
+  const managed = await listLibraries(db, actorId);
+  const selected = managed.filter(
+    (library) =>
+      (input.medium === undefined || library.medium === input.medium) &&
+      (input.paths === undefined ||
+        input.paths.some((path) =>
+          library.roots.some(
+            (root) =>
+              contains(root.path, resolve(path)) ||
+              contains(resolve(path), root.path),
+          ),
+        )),
+  );
+  const ids = Object.entries(input.providerIds ?? {});
+  if (ids.length && selected.length) {
+    const matches = await db
+      .selectDistinct({ id: items.id })
+      .from(items)
+      .innerJoin(providerIds, eq(providerIds.itemId, items.id))
+      .where(
+        and(
+          inArray(
+            items.libraryId,
+            selected.map((library) => library.id),
+          ),
+          or(
+            ...ids.map(([provider, value]) =>
+              and(
+                eq(providerIds.provider, provider),
+                eq(providerIds.value, value),
+              ),
+            ),
+          ),
+        ),
+      );
+    for (const item of matches) await queueProviderFetch(db, item.id, 1);
+  }
+  for (const library of selected) await scanLibrary(db, actorId, library.id);
 }
 
 /** Reports one scan run's counts and newest job for a caller holding manage-libraries. */

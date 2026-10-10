@@ -3,10 +3,9 @@ import { listVersionViews } from "../api/views.ts";
 import { AuthError } from "../auth/errors.ts";
 import { verifyPlaybackToken } from "../auth/playback-tokens.ts";
 import { authenticate } from "../auth/sessions.ts";
-import { locateVersionFile, serveVersionFile } from "../playback/direct.ts";
-import { planPlayback, toSubtitleStream } from "../playback/planning.ts";
+import { serveVersionFile } from "../playback/direct.ts";
+import { planPlayback } from "../playback/planning.ts";
 import { parseHlsName } from "../playback/playlists.ts";
-import { readWebvtt } from "../transcoder/subtitles.ts";
 import { browseAsUser, browseUser } from "./browse.ts";
 import { json, noTimeouts, type RequestContext, type Route } from "./http.ts";
 import { mediaSource, type PlannedSource } from "./media.ts";
@@ -34,7 +33,7 @@ export const jellyfinTokenLifetimeSeconds = 24 * 60 * 60;
  * `ApiKey` or `api_key`, or the playback token Thalia wrote into the URL
  * beside its PlaySessionId.
  */
-async function mediaUserId(
+export async function mediaUserId(
   { db, client, query, url }: RequestContext,
   itemId: string,
 ) {
@@ -103,32 +102,8 @@ async function sessionHls(
   return response;
 }
 
-async function subtitle(context: RequestContext) {
-  const { db, params, request } = context;
-  const itemId = requiredGuid(params.id);
-  const index = Number(params.index);
-  const userId = await mediaUserId(context, itemId);
-  const version = await versionOf(context, userId, itemId, params.source);
-  // ffmpeg numbers subtitle Streams among themselves; Jellyfin by File index.
-  const subtitles = version.streams.filter(
-    (stream) => stream.kind === "subtitle",
-  );
-  const ordinal = subtitles.findIndex((stream) => stream.index === index);
-  const stream = subtitles[ordinal];
-  if (stream === undefined || toSubtitleStream(stream).kind !== "text")
-    throw new AuthError("NOT_FOUND");
-  const { path } = await locateVersionFile(db, userId, itemId, version.id);
-  if (path === undefined) throw new AuthError("NOT_FOUND");
-  return new Response(await readWebvtt(path, ordinal, request.signal), {
-    headers: {
-      "content-type": "text/vtt; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
-}
-
 /**
- * PlaybackInfo, the direct stream, the HLS routes and the subtitle route.
+ * PlaybackInfo, the direct stream, and the HLS routes.
  * Media routes are anonymous to the route table because players fetch them
  * without headers; each checks its own credential.
  */
@@ -185,6 +160,9 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
               : subtitleIndex < 0
                 ? null
                 : subtitleIndex;
+          const externalSubtitle = version.externalSubtitles.some(
+            (track) => track.index === subtitleStreamIndex,
+          );
           let planned: PlannedSource | null = null;
           let sessionId: string | undefined;
           try {
@@ -203,7 +181,11 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
                   : { audioStreamIndex: audioIndex }),
                 ...(subtitleStreamIndex === undefined
                   ? {}
-                  : { subtitleStreamIndex }),
+                  : {
+                      subtitleStreamIndex: externalSubtitle
+                        ? null
+                        : subtitleStreamIndex,
+                    }),
               },
               { request, peerAddress },
             );
@@ -338,12 +320,6 @@ export function playbackRoutes(hls: HlsHandler): Route[] {
             context.params.variant,
             context.params.name ?? "",
           ),
-      },
-      {
-        method: "GET",
-        path: "/Videos/{id}/{source}/Subtitles/{index}/Stream.vtt",
-        anonymous: true,
-        handle: subtitle,
       },
     ] satisfies Route[]
   ).map((route) =>

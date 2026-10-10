@@ -1,8 +1,10 @@
 import type { createHlsHandler } from "../api/hls.ts";
 import type { createArtworkHandler } from "../metadata/artwork-http.ts";
 import type { MetadataProviderOptions } from "../metadata/providers.ts";
+import type { SubtitleProviderOptions } from "../subtitles/providers.ts";
 import { accountRoutes, preferenceRoutes } from "./accounts.ts";
 import { additionalBrowseRoutes, browseAsUser } from "./browse.ts";
+import { neutralAdapters } from "./coverage.ts";
 import { deviceRoutes } from "./devices.ts";
 import { type RequestContext, type Route, routePattern } from "./http.ts";
 import { imageRoutes } from "./images.ts";
@@ -14,6 +16,7 @@ import { accessOf, operations } from "./openapi.ts";
 import { playbackRoutes } from "./playback.ts";
 import { progressRoutes } from "./progress.ts";
 import { quickConnectRoutes } from "./quick-connect.ts";
+import { subtitleRoutes } from "./subtitles.ts";
 import { systemRoutes } from "./system.ts";
 import { userRoutes } from "./users.ts";
 
@@ -22,6 +25,7 @@ export function jellyfinRoutes(
   artwork: ReturnType<typeof createArtworkHandler>,
   hls: ReturnType<typeof createHlsHandler>,
   metadata: MetadataProviderOptions = {},
+  subtitles: SubtitleProviderOptions = {},
 ): Route[] {
   const implemented = [
     ...[...additionalBrowseRoutes, ...browseRoutes].map(browseAsUser),
@@ -36,6 +40,7 @@ export function jellyfinRoutes(
     ...imageRoutes(artwork),
     ...playbackRoutes(hls),
     ...progressRoutes,
+    ...subtitleRoutes(subtitles),
   ];
   const shape = (path: string) =>
     path.replace(/\{[^}]+\}/g, "{}").toLowerCase();
@@ -54,6 +59,9 @@ export function jellyfinRoutes(
     if (existing !== undefined) {
       // Core adapters predate the official parameter names. Keep their local names at the boundary.
       const pattern = routePattern(existing.path);
+      const behaviour = neutralAdapters.has(operation.operationId)
+        ? "neutral"
+        : "real";
       const params = (context: RequestContext) =>
         Object.fromEntries(
           Object.entries(pattern.exec(context.url.pathname)?.groups ?? {}).map(
@@ -64,12 +72,14 @@ export function jellyfinRoutes(
         return {
           ...existing,
           path: operation.path,
+          behaviour,
           handle: (context: RequestContext) =>
             existing.handle({ ...context, params: params(context) }),
         };
       return {
         ...existing,
         path: operation.path,
+        behaviour,
         admin: access.admin,
         handle: (context) =>
           existing.handle({ ...context, params: params(context) }),
@@ -80,12 +90,14 @@ export function jellyfinRoutes(
         method: operation.method,
         path: operation.path,
         anonymous: true,
+        behaviour: "neutral",
         handle: () => neutralResponse(operation),
       };
     return {
       method: operation.method,
       path: operation.path,
       admin: access.admin,
+      behaviour: "neutral",
       handle: () => neutralResponse(operation),
     };
   });

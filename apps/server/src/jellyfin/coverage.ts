@@ -1,50 +1,29 @@
-import type { ApiOperation } from "./openapi.ts";
+import type { Route } from "./http.ts";
+import { operations } from "./openapi.ts";
 
-/** These tag groups need real core adapters. Each later stack layer removes its explicit gap group. */
-export const gaps: Record<string, string> = {
-  Subtitle: "Exercise real subtitle streams and management where supported.",
-};
-
-/** Library operations completed by the browse layer while administration and file adapters remain explicit gaps. */
-export const coveredOperations = new Set([
-  "RefreshItem",
-  "DeleteItems",
-  "DeleteItem",
-  "GetLibraryOptionsInfo",
-  "PostUpdatedMedia",
-  "PostAddedMovies",
-  "PostUpdatedMovies",
-  "GetPhysicalPaths",
-  "RefreshLibrary",
-  "PostAddedSeries",
-  "PostUpdatedSeries",
-  "GetItems",
-  "GetItem",
-  "GetResumeItems",
-  "GetAncestors",
-  "GetItemCounts",
-  "GetMediaFolders",
-  "GetLatestMedia",
-  "GetRootFolder",
-  "GetSimilarItems",
-  "GetSimilarMovies",
-  "GetSimilarShows",
-  "GetSimilarAlbums",
-  "GetSimilarArtists",
-  "GetSimilarTrailers",
-  "GetItemCollections",
-  "GetThemeMedia",
-  "GetThemeSongs",
-  "GetThemeVideos",
-  "GetIntros",
-  "GetLocalTrailers",
-  "GetSpecialFeatures",
+/** Hand-written adapters that describe defaults or accept writes for absent core concepts. */
+export const neutralAdapters = new Set([
+  "GetConfiguration",
+  "GetNamedConfiguration",
+  "GetPasswordResetProviders",
+  "ForgotPassword",
+  "ForgotPasswordPin",
+  "UpdateItemContentType",
+  "GetPublicUsers",
 ]);
 
-/** A visible gap is never silently counted as neutral coverage. */
-export function gapOf(operation: ApiOperation) {
-  if (coveredOperations.has(operation.operationId)) return undefined;
-  return operation.tags
-    .map((tag) => gaps[tag])
-    .find((reason) => reason !== undefined);
+/** Counts every pinned operation once; a missing or unclassified route remains a visible gap. */
+export function coverageSummary(routes: readonly Route[]) {
+  const registered = new Map(
+    routes.map((route) => [`${route.method} ${route.path}`, route]),
+  );
+  const summary = { total: operations.length, real: 0, neutral: 0, gaps: 0 };
+  for (const operation of operations) {
+    const behaviour = registered.get(
+      `${operation.method} ${operation.path}`,
+    )?.behaviour;
+    if (behaviour === undefined) summary.gaps++;
+    else summary[behaviour]++;
+  }
+  return summary;
 }

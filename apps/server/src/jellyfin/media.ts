@@ -178,9 +178,30 @@ export function mediaSource(
     RequiresLooping: false,
     SupportsProbing: true,
     VideoType: "VideoFile",
-    MediaStreams: version.streams.map((stream) =>
-      mediaStream(itemId, version.id, stream, planned ?? undefined),
-    ),
+    MediaStreams: [
+      ...version.streams.map((stream) =>
+        mediaStream(itemId, version.id, stream, planned ?? undefined),
+      ),
+      ...version.externalSubtitles.map((track) => ({
+        Index: track.index,
+        Type: "Subtitle",
+        Codec: track.format === "srt" ? "subrip" : track.format,
+        Language: track.language,
+        IsExternal: true,
+        IsTextSubtitleStream: true,
+        IsForced: track.forced === true,
+        IsHearingImpaired: track.hearingImpaired === true,
+        IsDefault: false,
+        SupportsExternalStream: true,
+        DeliveryMethod: "External",
+        DeliveryUrl: subtitleUrl(
+          itemId,
+          version.id,
+          track.index,
+          planned?.query ?? null,
+        ),
+      })),
+    ],
     MediaAttachments: [],
     Formats: [],
     Bitrate:

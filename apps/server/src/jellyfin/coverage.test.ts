@@ -12,6 +12,8 @@ import { issueSession } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
 import { contributors, credits, items } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
+import { insertItem } from "../db/tree.ts";
+import { createLibrary } from "../libraries/service.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { coveredOperations, gapOf, gaps } from "./coverage.ts";
 import { createJellyfinHandler } from "./http.ts";
@@ -76,6 +78,78 @@ async function fixtureOf(
   operation: ApiOperation,
 ): Promise<Fixture> {
   const id = operation.operationId;
+  if (id === "AddVirtualFolder")
+    return {
+      parameters: {
+        name: "Coverage added",
+        collectionType: "movies",
+        paths: `${Bun.env.TMPDIR}/coverage-added`,
+      },
+      body: { LibraryOptions: {} },
+    };
+  if (
+    [
+      "RemoveVirtualFolder",
+      "RenameVirtualFolder",
+      "UpdateLibraryOptions",
+      "AddMediaPath",
+      "RemoveMediaPath",
+      "UpdateMediaPath",
+    ].includes(id)
+  ) {
+    const root = `${Bun.env.TMPDIR}/coverage-${id}-${Bun.randomUUIDv7()}`;
+    const library = await createLibrary(db, adminId, {
+      name: id,
+      medium: "movies",
+      roots:
+        id === "RemoveMediaPath"
+          ? [`${root}/first`, `${root}/second`]
+          : [`${root}/first`],
+    });
+    return {
+      parameters: {
+        name: library.name,
+        newName: "Coverage renamed",
+        path: `${root}/second`,
+      },
+      body:
+        id === "UpdateLibraryOptions"
+          ? {
+              Id: library.id,
+              LibraryOptions: { PathInfos: [{ Path: `${root}/first` }] },
+            }
+          : {
+              Name: library.name,
+              Path: `${root}/second`,
+              PathInfo: {
+                Path:
+                  id === "UpdateMediaPath" ? `${root}/first` : `${root}/second`,
+              },
+            },
+    };
+  }
+  if (["DeleteItems", "DeleteItem", "UpdateItem"].includes(id)) {
+    const library = await createLibrary(db, adminId, {
+      name: `${id} fixture`,
+      medium: "movies",
+      roots: [`${Bun.env.TMPDIR}/coverage-items-${id}`],
+    });
+    const item = await insertItem(db, {
+      libraryId: library.id,
+      kind: "movie",
+      title: "Coverage subject",
+      canonicalFolder: ".",
+      extension: {},
+    });
+    return {
+      parameters: { itemId: item.id, ids: item.id },
+      body: {
+        Name: "Coverage edited",
+        Overview: "Edited through Jellyfin",
+        ProviderIds: { Tmdb: "123" },
+      },
+    };
+  }
   if (id === "CreateKey") return { parameters: { app: "Coverage" } };
   if (id === "RevokeKey") {
     const key = await createIntegrationKey(db, adminId, "Coverage revoke");

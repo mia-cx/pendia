@@ -3,10 +3,7 @@ import type { ApiOperation } from "./openapi.ts";
 /** These tag groups need real core adapters. Each later stack layer removes its explicit gap group. */
 export const gaps: Record<string, string> = {
   Session: "Read sessions and exercise playback reports.",
-  Library:
-    "Complete library administration, refresh, notifications, and file routes.",
-  LibraryStructure: "Adapt core library management.",
-  ItemUpdate: "Adapt core metadata updates.",
+  Library: "Exercise real item downloads and files.",
   ItemLookup: "Adapt core metadata lookup where supported.",
   Image: "Exercise real artwork and HEAD/image aliases.",
   MediaInfo: "Exercise GET/POST playback info and bitrate test.",
@@ -18,6 +15,17 @@ export const gaps: Record<string, string> = {
 
 /** Library operations completed by the browse layer while administration and file adapters remain explicit gaps. */
 export const coveredOperations = new Set([
+  "RefreshItem",
+  "DeleteItems",
+  "DeleteItem",
+  "GetLibraryOptionsInfo",
+  "PostUpdatedMedia",
+  "PostAddedMovies",
+  "PostUpdatedMovies",
+  "GetPhysicalPaths",
+  "RefreshLibrary",
+  "PostAddedSeries",
+  "PostUpdatedSeries",
   "GetItems",
   "GetItem",
   "GetResumeItems",

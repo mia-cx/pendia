@@ -2,12 +2,7 @@ import type { ApiOperation } from "./openapi.ts";
 
 /** These tag groups need real core adapters. Each later stack layer removes its explicit gap group. */
 export const gaps: Record<string, string> = {
-  System: "Complete server identity and configuration defaults.",
-  Authentication: "Complete local auth, API keys, and Quick Connect fixtures.",
-  User: "Read and update real users and preferences.",
   UserView: "Real views and grouping options.",
-  Device: "Read real devices and session revocation.",
-  DisplayPreference: "Persist per-user display preferences.",
   Session: "Read sessions and exercise playback reports.",
   Library:
     "Complete browse, latest, counts, ancestors, similar, refresh, and file routes.",

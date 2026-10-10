@@ -29,7 +29,7 @@ describe.skipIf(!databaseUrl)("jellyfin auth", () => {
         expect(contractErrors("PublicSystemInfo", publicBody)).toEqual([]);
         expect(publicBody).toMatchObject({
           ProductName: "Jellyfin Server",
-          Version: "10.10.7",
+          Version: "12.2.0",
           ServerName: "Thalia",
         });
         expect(publicBody.Id).toMatch(/^[0-9a-f]{32}$/);

@@ -407,7 +407,13 @@ export async function applyMetadata(
   const enabled =
     selectedProvider === undefined
       ? providersForLibrary(config, item.libraryId)
-      : [selectedProvider];
+      : [
+          // A Show's manual choice must not override a child's explicit identity.
+          ...providers
+            .filter((provider) => show !== undefined && pinned.has(provider.id))
+            .map((provider) => provider.id),
+          selectedProvider,
+        ];
   for (const providerId of enabled) {
     const provider = providers.find((candidate) => candidate.id === providerId);
     if (provider === undefined || !provider.kinds.includes(item.kind)) continue;

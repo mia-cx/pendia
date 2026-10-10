@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { eq } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
 import { createLocalUser } from "../auth/accounts.ts";
@@ -9,9 +10,10 @@ import {
 } from "../auth/quick-connect.ts";
 import { issueSession } from "../auth/sessions.ts";
 import type { Database } from "../db/client.ts";
+import { contributors, credits, items } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
-import { gapOf, gaps } from "./coverage.ts";
+import { coveredOperations, gapOf, gaps } from "./coverage.ts";
 import { createJellyfinHandler } from "./http.ts";
 import {
   type ApiOperation,
@@ -201,6 +203,11 @@ test("registers every operation from the pinned official OpenAPI document", () =
       operations.some((operation) => operation.tags.includes(tag)),
       `Stale gap ${tag}`,
     ).toBe(true);
+  for (const id of coveredOperations)
+    expect(
+      operations.some((operation) => operation.operationId === id),
+      `Stale coverage ${id}`,
+    ).toBe(true);
 });
 
 describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
@@ -209,6 +216,22 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
     () =>
       withDatabase(async (db) => {
         const seeded = await seedBrowse(db);
+        await db
+          .update(items)
+          .set({ genres: ["Science Fiction"], tags: ["Classic"] })
+          .where(eq(items.id, seeded.matrix.id));
+        const [person] = await db
+          .insert(contributors)
+          .values({ name: "Keanu Reeves" })
+          .returning();
+        if (person === undefined) throw new Error("Missing contributor");
+        await db.insert(credits).values({
+          itemId: seeded.matrix.id,
+          contributorId: person.id,
+          role: "actor",
+          order: 0,
+          character: "Neo",
+        });
         const routes = jellyfinRoutes(
           createArtworkHandler(db),
           createHlsHandler(db),
@@ -224,6 +247,15 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
         for (const operation of operations) {
           if (gapOf(operation) !== undefined) continue;
           const fixture = await fixtureOf(db, seeded.admin.id, operation);
+          fixture.parameters = {
+            itemId: seeded.matrix.id,
+            seriesId: seeded.show.id,
+            genreName: "Science Fiction",
+            year: "1999",
+            name: "Keanu Reeves",
+            searchTerm: "Matrix",
+            ...fixture.parameters,
+          };
           const response = await send(requestOf(operation, admin, fixture));
           expect(response, operation.operationId).toBeDefined();
           if (response === undefined) continue;

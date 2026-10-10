@@ -3,7 +3,9 @@ import {
   type ItemView,
   type ItemViewQuery,
   type ItemViewSort,
+  listContributorCredits,
   listItemViews,
+  listLibraryFacets,
   listVersionViews,
   viewableLibraries,
 } from "../api/views.ts";
@@ -12,6 +14,7 @@ import type { Database } from "../db/client.ts";
 import { nextUp } from "../mediums/shows.ts";
 import { continueWatching } from "../playback/marks.ts";
 import { readServerId } from "../server-id.ts";
+import { facetId, personType } from "./facets.ts";
 import { json, type Route, type UserContext } from "./http.ts";
 import { mediaSource } from "./media.ts";
 import {
@@ -91,6 +94,10 @@ export function baseItemDto(view: ItemView, serverId: string) {
     OfficialRating: view.contentRating ?? undefined,
     Overview: view.overview ?? undefined,
     Genres: view.genres,
+    GenreItems: view.genres.map((name) => ({
+      Name: name,
+      Id: facetId("Genre", name),
+    })),
     Tags: view.tags,
     ProductionYear: view.year ?? undefined,
     IndexNumber:
@@ -143,7 +150,7 @@ export function baseItemDto(view: ItemView, serverId: string) {
 }
 
 /** Builds the CollectionFolder a library appears as in Jellyfin's user views. */
-function libraryDto(library: Library, serverId: string) {
+export function libraryDto(library: Library, serverId: string) {
   return {
     Name: library.name,
     ServerId: toGuid(serverId),
@@ -194,9 +201,19 @@ function kindsOf(query: Query): Kind[] | undefined {
   const lowered = (name: string) =>
     new Set(query.list(name).map((value) => value.toLowerCase()));
   const include = lowered("includeItemTypes");
+  for (const value of query.list("type")) include.add(value.toLowerCase());
+  if (query.flag("isMovie") === true) include.add("movie");
+  if (query.flag("isSeries") === true) include.add("series");
   const exclude = lowered("excludeItemTypes");
   const media = lowered("mediaTypes");
-  if (include.size === 0 && exclude.size === 0 && media.size === 0)
+  for (const value of query.list("mediaType")) media.add(value.toLowerCase());
+  if (
+    include.size === 0 &&
+    exclude.size === 0 &&
+    media.size === 0 &&
+    query.flag("isMovie") === undefined &&
+    query.flag("isSeries") === undefined
+  )
     return undefined;
   const kinds = Object.keys(itemTypes) as Kind[];
   const typeOf = (kind: Kind) => itemTypes[kind].toLowerCase();
@@ -204,6 +221,8 @@ function kindsOf(query: Query): Kind[] | undefined {
   return kinds.filter(
     (kind) =>
       (include.size === 0 || include.has(typeOf(kind))) &&
+      (query.flag("isMovie") !== false || kind !== "movie") &&
+      (query.flag("isSeries") !== false || kind !== "show") &&
       !exclude.has(typeOf(kind)) &&
       (media.size === 0 || (media.has("video") && playableKinds.has(kind))),
   );
@@ -243,7 +262,89 @@ function pageOf(query: Query) {
   };
 }
 
-async function viewsResult({ db, caller }: UserContext, query: ItemViewQuery) {
+/** Reads common browse filters once, including library scope and stable genre identifiers. */
+export async function browseSelection({
+  db,
+  caller,
+  query,
+}: UserContext): Promise<ItemViewQuery> {
+  const parent = query.get("parentId");
+  const parentId = parent === undefined ? undefined : requiredGuid(parent);
+  const library = (await viewableLibraries(db, caller.user.id)).find(
+    (row) => row.id === parentId,
+  );
+  const genreIds = new Set(
+    query.list("genreIds").map((value) => toGuid(requiredGuid(value))),
+  );
+  const genres = query.list("genres").flatMap((value) => value.split("|"));
+  if (genreIds.size)
+    genres.push(
+      ...(await listLibraryFacets(db, caller.user.id)).genres.filter((name) =>
+        genreIds.has(facetId("Genre", name)),
+      ),
+    );
+  const people = guids([
+    ...query.list("personIds"),
+    ...query.list("actorIds"),
+    ...query.list("directorIds"),
+    ...query.list("writerIds"),
+  ]);
+  const date = (name: string) => {
+    const value = query.get(name);
+    if (value === undefined) return undefined;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) throw new AuthError("INVALID_INPUT");
+    return parsed.toISOString().slice(0, 10);
+  };
+  return {
+    libraryIds: library === undefined ? undefined : [library.id],
+    ancestorId: library === undefined ? parentId : undefined,
+    ids: query.list("ids").length ? guids(query.list("ids")) : undefined,
+    kinds: kindsOf(query),
+    search: query.get("searchTerm"),
+    genres: genres.length || genreIds.size ? genres : undefined,
+    tags: query.list("tags").length
+      ? query.list("tags").flatMap((value) => value.split("|"))
+      : undefined,
+    years: query.list("years").length
+      ? query.list("years").map((value) => {
+          const year = Number(value);
+          if (!Number.isSafeInteger(year)) throw new AuthError("INVALID_INPUT");
+          return year;
+        })
+      : undefined,
+    contributorIds: people.length ? people : undefined,
+    contributorRoles: query
+      .list("personTypes")
+      .map((role) => role.toLowerCase().replaceAll(/[^a-z]/g, "")),
+    excludeIds: guids(query.list("excludeItemIds")),
+    premiereAfter: date("minPremiereDate"),
+    premiereBefore: date("maxPremiereDate"),
+    indexNumber: query.integer("indexNumber"),
+    seasonNumber: query.integer("parentIndexNumber"),
+    contentRatings: query.list("officialRatings").length
+      ? query.list("officialRatings").flatMap((value) => value.split("|"))
+      : undefined,
+    hasOverview: query.flag("hasOverview"),
+    hasContentRating:
+      query.flag("hasOfficialRating") ?? query.flag("hasParentalRating"),
+    providerNames: ["tmdb", "tvdb", "imdb"].filter(
+      (provider) => query.flag(`has${provider}Id`) === true,
+    ),
+    nameStartsWithOrGreater: query.get("nameStartsWithOrGreater"),
+    nameStartsWith: query.get("nameStartsWith"),
+    nameLessThan: query.get("nameLessThan"),
+    ...marksOf(query),
+    sort: sortOf(query),
+    ...pageOf(query),
+  };
+}
+
+/** Serializes a paged core selection with the Jellyfin total and offset. */
+export async function viewsResult(
+  { db, caller }: UserContext,
+  query: ItemViewQuery,
+) {
   const [page, serverId] = await Promise.all([
     listItemViews(db, caller.user.id, query),
     readServerId(db),
@@ -323,6 +424,7 @@ export const browseRoutes: Route[] = [
       if (kinds?.length === 0)
         return json(queryResult([], 0, pageOf(query).offset));
       return viewsResult(context, {
+        ...(await browseSelection(context)),
         ...(library !== undefined
           ? { libraryIds: [library.id], parentId: recursive ? undefined : null }
           : recursive
@@ -353,15 +455,51 @@ export const browseRoutes: Route[] = [
       const library = libraries.find((candidate) => candidate.id === id);
       if (library !== undefined) return json(libraryDto(library, serverId));
       const [view] = page.items;
-      if (view === undefined) throw new AuthError("NOT_FOUND");
-      if (!playableKinds.has(view.kind))
-        return json(baseItemDto(view, serverId));
+      if (view === undefined) {
+        const person = (await listContributorCredits(db, caller.user.id)).find(
+          (person) => person.id === id,
+        );
+        if (person !== undefined)
+          return json({
+            Id: toGuid(person.id),
+            Name: person.name,
+            Overview: person.overview,
+            Type: "Person",
+            ServerId: toGuid(serverId),
+            IsFolder: true,
+          });
+        const facets = await listLibraryFacets(db, caller.user.id);
+        const facet = [
+          ...facets.genres.map((name) => ({ name, type: "Genre" })),
+          ...facets.years.map((year) => ({ name: String(year), type: "Year" })),
+        ].find((value) => facetId(value.type, value.name) === toGuid(id));
+        if (facet !== undefined)
+          return json({
+            Id: toGuid(id),
+            Name: facet.name,
+            Type: facet.type,
+            IsFolder: true,
+          });
+        throw new AuthError("NOT_FOUND");
+      }
+      const dto = {
+        ...baseItemDto(view, serverId),
+        People: (
+          await listContributorCredits(db, caller.user.id, { ids: [id] })
+        ).map((person) => ({
+          Id: toGuid(person.id),
+          Name: person.name,
+          Role: person.character ?? person.role,
+          Type: personType(person.role),
+        })),
+      };
+      if (!playableKinds.has(view.kind)) return json(dto);
       // Swiftfin and Infuse pick a Version from the detail before they play.
       const sources = (await listVersionViews(db, caller.user.id, id)).map(
         (version) => mediaSource(id, version),
       );
       return json({
-        ...baseItemDto(view, serverId),
+        ...dto,
         MediaSources: sources,
         MediaStreams: sources[0]?.MediaStreams ?? [],
       });
@@ -433,6 +571,7 @@ export const browseRoutes: Route[] = [
         ancestorId: requiredGuid(context.params.id),
         parentId: season === undefined ? undefined : requiredGuid(season),
         kinds: ["episode"],
+        seasonNumber: context.query.integer("season"),
       });
     },
   },

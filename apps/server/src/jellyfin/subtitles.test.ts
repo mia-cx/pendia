@@ -22,6 +22,19 @@ import {
 const header =
   'MediaBrowser Client="Subtitles", Device="Player", DeviceId="subtitles-1"';
 
+const styledAss = [
+  "[Script Info]",
+  "ScriptType: v4.00+",
+  "PlayResX: 64",
+  "PlayResY: 64",
+  "[V4+ Styles]",
+  "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+  "Style: Signs,Courier New,24,&H000000FF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1",
+  "[Events]",
+  "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  "Dialogue: 0,0:00:00.20,0:00:01.60,Signs,,0,0,0,,{\\pos(20,30)\\c&HFF0000&}Styled subtitle.",
+].join("\n");
+
 async function fixture(db: Database, root: string) {
   await mkdir(`${root}/Subtitles (2026)`);
   await createVideoFixture(`${root}/Subtitles (2026)/Subtitles.mkv`, {
@@ -80,6 +93,7 @@ type MediaSource = {
   SupportsDirectPlay: boolean;
   MediaStreams: {
     Index: number;
+    Codec?: string;
     Type: string;
     Language?: string;
     IsExternal?: boolean;
@@ -248,6 +262,46 @@ describe.skipIf(!databaseUrl)("Jellyfin subtitles", () => {
           expect(await listSubtitles(db, f.itemId)).toEqual([
             { language: "en", format: "srt" },
           ]);
+          expect(
+            (
+              await f.call("POST", uploadPath, {
+                Language: "en",
+                Format: "ass",
+                IsForced: false,
+                IsHearingImpaired: false,
+                Data: Buffer.from(styledAss).toString("base64"),
+              })
+            ).status,
+          ).toBe(204);
+          const styledInfo = (await (
+            await f.call("GET", `/Items/${f.id}/PlaybackInfo`)
+          ).json()) as PlaybackInfo;
+          const assTrack = styledInfo.MediaSources[0]?.MediaStreams.find(
+            (stream) => stream.IsExternal && stream.Codec === "ass",
+          );
+          if (assTrack?.DeliveryUrl === undefined)
+            throw new Error("Missing native ASS delivery");
+          const nativeUrl = new URL(assTrack.DeliveryUrl, "http://thalia.test");
+          const native = await f.call(
+            "GET",
+            `${nativeUrl.pathname}?copyTimestamps=true`,
+          );
+          const windowed = await f.call(
+            "GET",
+            `${nativeUrl.pathname}?format=ass&startPositionTicks=5000000&endPositionTicks=10000000`,
+          );
+          const nativeText = await native.text();
+          const windowedText = await windowed.text();
+          expect(native.status).toBe(200);
+          expect(nativeUrl.pathname).toEndWith("Stream.ass");
+          for (const text of [nativeText, windowedText]) {
+            expect(text).toContain("Style: Signs,Courier New");
+            expect(text).toContain("&H000000FF");
+            expect(text).toContain(
+              "{\\pos(20,30)\\c&HFF0000&}Styled subtitle.",
+            );
+          }
+          expect(windowedText).toContain("0:00:00.00,0:00:00.50,Signs");
         }),
       ),
     60_000,
@@ -294,6 +348,50 @@ describe.skipIf(!databaseUrl)("Jellyfin subtitles", () => {
           expect(copiedText).toContain(
             "X-TIMESTAMP-MAP=LOCAL:00:00:00.200,MPEGTS:18000",
           );
+          const trackEvents = await f.call(
+            "GET",
+            `${path}/2000000/Stream.js?endPositionTicks=7000000`,
+          );
+          const headerPlaylist = await f.call(
+            "GET",
+            `${path}/subtitles.m3u8?segmentLength=1`,
+          );
+          const firstSegment = (await headerPlaylist.text())
+            .split("\n")
+            .find((line) => line !== "" && !line.startsWith("#"));
+          if (firstSegment === undefined)
+            throw new Error("Missing subtitle segment");
+          const headerlessSegment = await f.send(
+            new Request(
+              new URL(firstSegment, `http://thalia.test${path}/subtitles.m3u8`),
+            ),
+          );
+          expect({
+            json: trackEvents.status,
+            segment: headerlessSegment.status,
+          }).toEqual({ json: 200, segment: 200 });
+          expect(await trackEvents.json()).toEqual({
+            TrackEvents: [
+              {
+                Id: "0",
+                Text: "Fixture",
+                StartPositionTicks: 0,
+                EndPositionTicks: 5000000,
+              },
+            ],
+          });
+          const json = await f.call(
+            "GET",
+            `${path}/Stream.json?copyTimestamps=true`,
+            undefined,
+            f.viewer,
+          );
+          expect(json.status).toBe(200);
+          expect((await json.json()).TrackEvents[0]).toMatchObject({
+            Text: "Fixture",
+            StartPositionTicks: 0,
+            EndPositionTicks: 8000000,
+          });
           expect(
             (
               await f.call(

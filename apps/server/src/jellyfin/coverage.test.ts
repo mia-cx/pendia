@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import Ajv from "ajv";
-import addFormats from "ajv-formats";
 import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
+import { createLocalUser } from "../auth/accounts.ts";
+import { createIntegrationKey } from "../auth/integration-keys.ts";
+import {
+  authorizeQuickConnect,
+  initiateQuickConnect,
+} from "../auth/quick-connect.ts";
+import { issueSession } from "../auth/sessions.ts";
+import type { Database } from "../db/client.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { gapOf, gaps } from "./coverage.ts";
@@ -17,51 +23,29 @@ import {
   specificationSource,
 } from "./openapi.ts";
 import { jellyfinRoutes } from "./routes.ts";
+import { contractValidator as ajv, jsonSchema } from "./schema.ts";
 import { jellyfinLogin } from "./testing.ts";
 
-// OpenAPI 3.0's nullable applies to refs/allOf too. JSON Schema expresses that union with anyOf.
-function jsonSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(jsonSchema);
-  if (value === null || typeof value !== "object") return value;
-  const fields = value as Record<string, unknown>;
-  const schema = Object.fromEntries(
-    Object.entries(fields)
-      .filter(([name]) => name !== "nullable")
-      .map(([name, field]) => [
-        name,
-        name === "$ref" && typeof field === "string"
-          ? `jellyfin${field}`
-          : jsonSchema(field),
-      ]),
-  );
-  return fields.nullable === true
-    ? { anyOf: [schema, { type: "null" }] }
-    : schema;
-}
+type Fixture = { parameters?: Record<string, string>; body?: unknown };
+const header =
+  'MediaBrowser Client="Coverage", Device="Coverage", DeviceId="coverage"';
 
-const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: true });
-addFormats(ajv);
-for (const format of [
-  "int32",
-  "int64",
-  "float",
-  "double",
-  "binary",
-  "byte",
-  "text",
-])
-  ajv.addFormat(format, true);
-ajv.addSchema({
-  $id: "jellyfin",
-  components: { schemas: jsonSchema(openapi.components.schemas) },
-});
-
-function requestOf(operation: ApiOperation, token: string) {
+function requestOf(
+  operation: ApiOperation,
+  token: string,
+  fixture: Fixture = {},
+) {
   let path = operation.path;
   const query = new URLSearchParams();
   for (const parameter of operation.parameters ?? []) {
-    if (!parameter.required) continue;
-    const value = String(defaultValue(parameter.schema)) || "sample";
+    if (
+      !parameter.required &&
+      fixture.parameters?.[parameter.name] === undefined
+    )
+      continue;
+    const value =
+      fixture.parameters?.[parameter.name] ??
+      (String(defaultValue(parameter.schema)) || "sample");
     if (parameter.in === "path")
       path = path.replace(`{${parameter.name}}`, encodeURIComponent(value));
     if (parameter.in === "query") query.set(parameter.name, value);
@@ -69,14 +53,112 @@ function requestOf(operation: ApiOperation, token: string) {
   const bodySchema = operation.requestBody?.content["application/json"]?.schema;
   return new Request(`http://thalia.test${path}?${query}`, {
     method: operation.method,
-    headers: { "X-Emby-Token": token, "Content-Type": "application/json" },
+    headers: {
+      "X-Emby-Token": token,
+      "Content-Type": "application/json",
+      Authorization: header,
+    },
     body:
       bodySchema === undefined ||
       operation.method === "GET" ||
       operation.method === "HEAD"
         ? undefined
-        : JSON.stringify(defaultValue(bodySchema)),
+        : JSON.stringify(fixture.body ?? defaultValue(bodySchema)),
   });
+}
+
+/** Valid seeded subjects let the generated contract check exercise real writes without revoking its own caller. */
+async function fixtureOf(
+  db: Database,
+  adminId: string,
+  operation: ApiOperation,
+): Promise<Fixture> {
+  const id = operation.operationId;
+  if (id === "CreateKey") return { parameters: { app: "Coverage" } };
+  if (id === "RevokeKey") {
+    const key = await createIntegrationKey(db, adminId, "Coverage revoke");
+    return { parameters: { key: key.token } };
+  }
+  if (id === "AuthenticateUserByName")
+    return { body: { Username: "admin", Pw: "admin-pass" } };
+  if (
+    [
+      "AuthorizeQuickConnect",
+      "GetQuickConnectState",
+      "AuthenticateWithQuickConnect",
+    ].includes(id)
+  ) {
+    const pending = await initiateQuickConnect(
+      db,
+      {
+        clientName: "Coverage",
+        clientVersion: "1",
+        deviceName: "Coverage",
+        deviceId: id,
+      },
+      "127.0.0.1",
+    );
+    if (id === "AuthenticateWithQuickConnect")
+      await authorizeQuickConnect(db, adminId, pending.request.code);
+    return {
+      parameters: { code: pending.request.code, secret: pending.secret },
+      body: { Secret: pending.secret },
+    };
+  }
+  if (id === "CreateUserByName")
+    return { body: { Name: "coverage-created", Password: "coverage-pass" } };
+  if (
+    [
+      "GetDeviceInfo",
+      "GetDeviceOptions",
+      "UpdateDeviceOptions",
+      "DeleteDevice",
+    ].includes(id)
+  ) {
+    await issueSession(
+      db,
+      adminId,
+      {
+        clientName: "Coverage",
+        deviceName: "Coverage subject",
+        deviceId: id,
+      },
+      null,
+    );
+    return { parameters: { id }, body: { CustomName: "Coverage renamed" } };
+  }
+  if (
+    [
+      "GetUserById",
+      "DeleteUser",
+      "UpdateUser",
+      "UpdateUserPassword",
+      "UpdateUserPolicy",
+      "UpdateUserConfiguration",
+    ].includes(id)
+  ) {
+    const user = await createLocalUser(db, adminId, {
+      username: `coverage-${id.toLowerCase()}`,
+      password: "coverage-pass",
+    });
+    const body =
+      id === "UpdateUser"
+        ? { Name: "coverage-renamed" }
+        : id === "UpdateUserPassword"
+          ? { NewPw: "coverage-new-pass" }
+          : id === "UpdateUserPolicy"
+            ? {
+                IsDisabled: false,
+                EnableMediaPlayback: true,
+                AuthenticationProviderId:
+                  "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider",
+                PasswordResetProviderId:
+                  "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider",
+              }
+            : undefined;
+    return { parameters: { userId: user.id }, body };
+  }
+  return {};
 }
 
 function responseSchema(
@@ -126,21 +208,23 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
     "validates statuses, bodies, and admin access against a seeded library",
     () =>
       withDatabase(async (db) => {
-        await seedBrowse(db);
+        const seeded = await seedBrowse(db);
         const routes = jellyfinRoutes(
           createArtworkHandler(db),
           createHlsHandler(db),
         );
         const handle = createJellyfinHandler(db, routes);
         const send = (request: Request) => handle(request, "127.0.0.1");
-        const header =
-          'MediaBrowser Client="Coverage", Device="Coverage", DeviceId="coverage"';
         const admin = await jellyfinLogin(send, header, "admin", "admin-pass");
-        const viewer = await jellyfinLogin(send, header);
+        const viewer = await jellyfinLogin(
+          send,
+          header.replace('DeviceId="coverage"', 'DeviceId="coverage-viewer"'),
+        );
         const failures: string[] = [];
         for (const operation of operations) {
           if (gapOf(operation) !== undefined) continue;
-          const response = await send(requestOf(operation, admin));
+          const fixture = await fixtureOf(db, seeded.admin.id, operation);
+          const response = await send(requestOf(operation, admin, fixture));
           expect(response, operation.operationId).toBeDefined();
           if (response === undefined) continue;
           const declared = operation.responses[String(response.status)];
@@ -158,11 +242,13 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
           if (operation.method === "HEAD" || response.status === 204) {
             expect(text, operation.operationId).toBe("");
           } else if (schema !== undefined) {
-            const value: unknown = response.headers
-              .get("Content-Type")
-              ?.startsWith("application/json")
-              ? JSON.parse(text)
-              : text;
+            const value: unknown =
+              schema.format !== "binary" &&
+              response.headers
+                .get("Content-Type")
+                ?.startsWith("application/json")
+                ? JSON.parse(text)
+                : text;
             const validate = ajv.compile(jsonSchema(schema) as object);
             if (!validate(value))
               failures.push(
@@ -170,7 +256,7 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
               );
           }
           if (accessOf(operation).admin) {
-            const denied = await send(requestOf(operation, viewer));
+            const denied = await send(requestOf(operation, viewer, fixture));
             expect(
               denied?.status,
               `${operation.operationId} requires admin`,

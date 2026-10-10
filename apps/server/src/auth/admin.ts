@@ -43,7 +43,10 @@ export async function listGroups(db: Database, actorId: string) {
 }
 
 /** Loads one user's groups, overrides, library access and settings without a caller check. */
-export async function readUserAccess(db: Database, userId: string) {
+export async function readUserAccess(
+  db: Pick<Database, "select">,
+  userId: string,
+) {
   const [user] = await db
     .select(userFields)
     .from(users)
@@ -130,7 +133,7 @@ const maxBitrateCapBps = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** Writes a user's bitrate cap and content-rating ceiling for a caller holding manage-users. */
 export async function writeUserSettings(
-  db: Database,
+  db: Pick<Database, "select" | "insert">,
   actorId: string,
   userId: string,
   input: { bitrateCapBps: bigint | null; contentRatingCeiling: string | null },

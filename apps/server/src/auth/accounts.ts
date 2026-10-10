@@ -21,22 +21,30 @@ const usernamePattern = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 const setupCompleteKey = "auth.setupComplete";
 const setupLockKey = 0x70656e646175n;
 
+/** Empty-string hashes mark intentionally passwordless local accounts; null remains external-auth-only. */
+export function hashLocalPassword(password: string) {
+  return password === ""
+    ? Promise.resolve("")
+    : Bun.password.hash(password, { algorithm: "argon2id" });
+}
+
 /** Validates and hashes a local account before its transaction starts. */
-export async function prepareLocalAccount(input: LocalAccountInput) {
+export async function prepareLocalAccount(
+  input: LocalAccountInput,
+  allowEmptyPassword = false,
+) {
   const username = input.username.trim().toLowerCase();
   const displayName = (input.displayName ?? username).trim();
   if (
     !usernamePattern.test(username) ||
-    input.password.length < 1 ||
+    (!allowEmptyPassword && input.password.length < 1) ||
     input.password.length > 1024 ||
     displayName.length < 1 ||
     displayName.length > 128 ||
     displayName.includes("\0")
   )
     throw new AuthError("INVALID_INPUT");
-  const passwordHash = await Bun.password.hash(input.password, {
-    algorithm: "argon2id",
-  });
+  const passwordHash = await hashLocalPassword(input.password);
   return { username, displayName, passwordHash };
 }
 
@@ -94,9 +102,10 @@ export async function createLocalUser(
   db: Database,
   actorId: string,
   input: LocalAccountInput,
+  options: { allowEmptyPassword?: boolean } = {},
 ) {
   await requirePermission(db, actorId, "manage-users");
-  const prepared = await prepareLocalAccount(input);
+  const prepared = await prepareLocalAccount(input, options.allowEmptyPassword);
   try {
     return await db.transaction(async (tx) => {
       const members = await seedGroup(tx, "users");

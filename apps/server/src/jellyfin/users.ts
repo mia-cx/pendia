@@ -1,4 +1,6 @@
-import { checkPermission, isBuiltInAdmin } from "../auth/permissions.ts";
+import { readUserAccess } from "../auth/admin.ts";
+import { checkPermission } from "../auth/permissions.ts";
+import { readAccount, readClientPreference } from "../auth/profile.ts";
 import {
   type issueSession,
   login,
@@ -20,17 +22,21 @@ const passwordResetProvider =
 
 /** Builds a Jellyfin UserDto. Name is the login name, since clients sign in with it. */
 export async function userDto(db: Database, user: User, serverId: string) {
-  const [isAdministrator, canPlay] = await Promise.all([
-    isBuiltInAdmin(db, user.id),
-    checkPermission(db, user.id, "play"),
-  ]);
+  const [canPlay, preference, account, access, canManageSubtitles] =
+    await Promise.all([
+      checkPermission(db, user.id, "play"),
+      readClientPreference(db, user.id, user.id, "jellyfin", "configuration"),
+      readAccount(db, user.id, user.id),
+      readUserAccess(db, user.id),
+      checkPermission(db, user.id, "manage-subtitles"),
+    ]);
   return {
     Name: user.username,
     ServerId: toGuid(serverId),
     Id: toGuid(user.id),
     // `/Users/Public` lists nobody, so no client reads these to pick a login form.
-    HasPassword: true,
-    HasConfiguredPassword: true,
+    HasPassword: account.hasPassword,
+    HasConfiguredPassword: account.hasPassword,
     HasConfiguredEasyPassword: false,
     EnableAutoLogin: false,
     Configuration: {
@@ -47,14 +53,19 @@ export async function userDto(db: Database, user: User, serverId: string) {
       RememberAudioSelections: true,
       RememberSubtitleSelections: true,
       EnableNextEpisodeAutoPlay: true,
+      ...(preference !== null &&
+      typeof preference === "object" &&
+      !Array.isArray(preference)
+        ? preference
+        : {}),
     },
     Policy: {
-      IsAdministrator: isAdministrator,
+      IsAdministrator: account.administrator,
       IsHidden: true,
       EnableCollectionManagement: false,
-      EnableSubtitleManagement: false,
+      EnableSubtitleManagement: canManageSubtitles,
       EnableLyricManagement: false,
-      IsDisabled: false,
+      IsDisabled: account.disabledAt !== null,
       EnableUserPreferenceAccess: true,
       EnableRemoteControlOfOtherUsers: false,
       EnableSharedDeviceControl: false,
@@ -77,7 +88,7 @@ export async function userDto(db: Database, user: User, serverId: string) {
       LoginAttemptsBeforeLockout: -1,
       MaxActiveSessions: 0,
       EnablePublicSharing: false,
-      RemoteClientBitrateLimit: 0,
+      RemoteClientBitrateLimit: Number(access.settings.bitrateCapBps ?? 0n),
       AuthenticationProviderId: authenticationProvider,
       PasswordResetProviderId: passwordResetProvider,
       SyncPlayAccess: "None",
@@ -115,7 +126,6 @@ function sessionInfo(issued: Issued, client: ClientInfo, serverId: string) {
     SupportsMediaControl: false,
     SupportsRemoteControl: false,
     NowPlayingQueue: [],
-    NowPlayingQueueFullItems: [],
     HasCustomDeviceName: false,
     ServerId: toGuid(serverId),
     PlayableMediaTypes: [],
@@ -160,7 +170,7 @@ export const userRoutes: Route[] = [
         context.db,
         {
           username: body.string("Username"),
-          password: body.string("Pw"),
+          password: body.optionalString("Pw") ?? "",
           ...deviceOf(context.client),
         },
         address,
@@ -192,11 +202,5 @@ export const userRoutes: Route[] = [
     path: "/Users/Public",
     anonymous: true,
     handle: () => json([]),
-  },
-  // Remote control is deferred, so a client's capabilities change nothing.
-  {
-    method: "POST",
-    path: "/Sessions/Capabilities/Full",
-    handle: () => noContent(),
   },
 ];

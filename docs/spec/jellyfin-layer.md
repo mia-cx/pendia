@@ -19,10 +19,13 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 
 | Tag group | Behaviour | Notes |
 | --- | --- | --- |
-| System | Gap | Existing server identity; complete configuration defaults and contract checks. |
-| Authentication, User | Gap | Existing login and Quick Connect; complete real account operations and preferences. |
+| System | Real / neutral | Real identity, endpoint locality, ping, and UTC time. Default configuration; empty logs/storage; accepted configuration/restart/shutdown writes. |
+| Authentication | Real / neutral | Real local login, Quick Connect, and admin-managed recoverable integration keys. Password recovery requests direct clients to the administrator. |
+| User | Real | Account listing, creation, rename, deletion, password changes, disabled/admin/play/subtitle/bitrate policy, and stored configuration. Public users remain hidden. Unsupported policy capabilities stay disabled. |
 | UserView, Library, Show | Gap | Existing library/item browsing, resume, next-up; complete remaining browse calls. |
-| Device, DisplayPreference, Session | Gap | Complete real device/session reads and persisted preferences. Remote commands remain neutral. |
+| Device | Real | Live session-backed devices, custom names, and revocation. |
+| DisplayPreference | Real | Schema-validated preferences stored per user, client, and preference id. Owners and administrators have access. |
+| Session | Gap | Real live sessions and stored client capabilities; complete playback reports. Remote commands remain neutral. |
 | Filter, Genre, Person, Studio, Year, Search | Gap | Adapt core search and library metadata. |
 | LibraryStructure, ItemUpdate, ItemLookup, RemoteImage | Gap | Adapt core administration and metadata where supported. |
 | Movie, Suggestion | Gap | Return available movies/items as recommendations. |
@@ -43,3 +46,6 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 - PlaybackInfo takes `AudioStreamIndex` and `SubtitleStreamIndex` from the body or the query and plans the session with them; `SubtitleStreamIndex=-1` turns subtitles off. Both indexes stay on the transcode URL, and `DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` name the session's choice.
 - Query parameter names are matched case-insensitively, as ASP.NET does and clients rely on.
 - Specific literal routes precede parameter routes. `/Items/Latest` never resolves as an Item id.
+- Device sessions and ordinary API keys remain hash-only. Administrator-created integration keys also retain an authenticated encrypted copy for Jellyfin's key listing workflow.
+- Password changes verify the owner's current password and revoke other device sessions atomically. Administrator resets require a session credential. Intentionally passwordless local accounts remain distinct from external-auth accounts.
+- Policy changes apply atomically, including re-enabling disabled accounts. Account deletion, disabling, and group changes preserve an enabled administrator.

@@ -198,6 +198,8 @@ describe.skipIf(!databaseUrl)("Jellyfin browse facets", () => {
         "searchTerm=Keanu&mediaTypes=Audio",
         "searchTerm=Science&mediaTypes=Video",
         "searchTerm=Keanu&includeItemTypes=Person&isMovie=true",
+        "searchTerm=Keanu&includeItemTypes=Person&mediaTypes=Video",
+        "searchTerm=Science&includeItemTypes=Genre&mediaTypes=Video",
       ])
         expect(await call(`/Search/Hints?${query}`)).toMatchObject({
           TotalRecordCount: 0,

@@ -505,6 +505,8 @@ export const additionalBrowseRoutes: Route[] = [
         .list("mediaTypes")
         .map((type) => type.toLowerCase());
       // Person and Genre identities have Unknown media type and are neither movies nor series.
+      // Jellyfin 12.2 intersects item types and media types; the older SearchEngine cleared media types.
+      // https://github.com/jellyfin/jellyfin/blob/v12.2/Emby.Server.Implementations/Library/Search/SearchManager.cs
       const allowed = (type: string) =>
         (!includes.length || includes.includes(type)) &&
         !excludes.includes(type) &&

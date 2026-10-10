@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { eq } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
@@ -15,6 +16,7 @@ import { contributors, credits, items } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
 import { createLibrary } from "../libraries/service.ts";
+import { withVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { coveredOperations, gapOf, gaps } from "./coverage.ts";
 import { createJellyfinHandler } from "./http.ts";
@@ -29,7 +31,7 @@ import {
 } from "./openapi.ts";
 import { jellyfinRoutes } from "./routes.ts";
 import { contractValidator as ajv, jsonSchema } from "./schema.ts";
-import { jellyfinLogin } from "./testing.ts";
+import { fixturePng, jellyfinLogin } from "./testing.ts";
 
 type Fixture = { parameters?: Record<string, string>; body?: unknown };
 const header =
@@ -77,8 +79,36 @@ async function fixtureOf(
   db: Database,
   adminId: string,
   operation: ApiOperation,
+  root: string,
 ): Promise<Fixture> {
   const id = operation.operationId;
+  if (id === "ApplySearchCriteria")
+    return {
+      body: { ProviderIds: { Tmdb: "999" }, SearchProviderName: "tmdb" },
+    };
+  if (id === "DownloadRemoteImage") {
+    const folder = `${root}/download`;
+    await mkdir(folder);
+    const library = await createLibrary(db, adminId, {
+      name: "Artwork download",
+      medium: "movies",
+      roots: [folder],
+    });
+    const item = await insertItem(db, {
+      libraryId: library.id,
+      kind: "movie",
+      title: "Artwork subject",
+      canonicalFolder: ".",
+      extension: {},
+    });
+    return {
+      parameters: {
+        itemId: item.id,
+        type: "Primary",
+        imageUrl: "https://image.example/fixture.png",
+      },
+    };
+  }
   if (id === "AddVirtualFolder")
     return {
       parameters: {
@@ -289,89 +319,105 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
   test(
     "validates statuses, bodies, and admin access against a seeded library",
     () =>
-      withDatabase(async (db) => {
-        const seeded = await seedBrowse(db);
-        await db
-          .update(items)
-          .set({ genres: ["Science Fiction"], tags: ["Classic"] })
-          .where(eq(items.id, seeded.matrix.id));
-        const [person] = await db
-          .insert(contributors)
-          .values({ name: "Keanu Reeves" })
-          .returning();
-        if (person === undefined) throw new Error("Missing contributor");
-        await db.insert(credits).values({
-          itemId: seeded.matrix.id,
-          contributorId: person.id,
-          role: "actor",
-          order: 0,
-          character: "Neo",
-        });
-        const routes = jellyfinRoutes(
-          createArtworkHandler(db),
-          createHlsHandler(db),
-        );
-        const handle = createJellyfinHandler(db, routes);
-        const send = (request: Request) => handle(request, "127.0.0.1");
-        const admin = await jellyfinLogin(send, header, "admin", "admin-pass");
-        const viewer = await jellyfinLogin(
-          send,
-          header.replace('DeviceId="coverage"', 'DeviceId="coverage-viewer"'),
-        );
-        const failures: string[] = [];
-        for (const operation of operations) {
-          if (gapOf(operation) !== undefined) continue;
-          const fixture = await fixtureOf(db, seeded.admin.id, operation);
-          fixture.parameters = {
+      withDatabase(async (db) =>
+        withVideoFixture(async (root) => {
+          const seeded = await seedBrowse(db);
+          await db
+            .update(items)
+            .set({ genres: ["Science Fiction"], tags: ["Classic"] })
+            .where(eq(items.id, seeded.matrix.id));
+          const [person] = await db
+            .insert(contributors)
+            .values({ name: "Keanu Reeves" })
+            .returning();
+          if (person === undefined) throw new Error("Missing contributor");
+          await db.insert(credits).values({
             itemId: seeded.matrix.id,
-            seriesId: seeded.show.id,
-            genreName: "Science Fiction",
-            year: "1999",
-            name: "Keanu Reeves",
-            searchTerm: "Matrix",
-            ...fixture.parameters,
-          };
-          const response = await send(requestOf(operation, admin, fixture));
-          expect(response, operation.operationId).toBeDefined();
-          if (response === undefined) continue;
-          const declared = operation.responses[String(response.status)];
-          expect(
-            declared,
-            `${operation.operationId} status ${response.status}`,
-          ).toBeDefined();
-          expect(response.status, operation.operationId).toBeLessThan(300);
-          const schema = responseSchema(
-            operation,
-            response.status,
-            response.headers.get("Content-Type"),
+            contributorId: person.id,
+            role: "actor",
+            order: 0,
+            character: "Neo",
+          });
+          const routes = jellyfinRoutes(
+            createArtworkHandler(db),
+            createHlsHandler(db),
+            {
+              request: (async (_input: RequestInfo | URL) =>
+                new Response(fixturePng)) as typeof fetch,
+            },
           );
-          const text = await response.text();
-          if (operation.method === "HEAD" || response.status === 204) {
-            expect(text, operation.operationId).toBe("");
-          } else if (schema !== undefined) {
-            const value: unknown =
-              schema.format !== "binary" &&
-              response.headers
-                .get("Content-Type")
-                ?.startsWith("application/json")
-                ? JSON.parse(text)
-                : text;
-            const validate = ajv.compile(jsonSchema(schema) as object);
-            if (!validate(value))
-              failures.push(
-                `${operation.operationId}: ${ajv.errorsText(validate.errors)}`,
-              );
-          }
-          if (accessOf(operation).admin) {
-            const denied = await send(requestOf(operation, viewer, fixture));
+          const handle = createJellyfinHandler(db, routes);
+          const send = (request: Request) => handle(request, "127.0.0.1");
+          const admin = await jellyfinLogin(
+            send,
+            header,
+            "admin",
+            "admin-pass",
+          );
+          const viewer = await jellyfinLogin(
+            send,
+            header.replace('DeviceId="coverage"', 'DeviceId="coverage-viewer"'),
+          );
+          const failures: string[] = [];
+          for (const operation of operations) {
+            if (gapOf(operation) !== undefined) continue;
+            const fixture = await fixtureOf(
+              db,
+              seeded.admin.id,
+              operation,
+              root,
+            );
+            fixture.parameters = {
+              itemId: seeded.matrix.id,
+              seriesId: seeded.show.id,
+              genreName: "Science Fiction",
+              year: "1999",
+              name: "Keanu Reeves",
+              searchTerm: "Matrix",
+              ...fixture.parameters,
+            };
+            const response = await send(requestOf(operation, admin, fixture));
+            expect(response, operation.operationId).toBeDefined();
+            if (response === undefined) continue;
+            const declared = operation.responses[String(response.status)];
             expect(
-              denied?.status,
-              `${operation.operationId} requires admin`,
-            ).toBe(403);
+              declared,
+              `${operation.operationId} status ${response.status}`,
+            ).toBeDefined();
+            expect(response.status, operation.operationId).toBeLessThan(300);
+            const schema = responseSchema(
+              operation,
+              response.status,
+              response.headers.get("Content-Type"),
+            );
+            const text = await response.text();
+            if (operation.method === "HEAD" || response.status === 204) {
+              expect(text, operation.operationId).toBe("");
+            } else if (schema !== undefined) {
+              const value: unknown =
+                schema.format !== "binary" &&
+                response.headers
+                  .get("Content-Type")
+                  ?.startsWith("application/json")
+                  ? JSON.parse(text)
+                  : text;
+              const validate = ajv.compile(jsonSchema(schema) as object);
+              if (!validate(value))
+                failures.push(
+                  `${operation.operationId}: ${ajv.errorsText(validate.errors)}`,
+                );
+            }
+            if (accessOf(operation).admin) {
+              const denied = await send(requestOf(operation, viewer, fixture));
+              expect(
+                denied?.status,
+                `${operation.operationId} requires admin`,
+              ).toBe(403);
+            }
           }
-        }
-        expect(failures).toEqual([]);
-      }),
+          expect(failures).toEqual([]);
+        }),
+      ),
     60_000,
   );
 });

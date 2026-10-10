@@ -2,11 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { seedBrowse } from "../api/view-fixtures.ts";
-import { files, versions } from "../db/schema/index.ts";
+import { files, progress, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { insertItem } from "../db/tree.ts";
-import { getLibrary, updateLibrary } from "../libraries/service.ts";
+import { scanShowDirectory } from "../libraries/scan.ts";
+import {
+  createLibrary,
+  getLibrary,
+  updateLibrary,
+} from "../libraries/service.ts";
+import { createVideoFixture } from "../mediums/video-common/fixtures.ts";
 import { createJellyfinHandler } from "./http.ts";
 import { requiredGuid } from "./request.ts";
 import { jellyfinRoutes } from "./routes.ts";
@@ -100,12 +107,29 @@ describe.skipIf(!databaseUrl)("Jellyfin library administration", () => {
         expect(
           await call(`/Items/${library.ItemId}/MetadataEditor`),
         ).toMatchObject({ ContentType: "movies" });
+        const original = (await call(`/Items/${seed.matrix.id}`)) as {
+          ProviderIds: Record<string, string>;
+        };
+        const editor = (await call(
+          `/Items/${seed.matrix.id}/MetadataEditor`,
+        )) as { ExternalIdInfos: { Key: string }[] };
+        for (const info of editor.ExternalIdInfos)
+          expect(original.ProviderIds[info.Key]).toBeDefined();
 
         await call(`/Items/${seed.matrix.id}`, "POST", {
           Name: "Edited Matrix",
           Overview: "Manual description",
-          ProductionYear: 2003,
-          PremiereDate: "2003-05-15T00:00:00Z",
+          ProductionYear: "2003",
+          PremiereDate: "2003-05-15",
+          CommunityRating: "",
+          CriticRating: "",
+          Height: "",
+          AirsBeforeSeasonNumber: "",
+          AirsAfterSeasonNumber: "",
+          AirsBeforeEpisodeNumber: "",
+          IndexNumber: null,
+          ParentIndexNumber: null,
+          Video3DFormat: "",
           Genres: ["Science Fiction"],
           Tags: ["Edited"],
           ProviderIds: {},
@@ -137,8 +161,88 @@ describe.skipIf(!databaseUrl)("Jellyfin library administration", () => {
           ProviderIds: { Tmdb: "person-1" },
         });
         expect(await call(`/Items/${person.Id}/MetadataEditor`)).toMatchObject({
-          ExternalIdInfos: [{ Key: "tmdb" }],
+          ExternalIdInfos: [{ Key: "Tmdb" }],
           ContentType: null,
+        });
+        await call(`/Items/${person.Id}`, "POST", {
+          ProviderIds: { Tmdb: "" },
+        });
+        expect(await call(`/Items/${person.Id}`)).toMatchObject({
+          ProviderIds: {},
+        });
+        await call(`/Items/${seed.matrix.id}`, "POST", { ProductionYear: "" });
+        expect(await call(`/Items/${seed.matrix.id}`)).not.toHaveProperty(
+          "ProductionYear",
+        );
+        for (const body of [
+          { ProductionYear: "invalid" },
+          { PremiereDate: "2003-02-31" },
+        ])
+          expect(
+            (
+              await handle(
+                new Request(`http://thalia.test/Items/${seed.matrix.id}`, {
+                  method: "POST",
+                  headers: {
+                    "X-Emby-Token": token,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify(body),
+                }),
+                "127.0.0.1",
+              )
+            )?.status,
+          ).toBe(400);
+
+        const showRoot = join(root, "renumbered-shows");
+        await mkdir(join(showRoot, "Example"), { recursive: true });
+        await createVideoFixture(
+          join(showRoot, "Example", "Example S01E01.mkv"),
+          { width: 64, height: 64 },
+        );
+        const showLibrary = await createLibrary(db, seed.admin.id, {
+          name: "Renumbered shows",
+          medium: "shows",
+          roots: [showRoot],
+        });
+        await scanShowDirectory(db, showLibrary.id, "Example");
+        const [originalFile] = await db
+          .select()
+          .from(files)
+          .where(eq(files.libraryId, showLibrary.id));
+        if (originalFile === undefined) throw new Error("Missing scanned file");
+        const episode = (await call(`/Items/${originalFile.itemId}`)) as {
+          SeasonId: string;
+        };
+        const seasonId = requiredGuid(episode.SeasonId);
+        await db.insert(progress).values({
+          userId: seed.viewer.id,
+          itemId: originalFile.itemId,
+          versionId: originalFile.versionId,
+          format: "video",
+          positionSeconds: 0.5,
+        });
+        await call(`/Items/${seasonId}`, "POST", { IndexNumber: "3" });
+        await scanShowDirectory(db, showLibrary.id, "Example");
+        expect(
+          await db
+            .select()
+            .from(files)
+            .where(eq(files.libraryId, showLibrary.id)),
+        ).toEqual([originalFile]);
+        expect(await call(`/Items/${seasonId}`)).toMatchObject({
+          IndexNumber: 3,
+        });
+        expect(
+          (
+            await db
+              .select()
+              .from(progress)
+              .where(eq(progress.itemId, originalFile.itemId))
+          )[0],
+        ).toMatchObject({
+          positionSeconds: 0.5,
+          versionId: originalFile.versionId,
         });
 
         const managed = await getLibrary(

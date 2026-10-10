@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
 import { seedBrowse } from "../api/view-fixtures.ts";
-import { contributors, credits, items } from "../db/schema/index.ts";
+import {
+  contributors,
+  credits,
+  files,
+  items,
+  streams,
+  versions,
+} from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createJellyfinHandler } from "./http.ts";
 import { toGuid } from "./request.ts";
@@ -12,6 +19,43 @@ describe.skipIf(!databaseUrl)("Jellyfin browse facets", () => {
   test("keeps facets, people, and search inside authorized libraries and filters by stable facet identifiers", () =>
     withDatabase(async (db) => {
       const seed = await seedBrowse(db);
+      const [version] = await db
+        .select()
+        .from(versions)
+        .where(eq(versions.itemId, seed.matrix.id));
+      if (version === undefined) throw new Error("Missing version");
+      const [file] = await db
+        .insert(files)
+        .values({
+          versionId: version.id,
+          itemId: seed.matrix.id,
+          libraryId: seed.films.id,
+          rootId: seed.films.rootId,
+          path: "The Matrix/movie.mp4",
+          order: 0,
+          bytes: 1n,
+          modifiedAt: new Date(),
+        })
+        .returning();
+      if (file === undefined) throw new Error("Missing file");
+      await db.insert(streams).values([
+        {
+          versionId: version.id,
+          fileId: file.id,
+          index: 0,
+          kind: "audio",
+          codec: "aac",
+          language: "eng",
+        },
+        {
+          versionId: version.id,
+          fileId: file.id,
+          index: 1,
+          kind: "subtitle",
+          codec: "subrip",
+          language: "nld",
+        },
+      ]);
       await db
         .update(items)
         .set({ genres: ["Science Fiction"], tags: ["Classic"] })
@@ -90,6 +134,39 @@ describe.skipIf(!databaseUrl)("Jellyfin browse facets", () => {
       )) as { Items: { Name: string }[] };
       expect(filtered.Items.map((item) => item.Name)).toEqual(["The Matrix"]);
       expect(
+        await call(
+          `/Items?recursive=true&genreIds=${toGuid(Bun.randomUUIDv7())}`,
+        ),
+      ).toMatchObject({ TotalRecordCount: 0, Items: [] });
+      for (const filter of [
+        "audioLanguages=eng",
+        "subtitleLanguages=nld",
+        "hasTmdbId=true",
+        "hasImdbId=true",
+      ])
+        expect(
+          await call(`/Items?recursive=true&includeItemTypes=Movie&${filter}`),
+        ).toMatchObject({
+          TotalRecordCount: 1,
+          Items: [{ Name: "The Matrix" }],
+        });
+      for (const filter of ["audioLanguages=nld", "subtitleLanguages=eng"])
+        expect(
+          await call(`/Items?recursive=true&includeItemTypes=Movie&${filter}`),
+        ).toMatchObject({ TotalRecordCount: 0, Items: [] });
+      for (const filter of ["hasTmdbId=false", "hasImdbId=false"])
+        expect(
+          await call(`/Items?recursive=true&includeItemTypes=Movie&${filter}`),
+        ).toMatchObject({
+          TotalRecordCount: 2,
+          Items: [{ Name: "Arrival" }, { Name: "Heat" }],
+        });
+      expect(
+        await call(
+          "/Items?recursive=true&includeItemTypes=Movie&hasTvdbId=false",
+        ),
+      ).toMatchObject({ TotalRecordCount: 3 });
+      expect(
         await call(`/Items?recursive=true&personIds=${toGuid(actor.id)}`),
       ).toMatchObject({ TotalRecordCount: 1, Items: [{ Name: "The Matrix" }] });
       expect(await call("/Persons?searchTerm=Keanu")).toMatchObject({
@@ -99,6 +176,30 @@ describe.skipIf(!databaseUrl)("Jellyfin browse facets", () => {
       expect(await call("/Search/Hints?searchTerm=Keanu")).toMatchObject({
         TotalRecordCount: 1,
         SearchHints: [{ Name: "Keanu Reeves", Type: "Person" }],
+      });
+      expect(
+        await call("/Search/Hints?searchTerm=Keanu&includeItemTypes=Person"),
+      ).toMatchObject({
+        TotalRecordCount: 1,
+        SearchHints: [{ Type: "Person" }],
+      });
+      expect(
+        await call("/Search/Hints?searchTerm=Science&includeItemTypes=Genre"),
+      ).toMatchObject({
+        TotalRecordCount: 1,
+        SearchHints: [{ Type: "Genre" }],
+      });
+      expect(
+        await call("/Search/Hints?searchTerm=Keanu&excludeItemTypes=Person"),
+      ).toMatchObject({ TotalRecordCount: 0, SearchHints: [] });
+      expect(
+        await call(
+          "/Search/Hints?searchTerm=Private&includeItemTypes=Genre,Person",
+        ),
+      ).toMatchObject({ TotalRecordCount: 0, SearchHints: [] });
+      expect(await call("/Items/Filters2")).toMatchObject({
+        AudioLanguages: [{ Value: "eng" }],
+        SubtitleLanguages: [{ Value: "nld" }],
       });
       expect(await call("/Search/Hints?searchTerm=Private")).toMatchObject({
         TotalRecordCount: 0,

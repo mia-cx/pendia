@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { and, eq } from "drizzle-orm";
 import { createHlsHandler } from "../api/hls.ts";
 import { seedBrowse } from "../api/view-fixtures.ts";
+import { listVersionViews } from "../api/views.ts";
 import { createLocalUser } from "../auth/accounts.ts";
 import { createIntegrationKey } from "../auth/integration-keys.ts";
 import {
@@ -28,7 +29,8 @@ import {
 } from "../mediums/video-common/fixtures.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { storeArtworkOriginal } from "../metadata/artwork-store.ts";
-import { coveredOperations, gapOf, gaps } from "./coverage.ts";
+import { subtitleReference } from "../subtitles/service.ts";
+import { coverageSummary, neutralAdapters } from "./coverage.ts";
 import { createJellyfinHandler } from "./http.ts";
 import {
   type ApiOperation,
@@ -42,7 +44,11 @@ import {
 import { deviceProfiles } from "./profile-fixtures.ts";
 import { jellyfinRoutes } from "./routes.ts";
 import { contractValidator as ajv, jsonSchema } from "./schema.ts";
-import { fixturePng, jellyfinLogin } from "./testing.ts";
+import {
+  fixturePng,
+  fixtureSubtitleProvider,
+  jellyfinLogin,
+} from "./testing.ts";
 
 type Fixture = {
   parameters?: Record<string, string>;
@@ -101,6 +107,69 @@ async function fixtureOf(
   mediaId: string,
 ): Promise<Fixture> {
   const id = operation.operationId;
+  if (operation.tags.includes("Subtitle")) {
+    const remoteId = subtitleReference({
+      itemId: mediaId,
+      provider: fixtureSubtitleProvider.id,
+      providerId: "one",
+      language: "en",
+      forced: false,
+    });
+    if (
+      [
+        "SearchRemoteSubtitles",
+        "DownloadRemoteSubtitles",
+        "GetRemoteSubtitles",
+      ].includes(id)
+    )
+      return {
+        parameters: { itemId: mediaId, language: "eng", subtitleId: remoteId },
+      };
+    if (id === "UploadSubtitle")
+      return {
+        parameters: { itemId: mediaId },
+        body: {
+          Language: "en",
+          Format: "srt",
+          IsForced: false,
+          IsHearingImpaired: false,
+          Data: Buffer.from(
+            (await fixtureSubtitleProvider.download({ providerId: "one" }))
+              .text,
+          ).toString("base64"),
+        },
+      };
+    if (
+      [
+        "GetSubtitle",
+        "GetSubtitleWithTicks",
+        "GetSubtitlePlaylist",
+        "DeleteSubtitle",
+      ].includes(id)
+    ) {
+      const [version] = await listVersionViews(db, adminId, mediaId);
+      const index =
+        id === "DeleteSubtitle"
+          ? version?.externalSubtitles[0]?.index
+          : version?.streams.find((stream) => stream.kind === "subtitle")
+              ?.index;
+      if (index === undefined)
+        throw new Error(`Missing subtitle fixture for ${id}`);
+      return {
+        parameters: {
+          itemId: mediaId,
+          mediaSourceId: mediaId,
+          index: String(index),
+          segmentLength: "1",
+          routeItemId: mediaId,
+          routeMediaSourceId: mediaId,
+          routeIndex: String(index),
+          routeFormat: "vtt",
+          routeStartPositionTicks: "0",
+        },
+      };
+    }
+  }
   if (
     [
       "GetDownload",
@@ -438,12 +507,8 @@ test("registers every operation from the pinned official OpenAPI document", () =
       ),
       operation.operationId,
     ).toBe(true);
-  for (const tag of Object.keys(gaps))
-    expect(
-      operations.some((operation) => operation.tags.includes(tag)),
-      `Stale gap ${tag}`,
-    ).toBe(true);
-  for (const id of coveredOperations)
+  expect(coverageSummary(routes).gaps).toBe(0);
+  for (const id of neutralAdapters)
     expect(
       operations.some((operation) => operation.operationId === id),
       `Stale coverage ${id}`,
@@ -497,6 +562,11 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
               request: (async (_input: RequestInfo | URL) =>
                 new Response(fixturePng)) as typeof fetch,
             },
+            {
+              plugins: {
+                subtitleProviders: async () => [fixtureSubtitleProvider],
+              },
+            },
           );
           const handle = createJellyfinHandler(db, routes);
           const send = (request: Request) => handle(request, "127.0.0.1");
@@ -512,7 +582,6 @@ describe.skipIf(!databaseUrl)("official Jellyfin operation coverage", () => {
           );
           const failures: string[] = [];
           for (const operation of operations) {
-            if (gapOf(operation) !== undefined) continue;
             const fixture = await fixtureOf(
               db,
               seeded.admin.id,

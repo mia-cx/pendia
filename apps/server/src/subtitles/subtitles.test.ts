@@ -133,6 +133,13 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
         await db
           .insert(providerIds)
           .values({ itemId, provider: "imdb", value: "tt0078748" });
+        // Foreign dialogue does not satisfy the configured full English track.
+        await writeSubtitle(
+          db,
+          itemId,
+          { language: "en", format: "srt", forced: true },
+          cue,
+        );
 
         const calls: { url: string; headers: Headers; body: string }[] = [];
         const api = (async (input: string | URL, init?: RequestInit) => {
@@ -226,6 +233,7 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
         expect(search?.headers.get("api-key")).toBe("os-key");
         expect(search?.headers.get("user-agent")).toStartWith("Thalia");
         expect(await listSubtitles(db, itemId)).toEqual([
+          { language: "en", format: "srt", forced: true },
           { language: "en", format: "srt" },
           { language: "nl", format: "srt" },
         ]);
@@ -244,6 +252,11 @@ describe.skipIf(!databaseUrl)("OpenSubtitles", () => {
             profile,
           });
           expect(planned.subtitles).toEqual([
+            {
+              language: "en",
+              format: "srt",
+              url: `/api/subtitles/${itemId}/en.forced.srt`,
+            },
             {
               language: "en",
               format: "srt",

@@ -72,7 +72,7 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
 
   test("offers TrueHD direct play only to Infuse and a transcode to Swiftfin", () =>
     withDatabase(async (db) => {
-      const { movies } = await seedMovies(db, root, ["Atmos"]);
+      const { viewer, movies } = await seedMovies(db, root, ["Atmos"]);
       const movie = movies.get("Atmos");
       if (movie === undefined) throw new Error("Expected the movie.");
       const handle = createJellyfinHandler(
@@ -147,6 +147,36 @@ describe.skipIf(!databaseUrl)("jellyfin PlaybackInfo", () => {
       expect(head.status).toBe(200);
       expect(Number(head.headers.get("content-length"))).toBeGreaterThan(0);
       expect(await head.text()).toBe("");
+      const adminToken = await jellyfinLogin(
+        send,
+        'MediaBrowser Client="Admin", Device="Admin", DeviceId="admin-1"',
+        "admin",
+        "admin-pass",
+      );
+      const crossUser = await send(
+        new Request(
+          `http://thalia.test${sourceUrl}/PlaybackInfo?userId=${toGuid(viewer.id)}`,
+          {
+            method: "POST",
+            headers: {
+              authorization: `MediaBrowser Token="${adminToken}"`,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ DeviceProfile: deviceProfiles.swiftfin }),
+          },
+        ),
+      );
+      expect(crossUser.status).toBe(200);
+      const crossUserInfo = (await crossUser.json()) as PlaybackInfo;
+      const usableUrl = new URL(
+        crossUserInfo.MediaSources[0]?.TranscodingUrl ?? "",
+        "http://thalia.test",
+      );
+      expect(usableUrl.searchParams.get("token")).toBeTruthy();
+      usableUrl.pathname = `/Videos/${toGuid(movie.itemId)}/stream`;
+      const crossUserFile = await send(new Request(usableUrl));
+      expect(crossUserFile.status).toBe(200);
+      expect((await crossUserFile.arrayBuffer()).byteLength).toBeGreaterThan(0);
       const direct = await playbackInfo(
         "X-Emby-Authorization",
         infuse,

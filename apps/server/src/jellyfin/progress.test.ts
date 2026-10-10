@@ -7,6 +7,7 @@ import { progress, sessionRegistry, versions } from "../db/schema/index.ts";
 import { databaseUrl, withDatabase } from "../db/testing.ts";
 import { createArtworkHandler } from "../metadata/artwork-http.ts";
 import { continueWatching } from "../playback/marks.ts";
+import { resumeProgress } from "../playback/progress.ts";
 import { createJellyfinHandler } from "./http.ts";
 import { toGuid } from "./request.ts";
 import { jellyfinRoutes } from "./routes.ts";
@@ -309,6 +310,17 @@ describe.skipIf(!databaseUrl)("jellyfin progress and marks", () => {
         .select({ id: versions.id })
         .from(versions)
         .where(eq(versions.itemId, s.matrix.id));
+      if (selected === undefined) throw new Error("Missing Matrix version");
+      expect(
+        (
+          await call("POST", `/UserItems/${matrix}/UserData`, {
+            PlaybackPositionTicks: ticks(123),
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        await resumeProgress(db, s.viewer.id, s.matrix.id, selected.id),
+      ).toMatchObject({ positionSeconds: 123 });
       await db.insert(versions).values({
         itemId: s.matrix.id,
         itemKind: "movie",
@@ -364,6 +376,19 @@ describe.skipIf(!databaseUrl)("jellyfin progress and marks", () => {
           await call("POST", `/UserItems/${matrix}/Rating?likes=true`)
         ).json(),
       ).toMatchObject({ Rating: 8.5, Likes: true });
+      expect(
+        await (
+          await call("POST", `/UserItems/${matrix}/UserData`, {
+            Rating: null,
+            Likes: null,
+            LastPlayedDate: null,
+          })
+        ).json(),
+      ).toMatchObject({
+        Rating: 8.5,
+        Likes: true,
+        LastPlayedDate: "2024-01-02T03:04:05.000Z",
+      });
       expect(
         await (await call("DELETE", `/UserItems/${matrix}/Rating`)).json(),
       ).toMatchObject({ Rating: 8.5, Likes: null });

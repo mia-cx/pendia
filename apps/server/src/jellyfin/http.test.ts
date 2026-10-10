@@ -21,6 +21,18 @@ const routes: Route[] = [
     path: "/Users/Me",
     handle: ({ caller }) => json(caller),
   },
+  {
+    method: "GET",
+    path: "/Images/{index}.jpg",
+    anonymous: true,
+    handle: ({ params }) => json(params),
+  },
+  {
+    method: "GET",
+    path: "/Shows/Latest/Seasons",
+    anonymous: true,
+    handle: () => json("latest"),
+  },
 ];
 
 // Anonymous routes and unauthenticated failures never reach the database.
@@ -42,6 +54,8 @@ test("matches paths and query names case-insensitively", async () => {
 test("passes path parameters", async () => {
   const response = await get("/Shows/abc/Seasons");
   expect(await response?.json()).toEqual({ id: "abc" });
+  expect(await (await get("/Images/2.jpg"))?.json()).toEqual({ index: "2" });
+  expect(await (await get("/Shows/Latest/Seasons"))?.json()).toBe("latest");
 });
 
 test("answers legacy per-user routes with a JSON 404", async () => {

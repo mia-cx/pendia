@@ -1,48 +1,39 @@
 # Jellyfin translation layer
 
-Thalia speaks enough of the Jellyfin API that existing clients work without changes. Field-level detail is in the research findings on branch `research/jellyfin-client-api`.
+Thalia mirrors Jellyfin's official stable OpenAPI contract. Every documented operation has a route, including HEAD requests.
+The adapter uses Thalia's core functions. It runs no database queries and does not put Jellyfin DTOs in the core.
 
-## Promised clients
+## Contract
 
-Infuse and Swiftfin are the clients Mia tests. Findroid and Jellyfin Android TV are expected to work. Any client that talks to a Jellyfin server over its API is welcome; the promise is the endpoint list below, not a client list.
+- Jellyfin 12.2.0, released as [v12.2](https://github.com/jellyfin/jellyfin/releases/tag/v12.2).
+- Downloaded 2026-10-10 from [the official stable document](https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json).
+- Committed as `apps/server/src/jellyfin/openapi/jellyfin-12.2.0.json`, with source and SHA-256 in `openapi/source.json`.
+- 364 operations across 45 tag groups. The committed document decides paths, methods, response schemas, and authorization policies.
+- `coverage.test.ts` generates registration and seeded response checks from that document. `coverage.ts` lists unfinished real adapters explicitly.
 
-Not promised: Kodi and jellyfin-web, which both call the pre-10.10 `/Users/{userId}/...` routes. Thalia serves the 10.10 and later dialect only. If Kodi matters later, a Thalia Kodi plugin beats serving a second dialect forever.
+## Coverage decisions
 
-## Endpoints
+"Gap" means the route exists but the tag group still needs its real adapter or seeded contract proof.
+Neutral reads return an empty result or default configuration. Neutral writes use the contract's accepted response, preferably 204.
+Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an admin session, including neutral operations.
 
-Auth
-- `POST /Users/AuthenticateByName`
-- `POST /QuickConnect/Initiate`, `GET /QuickConnect/Connect`, `POST /Users/AuthenticateWithQuickConnect`
-- `POST /Sessions/Logout`
-- `GET /System/Info`, `GET /System/Info/Public`, `GET /Users/Me`
-
-Browse
-- `GET /UserViews`
-- `GET /Items`, `GET /Items/{id}`
-- `GET /UserItems/Resume`
-- `GET /Shows/NextUp`, `GET /Shows/{id}/Seasons`, `GET /Shows/{id}/Episodes`
-
-Play
-- `POST /Items/{id}/PlaybackInfo`
-- `GET /Videos/{id}/stream`
-- `GET /videos/{id}/master.m3u8`, `main.m3u8`, segment routes
-- `GET /Videos/{id}/{source}/Subtitles/{index}/Stream.vtt`
-
-Progress and marks
-- `POST /Sessions/Playing`, `/Sessions/Playing/Progress`, `/Sessions/Playing/Stopped`
-- `POST` and `DELETE /UserPlayedItems/{id}`
-- `POST` and `DELETE /UserFavoriteItems/{id}`
-
-Images
-- `GET /Items/{id}/Images/{type}`, anonymous, with `tag`, `maxWidth`, `fillWidth`, `quality`
-
-Websocket `/socket`
-- `KeepAlive`, `LibraryChanged`, `UserDataChanged`
-
-Absent
-- Live TV: endpoints answer with empty lists, so a guide is empty rather than broken.
-- Music and audio: deferred with the medium.
-- Remote control, `Play`, `Playstate`, `GeneralCommand`, and SyncPlay: deferred.
+| Tag group | Behaviour | Notes |
+| --- | --- | --- |
+| System | Gap | Existing server identity; complete configuration defaults and contract checks. |
+| Authentication, User | Gap | Existing login and Quick Connect; complete real account operations and preferences. |
+| UserView, Library, Show | Gap | Existing library/item browsing, resume, next-up; complete remaining browse calls. |
+| Device, DisplayPreference, Session | Gap | Complete real device/session reads and persisted preferences. Remote commands remain neutral. |
+| Filter, Genre, Person, Studio, Year, Search | Gap | Adapt core search and library metadata. |
+| LibraryStructure, ItemUpdate, ItemLookup, RemoteImage | Gap | Adapt core administration and metadata where supported. |
+| Movie, Suggestion | Gap | Return available movies/items as recommendations. |
+| Image, MediaInfo, UserData, Video, Subtitle | Gap | Existing artwork/playback/marks; complete aliases, HEAD, and seeded proof. |
+| Artist, Audio, MusicGenre, InstantMix, Lyric | Neutral | No music medium. Empty lists/defaults, accepted writes, empty binary responses. |
+| LiveTv, Channel | Neutral | No tuner, channels, programmes, recordings, or listing providers. |
+| SyncPlay | Neutral | No synchronized playback groups. Empty group lists and accepted no-op controls. |
+| Collection, Playlist | Neutral | No collection or playlist model. Empty results and accepted no-op writes. |
+| Plugin, ScheduledTask, Backup, Environment | Neutral | Jellyfin-specific plugins, tasks, backups, and host configuration have no Thalia equivalent. |
+| Branding, Localization, Startup | Neutral | Default branding/localization/setup responses. Thalia is already configured. |
+| MediaSegment, Trailer, TrickPlay | Neutral | No chapters/segments, trailers, or trickplay tiles. Empty results and valid neutral media. |
 
 ## Mapping
 
@@ -51,3 +42,4 @@ Absent
 - Thalia serves a real transcode URL in Jellyfin's `master.m3u8` shape, and clients follow it as given.
 - PlaybackInfo takes `AudioStreamIndex` and `SubtitleStreamIndex` from the body or the query and plans the session with them; `SubtitleStreamIndex=-1` turns subtitles off. Both indexes stay on the transcode URL, and `DefaultAudioStreamIndex` and `DefaultSubtitleStreamIndex` name the session's choice.
 - Query parameter names are matched case-insensitively, as ASP.NET does and clients rely on.
+- Specific literal routes precede parameter routes. `/Items/Latest` never resolves as an Item id.

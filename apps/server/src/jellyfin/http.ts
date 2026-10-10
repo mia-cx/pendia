@@ -1,4 +1,5 @@
 import { AuthError } from "../auth/errors.ts";
+import { requireAdmin } from "../auth/permissions.ts";
 import { authenticate } from "../auth/sessions.ts";
 import { readAuthSettings } from "../auth/settings.ts";
 import { requestIdentity } from "../auth/transport.ts";
@@ -37,7 +38,11 @@ export type UserContext = RequestContext & {
 type Handler<Context> = (context: Context) => Promise<Response> | Response;
 
 /** One Jellyfin endpoint. Paths use `{name}` parameters and match case-insensitively. */
-export type Route = { method: "GET" | "POST" | "DELETE"; path: string } & (
+export type Route = {
+  method: "GET" | "POST" | "DELETE" | "HEAD";
+  path: string;
+  admin?: boolean;
+} & (
   | { anonymous: true; handle: Handler<RequestContext> }
   | { anonymous?: false; handle: Handler<UserContext> }
 );
@@ -73,25 +78,35 @@ function decodeParam(value: string): string {
   }
 }
 
-function compile(route: Route) {
-  const pattern = route.path
-    .split("/")
-    .map((segment) =>
-      segment.startsWith("{") && segment.endsWith("}")
-        ? `(?<${segment.slice(1, -1)}>[^/]+)`
-        : segment.replace(/[.*+?^$()|[\]\\]/g, "\\$&"),
+/** Compiles whole and embedded parameters, such as `stream.{container}` and `{index}.jpg`. */
+export function routePattern(path: string) {
+  const pattern = path
+    .split(/(\{[^}]+\})/)
+    .map((part) =>
+      part.startsWith("{")
+        ? `(?<${part.slice(1, -1)}>[^/]+)`
+        : part.replace(/[.*+?^$()|[\]\\]/g, "\\$&"),
     )
-    .join("/");
-  return { route, pattern: new RegExp(`^${pattern}/?$`, "i") };
+    .join("");
+  return new RegExp(`^${pattern}/?$`, "i");
+}
+
+function compile(route: Route) {
+  const pattern = routePattern(route.path);
+  return { route, pattern };
 }
 
 /**
  * Creates the Jellyfin translation layer handler. It answers matched routes, and a
- * JSON 404 for any other path under a Jellyfin root written in Jellyfin's own casing,
- * such as the legacy `/Users/{userId}/Items`. Everything else returns undefined.
+ * JSON 404 for any other path under a Jellyfin root written in Jellyfin's own casing.
+ * Everything else returns undefined so Thalia's own screens can use lowercase paths.
  */
 export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
-  const compiled = routes.map(compile);
+  // Literal operations precede parameter routes, so `/Items/Latest` is not an Item id.
+  const compiled = routes.map(compile).sort((a, b) => {
+    const score = (path: string) => path.replace(/\{[^}]+\}/g, "").length;
+    return score(b.route.path) - score(a.route.path);
+  });
   const roots = new Set(routes.map((route) => route.path.split("/")[1]));
   return async (
     request: Request,
@@ -133,6 +148,11 @@ export function createJellyfinHandler(db: Database, routes: readonly Route[]) {
       const token = context.client.token;
       if (token === undefined) throw new AuthError("UNAUTHENTICATED");
       const caller = await authenticate(db, token);
+      if (found.route.admin) {
+        if (caller.credential.kind !== "session")
+          throw new AuthError("FORBIDDEN");
+        await requireAdmin(db, caller.user.id);
+      }
       return await found.route.handle({ ...context, caller, token });
     } catch (error) {
       if (error instanceof AuthError) {

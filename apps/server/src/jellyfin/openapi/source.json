@@ -1,0 +1,7 @@
+{
+  "version": "12.2.0",
+  "url": "https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json",
+  "release": "https://github.com/jellyfin/jellyfin/releases/tag/v12.2",
+  "downloadedAt": "2026-10-10",
+  "sha256": "bd31bb194443d1c57616fa0a8521e099b17d096b92794e471c0e0725c50949c8"
+}

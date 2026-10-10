@@ -192,6 +192,25 @@ describe.skipIf(!databaseUrl)("Jellyfin browse facets", () => {
       expect(
         await call("/Search/Hints?searchTerm=Keanu&excludeItemTypes=Person"),
       ).toMatchObject({ TotalRecordCount: 0, SearchHints: [] });
+      for (const query of [
+        "searchTerm=Keanu&isSeries=true",
+        "searchTerm=Science&isSeries=true",
+        "searchTerm=Keanu&mediaTypes=Audio",
+        "searchTerm=Science&mediaTypes=Video",
+        "searchTerm=Keanu&includeItemTypes=Person&isMovie=true",
+      ])
+        expect(await call(`/Search/Hints?${query}`)).toMatchObject({
+          TotalRecordCount: 0,
+          SearchHints: [],
+        });
+      expect(
+        await call(
+          "/Search/Hints?searchTerm=Keanu&includeItemTypes=Person&mediaTypes=Unknown&isSeries=false&isMovie=false",
+        ),
+      ).toMatchObject({
+        TotalRecordCount: 1,
+        SearchHints: [{ Type: "Person", MediaType: "Unknown" }],
+      });
       expect(
         await call(
           "/Search/Hints?searchTerm=Private&includeItemTypes=Genre,Person",

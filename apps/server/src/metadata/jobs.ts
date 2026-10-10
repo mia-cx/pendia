@@ -13,16 +13,13 @@ import { createJobQueue } from "../jobs/queue.ts";
 import type { createJobRegistry } from "../jobs/registry.ts";
 import { emitPluginEvents } from "../plugins/events.ts";
 import type { PluginRuntime } from "../plugins/runtime.ts";
-import { readProviderKey } from "../providers/keys.ts";
 import { queueSubtitleFetch } from "../subtitles/jobs.ts";
 import {
   removeSelectedArtwork,
   storeArtworkOriginal,
 } from "./artwork-store.ts";
+import { metadataProviders } from "./providers.ts";
 import { applyMetadata } from "./service.ts";
-import { readMetadataSettings } from "./settings.ts";
-import { createTmdbMetadataProvider } from "./tmdb.ts";
-import { createTvdbMetadataProvider } from "./tvdb.ts";
 
 /** Queues one Item's provider-fetch at `priority`, or returns the due one already queued, raised to it. */
 export async function queueProviderFetch(
@@ -118,32 +115,6 @@ async function emitItemUpdated(db: Database, itemId: string) {
   });
 }
 
-async function metadataProviders(
-  db: Database,
-  request: typeof fetch,
-  plugins: PluginRuntime | undefined,
-): Promise<MetadataProvider[]> {
-  const config = await readMetadataSettings(db);
-  const providers: MetadataProvider[] = [];
-  const storedTmdbKey = (await readProviderKey(db, "tmdb"))?.trim();
-  // An admin-stored key wins; TMDB_API_KEY covers deployments set up by env.
-  const tmdbKey =
-    storedTmdbKey || config.tmdb?.apiKey || Bun.env.TMDB_API_KEY?.trim();
-  if (tmdbKey) providers.push(createTmdbMetadataProvider(tmdbKey, request));
-  const tvdbKey = (await readProviderKey(db, "tvdb"))?.trim();
-  if (tvdbKey)
-    providers.push(
-      createTvdbMetadataProvider(
-        tvdbKey,
-        await readProviderKey(db, "tvdb-pin"),
-        request,
-      ),
-    );
-  if (plugins !== undefined)
-    providers.push(...(await plugins.metadataProviders()));
-  return providers;
-}
-
 type ArtworkType = MetadataResult["artwork"][number]["type"];
 
 /** The artwork a fetch stores per kind: the primary image first, then the hero images Home and the detail pages draw. */
@@ -233,7 +204,7 @@ export function registerMetadataJobs(
     const publish = () =>
       publishEvent(db, { kind: "library.changed", libraryId: item.libraryId });
     try {
-      const providers = await metadataProviders(db, request, plugins);
+      const providers = await metadataProviders(db, { request, plugins });
       const matched = await fetchItem(item, providers, publish);
       if (!matched || item.kind !== "show") return;
       // One job covers the whole Show, so its Seasons and Episodes publish

@@ -25,7 +25,13 @@ import { replaceItemCredits } from "./service.ts";
 export type ItemMetadataEdit = Partial<
   Pick<
     typeof items.$inferInsert,
-    "title" | "year" | "overview" | "contentRating" | "genres" | "tags"
+    | "title"
+    | "year"
+    | "overview"
+    | "contentRating"
+    | "genres"
+    | "tags"
+    | "metadataState"
   >
 > & {
   providerIds?: Record<string, string>;

@@ -321,7 +321,9 @@ export async function startThalia(
         plugins: createPluginRouteHandler(database.db, plugins),
         jellyfin: createJellyfinHandler(
           database.db,
-          jellyfinRoutes(artwork, createHlsHandler(database.db, transcoder)),
+          jellyfinRoutes(artwork, createHlsHandler(database.db, transcoder), {
+            plugins,
+          }),
         ),
         socket: createJellyfinSocket(database.db, eventBroker),
         watcher: createWatcherHandler(database.db, changeDebouncer),

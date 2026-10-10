@@ -37,27 +37,48 @@ const shards: string[][] = Array.from({ length: workers }, () => []);
 for (const [index, file] of files.entries())
   shards[index % workers]?.push(file);
 
-const procs = shards
-  .filter((shard) => shard.length > 0)
-  .map((shard) =>
-    Bun.spawn(["bun", "test", ...shard], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-    }),
-  );
+/** Runs one shard and prints its output; a shard killed by a signal is a crash. */
+async function runShard(shard: string[]) {
+  const proc = Bun.spawn(["bun", "test", ...shard], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  });
+  // Drain both pipes immediately so a full pipe cannot stall the shard.
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  process.stdout.write(out);
+  process.stderr.write(err);
+  // Bun keeps going after a failed test, so a crash can follow a real failure.
+  const failed = /^\(fail\) /m.test(out) || /^\(fail\) /m.test(err);
+  return { code, signal: proc.signalCode, failed };
+}
 
-// Drain every child immediately so a full pipe cannot stall a later shard.
+// Bun itself sometimes segfaults under this suite's load. A crash says nothing
+// about the tests, so a crashed shard runs once more, unless a test in it had
+// already failed.
 const codes = await Promise.all(
-  procs.map(async (proc) => {
-    const [out, err, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    process.stdout.write(out);
-    process.stderr.write(err);
-    return code;
-  }),
+  shards
+    .filter((shard) => shard.length > 0)
+    .map(async (shard) => {
+      const first = await runShard(shard);
+      if (first.signal === null) return first.code;
+      if (first.failed) {
+        console.error(
+          `\nA test shard crashed (${first.signal}) after a test failed: ${shard.join(" ")}\n`,
+        );
+        return 1;
+      }
+      console.error(
+        `\nA test shard crashed (${first.signal}); running it again: ${shard.join(" ")}\n`,
+      );
+      const second = await runShard(shard);
+      if (second.signal !== null)
+        console.error(`\nThe test shard crashed again (${second.signal}).\n`);
+      return second.signal === null ? second.code : 1;
+    }),
 );
 process.exit(codes.some((code) => code !== 0) ? 1 : 0);

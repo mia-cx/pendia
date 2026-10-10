@@ -54,12 +54,13 @@ const bunResize: ArtworkResize = async (
   const source = await image.metadata();
   // Never enlarge: a small original is served at its own width.
   const resized = image.resize(Math.min(width, source.width));
+  const outputFormat = format ?? source.format;
   const encoded =
-    format === "jpeg"
+    outputFormat === "jpeg"
       ? resized.jpeg({ quality })
-      : format === "png"
+      : outputFormat === "png"
         ? resized.png()
-        : format === "webp"
+        : outputFormat === "webp"
           ? resized.webp({ quality })
           : resized;
   const bytes = await encoded.bytes();

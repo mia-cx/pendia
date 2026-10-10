@@ -501,9 +501,16 @@ export const additionalBrowseRoutes: Route[] = [
       const excludes = context.query
         .list("excludeItemTypes")
         .map((type) => type.toLowerCase());
+      const mediaTypes = context.query
+        .list("mediaTypes")
+        .map((type) => type.toLowerCase());
+      // Person and Genre identities have Unknown media type and are neither movies nor series.
       const allowed = (type: string) =>
         (!includes.length || includes.includes(type)) &&
-        !excludes.includes(type);
+        !excludes.includes(type) &&
+        context.query.flag("isMovie") !== true &&
+        context.query.flag("isSeries") !== true &&
+        (!mediaTypes.length || mediaTypes.includes("unknown"));
       if (context.query.flag("includePeople") !== false && allowed("person"))
         hints.push(
           ...(await people(context, true)).map((person) => ({
@@ -512,6 +519,7 @@ export const additionalBrowseRoutes: Route[] = [
             Name: person.Name,
             MatchedTerm: person.Name,
             Type: "Person",
+            MediaType: "Unknown",
             IsFolder: true,
           })),
         );
@@ -523,6 +531,7 @@ export const additionalBrowseRoutes: Route[] = [
             Name: genre.Name,
             MatchedTerm: genre.Name,
             Type: "Genre",
+            MediaType: "Unknown",
             IsFolder: true,
           })),
         );

@@ -174,6 +174,27 @@ describe.skipIf(!databaseUrl)("jellyfin images", () => {
             )
           ).status,
         ).toBe(204);
+        for (const format of ["jpeg", "webp"] as const) {
+          const original = await new Bun.Image(png)
+            [format]({ quality: 100 })
+            .bytes();
+          expect(
+            (
+              await send(
+                `${images}/Primary`,
+                { ...auth, "content-type": `image/${format}` },
+                { method: "POST", body: new Uint8Array(original) },
+              )
+            ).status,
+          ).toBe(204);
+          const low = await send(`${images}/Primary?quality=1`, auth);
+          const high = await send(`${images}/Primary?quality=100`, auth);
+          expect(low.headers.get("content-type")).toBe(`image/${format}`);
+          expect(high.headers.get("content-type")).toBe(`image/${format}`);
+          expect(Buffer.from(await low.arrayBuffer())).not.toEqual(
+            Buffer.from(await high.arrayBuffer()),
+          );
+        }
         expect(
           (await send(`${images}/Primary`, auth, { method: "DELETE" })).status,
         ).toBe(204);

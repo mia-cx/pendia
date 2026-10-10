@@ -144,11 +144,7 @@ export async function issueSession(
 export async function login(db: Database, input: LoginInput, address: string) {
   const username = input.username.trim().toLowerCase();
   prepareDevice(input);
-  if (
-    !usernamePattern.test(username) ||
-    input.password.length < 1 ||
-    input.password.length > 1024
-  )
+  if (!usernamePattern.test(username) || input.password.length > 1024)
     throw new AuthError("INVALID_INPUT");
 
   const config = await readAuthSettings(db);
@@ -263,7 +259,7 @@ export async function revokeSession(
 
 /** Creates a labeled API key for the actor and returns its token once. */
 export async function createApiKey(
-  db: Database,
+  db: Pick<Database, "select" | "insert">,
   actorId: string,
   name: string,
 ) {

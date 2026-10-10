@@ -22,12 +22,15 @@ const setupCompleteKey = "auth.setupComplete";
 const setupLockKey = 0x70656e646175n;
 
 /** Validates and hashes a local account before its transaction starts. */
-export async function prepareLocalAccount(input: LocalAccountInput) {
+export async function prepareLocalAccount(
+  input: LocalAccountInput,
+  allowEmptyPassword = false,
+) {
   const username = input.username.trim().toLowerCase();
   const displayName = (input.displayName ?? username).trim();
   if (
     !usernamePattern.test(username) ||
-    input.password.length < 1 ||
+    (!allowEmptyPassword && input.password.length < 1) ||
     input.password.length > 1024 ||
     displayName.length < 1 ||
     displayName.length > 128 ||
@@ -94,9 +97,10 @@ export async function createLocalUser(
   db: Database,
   actorId: string,
   input: LocalAccountInput,
+  options: { allowEmptyPassword?: boolean } = {},
 ) {
   await requirePermission(db, actorId, "manage-users");
-  const prepared = await prepareLocalAccount(input);
+  const prepared = await prepareLocalAccount(input, options.allowEmptyPassword);
   try {
     return await db.transaction(async (tx) => {
       const members = await seedGroup(tx, "users");

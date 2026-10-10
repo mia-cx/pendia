@@ -20,13 +20,13 @@
     "@orpc/openapi": "1.15.0",
     "@orpc/server": "1.15.0",
     "@thalia/plugin-api": "workspace:*",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "drizzle-orm": "0.45.2",
     "effect": "3.22.1",
     "oauth4webapi": "3.8.7"
   },
   "devDependencies": {
-    "ajv": "8.20.0",
-    "ajv-formats": "3.0.1",
     "drizzle-kit": "0.31.10",
     "hls-parser": "0.16.1",
     "hls.js": "1.7.3"

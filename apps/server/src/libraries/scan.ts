@@ -1393,6 +1393,7 @@ export async function scanShowDirectory(
       const showId = show.id;
       itemIds.push(showId);
 
+      const claimedSeasons = new Set<string>();
       for (const seasonGroup of group.seasons) {
         const seasonFiles = seasonGroup.episodes.flatMap((episode) =>
           episode.versions.flatMap((version) =>
@@ -1458,6 +1459,10 @@ export async function scanShowDirectory(
           });
           seasonId = created.id;
         }
+
+        // An edited display number must not make two filename Seasons share Episodes and progress.
+        if (claimedSeasons.has(seasonId)) throw new AuthError("CONFLICT");
+        claimedSeasons.add(seasonId);
 
         const persistedEpisodes = await tx
           .select({

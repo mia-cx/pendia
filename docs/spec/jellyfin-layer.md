@@ -23,10 +23,10 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 | Authentication | Real / neutral | Real local login, Quick Connect, and admin-managed recoverable integration keys. Password recovery requests direct clients to the administrator. |
 | User | Real | Account listing, creation, rename, deletion, password changes, disabled/admin/play/subtitle/bitrate policy, and stored configuration. Public users remain hidden. Unsupported policy capabilities stay disabled. |
 | UserView, Show | Real | Authorized library views, grouping options, seasons, episodes, next-up, and upcoming episodes. |
-| Library | Real / gap / neutral | Real browse/detail, catalogue removal, physical paths, scan/refresh, and media/provider notifications. Download/file proof remains explicit. Themes, intros, collections, extras, and Jellyfin-only provider option pages return neutral results. |
+| Library | Real / neutral | Real browse/detail, catalogue removal, physical paths, scan/refresh, downloads/files, and media/provider notifications. Themes, intros, collections, extras, and Jellyfin-only provider option pages return neutral results. |
 | Device | Real | Live session-backed devices, custom names, and revocation. |
 | DisplayPreference | Real | Schema-validated preferences stored per user, client, and preference id. Owners and administrators have access. |
-| Session | Gap | Real live sessions and stored client capabilities; complete playback reports. Remote commands remain neutral. |
+| Session | Real / neutral | Live device sessions, stored client capabilities/viewing state, current playback and player state, heartbeats, and playback reports. Remote commands, additional session users, and server messages have no core transport and are neutral. |
 | Filter, Genre, Person, Year, Search | Real | Authorized genre/tag/rating/year/language facets, contributor credits, and paged item/person/genre search hints. Genre and year ids remain stable across restarts. |
 | Studio | Neutral | No studio model. Empty lists and default item responses. |
 | LibraryStructure | Real / neutral | Create, rename, remove, and scan movie/show libraries; add/remove roots and round-trip library options. Other media have no core medium. Jellyfin-only options are stored client preferences and do not change core scanning. |
@@ -35,7 +35,10 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 | RemoteImage | Real / neutral | List configured item artwork providers, fetch candidates for stored identifiers, page/filter candidates, and download a selected original. Library/person/facet image owners do not exist in the core. |
 | Movie, Suggestion | Real | Suggestions use unplayed items. Movie recommendations and similar lists use available movies and matching genres. |
 | Image | Real / neutral | Read selected item originals and image info, upload base64 or raw images, replace/delete originals, and serve GET/HEAD aliases. Resize respects width/height bounds and encodes JPEG, PNG, or WebP; other format requests use PNG. One original per core image kind; reordering and other image owners are neutral. |
-| MediaInfo, UserData, Video, Subtitle | Gap | Existing playback/marks; complete aliases, HEAD, and seeded proof. |
+| MediaInfo | Real / neutral | Source discovery, profile-based playback planning, and bounded bitrate-test bytes. No live-stream resource; accepted open/close responses are neutral. |
+| UserData | Real | Read/import partial progress, play counts/dates, favourites, numeric ratings, and independent likes/dislikes. Played marks also update descendants. |
+| Video | Real / neutral | Authorized GET/HEAD direct files and container aliases. Multipart files are not separate Items; additional-part Items, attachments, and manual version-group overrides have no core model. Their reads/writes are neutral. |
+| Subtitle | Gap | Existing embedded playback; complete formats, management, and seeded proof. |
 | Artist, Audio, MusicGenre, InstantMix, Lyric | Neutral | No music medium. Empty lists/defaults, accepted writes, empty binary responses. |
 | LiveTv, Channel | Neutral | No tuner, channels, programmes, recordings, or listing providers. |
 | SyncPlay | Neutral | No synchronized playback groups. Empty group lists and accepted no-op controls. |
@@ -60,3 +63,5 @@ Operations marked `RequiresElevation` or `FirstTimeSetupOrElevated` require an a
 - Manual metadata edits use the same library/item locks and contributor creation lock as provider metadata. Explicit provider ids replace the editor's supplied set.
 - Interactive lookup and background jobs share credentialed built-in/plugin providers. Identifying a Show queues its descendants to follow the chosen root identity, preserving explicitly pinned children. Artwork replacement removes obsolete selections; preservation fills missing types only. Queued fetches retain that choice. One original per core artwork type is selected.
 - Item artwork covers Primary, Backdrop, Logo, and Thumb at index zero. Uploads share bounded decoding and original storage with provider downloads. HEAD returns GET headers without a body, including on errors. JPEG/PNG/WebP and quality choices belong to the core resize cache key. Image effects and playback overlays have no core renderer and leave the image undecorated.
+- Playback source discovery does not start a play. Device session listings use active core plays and retain per-device position, pause, mute, volume, and selected streams. Stopped plays disappear; heartbeats never count a play.
+- Personal-state imports preserve fields the client omits and never start playback. Positions use the selected Version's duration. Likes/dislikes and numeric ratings are separate opinions; clearing one preserves the other.
